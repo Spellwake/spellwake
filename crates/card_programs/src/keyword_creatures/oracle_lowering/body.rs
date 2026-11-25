@@ -79,6 +79,7 @@ impl BodyBuilder {
         if body.target == BodyTarget::None {
             rewrite_body_after_revealed_top(&mut body);
         }
+        rewrite_body_after_amass(&mut body);
         let mut body = match self.graveyard_target_bounds {
             Some((min, max)) => body.with_graveyard_target_bounds(min, max),
             None => body,
@@ -105,8 +106,24 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
                 reveal_only: true,
                 ..
             } | Instruction::MayRevealLibraryTop
+                | Instruction::ExileLibraryTop { .. }
         ) {
             saw_reveal_top = true;
+        }
+    }
+}
+
+fn rewrite_body_after_amass(body: &mut ExecutableBody) {
+    if is_object_body_target(body.target, false) {
+        return;
+    }
+    let mut saw_amass = false;
+    for op in &mut body.instructions {
+        if saw_amass {
+            rewrite_instruction_anaphora(op, ValueObjectRef::LastAmassedArmy);
+        }
+        if matches!(op, Instruction::Amass { .. }) {
+            saw_amass = true;
         }
     }
 }
@@ -722,6 +739,7 @@ fn try_lower_exact_plus_upto_spell_modes(
         SpellModes {
             minimum: 1,
             maximum: 1,
+            conditional_maximum: None,
             allow_repeat: false,
             distinct_targets: false,
             uniqueness: ModalUniqueness::None,
@@ -732,6 +750,220 @@ fn try_lower_exact_plus_upto_spell_modes(
             additional: vec![mode1],
         },
     ))
+}
+
+fn parse_conditional_modal_max_phrase(raw: &str, modes_len: u8) -> Option<u8> {
+    let mut norm = raw
+        .trim()
+        .trim_end_matches('.')
+        .trim_end_matches('\u{2014}')
+        .trim_end_matches('-')
+        .trim_end_matches(':')
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        norm.as_str(),
+        "choose_both_instead" | "choose_both" | "choose both instead" | "choose both"
+    ) {
+        return (modes_len >= 2).then_some(2);
+    }
+    if let Some(rest) = norm.strip_prefix("instead, ") {
+        norm = rest.trim().to_string();
+    } else if let Some(rest) = norm.strip_prefix("instead ") {
+        norm = rest.trim().to_string();
+    }
+    if let Some(rest) = norm.strip_suffix(" instead") {
+        norm = rest.trim().to_string();
+    }
+    if let Some(rest) = norm.strip_prefix("you may ") {
+        norm = rest.trim().to_string();
+    }
+    if let Some(rest) = norm.strip_prefix("choose ") {
+        norm = rest.trim().to_string();
+    }
+    match norm.as_str() {
+        "both" | "one or both" if modes_len >= 2 => Some(2),
+        "all" | "all of them" | "any number" | "any_number" | "any number of them"
+        | "one or more" => Some(modes_len),
+        "two" | "up to two" | "one or two" | "2" | "up to 2" => Some(2),
+        "three" | "up to three" | "one, two, or three" | "3" | "up to 3" => Some(3),
+        "four" | "up to four" | "4" | "up to 4" => Some(4),
+        "five" | "up to five" | "5" | "up to 5" => Some(5),
+        _ => None,
+    }
+}
+
+fn extract_conditional_modal_max_from_body(body: &[InstructionAst], modes_len: u8) -> Option<u8> {
+    match body {
+        [InstructionAst::ReplaceEffect(inner)] | [InstructionAst::Optional(inner)] => {
+            extract_conditional_modal_max_from_body(inner, modes_len)
+        }
+        [InstructionAst::ChooseOption(raw)] | [InstructionAst::ModalModifier(raw)] => {
+            parse_conditional_modal_max_phrase(raw, modes_len)
+        }
+        [InstructionAst::Modal { choice, modes }] if modes.is_empty() => {
+            parse_conditional_modal_max_phrase(choice, modes_len)
+        }
+        _ => None,
+    }
+}
+
+fn lower_world_modal_condition(
+    cond: &ConditionAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ResolutionCondition> {
+    let mut dummy = BodyBuilder::new();
+    let rc = lower_resolution_condition(cond, &mut dummy, vocabulary, false, None).ok()?;
+    (dummy.target == BodyTarget::None && rc.is_world_evaluable()).then_some(rc)
+}
+
+type ConditionalModalMax = (ResolutionCondition, u8);
+
+fn strip_conditional_modal_max(
+    ops: &[InstructionAst],
+    modes_len: u8,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(Vec<InstructionAst>, Option<ConditionalModalMax>), &'static str> {
+    let mut out = Vec::with_capacity(ops.len());
+    let mut found: Option<(ResolutionCondition, u8)> = None;
+    for op in ops {
+        if let InstructionAst::IfCondition {
+            condition,
+            then_body,
+        } = op
+            && let Some(cond_max) = extract_conditional_modal_max_from_body(then_body, modes_len)
+        {
+            if found.is_some() {
+                return Err("oracle:multiple-conditional-modal-max");
+            }
+            let rc = lower_world_modal_condition(condition, vocabulary)
+                .ok_or("oracle:unsupported-conditional-modal-max")?;
+            found = Some((rc, cond_max));
+            continue;
+        }
+        out.push(op.clone());
+    }
+    Ok((out, found))
+}
+
+struct ParsedModalChoice {
+    min: u8,
+    raw_max: u8,
+    uniqueness: ModalUniqueness,
+    conditional_maximum: Option<(ResolutionCondition, u8)>,
+}
+
+fn parse_conditional_modal_condition(
+    cond_raw: &str,
+    compiler_vocab: &spellwake_oracle_compiler::Vocabulary,
+) -> Option<ConditionAst> {
+    if let Ok(ast) = spellwake_oracle_compiler::filter::parse_condition(cond_raw, compiler_vocab) {
+        return Some(ast);
+    }
+    let norm = cond_raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace("this spell", "~");
+    if let Ok(ast) = spellwake_oracle_compiler::filter::parse_condition(&norm, compiler_vocab) {
+        return Some(ast);
+    }
+    if let Some(after_both) = norm.strip_prefix("you control both ")
+        && let Some((lhs, rhs)) = after_both.split_once(" and ")
+    {
+        let expanded = format!(
+            "you control {} and if you control {}",
+            lhs.trim(),
+            rhs.trim()
+        );
+        if let Ok(ast) =
+            spellwake_oracle_compiler::filter::parse_condition(&expanded, compiler_vocab)
+        {
+            return Some(ast);
+        }
+    }
+    None
+}
+
+fn unwrap_modal_modes_from_if_body(
+    body: &[InstructionAst],
+) -> Option<(&str, &[spellwake_oracle_compiler::ast::ModalModeAst])> {
+    match body {
+        [InstructionAst::Optional(inner)] | [InstructionAst::ReplaceEffect(inner)] => {
+            unwrap_modal_modes_from_if_body(inner)
+        }
+        [InstructionAst::Modal { choice, modes }] if modes.len() >= 2 => {
+            Some((choice.as_str(), modes.as_slice()))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_split_conditional_modal(ins: &[InstructionAst]) -> Option<Vec<InstructionAst>> {
+    for idx in 0..ins.len().saturating_sub(1) {
+        if let InstructionAst::Modal {
+            choice: base_choice,
+            modes,
+        } = &ins[idx]
+            && modes.is_empty()
+            && let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = &ins[idx + 1]
+            && let Some((boost_choice, inner_modes)) = unwrap_modal_modes_from_if_body(then_body)
+        {
+            let mut out = Vec::with_capacity(ins.len());
+            out.extend_from_slice(&ins[..idx]);
+            out.push(InstructionAst::Modal {
+                choice: base_choice.clone(),
+                modes: inner_modes.to_vec(),
+            });
+            out.push(InstructionAst::IfCondition {
+                condition: condition.clone(),
+                then_body: vec![InstructionAst::ModalModifier(boost_choice.to_string())],
+            });
+            out.extend_from_slice(&ins[idx + 2..]);
+            return Some(out);
+        }
+    }
+    None
+}
+
+fn parse_modal_choice_with_conditional_max(
+    choice: &str,
+    modes_len: u8,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<ParsedModalChoice, &'static str> {
+    let low = choice.to_ascii_lowercase();
+    if let Some(idx) = low.find(". if ") {
+        let base_raw = choice[..idx].trim();
+        let if_tail = choice[idx + ". if ".len()..].trim();
+        let (min, raw_max, uniqueness) = parse_modal_choice_with_uniqueness(base_raw)?;
+        let compiler_vocab = cached_compiler_vocab(vocabulary);
+        for (comma_idx, _) in if_tail.match_indices(", ") {
+            let cond_raw = if_tail[..comma_idx].trim();
+            let act_raw = if_tail[comma_idx + 2..].trim();
+            if let Some(cond_max) = parse_conditional_modal_max_phrase(act_raw, modes_len)
+                && let Some(cond_ast) = parse_conditional_modal_condition(cond_raw, &compiler_vocab)
+            {
+                let rc = lower_world_modal_condition(&cond_ast, vocabulary)
+                    .ok_or("oracle:unsupported-conditional-modal-max")?;
+                return Ok(ParsedModalChoice {
+                    min,
+                    raw_max,
+                    uniqueness,
+                    conditional_maximum: Some((rc, cond_max)),
+                });
+            }
+        }
+        return Err("oracle:unsupported-conditional-modal-max");
+    }
+    let (min, raw_max, uniqueness) = parse_modal_choice_with_uniqueness(choice)?;
+    Ok(ParsedModalChoice {
+        min,
+        raw_max,
+        uniqueness,
+        conditional_maximum: None,
+    })
 }
 
 pub(super) fn lower_spell_effects(
@@ -811,6 +1043,7 @@ pub(super) fn lower_spell_effects(
             Some(SpellModes {
                 minimum: 1,
                 maximum: max,
+                conditional_maximum: None,
                 allow_repeat: false,
                 distinct_targets,
                 uniqueness: ModalUniqueness::None,
@@ -822,22 +1055,54 @@ pub(super) fn lower_spell_effects(
             }),
         ));
     }
-    if let Some((pre, choice, modes, post, allow_repeat)) = extract_modal_with_wrap(ins) {
-        let (min, raw_max, uniqueness) = parse_modal_choice_with_uniqueness(choice)?;
+    let normalized_split_modal = normalize_split_conditional_modal(ins);
+    let modal_ins = normalized_split_modal.as_deref().unwrap_or(ins);
+    if let Some((pre, choice, modes, post, allow_repeat)) = extract_modal_with_wrap(modal_ins) {
         if modes.len() < 2 {
             return Err("oracle:modal-too-few");
         }
+        let modes_len = u8::try_from(modes.len()).unwrap_or(u8::MAX);
+        let ParsedModalChoice {
+            min,
+            raw_max,
+            uniqueness,
+            mut conditional_maximum,
+        } = parse_modal_choice_with_conditional_max(choice, modes_len, vocabulary)?;
         let max = if allow_repeat {
             raw_max
         } else {
-            raw_max.min(u8::try_from(modes.len()).unwrap_or(u8::MAX))
+            raw_max.min(modes_len)
         };
-        let (pre_clean, pre_distinct) = strip_each_mode_different_player(pre);
-        let (post_clean, post_distinct) = strip_each_mode_different_player(post);
+        let (pre_nodist, pre_distinct) = strip_each_mode_different_player(pre);
+        let (post_nodist, post_distinct) = strip_each_mode_different_player(post);
+        let (pre_clean, pre_cond_max) =
+            strip_conditional_modal_max(&pre_nodist, modes_len, vocabulary)?;
+        let (post_clean, post_cond_max) =
+            strip_conditional_modal_max(&post_nodist, modes_len, vocabulary)?;
+        for extra_cm in [pre_cond_max, post_cond_max].into_iter().flatten() {
+            if conditional_maximum.is_some() {
+                return Err("oracle:multiple-conditional-modal-max");
+            }
+            conditional_maximum = Some(extra_cm);
+        }
+        let conditional_maximum = match conditional_maximum {
+            Some((cond, raw_cmax)) => {
+                let eff_cmax = if allow_repeat {
+                    raw_cmax
+                } else {
+                    raw_cmax.min(modes_len)
+                };
+                if eff_cmax < min || (!allow_repeat && usize::from(eff_cmax) > modes.len()) {
+                    return Err("oracle:unsupported-conditional-modal-max");
+                }
+                Some((Box::new(cond), eff_cmax))
+            }
+            None => None,
+        };
         let mut stripped_distinct = pre_distinct || post_distinct;
         let (prefix, suffix, embed_wrap) = if pre_clean.is_empty() && post_clean.is_empty() {
             (None, None, false)
-        } else if (min, max) == (1, 1) && !allow_repeat {
+        } else if (min, max) == (1, 1) && !allow_repeat && conditional_maximum.is_none() {
             (None, None, true)
         } else {
             let pb = if pre_clean.is_empty() {
@@ -926,6 +1191,7 @@ pub(super) fn lower_spell_effects(
             Some(SpellModes {
                 minimum: min,
                 maximum: max,
+                conditional_maximum,
                 allow_repeat,
                 distinct_targets,
                 uniqueness,
@@ -1215,11 +1481,17 @@ pub(super) fn rewrite_instruction_anaphora(op: &mut Instruction, replacement: Va
             ..
         }
         | Instruction::RepeatLoop { count: amount, .. }
+        | Instruction::BindResolutionX(amount)
         | Instruction::AffectPermanentTargets {
             action: PermanentTargetAction::PutCounters { amount, .. },
             ..
         } => {
             rewrite_value_expr_anaphora(amount, replacement);
+        }
+        Instruction::SearchLibrary { filter } => {
+            if let SearchCount::UpToExpr(expr) = &mut filter.count {
+                rewrite_value_expr_anaphora(expr, replacement);
+            }
         }
         Instruction::DealDamageFrom { amount, .. } => {
             if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = amount.as_mut() {
@@ -1351,8 +1623,14 @@ pub(super) fn rewrite_body_prior_result(body: &mut ExecutableBody, replacement: 
                 | Instruction::ExileTopPlay { count: amount, .. }
                 | Instruction::LookTopChoose { count: amount, .. }
                 | Instruction::ModifyGroupByAmount { amount, .. }
-                | Instruction::BoostTargetPower { amount, .. } => {
+                | Instruction::BoostTargetPower { amount, .. }
+                | Instruction::BindResolutionX(amount) => {
                     rewrite_value_expr_prior_result(amount, replacement);
+                }
+                Instruction::SearchLibrary { filter } => {
+                    if let SearchCount::UpToExpr(expr) = &mut filter.count {
+                        rewrite_value_expr_prior_result(expr, replacement);
+                    }
                 }
                 Instruction::CreateTokens { creations }
                 | Instruction::CreateAttackingTokens { creations } => {
@@ -2090,11 +2368,17 @@ fn rewrite_body_trigger_subject_stats(body: &mut ExecutableBody, replacement: Va
                 ..
             }
             | Instruction::RepeatLoop { count: amount, .. }
+            | Instruction::BindResolutionX(amount)
             | Instruction::AffectPermanentTargets {
                 action: PermanentTargetAction::PutCounters { amount, .. },
                 ..
             } => {
                 rewrite_value_expr_trigger_subject(amount, replacement);
+            }
+            Instruction::SearchLibrary { filter } => {
+                if let SearchCount::UpToExpr(expr) = &mut filter.count {
+                    rewrite_value_expr_trigger_subject(expr, replacement);
+                }
             }
             Instruction::DealDamageFrom { amount, .. } => {
                 if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = amount.as_mut() {
@@ -4704,11 +4988,18 @@ pub(super) fn lower_resolution_condition(
         ConditionAst::IsNotToken => {
             let mut c = ObjectClause::any();
             c.token = Some(false);
+            let is_obj_target = is_object_body_target(builder.target, false);
+            let mref = if is_obj_target {
+                MatchObjectRef::TargetObject
+            } else if let Some(prev) =
+                resolve_prev_anaphora_ref(&builder.instructions, false, in_trigger)
+            {
+                prev
+            } else {
+                MatchObjectRef::AbilitySource
+            };
             Ok(ResolutionCondition {
-                left: ValueExpr::object_matches(
-                    MatchObjectRef::AbilitySource,
-                    ObjectFilter::Clause(c),
-                ),
+                left: ValueExpr::object_matches(mref, ObjectFilter::Clause(c)),
                 comparison: Comparison::Equal,
                 right: ValueExpr::literal(1),
             })
@@ -4906,6 +5197,11 @@ pub(super) fn lower_resolution_condition(
         }),
         ConditionAst::Marker(GameMarker::EvidenceCollected) => Ok(ResolutionCondition {
             left: ValueExpr::event(EventValueKind::EvidenceCollected),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        }),
+        ConditionAst::Marker(GameMarker::AdditionalCostPaid { .. }) => Ok(ResolutionCondition {
+            left: ValueExpr::event(EventValueKind::AdditionalCostPaid),
             comparison: Comparison::GreaterOrEqual,
             right: ValueExpr::literal(1),
         }),
@@ -6472,14 +6768,11 @@ pub(super) fn lower_resolution_condition(
             comparison: Comparison::GreaterOrEqual,
             right: ValueExpr::literal(1),
         }),
-        ConditionAst::Marker(GameMarker::AttackedThisCombat { subject })
-            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
-        {
+        ConditionAst::Marker(GameMarker::AttackedThisCombat { subject }) => {
+            let mref = resolve_match_object_ref(subject, builder, in_trigger, false)
+                .ok_or("oracle:unsupported-if-condition")?;
             Ok(ResolutionCondition {
-                left: ValueExpr::object_matches(
-                    MatchObjectRef::AbilitySource,
-                    ObjectFilter::any().attacking(),
-                ),
+                left: ValueExpr::object_matches(mref, ObjectFilter::any().attacking()),
                 comparison: Comparison::Equal,
                 right: ValueExpr::literal(1),
             })
@@ -8754,8 +9047,1615 @@ fn rewrite_spell_self_has_status_to_anaphora(cond: &ConditionAst) -> ConditionAs
                 status: status.clone(),
             }
         }
+        ConditionAst::MatchesFilter { subject, filter }
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+        {
+            ConditionAst::MatchesFilter {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                filter: filter.clone(),
+            }
+        }
+        ConditionAst::HasKeyword { subject, keyword }
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+        {
+            ConditionAst::HasKeyword {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                keyword: keyword.clone(),
+            }
+        }
+        ConditionAst::StatCompare {
+            subject,
+            stat,
+            op,
+            value,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => ConditionAst::StatCompare {
+            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            stat: *stat,
+            op: *op,
+            value: *value,
+        },
+        ConditionAst::CounterCompare {
+            subject,
+            counter_kind,
+            op,
+            value,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+            ConditionAst::CounterCompare {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                counter_kind: counter_kind.clone(),
+                op: *op,
+                value: *value,
+            }
+        }
+        ConditionAst::Marker(GameMarker::AttackedThisCombat { subject })
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+        {
+            ConditionAst::Marker(GameMarker::AttackedThisCombat {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            })
+        }
         other => other.clone(),
     }
+}
+
+fn value_expr_has_chosen_x(expr: &ValueExprAst) -> bool {
+    match expr {
+        ValueExprAst::ChosenX => true,
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::AbsDiff(a, b) => value_expr_has_chosen_x(a) || value_expr_has_chosen_x(b),
+        ValueExprAst::DivConst { expr, .. } => value_expr_has_chosen_x(expr),
+        ValueExprAst::Pow { base, exp } => {
+            value_expr_has_chosen_x(base) || value_expr_has_chosen_x(exp)
+        }
+        ValueExprAst::Shortfall { threshold, actual } => {
+            value_expr_has_chosen_x(threshold) || value_expr_has_chosen_x(actual)
+        }
+        _ => false,
+    }
+}
+
+fn str_references_x(raw: &str) -> bool {
+    let t = raw.trim().replace('\u{2212}', "-");
+    matches!(
+        t.to_ascii_lowercase().as_str(),
+        "x" | "+x" | "-x" | "2x" | "+2x" | "-2x"
+    )
+}
+
+fn condition_has_chosen_x(cond: &ConditionAst) -> bool {
+    match cond {
+        ConditionAst::Not(inner) => condition_has_chosen_x(inner),
+        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
+            condition_has_chosen_x(a) || condition_has_chosen_x(b)
+        }
+        ConditionAst::Compare { lhs, rhs, .. } | ConditionAst::ExprCompare { lhs, rhs, .. } => {
+            value_expr_has_chosen_x(lhs) || value_expr_has_chosen_x(rhs)
+        }
+        _ => false,
+    }
+}
+
+fn instruction_has_chosen_x(ins: &InstructionAst) -> bool {
+    match ins {
+        InstructionAst::DealDamage { amount, .. }
+        | InstructionAst::PreventDamage { amount, .. } => value_expr_has_chosen_x(amount),
+        InstructionAst::ChangeLife { delta, .. } => value_expr_has_chosen_x(delta),
+        InstructionAst::Draw { count, .. }
+        | InstructionAst::Mill { count, .. }
+        | InstructionAst::Scry { count, .. }
+        | InstructionAst::Surveil { count, .. }
+        | InstructionAst::PutCounters { count, .. }
+        | InstructionAst::GainPlayerCounters { count, .. }
+        | InstructionAst::SearchLibrary { count, .. }
+        | InstructionAst::LookTopLibrary { count, .. }
+        | InstructionAst::ExileTopLibrary { count, .. }
+        | InstructionAst::Connive { count, .. }
+        | InstructionAst::Incubate { count } => value_expr_has_chosen_x(count),
+        InstructionAst::Discover { value } => value_expr_has_chosen_x(value),
+        InstructionAst::Discard { count, .. }
+        | InstructionAst::Sacrifice { count, .. }
+        | InstructionAst::RemoveCounters { count, .. } => {
+            count.as_deref().is_some_and(value_expr_has_chosen_x)
+        }
+        InstructionAst::ModifyPT { dx, dy, scale, .. } => {
+            str_references_x(dx)
+                || str_references_x(dy)
+                || scale.as_deref().is_some_and(value_expr_has_chosen_x)
+        }
+        InstructionAst::AnimateOrSetBasePT {
+            power, toughness, ..
+        } => str_references_x(power) || str_references_x(toughness),
+        InstructionAst::CreateToken { token, .. } => match token {
+            TokenSpecAst::Creature {
+                count,
+                power,
+                toughness,
+                ..
+            } => {
+                value_expr_has_chosen_x(count)
+                    || str_references_x(power)
+                    || str_references_x(toughness)
+            }
+            TokenSpecAst::Predefined { count, .. } | TokenSpecAst::Copy { count, .. } => {
+                value_expr_has_chosen_x(count)
+            }
+            TokenSpecAst::Role { .. } => false,
+        },
+        InstructionAst::AddMana {
+            mana: ManaSpecAst::AnyColor { amount, .. } | ManaSpecAst::CombinationOf { amount, .. },
+            ..
+        } => value_expr_has_chosen_x(amount),
+        InstructionAst::ForEachCount { count, body } => {
+            value_expr_has_chosen_x(count) || body.iter().any(instruction_has_chosen_x)
+        }
+        InstructionAst::IfCondition {
+            condition,
+            then_body: inner,
+        } => condition_has_chosen_x(condition) || inner.iter().any(instruction_has_chosen_x),
+        InstructionAst::Optional(inner)
+        | InstructionAst::OptionalPlayer { body: inner, .. }
+        | InstructionAst::Otherwise(inner)
+        | InstructionAst::ReplaceEffect(inner)
+        | InstructionAst::IfPreviousSucceeded(inner)
+        | InstructionAst::IfPreviousFailed(inner)
+        | InstructionAst::ReflexiveTrigger(inner)
+        | InstructionAst::DelayedTrigger { body: inner, .. }
+        | InstructionAst::ForEachPlayer { body: inner, .. }
+        | InstructionAst::ForEachObject { body: inner, .. } => {
+            inner.iter().any(instruction_has_chosen_x)
+        }
+        InstructionAst::Unless {
+            body,
+            unless_action,
+            ..
+        } => {
+            body.iter().any(instruction_has_chosen_x)
+                || unless_action
+                    .as_ref()
+                    .is_some_and(|a| a.iter().any(instruction_has_chosen_x))
+        }
+        InstructionAst::BindX { x_expr, .. } => value_expr_has_chosen_x(x_expr),
+        _ => false,
+    }
+}
+
+fn lower_bound_x_for_resolution(
+    x_expr: &ValueExprAst,
+    builder: &BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+) -> Result<ValueExpr, &'static str> {
+    if let ValueExprAst::ObjectStat { subject, stat } = x_expr
+        && let SubjectRefAst::Anaphora(raw) = subject.as_ref()
+        && raw.to_ascii_lowercase().contains("army")
+        && builder
+            .instructions
+            .iter()
+            .any(|op| matches!(op, Instruction::Amass { .. }))
+    {
+        let st = match stat {
+            StatKind::Power => ObjectStatKind::Power,
+            StatKind::Toughness => ObjectStatKind::Toughness,
+            StatKind::ManaValue => ObjectStatKind::ManaValue,
+            StatKind::Loyalty => ObjectStatKind::Loyalty,
+        };
+        return Ok(ValueExpr::object_stat(ValueObjectRef::LastAmassedArmy, st));
+    }
+    let mut val = lower_value_expr_in_context(x_expr, builder, in_trigger, vocabulary)?;
+    if !is_object_body_target(builder.target, false) {
+        let replacement = builder.instructions.iter().rev().find_map(|op| match op {
+            Instruction::Amass { .. } => Some(ValueObjectRef::LastAmassedArmy),
+            Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_) => {
+                Some(ValueObjectRef::LastSacrificedCreature)
+            }
+            Instruction::LookTopChoose {
+                reveal_only: true, ..
+            }
+            | Instruction::MayRevealLibraryTop
+            | Instruction::ExileLibraryTop { .. } => Some(ValueObjectRef::RevealedTop),
+            _ => None,
+        });
+        if let Some(repl) = replacement {
+            rewrite_value_expr_anaphora(&mut val, repl);
+        }
+    }
+    Ok(val)
+}
+
+fn is_searched_library_guard(cond: &ConditionAst) -> bool {
+    match cond {
+        ConditionAst::SearchedLibraryThisWay => true,
+        ConditionAst::PlayerActionThisTurn { action, .. }
+        | ConditionAst::EventOccurredThisTurn { event: action } => matches!(
+            action.trim().to_ascii_lowercase().as_str(),
+            "you search your library this way"
+                | "you searched your library this way"
+                | "that player searches their library this way"
+                | "that player searched their library this way"
+                | "they search their library this way"
+                | "they searched their library this way"
+                | "a player searches their library this way"
+                | "a player searched their library this way"
+                | "a player searches a library this way"
+                | "a player searched a library this way"
+        ),
+        _ => false,
+    }
+}
+
+fn is_search_found_anaphora(subj: &SubjectRefAst) -> bool {
+    matches!(
+        subj,
+        SubjectRefAst::Anaphora(a)
+            if {
+                let low = a.trim().to_ascii_lowercase();
+                !low.contains("rest") && !low.contains("other")
+            }
+    )
+}
+
+fn is_search_placeholder_dest(dest: &str) -> bool {
+    matches!(
+        dest.trim().to_ascii_lowercase().as_str(),
+        "" | "found_set" | "found" | "revealed"
+    )
+}
+
+fn apply_search_continuation_step(
+    step: &InstructionAst,
+    eff_reveal: &mut bool,
+    eff_dest: &mut String,
+    saw_shuffle: &mut bool,
+) -> bool {
+    match step {
+        InstructionAst::RevealCards { subject } if is_search_found_anaphora(subject) => {
+            *eff_reveal = true;
+            true
+        }
+        InstructionAst::LookTopLibrary {
+            reveal, library, ..
+        } if library.eq_ignore_ascii_case("ref")
+            || library.to_ascii_lowercase().starts_with("ref:") =>
+        {
+            *eff_reveal |= *reveal;
+            true
+        }
+        InstructionAst::MoveZone { subject, to }
+            if is_search_found_anaphora(subject) && is_search_placeholder_dest(eff_dest) =>
+        {
+            *eff_dest = to.clone();
+            if to.to_ascii_lowercase().contains("after_shuffle") {
+                *saw_shuffle = true;
+            }
+            true
+        }
+        InstructionAst::ReturnZone {
+            subject,
+            from_zone: None,
+            to,
+            tapped,
+            transformed: false,
+            with_counter: None,
+            attached_to: None,
+            random: false,
+            except: None,
+            count: None,
+            up_to: false,
+            any_number: false,
+            ..
+        } if is_search_found_anaphora(subject) && is_search_placeholder_dest(eff_dest) => {
+            let to_low = to.to_ascii_lowercase();
+            *eff_dest = if *tapped && !to_low.contains("tapped") {
+                format!("{to} tapped")
+            } else {
+                to.clone()
+            };
+            if to_low.contains("after_shuffle") {
+                *saw_shuffle = true;
+            }
+            true
+        }
+        InstructionAst::Exile {
+            actor:
+                None
+                | Some(
+                    PlayerRefAst::You
+                    | PlayerRefAst::ThatPlayer
+                    | PlayerRefAst::TargetPlayer
+                    | PlayerRefAst::TargetOpponent,
+                ),
+            subject,
+            random: false,
+            face_down: false,
+            into_pile: false,
+        } if is_search_found_anaphora(subject) && is_search_placeholder_dest(eff_dest) => {
+            *eff_dest = "exile".to_string();
+            true
+        }
+        InstructionAst::ShuffleLibrary {
+            player:
+                PlayerRefAst::You
+                | PlayerRefAst::ThatPlayer
+                | PlayerRefAst::TargetPlayer
+                | PlayerRefAst::TargetOpponent
+                | PlayerRefAst::EachPlayer
+                | PlayerRefAst::EachOpponent,
+        } => {
+            let dest_low = eff_dest.to_ascii_lowercase();
+            if dest_low.contains("top") && !dest_low.contains("after_shuffle") {
+                return false;
+            }
+            *saw_shuffle = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn try_fuse_search_library(
+    ins: &[InstructionAst],
+    i: usize,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Option<usize> {
+    let (opt_chooser, search_ast, inner_rest) = match &ins[i] {
+        s @ InstructionAst::SearchLibrary { .. } => (None, s, &[][..]),
+        InstructionAst::Optional(inner) => match inner.split_first() {
+            Some((s @ InstructionAst::SearchLibrary { .. }, rest)) => {
+                (Some(PlayerRefAst::You), s, rest)
+            }
+            _ => return None,
+        },
+        InstructionAst::OptionalPlayer { player, body } => match body.split_first() {
+            Some((s @ InstructionAst::SearchLibrary { .. }, rest)) => (Some(*player), s, rest),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let InstructionAst::SearchLibrary {
+        library,
+        count,
+        filter,
+        reveal,
+        to_zone,
+        shuffle,
+        up_to,
+        any_number,
+        extra_zones,
+        secondary_filter,
+        secondary_is_or,
+        where_x,
+        rest_to_zone,
+        modifier,
+        follow_up,
+        exact: false,
+    } = search_ast
+    else {
+        return None;
+    };
+    if !follow_up.is_empty() {
+        return None;
+    }
+    let mut eff_reveal = *reveal;
+    let mut eff_dest = to_zone.clone();
+    let mut saw_shuffle = *shuffle;
+    if eff_dest.to_ascii_lowercase().contains("after_shuffle") {
+        saw_shuffle = true;
+    }
+    // Strictly consume every instruction inside Optional / OptionalPlayer (fail-closed if any is unhandled).
+    for step in inner_rest {
+        if !apply_search_continuation_step(step, &mut eff_reveal, &mut eff_dest, &mut saw_shuffle) {
+            return None;
+        }
+    }
+    let mut cursor = i + 1;
+    while cursor < ins.len() {
+        if apply_search_continuation_step(
+            &ins[cursor],
+            &mut eff_reveal,
+            &mut eff_dest,
+            &mut saw_shuffle,
+        ) {
+            cursor += 1;
+            continue;
+        }
+        if let InstructionAst::IfCondition {
+            condition,
+            then_body,
+        } = &ins[cursor]
+            && is_searched_library_guard(condition)
+            && !then_body.is_empty()
+        {
+            let mut r = eff_reveal;
+            let mut d = eff_dest.clone();
+            let mut s = saw_shuffle;
+            if then_body
+                .iter()
+                .all(|st| apply_search_continuation_step(st, &mut r, &mut d, &mut s))
+            {
+                eff_reveal = r;
+                eff_dest = d;
+                saw_shuffle = s;
+                cursor += 1;
+                continue;
+            }
+            // Fail-closed: do not emit a search leaving an unhandled SearchedLibraryThisWay clause.
+            return None;
+        }
+        if let InstructionAst::IfPreviousSucceeded(then_body) = &ins[cursor]
+            && !then_body.is_empty()
+            && (!saw_shuffle || is_search_placeholder_dest(&eff_dest))
+        {
+            let mut r = eff_reveal;
+            let mut d = eff_dest.clone();
+            let mut s = saw_shuffle;
+            if then_body
+                .iter()
+                .all(|st| apply_search_continuation_step(st, &mut r, &mut d, &mut s))
+            {
+                eff_reveal = r;
+                eff_dest = d;
+                saw_shuffle = s;
+                cursor += 1;
+                continue;
+            }
+        }
+        break;
+    }
+    let is_optional_player = opt_chooser.is_some_and(|p| p != PlayerRefAst::You);
+    let fused_something = cursor > i + 1 || !inner_rest.is_empty() || is_optional_player;
+    if !fused_something || !saw_shuffle || is_search_placeholder_dest(&eff_dest) {
+        return None;
+    }
+    let dest_arg = if eff_dest.to_ascii_lowercase().contains("top") {
+        "top of your library"
+    } else {
+        eff_dest.as_str()
+    };
+    let count_arg = if where_x.is_none() {
+        resolve_x(count, bound_x)
+    } else {
+        count.as_ref()
+    };
+    let extra = SearchLibraryExtra {
+        extra_zones: extra_zones.as_slice(),
+        secondary_filter: secondary_filter.as_deref(),
+        secondary_is_or: *secondary_is_or,
+        where_x: where_x.as_deref(),
+        rest_to_zone: rest_to_zone.as_deref(),
+        modifier: modifier.as_ref(),
+    };
+    let is_optional = opt_chooser.is_some();
+    let mut search = match lower_library_search_ext(
+        library,
+        count_arg,
+        filter,
+        eff_reveal,
+        dest_arg,
+        vocabulary,
+        is_optional,
+        *up_to,
+        *any_number,
+        &extra,
+    ) {
+        Ok(s) => s,
+        Err("oracle:dynamic-search-count")
+            if (*up_to || is_optional)
+                && where_x.is_none()
+                && !*any_number
+                && secondary_filter.is_none()
+                && rest_to_zone.is_none() =>
+        {
+            let dyn_expr =
+                lower_value_expr_in_context(count_arg, builder, in_trigger, vocabulary).ok()?;
+            let mut s = lower_library_search_ext(
+                library,
+                &ValueExprAst::Const(1),
+                filter,
+                eff_reveal,
+                dest_arg,
+                vocabulary,
+                is_optional,
+                true,
+                false,
+                &extra,
+            )
+            .ok()?;
+            s.count = SearchCount::UpToExpr(Box::new(dyn_expr));
+            s
+        }
+        Err(_) => return None,
+    };
+    let mut probe = builder.clone();
+    if let Some(opt_player) = opt_chooser {
+        let chooser = if opt_player == PlayerRefAst::You {
+            ResolvingPlayer::Controller
+        } else {
+            lower_resolving_player_in_context(opt_player, &mut probe, in_trigger).ok()?
+        };
+        if search.searcher == ResolvingPlayer::UniqueRelatedPlayer {
+            search.searcher = if opt_player != PlayerRefAst::You {
+                chooser
+            } else {
+                lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, &mut probe, in_trigger)
+                    .ok()?
+            };
+        }
+        if !search.supports_optional_wrapper() {
+            return None;
+        }
+        bind_search_target_local(&mut probe, &search).ok()?;
+        *builder = probe;
+        builder
+            .instructions
+            .push(Instruction::OptionalEffect { chooser });
+        builder.instructions.push(Instruction::SearchLibrary {
+            filter: Box::new(search),
+        });
+    } else {
+        if search.searcher == ResolvingPlayer::UniqueRelatedPlayer {
+            search.searcher =
+                lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, &mut probe, in_trigger)
+                    .ok()?;
+        }
+        bind_search_target_local(&mut probe, &search).ok()?;
+        *builder = probe;
+        builder.instructions.push(Instruction::SearchLibrary {
+            filter: Box::new(search),
+        });
+    }
+    Some(cursor)
+}
+
+fn is_top_card_anaphora_label(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "it" | "that card" | "the card" | "the revealed card" | "the exiled card"
+    )
+}
+
+fn is_revealed_card_move_op(ins: &InstructionAst) -> bool {
+    match ins {
+        InstructionAst::MoveZone { subject, .. }
+        | InstructionAst::ReturnZone { subject, .. }
+        | InstructionAst::Exile { subject, .. }
+        | InstructionAst::GrantCastPermission { subject, .. } => {
+            matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if is_top_card_anaphora_label(a))
+        }
+        InstructionAst::Optional(inner) => {
+            matches!(inner.as_slice(), [single] if is_revealed_card_move_op(single))
+        }
+        _ => false,
+    }
+}
+
+fn lower_revealed_top_branch(
+    branch: &[InstructionAst],
+    outer_builder: &BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<BodyBuilder, &'static str> {
+    let mut sub = BodyBuilder::with_trigger_hint(outer_builder.trigger_hint);
+    sub.target = outer_builder.target;
+    sub.instructions.push(Instruction::LookTopChoose {
+        count: ValueExpr::literal(1),
+        library_owner: ResolvingPlayer::Controller,
+        filter: None,
+        reveal: true,
+        reveal_only: true,
+        to_battlefield: false,
+        enters_tapped: false,
+        take_all_matching: false,
+        max_picks: 0,
+        rest_to_graveyard: false,
+        rest_to_exile: false,
+        rest_to_top: false,
+        random_rest_order: false,
+        secondary: None,
+    });
+    for step in branch {
+        if is_revealed_card_move_op(step) {
+            let saved_target = sub.target;
+            let inner_step = match step {
+                InstructionAst::Optional(v) if v.len() == 1 => &v[0],
+                other => other,
+            };
+            let force_card_ref = saved_target == BodyTarget::None
+                || matches!(
+                    inner_step,
+                    InstructionAst::MoveZone { subject, .. }
+                        | InstructionAst::ReturnZone { subject, .. }
+                        | InstructionAst::Exile { subject, .. }
+                        | InstructionAst::GrantCastPermission { subject, .. }
+                        if matches!(
+                            subject.as_ref(),
+                            SubjectRefAst::Anaphora(a)
+                                if !a.trim().eq_ignore_ascii_case("it")
+                        )
+                );
+            if force_card_ref {
+                sub.target = BodyTarget::None;
+                let res = lower_instruction_seq(
+                    std::slice::from_ref(step),
+                    &mut sub,
+                    vocabulary,
+                    ids,
+                    false,
+                    false,
+                    bound_x,
+                );
+                sub.target = saved_target;
+                res?;
+                continue;
+            }
+        }
+        lower_instruction_seq(
+            std::slice::from_ref(step),
+            &mut sub,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        )?;
+    }
+    sub.instructions.remove(0);
+    if sub.instructions.is_empty() {
+        return Err("oracle:empty-body");
+    }
+    for op in &mut sub.instructions {
+        op.shift_jumps(-1, 1);
+    }
+    Ok(sub)
+}
+
+fn condition_references_anaphora(cond: &ConditionAst) -> bool {
+    match cond {
+        ConditionAst::Not(inner) => condition_references_anaphora(inner),
+        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
+            condition_references_anaphora(a) || condition_references_anaphora(b)
+        }
+        ConditionAst::MatchesFilter { subject, .. }
+        | ConditionAst::HasStatus { subject, .. }
+        | ConditionAst::HasKeyword { subject, .. }
+        | ConditionAst::StatCompare { subject, .. }
+        | ConditionAst::CounterCompare { subject, .. } => {
+            matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+        }
+        _ => false,
+    }
+}
+
+fn value_expr_references_anaphora_stat(expr: &ValueExprAst) -> bool {
+    match expr {
+        ValueExprAst::ObjectStat { subject, .. } => {
+            matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+        }
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::AbsDiff(a, b) => {
+            value_expr_references_anaphora_stat(a) || value_expr_references_anaphora_stat(b)
+        }
+        ValueExprAst::DivConst { expr, .. } => value_expr_references_anaphora_stat(expr),
+        _ => false,
+    }
+}
+
+fn is_card_anaphora_grant_cast(ins: &InstructionAst) -> Option<&InstructionAst> {
+    let inner = match ins {
+        g @ InstructionAst::GrantCastPermission { .. } => g,
+        InstructionAst::Optional(v) => match v.as_slice() {
+            [single] => single,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if let InstructionAst::GrantCastPermission {
+        subject,
+        count_limit: None,
+        alt_cost: None,
+        ..
+    } = inner
+        && matches!(
+            subject.as_ref(),
+            SubjectRefAst::Anaphora(a)
+                if matches!(
+                    a.trim().to_ascii_lowercase().as_str(),
+                    "it" | "them"
+                        | "that card"
+                        | "those cards"
+                        | "the card"
+                        | "the exiled card"
+                        | "the exiled cards"
+                        | "the revealed card"
+                        | "the revealed cards"
+                )
+        )
+    {
+        Some(inner)
+    } else {
+        None
+    }
+}
+
+fn parse_look_top_library_owner(
+    library: &str,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+) -> Option<(Option<BodyTarget>, ResolvingPlayer)> {
+    let lib_low = library.trim().to_ascii_lowercase();
+    match lib_low.as_str() {
+        "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" => {
+            Some((None, ResolvingPlayer::Controller))
+        }
+        "target player" | "target player's" | "targetplayer" => Some((
+            Some(BodyTarget::SinglePlayer),
+            ResolvingPlayer::TargetPlayer,
+        )),
+        "target opponent" | "target opponent's" | "targetopponent" => Some((
+            Some(BodyTarget::SingleOpponent),
+            ResolvingPlayer::TargetPlayer,
+        )),
+        "target" | "their" | "their library"
+            if matches!(
+                builder.target,
+                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+            ) =>
+        {
+            Some((None, ResolvingPlayer::TargetPlayer))
+        }
+        "their" | "their library" | "that player" | "that player's" | "thatplayer"
+            if in_trigger =>
+        {
+            Some((None, ResolvingPlayer::UniqueRelatedPlayer))
+        }
+        "defending player" | "defending player's" | "defendingplayer" => {
+            Some((None, ResolvingPlayer::DefendingPlayer))
+        }
+        "enchanted player" | "enchanted player's" | "enchantedplayer" => {
+            Some((None, ResolvingPlayer::EnchantedPlayer))
+        }
+        "active player" | "active player's" | "activeplayer" => {
+            Some((None, ResolvingPlayer::ActivePlayer))
+        }
+        _ => None,
+    }
+}
+
+fn is_look_top_rest_anaphora(subj: &SubjectRefAst) -> bool {
+    matches!(
+        subj,
+        SubjectRefAst::Anaphora(a)
+            if matches!(
+                a.trim().to_ascii_lowercase().as_str(),
+                "the_rest"
+                    | "the rest"
+                    | "rest"
+                    | "the other"
+                    | "the other one"
+                    | "the other cards"
+                    | "the other card"
+                    | "the others"
+                    | "any other cards"
+                    | "them"
+                    | "those cards"
+                    | "the rest of them"
+                    | "the rest of the cards"
+                    | "the rest of those cards"
+                    | "the remaining cards"
+                    | "the remaining card"
+                    | "the remaining one"
+                    | "the unchosen cards"
+                    | "any cards not chosen"
+            )
+    )
+}
+
+struct LookTopRestDest {
+    rest_gy: bool,
+    rest_exile: bool,
+    rest_top: bool,
+    random_rest: bool,
+}
+
+fn extract_look_top_rest_dest(op: &InstructionAst) -> Option<LookTopRestDest> {
+    match op {
+        InstructionAst::ReorderTopLibrary => Some(LookTopRestDest {
+            rest_gy: false,
+            rest_exile: false,
+            rest_top: true,
+            random_rest: false,
+        }),
+        InstructionAst::MoveZone { subject, to } if is_look_top_rest_anaphora(subject) => {
+            let low = to.to_ascii_lowercase();
+            let rest_bottom = low.contains("bottom");
+            let rest_gy = low.contains("graveyard");
+            let rest_exile = low.contains("exile");
+            let rest_top = !rest_bottom && low.contains("top") && low.contains("library");
+            let random_rest = low.contains("random");
+            (rest_bottom || rest_gy || rest_exile || rest_top).then_some(LookTopRestDest {
+                rest_gy,
+                rest_exile,
+                rest_top,
+                random_rest,
+            })
+        }
+        InstructionAst::ReturnZone {
+            subject,
+            from_zone: None,
+            to,
+            tapped: false,
+            transformed: false,
+            with_counter: None,
+            attached_to: None,
+            random,
+            except: None,
+            count: None,
+            up_to: false,
+            any_number: false,
+            ..
+        } if is_look_top_rest_anaphora(subject) => {
+            let low = to.to_ascii_lowercase();
+            let random_rest = *random || low.contains("random");
+            let rest_gy = low.contains("graveyard");
+            let rest_exile = low.contains("exile");
+            let rest_top = !random_rest && !low.contains("bottom") && low.contains("top");
+            let rest_bottom = low.contains("bottom")
+                || (random_rest && !rest_gy && !rest_exile && !rest_top && low.contains("library"));
+            (rest_bottom || rest_gy || rest_exile || rest_top).then_some(LookTopRestDest {
+                rest_gy,
+                rest_exile,
+                rest_top,
+                random_rest,
+            })
+        }
+        _ => None,
+    }
+}
+
+struct LookTopKeepBucket {
+    filter: Option<ObjectFilter>,
+    to_battlefield: bool,
+    enters_tapped: bool,
+    take_all_matching: bool,
+    max_picks: u8,
+}
+
+fn parse_look_top_keep_arity(keep_low: &str, rev_tag: &str) -> (bool, u8) {
+    if rev_tag == "revealed:all" {
+        return (true, 1);
+    }
+    if rev_tag == "revealed:any_number" {
+        return (false, u8::MAX);
+    }
+    if let Some(num_str) = rev_tag.strip_prefix("revealed:")
+        && let Ok(n) = num_str.parse::<u8>()
+        && n >= 2
+    {
+        return (false, n);
+    }
+    if keep_low.contains("all of them")
+        || keep_low.contains("all cards")
+        || keep_low.starts_with("all ")
+        || keep_low.contains("each of them")
+    {
+        (true, 1)
+    } else if keep_low.contains("any number") {
+        (false, u8::MAX)
+    } else if keep_low.contains("four")
+        || keep_low.starts_with("up to 4 ")
+        || keep_low.starts_with("4 ")
+    {
+        (false, 4)
+    } else if keep_low.contains("three")
+        || keep_low.starts_with("up to 3 ")
+        || keep_low.starts_with("3 ")
+    {
+        (false, 3)
+    } else if keep_low.contains("two")
+        || keep_low.starts_with("up to 2 ")
+        || keep_low.starts_with("2 ")
+    {
+        (false, 2)
+    } else {
+        (false, 1)
+    }
+}
+
+fn parse_look_top_single_keep_op(
+    op: &InstructionAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<LookTopKeepBucket> {
+    let parse_filter_and_arity =
+        |subj: &SubjectRefAst| -> Option<(bool, u8, Option<ObjectFilter>)> {
+            match subj {
+                SubjectRefAst::Group(f) => {
+                    if is_unrestricted_filter(f) {
+                        Some((false, 1, None))
+                    } else {
+                        lower_object_filter(f, vocabulary)
+                            .ok()
+                            .map(|o| (false, 1, Some(o)))
+                    }
+                }
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                    if is_unrestricted_filter(f) {
+                        Some((true, 1, None))
+                    } else {
+                        lower_object_filter(f, vocabulary)
+                            .ok()
+                            .map(|o| (true, 1, Some(o)))
+                    }
+                }
+                SubjectRefAst::Anaphora(a) => {
+                    let al = a.trim().to_ascii_lowercase();
+                    match al.as_str() {
+                        "one of them"
+                        | "one"
+                        | "up to one of them"
+                        | "up to one"
+                        | "that card"
+                        | "it"
+                        | "a card from among them" => Some((false, 1, None)),
+                        "two of them" | "two" | "up to two of them" | "up to two" => {
+                            Some((false, 2, None))
+                        }
+                        "three of them" | "three" | "up to three of them" | "up to three" => {
+                            Some((false, 3, None))
+                        }
+                        "four of them" | "four" | "up to four of them" | "up to four" => {
+                            Some((false, 4, None))
+                        }
+                        "any number of them" | "any number" => Some((false, u8::MAX, None)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        };
+    let build_from_move =
+        |subj: &SubjectRefAst, to: &str, tapped_flag: bool, override_max: Option<u8>| {
+            let keep_low = to.to_ascii_lowercase();
+            let to_hand = keep_low.contains("hand");
+            let to_battlefield = keep_low.contains("battlefield");
+            if !(to_hand || to_battlefield) {
+                return None;
+            }
+            let enters_tapped = to_battlefield && (tapped_flag || keep_low.contains("tapped"));
+            let (take_all_matching, subj_max, filter) = parse_filter_and_arity(subj)?;
+            Some(LookTopKeepBucket {
+                filter,
+                to_battlefield,
+                enters_tapped,
+                take_all_matching,
+                max_picks: override_max.unwrap_or(subj_max),
+            })
+        };
+    match op {
+        InstructionAst::RevealFromLooked { filter, to }
+            if to != "revealed" && !to.starts_with("revealed:") =>
+        {
+            let keep_low = to.to_ascii_lowercase();
+            let to_hand = keep_low.contains("hand");
+            let to_battlefield = keep_low.contains("battlefield");
+            if !(to_hand || to_battlefield) {
+                return None;
+            }
+            let enters_tapped = to_battlefield && keep_low.contains("tapped");
+            let (take_all_matching, max_picks) = parse_look_top_keep_arity(&keep_low, "");
+            let obj = lower_object_filter(filter, vocabulary).ok()?;
+            Some(LookTopKeepBucket {
+                filter: Some(obj),
+                to_battlefield,
+                enters_tapped,
+                take_all_matching,
+                max_picks,
+            })
+        }
+        InstructionAst::MoveZone { subject, to } => build_from_move(subject, to, false, None),
+        InstructionAst::ReturnZone {
+            subject,
+            from_zone: None,
+            to,
+            tapped,
+            transformed: false,
+            with_counter: None,
+            attached_to: None,
+            random: false,
+            except: None,
+            count,
+            any_number,
+            ..
+        } => {
+            let override_max = if *any_number {
+                Some(u8::MAX)
+            } else if let Some(cnt_ast) = count {
+                match cnt_ast.as_ref() {
+                    ValueExprAst::Const(n) if *n >= 1 => u8::try_from(*n).ok(),
+                    _ => return None,
+                }
+            } else {
+                None
+            };
+            build_from_move(subject, to, *tapped, override_max)
+        }
+        InstructionAst::Optional(inner) => match inner.as_slice() {
+            [single] => parse_look_top_single_keep_op(single, vocabulary),
+            [InstructionAst::RevealFromLooked { filter, to: rev_to }, mv]
+                if rev_to == "revealed" || rev_to.starts_with("revealed:") =>
+            {
+                let (keep_to, tapped_flag) = match mv {
+                    InstructionAst::MoveZone { subject, to }
+                        if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
+                    {
+                        (to.as_str(), false)
+                    }
+                    InstructionAst::ReturnZone {
+                        subject,
+                        from_zone: None,
+                        to,
+                        tapped,
+                        transformed: false,
+                        with_counter: None,
+                        attached_to: None,
+                        ..
+                    } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
+                        (to.as_str(), *tapped)
+                    }
+                    _ => return None,
+                };
+                let keep_low = keep_to.to_ascii_lowercase();
+                let to_hand = keep_low.contains("hand");
+                let to_battlefield = keep_low.contains("battlefield");
+                if !(to_hand || to_battlefield) {
+                    return None;
+                }
+                let enters_tapped = to_battlefield && (tapped_flag || keep_low.contains("tapped"));
+                let (take_all_matching, max_picks) = parse_look_top_keep_arity(&keep_low, rev_to);
+                let obj = lower_object_filter(filter, vocabulary).ok()?;
+                Some(LookTopKeepBucket {
+                    filter: Some(obj),
+                    to_battlefield,
+                    enters_tapped,
+                    take_all_matching,
+                    max_picks,
+                })
+            }
+            [InstructionAst::RevealCards { subject: rev_subj }, mv] => {
+                let (keep_to, tapped_flag) = match mv {
+                    InstructionAst::MoveZone { subject, to }
+                        if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
+                    {
+                        (to.as_str(), false)
+                    }
+                    InstructionAst::ReturnZone {
+                        subject,
+                        from_zone: None,
+                        to,
+                        tapped,
+                        transformed: false,
+                        with_counter: None,
+                        attached_to: None,
+                        ..
+                    } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
+                        (to.as_str(), *tapped)
+                    }
+                    _ => return None,
+                };
+                build_from_move(rev_subj, keep_to, tapped_flag, None)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn try_fuse_look_top_extended(
+    ins: &[InstructionAst],
+    i: usize,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Option<usize> {
+    let InstructionAst::LookTopLibrary {
+        reveal,
+        library,
+        count,
+    } = &ins[i]
+    else {
+        return None;
+    };
+    let (req_bt, library_owner) = parse_look_top_library_owner(library, builder, in_trigger)?;
+    // Case 1: 2-step LookTopLibrary(Const(1)) + [Optional?]MoveZone/ReturnZone(card-anaphora, bottom)
+    if i + 1 < ins.len() && matches!(count.as_ref(), ValueExprAst::Const(1)) {
+        let single_bottom: Option<bool> = match &ins[i + 1] {
+            InstructionAst::MoveZone { subject, to }
+                if matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if is_top_card_anaphora_label(a))
+                    && to.to_ascii_lowercase().contains("bottom") =>
+            {
+                Some(false)
+            }
+            InstructionAst::ReturnZone {
+                subject,
+                from_zone: None,
+                to,
+                tapped: false,
+                transformed: false,
+                with_counter: None,
+                attached_to: None,
+                except: None,
+                count: None,
+                up_to: false,
+                any_number: false,
+                ..
+            } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if is_top_card_anaphora_label(a))
+                && (to.to_ascii_lowercase().contains("bottom")
+                    || to.to_ascii_lowercase().contains("random order")) =>
+            {
+                Some(false)
+            }
+            InstructionAst::Optional(inner) => match inner.as_slice() {
+                [InstructionAst::MoveZone { subject, to }]
+                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if is_top_card_anaphora_label(a))
+                        && to.to_ascii_lowercase().contains("bottom") =>
+                {
+                    Some(true)
+                }
+                [
+                    InstructionAst::ReturnZone {
+                        subject,
+                        from_zone: None,
+                        to,
+                        tapped: false,
+                        transformed: false,
+                        with_counter: None,
+                        attached_to: None,
+                        except: None,
+                        count: None,
+                        up_to: false,
+                        any_number: false,
+                        ..
+                    },
+                ] if matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if is_top_card_anaphora_label(a))
+                    && (to.to_ascii_lowercase().contains("bottom")
+                        || to.to_ascii_lowercase().contains("random order")) =>
+                {
+                    Some(true)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(is_opt) = single_bottom {
+            let mut probe = builder.clone();
+            if let Some(bt) = req_bt {
+                probe.bind_target(bt).ok()?;
+            }
+            *builder = probe;
+            builder.instructions.push(Instruction::LookTopChoose {
+                count: ValueExpr::literal(1),
+                library_owner,
+                filter: None,
+                reveal: *reveal,
+                reveal_only: true,
+                to_battlefield: false,
+                enters_tapped: false,
+                take_all_matching: false,
+                max_picks: 0,
+                rest_to_graveyard: false,
+                rest_to_exile: false,
+                rest_to_top: false,
+                random_rest_order: false,
+                secondary: None,
+            });
+            if is_opt {
+                builder.instructions.push(Instruction::OptionalEffect {
+                    chooser: ResolvingPlayer::Controller,
+                });
+            }
+            builder.instructions.push(Instruction::MoveSubject {
+                subject: MoveSubjectRef::RevealedCard,
+                destination: SubjectDestination::Library(LibraryPlacement::Bottom),
+            });
+            return Some(i + 2);
+        }
+    }
+    // Case 1b: 2-step LookTopLibrary(count) + ReorderTopLibrary / MoveZone/ReturnZone(rest, top of library)
+    if i + 1 < ins.len()
+        && let Some(rest) = extract_look_top_rest_dest(&ins[i + 1])
+        && rest.rest_top
+        && !rest.rest_gy
+        && !rest.rest_exile
+    {
+        let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary).ok()?;
+        let mut probe = builder.clone();
+        if let Some(bt) = req_bt {
+            probe.bind_target(bt).ok()?;
+        }
+        *builder = probe;
+        builder.instructions.push(Instruction::LookTopChoose {
+            count: cnt,
+            library_owner,
+            filter: None,
+            reveal: *reveal,
+            reveal_only: false,
+            to_battlefield: false,
+            enters_tapped: false,
+            take_all_matching: false,
+            max_picks: 0,
+            rest_to_graveyard: false,
+            rest_to_exile: false,
+            rest_to_top: true,
+            random_rest_order: false,
+            secondary: None,
+        });
+        return Some(i + 2);
+    }
+    // Case 2: Two-bucket LookTopLibrary + keep1 + keep2 + rest-move -> LookTopChoose with secondary
+    if i + 3 < ins.len()
+        && let Some(b1) = parse_look_top_single_keep_op(&ins[i + 1], vocabulary)
+        && let Some(b2) = parse_look_top_single_keep_op(&ins[i + 2], vocabulary)
+        && let Some(sec_filter) = b2.filter
+        && !b2.take_all_matching
+        && let Some(rest) = extract_look_top_rest_dest(&ins[i + 3])
+    {
+        let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary).ok()?;
+        let mut probe = builder.clone();
+        if let Some(bt) = req_bt {
+            probe.bind_target(bt).ok()?;
+        }
+        *builder = probe;
+        builder.instructions.push(Instruction::LookTopChoose {
+            count: cnt,
+            library_owner,
+            filter: b1.filter.map(Box::new),
+            reveal: *reveal,
+            reveal_only: false,
+            to_battlefield: b1.to_battlefield,
+            enters_tapped: b1.enters_tapped,
+            take_all_matching: b1.take_all_matching,
+            max_picks: b1.max_picks,
+            rest_to_graveyard: rest.rest_gy,
+            rest_to_exile: rest.rest_exile,
+            rest_to_top: rest.rest_top,
+            random_rest_order: rest.random_rest,
+            secondary: Some(Box::new(spellwake_engine::program::LookTopSecondary {
+                filter: Box::new(sec_filter),
+                to_battlefield: b2.to_battlefield,
+                enters_tapped: b2.enters_tapped,
+                max_picks: b2.max_picks,
+            })),
+        });
+        return Some(i + 4);
+    }
+    // Case 3: 3-step LookTopLibrary + keep1 (including Optional([RevealCards/RevealFromLooked, ReturnZone/MoveZone]))
+    // + rest-move (MoveZone / ReturnZone / ReorderTopLibrary), supporting non-Controller library_owner too.
+    if i + 2 < ins.len()
+        && let Some(b1) = parse_look_top_single_keep_op(&ins[i + 1], vocabulary)
+        && let Some(rest) = extract_look_top_rest_dest(&ins[i + 2])
+    {
+        let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary).ok()?;
+        let mut probe = builder.clone();
+        if let Some(bt) = req_bt {
+            probe.bind_target(bt).ok()?;
+        }
+        *builder = probe;
+        builder.instructions.push(Instruction::LookTopChoose {
+            count: cnt,
+            library_owner,
+            filter: b1.filter.map(Box::new),
+            reveal: *reveal,
+            reveal_only: false,
+            to_battlefield: b1.to_battlefield,
+            enters_tapped: b1.enters_tapped,
+            take_all_matching: b1.take_all_matching,
+            max_picks: b1.max_picks,
+            rest_to_graveyard: rest.rest_gy,
+            rest_to_exile: rest.rest_exile,
+            rest_to_top: rest.rest_top,
+            random_rest_order: rest.random_rest,
+            secondary: None,
+        });
+        return Some(i + 3);
+    }
+    // Case 4: 4-step LookTopLibrary + [Optional?](RevealCards | RevealFromLooked("revealed"))
+    // + [Optional?]MoveZone/ReturnZone(Anaphora, hand/bf) + rest-move (MoveZone / ReturnZone / ReorderTopLibrary)
+    if i + 3 < ins.len()
+        && let Some(rest) = extract_look_top_rest_dest(&ins[i + 3])
+    {
+        enum LookTopRevealStep<'a> {
+            Cards(&'a SubjectRefAst),
+            FromLooked(&'a ObjectFilterAst, &'a str),
+        }
+        let rev_step = match &ins[i + 1] {
+            InstructionAst::RevealCards { subject } => {
+                Some(LookTopRevealStep::Cards(subject.as_ref()))
+            }
+            InstructionAst::RevealFromLooked { filter, to }
+                if to == "revealed" || to.starts_with("revealed:") =>
+            {
+                Some(LookTopRevealStep::FromLooked(filter.as_ref(), to.as_str()))
+            }
+            InstructionAst::Optional(inner) => match inner.as_slice() {
+                [InstructionAst::RevealCards { subject }] => {
+                    Some(LookTopRevealStep::Cards(subject.as_ref()))
+                }
+                [InstructionAst::RevealFromLooked { filter, to }]
+                    if to == "revealed" || to.starts_with("revealed:") =>
+                {
+                    Some(LookTopRevealStep::FromLooked(filter.as_ref(), to.as_str()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let mv_info = match &ins[i + 2] {
+            InstructionAst::MoveZone { subject, to }
+                if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
+            {
+                Some((to.as_str(), false))
+            }
+            InstructionAst::ReturnZone {
+                subject,
+                from_zone: None,
+                to,
+                tapped,
+                transformed: false,
+                with_counter: None,
+                attached_to: None,
+                ..
+            } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
+                Some((to.as_str(), *tapped))
+            }
+            InstructionAst::Optional(inner) => match inner.as_slice() {
+                [InstructionAst::MoveZone { subject, to }]
+                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
+                {
+                    Some((to.as_str(), false))
+                }
+                [
+                    InstructionAst::ReturnZone {
+                        subject,
+                        from_zone: None,
+                        to,
+                        tapped,
+                        transformed: false,
+                        with_counter: None,
+                        attached_to: None,
+                        ..
+                    },
+                ] if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
+                    Some((to.as_str(), *tapped))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let (Some(rstep), Some((keep_to, tapped_flag))) = (rev_step, mv_info) {
+            let bucket_opt = match rstep {
+                LookTopRevealStep::Cards(rsubj) => {
+                    let synth_mv = InstructionAst::MoveZone {
+                        subject: Box::new(rsubj.clone()),
+                        to: if tapped_flag && !keep_to.to_ascii_lowercase().contains("tapped") {
+                            format!("{keep_to} tapped")
+                        } else {
+                            keep_to.to_string()
+                        },
+                    };
+                    parse_look_top_single_keep_op(&synth_mv, vocabulary)
+                }
+                LookTopRevealStep::FromLooked(filter_ast, rev_tag) => {
+                    let keep_low = keep_to.to_ascii_lowercase();
+                    let to_hand = keep_low.contains("hand");
+                    let to_battlefield = keep_low.contains("battlefield");
+                    if to_hand || to_battlefield {
+                        let enters_tapped =
+                            to_battlefield && (tapped_flag || keep_low.contains("tapped"));
+                        let (take_all_matching, max_picks) =
+                            parse_look_top_keep_arity(&keep_low, rev_tag);
+                        lower_object_filter(filter_ast, vocabulary).ok().map(|obj| {
+                            LookTopKeepBucket {
+                                filter: Some(obj),
+                                to_battlefield,
+                                enters_tapped,
+                                take_all_matching,
+                                max_picks,
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(b1) = bucket_opt {
+                let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary).ok()?;
+                let mut probe = builder.clone();
+                if let Some(bt) = req_bt {
+                    probe.bind_target(bt).ok()?;
+                }
+                *builder = probe;
+                builder.instructions.push(Instruction::LookTopChoose {
+                    count: cnt,
+                    library_owner,
+                    filter: b1.filter.map(Box::new),
+                    reveal: *reveal,
+                    reveal_only: false,
+                    to_battlefield: b1.to_battlefield,
+                    enters_tapped: b1.enters_tapped,
+                    take_all_matching: b1.take_all_matching,
+                    max_picks: b1.max_picks,
+                    rest_to_graveyard: rest.rest_gy,
+                    rest_to_exile: rest.rest_exile,
+                    rest_to_top: rest.rest_top,
+                    random_rest_order: rest.random_rest,
+                    secondary: None,
+                });
+                return Some(i + 4);
+            }
+        }
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_fuse_choose_keyword_grant(
+    ins: &[InstructionAst],
+    i: usize,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Option<usize> {
+    if i + 1 >= ins.len() {
+        return None;
+    }
+    let InstructionAst::ChooseOption(opts_raw) = &ins[i] else {
+        return None;
+    };
+    let (subject, duration) = match &ins[i + 1] {
+        InstructionAst::GrantAbilityText {
+            subject,
+            ability_text,
+            compiled: None,
+            duration,
+        } if matches!(
+            ability_text
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "that ability" | "the chosen ability" | "that keyword" | "the chosen keyword"
+        ) =>
+        {
+            (subject, duration)
+        }
+        InstructionAst::GrantKeywords {
+            subject,
+            keywords,
+            duration,
+        } if keywords.len() == 1
+            && matches!(
+                keywords[0]
+                    .trim()
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "that ability" | "the chosen ability" | "that keyword" | "the chosen keyword"
+            ) =>
+        {
+            (subject, duration)
+        }
+        _ => return None,
+    };
+    let trimmed = opts_raw.trim().trim_end_matches('.');
+    let (chooser_ref, list_raw) = if let Some((prefix, rest)) = trimmed.split_once(':') {
+        let pr = match prefix.trim().to_ascii_lowercase().as_str() {
+            "you" => PlayerRefAst::You,
+            "targetplayer" | "target player" => PlayerRefAst::TargetPlayer,
+            "targetopponent" | "target opponent" => PlayerRefAst::TargetOpponent,
+            "thatplayer" | "that player" => PlayerRefAst::ThatPlayer,
+            "activeplayer" | "active player" => PlayerRefAst::ActivePlayer,
+            "defendingplayer" | "defending player" => PlayerRefAst::DefendingPlayer,
+            "enchantedplayer" | "enchanted player" => PlayerRefAst::EnchantedPlayer,
+            _ => return None,
+        };
+        (pr, rest.trim())
+    } else {
+        (PlayerRefAst::You, trimmed)
+    };
+    let list_clean = list_raw
+        .strip_prefix("choose ")
+        .or_else(|| list_raw.strip_prefix("Choose "))
+        .unwrap_or(list_raw)
+        .trim();
+    let mut kw_options: Vec<String> = Vec::new();
+    for seg in list_clean.split(" or ") {
+        for sub in seg.split(',') {
+            let k = sub
+                .trim()
+                .trim_start_matches("or ")
+                .trim_start_matches("and ")
+                .trim();
+            if !k.is_empty() {
+                kw_options.push(k.to_string());
+            }
+        }
+    }
+    if kw_options.len() < 2 || kw_options.len() > 16 {
+        return None;
+    }
+    for kw in &kw_options {
+        if lower_ability_change(std::slice::from_ref(kw), vocabulary).is_err() {
+            return None;
+        }
+    }
+    let mut probe = builder.clone();
+    let chooser = if chooser_ref == PlayerRefAst::You {
+        ResolvingPlayer::Controller
+    } else {
+        lower_resolving_player_in_context(chooser_ref, &mut probe, in_trigger).ok()?
+    };
+    let mut shared_target: Option<BodyTarget> = None;
+    let mut branches = Vec::with_capacity(kw_options.len());
+    for kw in kw_options {
+        let mut br = BodyBuilder::with_trigger_hint(probe.trigger_hint);
+        br.target = probe.target;
+        let synth = InstructionAst::GrantKeywords {
+            subject: subject.clone(),
+            keywords: vec![kw.clone()],
+            duration: duration.clone(),
+        };
+        if lower_instruction(
+            &synth,
+            &mut br,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        )
+        .is_err()
+            || br.instructions.is_empty()
+            || br.graveyard_target_bounds.is_some()
+            || br.x_target_count
+            || br.up_to_one_target
+        {
+            return None;
+        }
+        let br_target = br.target;
+        if let Some(prev_t) = shared_target {
+            if prev_t != br_target {
+                return None;
+            }
+        } else {
+            shared_target = Some(br_target);
+        }
+        br.target = BodyTarget::None;
+        let body = br.finish().ok()?;
+        branches.push(ChooseOptionBranch { label: kw, body });
+    }
+    if let Some(st) = shared_target
+        && st != probe.target
+    {
+        probe.bind_target(st).ok()?;
+    }
+    *builder = probe;
+    builder.instructions.push(Instruction::ChooseOption {
+        chooser,
+        options: branches,
+    });
+    Some(i + 2)
 }
 
 fn emit_condition_branches(
@@ -9509,376 +11409,26 @@ pub(super) fn lower_instruction_seq(
             i += 1;
             continue;
         }
-        // Fuse [Optional([SearchLibrary(shuffle: false, to_zone: "found_set")])] + ShuffleLibrary + MoveZone(Anaphora, "top...")
-        if i + 2 < ins.len()
-            && let InstructionAst::Optional(inner) = &ins[i]
-            && let [
-                InstructionAst::SearchLibrary {
-                    library,
-                    count,
-                    filter,
-                    reveal,
-                    to_zone,
-                    shuffle: false,
-                    up_to,
-                    any_number,
-                    extra_zones,
-                    secondary_filter,
-                    secondary_is_or,
-                    where_x,
-                    rest_to_zone,
-                    modifier,
-                    follow_up,
-                    exact: false,
-                },
-            ] = inner.as_slice()
-            && follow_up.is_empty()
-            && (to_zone == "found_set" || to_zone.is_empty())
-            && matches!(
-                &ins[i + 1],
-                InstructionAst::ShuffleLibrary {
-                    player: PlayerRefAst::You
-                        | PlayerRefAst::ThatPlayer
-                        | PlayerRefAst::TargetPlayer
-                        | PlayerRefAst::TargetOpponent
-                        | PlayerRefAst::EachPlayer
-                        | PlayerRefAst::EachOpponent
-                }
-            )
-            && let InstructionAst::MoveZone { subject, to } = &ins[i + 2]
-            && matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
-            && to.to_ascii_lowercase().contains("top")
+        // Unified SearchLibrary fusion: Optional / OptionalPlayer / standalone SearchLibrary +
+        // reveal / MoveZone / ReturnZone / Exile / ShuffleLibrary / IfCondition(SearchedLibraryThisWay) / IfPreviousSucceeded.
+        if let Some(next_i) =
+            try_fuse_search_library(ins, i, builder, vocabulary, in_trigger, bound_x)
         {
-            let search = lower_library_search_ext(
-                library,
-                count,
-                filter,
-                *reveal,
-                "top of your library",
-                vocabulary,
-                true,
-                *up_to,
-                *any_number,
-                &SearchLibraryExtra {
-                    extra_zones: extra_zones.as_slice(),
-                    secondary_filter: secondary_filter.as_deref(),
-                    secondary_is_or: *secondary_is_or,
-                    where_x: where_x.as_deref(),
-                    rest_to_zone: rest_to_zone.as_deref(),
-                    modifier: modifier.as_ref(),
-                },
-            )?;
-            bind_search_target_local(builder, &search)?;
-            builder.instructions.push(Instruction::OptionalEffect {
-                chooser: ResolvingPlayer::Controller,
-            });
-            builder.instructions.push(Instruction::SearchLibrary {
-                filter: Box::new(search),
-            });
-            i += 3;
+            i = next_i;
             continue;
         }
-        // Fuse SearchLibrary(shuffle: false, to_zone: "found_set") + ShuffleLibrary + MoveZone(Anaphora, "top...")
-        if i + 2 < ins.len()
-            && let InstructionAst::SearchLibrary {
-                library,
-                count,
-                filter,
-                reveal,
-                to_zone,
-                shuffle: false,
-                up_to,
-                any_number,
-                extra_zones,
-                secondary_filter,
-                secondary_is_or,
-                where_x,
-                rest_to_zone,
-                modifier,
-                follow_up,
-                exact: false,
-            } = &ins[i]
-            && follow_up.is_empty()
-            && (to_zone == "found_set" || to_zone.is_empty())
-            && matches!(
-                &ins[i + 1],
-                InstructionAst::ShuffleLibrary {
-                    player: PlayerRefAst::You
-                        | PlayerRefAst::ThatPlayer
-                        | PlayerRefAst::TargetPlayer
-                        | PlayerRefAst::TargetOpponent
-                        | PlayerRefAst::EachPlayer
-                        | PlayerRefAst::EachOpponent
-                }
-            )
-            && let InstructionAst::MoveZone { subject, to } = &ins[i + 2]
-            && matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
-            && to.to_ascii_lowercase().contains("top")
-        {
-            let search = lower_library_search_ext(
-                library,
-                count,
-                filter,
-                *reveal,
-                "top of your library",
-                vocabulary,
-                false,
-                *up_to,
-                *any_number,
-                &SearchLibraryExtra {
-                    extra_zones: extra_zones.as_slice(),
-                    secondary_filter: secondary_filter.as_deref(),
-                    secondary_is_or: *secondary_is_or,
-                    where_x: where_x.as_deref(),
-                    rest_to_zone: rest_to_zone.as_deref(),
-                    modifier: modifier.as_ref(),
-                },
-            )?;
-            bind_search_target_local(builder, &search)?;
-            builder.instructions.push(Instruction::SearchLibrary {
-                filter: Box::new(search),
-            });
-            i += 3;
-            continue;
-        }
-        // Fuse Optional([SearchLibrary(shuffle: _, to_zone: "found_set")]) + MoveZone(Anaphora, "top...")
-        if i + 1 < ins.len()
-            && let InstructionAst::Optional(inner) = &ins[i]
-            && let [
-                InstructionAst::SearchLibrary {
-                    library,
-                    count,
-                    filter,
-                    reveal,
-                    to_zone,
-                    shuffle,
-                    up_to,
-                    any_number,
-                    extra_zones,
-                    secondary_filter,
-                    secondary_is_or,
-                    where_x,
-                    rest_to_zone,
-                    modifier,
-                    follow_up,
-                    exact: false,
-                },
-            ] = inner.as_slice()
-            && follow_up.is_empty()
-            && (to_zone == "found_set" || to_zone.is_empty())
-            && let InstructionAst::MoveZone { subject, to } = &ins[i + 1]
-            && matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
-            && {
-                let to_low = to.to_ascii_lowercase();
-                to_low.contains("top") && (*shuffle || to_low.contains("after_shuffle"))
-            }
-        {
-            let search = lower_library_search_ext(
-                library,
-                count,
-                filter,
-                *reveal,
-                "top of your library",
-                vocabulary,
-                true,
-                *up_to,
-                *any_number,
-                &SearchLibraryExtra {
-                    extra_zones: extra_zones.as_slice(),
-                    secondary_filter: secondary_filter.as_deref(),
-                    secondary_is_or: *secondary_is_or,
-                    where_x: where_x.as_deref(),
-                    rest_to_zone: rest_to_zone.as_deref(),
-                    modifier: modifier.as_ref(),
-                },
-            )?;
-            bind_search_target_local(builder, &search)?;
-            builder.instructions.push(Instruction::OptionalEffect {
-                chooser: ResolvingPlayer::Controller,
-            });
-            builder.instructions.push(Instruction::SearchLibrary {
-                filter: Box::new(search),
-            });
-            i += 2;
-            continue;
-        }
-        // Fuse SearchLibrary(shuffle: _, to_zone: "found_set") + MoveZone(Anaphora, "top...")
-        if i + 1 < ins.len()
-            && let InstructionAst::SearchLibrary {
-                library,
-                count,
-                filter,
-                reveal,
-                to_zone,
-                shuffle,
-                up_to,
-                any_number,
-                extra_zones,
-                secondary_filter,
-                secondary_is_or,
-                where_x,
-                rest_to_zone,
-                modifier,
-                follow_up,
-                exact: false,
-            } = &ins[i]
-            && follow_up.is_empty()
-            && (to_zone == "found_set" || to_zone.is_empty())
-            && let InstructionAst::MoveZone { subject, to } = &ins[i + 1]
-            && matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
-            && {
-                let to_low = to.to_ascii_lowercase();
-                to_low.contains("top") && (*shuffle || to_low.contains("after_shuffle"))
-            }
-        {
-            let search = lower_library_search_ext(
-                library,
-                count,
-                filter,
-                *reveal,
-                "top of your library",
-                vocabulary,
-                false,
-                *up_to,
-                *any_number,
-                &SearchLibraryExtra {
-                    extra_zones: extra_zones.as_slice(),
-                    secondary_filter: secondary_filter.as_deref(),
-                    secondary_is_or: *secondary_is_or,
-                    where_x: where_x.as_deref(),
-                    rest_to_zone: rest_to_zone.as_deref(),
-                    modifier: modifier.as_ref(),
-                },
-            )?;
-            bind_search_target_local(builder, &search)?;
-            builder.instructions.push(Instruction::SearchLibrary {
-                filter: Box::new(search),
-            });
-            i += 2;
-            continue;
-        }
-        // Fuse Optional([SearchLibrary(shuffle: false)]) + ShuffleLibrary
-        if i + 1 < ins.len()
-            && let InstructionAst::Optional(inner) = &ins[i]
-            && let [
-                InstructionAst::SearchLibrary {
-                    library,
-                    count,
-                    filter,
-                    reveal,
-                    to_zone,
-                    shuffle: false,
-                    up_to,
-                    any_number,
-                    extra_zones,
-                    secondary_filter,
-                    secondary_is_or,
-                    where_x,
-                    rest_to_zone,
-                    modifier,
-                    follow_up,
-                    exact: false,
-                },
-            ] = inner.as_slice()
-            && follow_up.is_empty()
-            && matches!(
-                &ins[i + 1],
-                InstructionAst::ShuffleLibrary {
-                    player: PlayerRefAst::You
-                        | PlayerRefAst::ThatPlayer
-                        | PlayerRefAst::TargetPlayer
-                        | PlayerRefAst::TargetOpponent
-                        | PlayerRefAst::EachPlayer
-                        | PlayerRefAst::EachOpponent
-                }
-            )
-        {
-            let search = lower_library_search_ext(
-                library,
-                count,
-                filter,
-                *reveal,
-                to_zone,
-                vocabulary,
-                true,
-                *up_to,
-                *any_number,
-                &SearchLibraryExtra {
-                    extra_zones: extra_zones.as_slice(),
-                    secondary_filter: secondary_filter.as_deref(),
-                    secondary_is_or: *secondary_is_or,
-                    where_x: where_x.as_deref(),
-                    rest_to_zone: rest_to_zone.as_deref(),
-                    modifier: modifier.as_ref(),
-                },
-            )?;
-            bind_search_target_local(builder, &search)?;
-            builder.instructions.push(Instruction::OptionalEffect {
-                chooser: ResolvingPlayer::Controller,
-            });
-            builder.instructions.push(Instruction::SearchLibrary {
-                filter: Box::new(search),
-            });
-            i += 2;
-            continue;
-        }
-        // Fuse SearchLibrary(shuffle: false) + ShuffleLibrary into native SearchLibrary
-        if i + 1 < ins.len()
-            && let InstructionAst::SearchLibrary {
-                library,
-                count,
-                filter,
-                reveal,
-                to_zone,
-                shuffle: false,
-                up_to,
-                any_number,
-                extra_zones,
-                secondary_filter,
-                secondary_is_or,
-                where_x,
-                rest_to_zone,
-                modifier,
-                follow_up,
-                exact: false,
-            } = &ins[i]
-            && follow_up.is_empty()
-            && matches!(
-                &ins[i + 1],
-                InstructionAst::ShuffleLibrary {
-                    player: PlayerRefAst::You
-                        | PlayerRefAst::ThatPlayer
-                        | PlayerRefAst::TargetPlayer
-                        | PlayerRefAst::TargetOpponent
-                        | PlayerRefAst::EachPlayer
-                        | PlayerRefAst::EachOpponent
-                }
-            )
-        {
-            let search = lower_library_search_ext(
-                library,
-                count,
-                filter,
-                *reveal,
-                to_zone,
-                vocabulary,
-                false,
-                *up_to,
-                *any_number,
-                &SearchLibraryExtra {
-                    extra_zones: extra_zones.as_slice(),
-                    secondary_filter: secondary_filter.as_deref(),
-                    secondary_is_or: *secondary_is_or,
-                    where_x: where_x.as_deref(),
-                    rest_to_zone: rest_to_zone.as_deref(),
-                    modifier: modifier.as_ref(),
-                },
-            )?;
-            bind_search_target_local(builder, &search)?;
-            builder.instructions.push(Instruction::SearchLibrary {
-                filter: Box::new(search),
-            });
-            i += 2;
+        // Fuse ChooseOption(<keyword list>) + GrantAbilityText("that ability") (e.g. Angelic Skirmisher).
+        if let Some(next_i) = try_fuse_choose_keyword_grant(
+            ins,
+            i,
+            builder,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        ) {
+            i = next_i;
             continue;
         }
         // Fuse Exile(target) + DelayedTrigger(EndStep, ReturnZone(Anaphora, battlefield)) -> ExileUntilNextEndStep
@@ -10175,6 +11725,47 @@ pub(super) fn lower_instruction_seq(
                             offer_idx + 1,
                             0,
                         ));
+                        // If the paid branch ends with revealing/exiling the top card of a library
+                        // and the next sibling sentence tests that revealed/exiled card (plus optional Otherwise),
+                        // pull those dependent sentences inside the paid branch (e.g. Skirk Drill Sergeant).
+                        let tail_checks_top = matches!(
+                            then_body.last(),
+                            Some(
+                                InstructionAst::LookTopLibrary {
+                                    reveal: true,
+                                    count,
+                                    ..
+                                } | InstructionAst::ExileTopLibrary { count, .. }
+                            ) if matches!(count.as_ref(), ValueExprAst::Const(1))
+                        );
+                        if tail_checks_top
+                            && i + 2 < ins.len()
+                            && let InstructionAst::IfCondition { condition, .. } = &ins[i + 2]
+                            && condition_references_anaphora(condition)
+                        {
+                            let has_else = i + 3 < ins.len()
+                                && matches!(&ins[i + 3], InstructionAst::Otherwise(_));
+                            let mut combined =
+                                Vec::with_capacity(then_body.len() + if has_else { 2 } else { 1 });
+                            combined.extend_from_slice(then_body);
+                            combined.push(ins[i + 2].clone());
+                            if has_else {
+                                combined.push(ins[i + 3].clone());
+                            }
+                            lower_instruction_seq(
+                                &combined,
+                                builder,
+                                vocabulary,
+                                ids,
+                                in_trigger,
+                                self_pronoun_valid,
+                                bound_x,
+                            )?;
+                            let end_dest = builder.instructions.len();
+                            set_offer_declined(builder.instructions.get_mut(offer_idx), end_dest);
+                            i += if has_else { 4 } else { 3 };
+                            continue;
+                        }
                         lower_instruction_seq(
                             then_body,
                             builder,
@@ -10238,14 +11829,27 @@ pub(super) fn lower_instruction_seq(
                         continue;
                     }
                     InstructionAst::ReflexiveTrigger(ref_body) => {
+                        let bind_val = if let Some(bx) = bound_x
+                            && ref_body.iter().any(instruction_has_chosen_x)
+                        {
+                            Some(lower_bound_x_for_resolution(
+                                bx, builder, vocabulary, in_trigger,
+                            )?)
+                        } else {
+                            None
+                        };
                         let reflexive_body =
                             lower_effect_body(ref_body, vocabulary, ids, true, self_pronoun_valid)?;
                         let offer_idx = builder.instructions.len();
+                        let paid_len = if bind_val.is_some() { 2 } else { 1 };
                         builder.instructions.push(with_offer_dests(
                             offer_template,
                             offer_idx + 1,
-                            offer_idx + 2,
+                            offer_idx + 1 + paid_len,
                         ));
+                        if let Some(val) = bind_val {
+                            builder.instructions.push(Instruction::BindResolutionX(val));
+                        }
                         builder
                             .instructions
                             .push(Instruction::EmitReflexiveTrigger {
@@ -10253,6 +11857,36 @@ pub(super) fn lower_instruction_seq(
                             });
                         i += 2;
                         continue;
+                    }
+                    InstructionAst::BindX { x_expr, body } => {
+                        if let [InstructionAst::ReflexiveTrigger(ref_body)] = body.as_slice() {
+                            let x_val = lower_bound_x_for_resolution(
+                                x_expr, builder, vocabulary, in_trigger,
+                            )?;
+                            let reflexive_body = lower_effect_body(
+                                ref_body,
+                                vocabulary,
+                                ids,
+                                true,
+                                self_pronoun_valid,
+                            )?;
+                            let offer_idx = builder.instructions.len();
+                            builder.instructions.push(with_offer_dests(
+                                offer_template,
+                                offer_idx + 1,
+                                offer_idx + 3,
+                            ));
+                            builder
+                                .instructions
+                                .push(Instruction::BindResolutionX(x_val));
+                            builder
+                                .instructions
+                                .push(Instruction::EmitReflexiveTrigger {
+                                    body: Box::new(reflexive_body),
+                                });
+                            i += 2;
+                            continue;
+                        }
                     }
                     _ => {}
                 }
@@ -10267,8 +11901,22 @@ pub(super) fn lower_instruction_seq(
             i += 1;
             continue;
         }
-        // Lower ReflexiveTrigger ("When you do, ...") after an action/optional cost with CR 603.12 conditional guard
-        if let InstructionAst::ReflexiveTrigger(ref_body) = &ins[i] {
+        // Lower ReflexiveTrigger ("When you do, ...") or BindX([ReflexiveTrigger(...)])
+        // with CR 603.12 conditional guard and BindResolutionX propagation.
+        let reflexive_pair: Option<(Option<&ValueExprAst>, &[InstructionAst])> = match &ins[i] {
+            InstructionAst::ReflexiveTrigger(ref_body) => {
+                let outer_x = bound_x.filter(|_| ref_body.iter().any(instruction_has_chosen_x));
+                Some((outer_x, ref_body.as_slice()))
+            }
+            InstructionAst::BindX { x_expr, body } => match body.as_slice() {
+                [InstructionAst::ReflexiveTrigger(ref_body)] => {
+                    Some((Some(x_expr.as_ref()), ref_body.as_slice()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((x_expr_opt, ref_body)) = reflexive_pair {
             let prev_tracks_action = i > 0
                 && matches!(
                     &ins[i - 1],
@@ -10283,24 +11931,71 @@ pub(super) fn lower_instruction_seq(
                         | InstructionAst::SearchLibrary { .. }
                         | InstructionAst::Clash { .. }
                 );
+            let bind_val = x_expr_opt
+                .map(|xe| lower_bound_x_for_resolution(xe, builder, vocabulary, in_trigger))
+                .transpose()?;
             let reflexive_body =
                 lower_effect_body(ref_body, vocabulary, ids, true, self_pronoun_valid)?;
             if prev_tracks_action {
                 let branch_idx = builder.instructions.len();
+                let body_len = if bind_val.is_some() { 2 } else { 1 };
                 builder.instructions.push(Instruction::BranchIfFalse {
                     condition: ResolutionCondition {
                         left: ValueExpr::event(EventValueKind::LastActionSucceeded),
                         comparison: Comparison::GreaterOrEqual,
                         right: ValueExpr::literal(1),
                     },
-                    destination: branch_idx + 2,
+                    destination: branch_idx + 1 + body_len,
                 });
+            }
+            if let Some(val) = bind_val {
+                builder.instructions.push(Instruction::BindResolutionX(val));
             }
             builder
                 .instructions
                 .push(Instruction::EmitReflexiveTrigger {
                     body: Box::new(reflexive_body),
                 });
+            i += 1;
+            continue;
+        }
+        // Sentence-scoped BindX whose bound X is referenced by downstream instructions in this sequence
+        // (e.g. Chainer's Torment chapter III): emit BindResolutionX so downstream ChosenX validates and reads X.
+        if let InstructionAst::BindX { x_expr, body } = &ins[i]
+            && !body.is_empty()
+            && ins[i + 1..].iter().any(instruction_has_chosen_x)
+        {
+            let pre_x = lower_bound_x_for_resolution(x_expr, builder, vocabulary, in_trigger).ok();
+            let emit_before = pre_x
+                .as_ref()
+                .is_some_and(|v| builder.target != BodyTarget::None || !v.uses_target());
+            if emit_before && let Some(val) = pre_x {
+                builder.instructions.push(Instruction::BindResolutionX(val));
+                lower_instruction_seq(
+                    body,
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    Some(x_expr.as_ref()),
+                )?;
+            } else {
+                lower_instruction_seq(
+                    body,
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    Some(x_expr.as_ref()),
+                )?;
+                if let Ok(val) =
+                    lower_bound_x_for_resolution(x_expr, builder, vocabulary, in_trigger)
+                {
+                    builder.instructions.push(Instruction::BindResolutionX(val));
+                }
+            }
             i += 1;
             continue;
         }
@@ -10440,6 +12135,127 @@ pub(super) fn lower_instruction_seq(
                 }
                 _ => {}
             }
+        }
+        // Wrap Optional([ExileTopLibrary]) + dependent card-anaphora follow-ups (IfCondition / stat damage / GrantCastPermission)
+        // in a single OptionalSequence so facts.definitely_checked_top holds across the follow-ups (e.g. Daredevil).
+        let opt_exile_top = match &ins[i] {
+            InstructionAst::Optional(inner) => match inner.as_slice() {
+                [exile @ InstructionAst::ExileTopLibrary { .. }] => {
+                    Some((PlayerRefAst::You, exile))
+                }
+                _ => None,
+            },
+            InstructionAst::OptionalPlayer { player, body } => match body.as_slice() {
+                [exile @ InstructionAst::ExileTopLibrary { .. }] => Some((*player, exile)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((opt_player, exile_op)) = opt_exile_top
+            && i + 1 < ins.len()
+        {
+            let mut end = i + 1;
+            while end < ins.len() {
+                match &ins[end] {
+                    InstructionAst::IfCondition { condition, .. }
+                        if condition_references_anaphora(condition) =>
+                    {
+                        end += 1;
+                        if end < ins.len() && matches!(&ins[end], InstructionAst::Otherwise(_)) {
+                            end += 1;
+                        }
+                    }
+                    InstructionAst::DealDamage { amount, .. }
+                        if value_expr_references_anaphora_stat(amount) =>
+                    {
+                        end += 1;
+                    }
+                    InstructionAst::ChangeLife { delta, .. }
+                        if value_expr_references_anaphora_stat(delta) =>
+                    {
+                        end += 1;
+                    }
+                    other if is_card_anaphora_grant_cast(other).is_some() => {
+                        end += 1;
+                    }
+                    _ => break,
+                }
+            }
+            if end > i + 1 {
+                let mut probe = builder.clone();
+                let chooser_res = if opt_player == PlayerRefAst::You {
+                    Ok(ResolvingPlayer::Controller)
+                } else {
+                    lower_resolving_player_in_context(opt_player, &mut probe, in_trigger)
+                };
+                if let Ok(chooser) = chooser_res {
+                    let start = probe.instructions.len();
+                    let mut combined = Vec::with_capacity(end - i);
+                    combined.push(exile_op.clone());
+                    combined.extend_from_slice(&ins[i + 1..end]);
+                    if lower_instruction_seq(
+                        &combined,
+                        &mut probe,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )
+                    .is_ok()
+                        && probe.instructions.len() > start
+                        && matches!(
+                            probe.instructions.get(start),
+                            Some(
+                                Instruction::ExileLibraryTop { .. }
+                                    | Instruction::ExileTopPlay { .. }
+                                    | Instruction::ExileTopForPlay { .. }
+                            )
+                        )
+                    {
+                        let span = probe.instructions.len() - start;
+                        if span == 1 {
+                            prepend_instruction_at(
+                                &mut probe.instructions,
+                                start,
+                                Instruction::OptionalEffect { chooser },
+                            );
+                        } else {
+                            prepend_instruction_at(
+                                &mut probe.instructions,
+                                start,
+                                Instruction::OptionalSequence {
+                                    chooser,
+                                    instructions: span,
+                                },
+                            );
+                        }
+                        *builder = probe;
+                        i = end;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Route card-anaphora GrantCastPermission after ExileLibraryTop / LookTopChoose(reveal_only) / MayRevealLibraryTop
+        // to MoveSubjectRef::RevealedCard even inside triggered abilities (e.g. Daredevil).
+        if builder.target == BodyTarget::None
+            && builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::ExileLibraryTop { .. }
+                        | Instruction::LookTopChoose {
+                            reveal_only: true,
+                            ..
+                        }
+                        | Instruction::MayRevealLibraryTop
+                )
+            })
+            && let Some(grant_op) = is_card_anaphora_grant_cast(&ins[i])
+        {
+            lower_instruction(grant_op, builder, vocabulary, ids, false, false, bound_x)?;
+            i += 1;
+            continue;
         }
         // Fuse paired impulse draw: ExileTopLibrary + GrantCastPermission (+ optional ManaSpendRestriction) -> ExileTopForPlay / ExileTopPlay
         if i + 1 < ins.len()
@@ -11048,37 +12864,34 @@ pub(super) fn lower_instruction_seq(
                 } else {
                     None
                 };
-                let mut then_b = BodyBuilder::new();
-                let then_ok = lower_instruction_seq(
+                let then_b = lower_revealed_top_branch(
                     then_body,
-                    &mut then_b,
+                    builder,
                     vocabulary,
                     ids,
                     in_trigger,
                     self_pronoun_valid,
                     bound_x,
-                )
-                .is_ok()
-                    && (then_b.target == BodyTarget::None || then_b.target == builder.target);
-                let mut else_b = BodyBuilder::new();
-                let else_ok = match else_opt {
-                    Some(eb) => {
-                        lower_instruction_seq(
-                            eb,
-                            &mut else_b,
-                            vocabulary,
-                            ids,
-                            in_trigger,
-                            self_pronoun_valid,
-                            bound_x,
-                        )
-                        .is_ok()
-                            && (else_b.target == BodyTarget::None
-                                || else_b.target == builder.target)
-                    }
-                    None => true,
+                );
+                let else_b = match else_opt {
+                    Some(eb) => lower_revealed_top_branch(
+                        eb,
+                        builder,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )
+                    .map(Some),
+                    None => Ok(None),
                 };
-                if then_ok && else_ok {
+                if let (Ok(then_b), Ok(else_b_opt)) = (then_b, else_b)
+                    && (then_b.target == BodyTarget::None || then_b.target == builder.target)
+                    && else_b_opt.as_ref().is_none_or(|eb| {
+                        eb.target == BodyTarget::None || eb.target == builder.target
+                    })
+                {
                     builder.instructions.push(Instruction::LookTopChoose {
                         count: ValueExpr::literal(1),
                         library_owner: ResolvingPlayer::Controller,
@@ -11113,7 +12926,7 @@ pub(super) fn lower_instruction_seq(
                         op.shift_jumps(then_shift, 0);
                         builder.instructions.push(op);
                     }
-                    if else_opt.is_some() {
+                    if let Some(else_b) = else_b_opt {
                         let jump_idx = builder.instructions.len();
                         builder
                             .instructions
@@ -11240,36 +13053,34 @@ pub(super) fn lower_instruction_seq(
                 let mut inner_f = filter_ast.clone();
                 inner_f.zone = None;
                 if let Ok(obj_filter) = lower_object_filter(&inner_f, vocabulary) {
-                    let mut then_b = BodyBuilder::new();
-                    let then_ok = lower_instruction_seq(
+                    let then_b = lower_revealed_top_branch(
                         then_slice,
-                        &mut then_b,
+                        builder,
                         vocabulary,
                         ids,
                         in_trigger,
                         self_pronoun_valid,
                         bound_x,
-                    )
-                    .is_ok()
-                        && then_b.target == BodyTarget::None;
-                    let mut else_b = BodyBuilder::new();
-                    let else_ok = match else_opt {
-                        Some(eb) => {
-                            lower_instruction_seq(
-                                eb,
-                                &mut else_b,
-                                vocabulary,
-                                ids,
-                                in_trigger,
-                                self_pronoun_valid,
-                                bound_x,
-                            )
-                            .is_ok()
-                                && else_b.target == BodyTarget::None
-                        }
-                        None => true,
+                    );
+                    let else_b = match else_opt {
+                        Some(eb) => lower_revealed_top_branch(
+                            eb,
+                            builder,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        )
+                        .map(Some),
+                        None => Ok(None),
                     };
-                    if then_ok && else_ok {
+                    if let (Ok(then_b), Ok(else_b_opt)) = (then_b, else_b)
+                        && then_b.target == BodyTarget::None
+                        && else_b_opt
+                            .as_ref()
+                            .is_none_or(|eb| eb.target == BodyTarget::None)
+                    {
                         if use_may_reveal {
                             builder.instructions.push(Instruction::MayRevealLibraryTop);
                         } else {
@@ -11311,7 +13122,7 @@ pub(super) fn lower_instruction_seq(
                             op.shift_jumps(then_shift, 0);
                             builder.instructions.push(op);
                         }
-                        if else_opt.is_some() {
+                        if let Some(else_b) = else_b_opt {
                             let jump_idx = builder.instructions.len();
                             builder
                                 .instructions
@@ -11443,6 +13254,15 @@ pub(super) fn lower_instruction_seq(
                     continue;
                 }
             }
+        }
+        // Extended LookTop fusions: 2-step LookTop(1) + MoveZone/ReturnZone(bottom),
+        // two-bucket LookTopSecondary, RevealCards + MoveZone/ReturnZone + rest-move (including ReturnZone bottom in random order),
+        // and generalized library_owner.
+        if let Some(next_i) =
+            try_fuse_look_top_extended(ins, i, builder, vocabulary, in_trigger, bound_x)
+        {
+            i = next_i;
+            continue;
         }
         // Fuse 4-step LookTopLibrary + [Optional?]RevealFromLooked(to="revealed") + [Optional?]MoveZone(it -> hand/bf) + MoveZone(rest -> bottom/gy/exile/top)
         // AND 3-step LookTopLibrary + Optional([RevealFromLooked(to="revealed"), MoveZone(it -> hand/bf)]) + MoveZone(rest -> bottom/gy/exile/top)
@@ -12210,6 +14030,7 @@ pub(super) fn lower_instruction_seq(
                         && maybe_filter.is_none()
                         && to_hand
                         && rest_bottom
+                        && !rest_low.contains("random order")
                     {
                         builder
                             .instructions
@@ -12334,108 +14155,6 @@ pub(super) fn lower_instruction_seq(
                     }))
             {
                 i += 1;
-                continue;
-            }
-        }
-        // Fuse multi-sentence SearchLibrary(shuffle: false, to_zone: "found_set"|...) + [LookTop("ref")?] + [MoveZone/ReturnZone(Anaphora)?] + ShuffleLibrary
-        if let InstructionAst::SearchLibrary {
-            library,
-            count,
-            filter,
-            reveal,
-            to_zone,
-            shuffle: false,
-            up_to,
-            any_number,
-            extra_zones,
-            secondary_filter,
-            secondary_is_or,
-            where_x,
-            rest_to_zone,
-            modifier,
-            follow_up,
-            exact: false,
-        } = &ins[i]
-            && follow_up.is_empty()
-        {
-            let mut cursor = i + 1;
-            let mut eff_reveal = *reveal;
-            let mut eff_dest = to_zone.clone();
-            if cursor < ins.len()
-                && let InstructionAst::LookTopLibrary {
-                    reveal: r2,
-                    library: l2,
-                    ..
-                } = &ins[cursor]
-                && l2.eq_ignore_ascii_case("ref")
-            {
-                eff_reveal |= *r2;
-                cursor += 1;
-            }
-            if cursor < ins.len() {
-                match &ins[cursor] {
-                    InstructionAst::MoveZone { subject, to }
-                        if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
-                    {
-                        eff_dest = to.clone();
-                        cursor += 1;
-                    }
-                    InstructionAst::ReturnZone {
-                        subject,
-                        to,
-                        tapped,
-                        transformed: false,
-                        with_counter: None,
-                        attached_to: None,
-                        ..
-                    } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
-                        eff_dest = if *tapped && !to.to_ascii_lowercase().contains("tapped") {
-                            format!("{to} tapped")
-                        } else {
-                            to.clone()
-                        };
-                        cursor += 1;
-                    }
-                    _ => {}
-                }
-            }
-            if cursor < ins.len()
-                && matches!(
-                    &ins[cursor],
-                    InstructionAst::ShuffleLibrary {
-                        player: PlayerRefAst::You
-                            | PlayerRefAst::ThatPlayer
-                            | PlayerRefAst::TargetPlayer
-                            | PlayerRefAst::TargetOpponent
-                            | PlayerRefAst::EachPlayer
-                            | PlayerRefAst::EachOpponent
-                    }
-                )
-                && let Ok(search) = lower_library_search_ext(
-                    library,
-                    count,
-                    filter,
-                    eff_reveal,
-                    &eff_dest,
-                    vocabulary,
-                    false,
-                    *up_to,
-                    *any_number,
-                    &SearchLibraryExtra {
-                        extra_zones: extra_zones.as_slice(),
-                        secondary_filter: secondary_filter.as_deref(),
-                        secondary_is_or: *secondary_is_or,
-                        where_x: where_x.as_deref(),
-                        rest_to_zone: rest_to_zone.as_deref(),
-                        modifier: modifier.as_ref(),
-                    },
-                )
-            {
-                bind_search_target_local(builder, &search)?;
-                builder.instructions.push(Instruction::SearchLibrary {
-                    filter: Box::new(search),
-                });
-                i = cursor + 1;
                 continue;
             }
         }

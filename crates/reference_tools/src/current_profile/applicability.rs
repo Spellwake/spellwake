@@ -321,6 +321,10 @@ native!(ExecutableBody, self, {
         | Instruction::RequireCombatAction { .. }
         | Instruction::CreateTemporaryRule { .. }
         | Instruction::CreateTokenCopy { .. }
+        | Instruction::BindResolutionX(_)
+        | Instruction::PutResolvingSpellInLibrary(_)
+        | Instruction::PutSubjectIntoLibraryFromTop { .. }
+        | Instruction::SetDayNight(_)
         | Instruction::CreateAuraTokenAttached { .. }
         | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }

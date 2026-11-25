@@ -618,6 +618,79 @@ impl ActiveDamageBatch {
         Ok(())
     }
 
+    /// Redirect up to `amount` damage from one component to `new_target` (CR 614.9, 614.5).
+    /// When `amount < component.remaining`, splits the redirected portion into a fresh component
+    /// using `split_id` and marks both original and split components consumed for `application.effect`.
+    pub(crate) fn redirect_partial_component(
+        &mut self,
+        application: DamageApplication,
+        new_target: DamageRecipient,
+        amount: RulesInteger,
+        split_id: DamageAttemptId,
+    ) -> Result<RulesInteger, DamageError> {
+        if self.phase != DamageBatchPhase::Selecting
+            || self.consumed_shields.contains(&application)
+            || !amount.is_positive()
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let (
+            DamageEffectId::StaticModify(_, _)
+            | DamageEffectId::TemporaryStaticModify(_)
+            | DamageEffectId::TemporaryPrevention(_),
+            DamageScope::Component(attempt),
+        ) = (application.effect, application.scope)
+        else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let component = self
+            .components
+            .get_mut(&attempt)
+            .filter(|component| component.remaining.is_positive())
+            .ok_or(DamageError::InapplicableEffect)?;
+        if amount >= component.remaining {
+            let moved = component.remaining.clone();
+            component.attempt.target = new_target;
+            component.affected_player = match new_target {
+                DamageRecipient::Player(player) => Some(player),
+                _ => None,
+            };
+            self.consumed_shields.insert(application);
+            self.stage = stage;
+            return Ok(moved);
+        }
+        let split_component = DamageComponent {
+            attempt: DamageAttempt {
+                id: split_id,
+                batch: component.attempt.batch,
+                source: component.attempt.source.clone(),
+                target: new_target,
+                amount: amount.clone(),
+            },
+            remaining: amount.clone(),
+            preventable: component.preventable,
+            recipient_unavailable: component.recipient_unavailable,
+            affected_player: match new_target {
+                DamageRecipient::Player(player) => Some(player),
+                _ => None,
+            },
+            used_multipliers: component.used_multipliers.clone(),
+        };
+        component.remaining = component.remaining.minus(&amount);
+        self.components.insert(split_id, split_component);
+        self.consumed_shields.insert(application);
+        self.consumed_shields.insert(DamageApplication {
+            effect: application.effect,
+            scope: DamageScope::Component(split_id),
+        });
+        self.stage = stage;
+        Ok(amount)
+    }
+
     pub(crate) fn prevent_all_but_one(
         &mut self,
         application: DamageApplication,
@@ -975,6 +1048,16 @@ impl DamageState {
     }
     pub(crate) fn shields(&self) -> impl Iterator<Item = &PreventionShield> {
         self.shields.values()
+    }
+
+    /// Allocate a fresh attempt identifier for a split redirected damage component.
+    pub(crate) fn alloc_attempt_id(&mut self) -> Result<DamageAttemptId, DamageError> {
+        let id = DamageAttemptId(self.next_attempt);
+        self.next_attempt = self
+            .next_attempt
+            .checked_add(1)
+            .ok_or(DamageError::AttemptIdentityExhausted)?;
+        Ok(id)
     }
 
     /// Validate the proposal and every checked allocation before counters move.

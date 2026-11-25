@@ -366,15 +366,22 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             },
             Instruction::GrantCardPlayPermission { .. } => {}
             Instruction::CreateTokenCopy {
-                count, add_subtype, ..
+                count,
+                add_subtypes,
+                ..
             } => {
                 count.rewrite_creature_type(change.from, change.to);
-                if let Some(sub) = add_subtype
-                    && *sub == change.from
-                {
-                    *sub = change.to;
+                if add_subtypes.remove(&change.from) {
+                    add_subtypes.insert(change.to);
                 }
             }
+            Instruction::BindResolutionX(expr) => {
+                expr.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::PutSubjectIntoLibraryFromTop { offset, .. } => {
+                offset.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::PutResolvingSpellInLibrary(_) | Instruction::SetDayNight(_) => {}
             Instruction::CreateAuraTokenAttached { definition, .. } => {
                 definition.rewrite_creature_types(change);
             }

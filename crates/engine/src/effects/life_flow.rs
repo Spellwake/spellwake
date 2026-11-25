@@ -122,6 +122,51 @@ impl EffectWindow {
         Ok(prohibited)
     }
 
+    /// Players whose life total currently can't change (CR 119.7-119.8: Platinum Emperion, Teferi's Protection).
+    pub(super) fn life_total_cant_change_players(
+        &self,
+        current: &crate::characteristics::EvaluatedCharacteristics,
+    ) -> BTreeSet<SeatId> {
+        let mut frozen = BTreeSet::new();
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+                && matches!(
+                    ability.as_ref(),
+                    crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::ControllerLifeTotalCantChange,
+                        ..
+                    }
+                )
+            {
+                frozen.insert(active.controller);
+            }
+        }
+        for source in current
+            .objects
+            .values()
+            .filter(|permanent| permanent.zone == ObjectZone::Battlefield)
+        {
+            if let Some(controller) = source.controller
+                && source.has_battlefield_rule(|ability| {
+                    matches!(
+                        ability,
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule: crate::characteristics::StaticRestriction::ControllerLifeTotalCantChange,
+                            ..
+                        }
+                    )
+                })
+            {
+                frozen.insert(controller);
+            }
+        }
+        frozen
+    }
+
     fn restrict_life_gains(
         &self,
         current: &crate::characteristics::EvaluatedCharacteristics,
@@ -129,6 +174,8 @@ impl EffectWindow {
         declined: &BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
     ) -> Result<super::event_replacement::LifeReplacementOutcome, EffectError> {
         let mut outcome = super::event_replacement::LifeReplacementOutcome::default();
+        let frozen = self.life_total_cant_change_players(current);
+        adjustments.retain(|player, _| !frozen.contains(player));
         let prohibited = self.life_gain_prohibitions(current)?;
         adjustments.retain(|player, adjustment| {
             !prohibited.contains(player)
@@ -607,6 +654,12 @@ impl EffectWindow {
             return Err(EffectError::InvalidCastResource);
         }
         let before = self.rules_snapshot(turn)?;
+        if self
+            .life_total_cant_change_players(&before.view().evaluated)
+            .contains(&player)
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
         if matches!(
             cause,
             EventCause::ActivatedAbilityCost { .. } | EventCause::CastLifePayment { .. }

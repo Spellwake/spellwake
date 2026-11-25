@@ -1863,16 +1863,50 @@ impl EffectWindow {
             )?;
         }
         let prohibited = self.life_gain_prohibitions(&before.view().evaluated)?;
-        gains.retain(|(_, player), _| !prohibited.contains(player));
-        // Enforce StaticDamageRule::MinimumLifeTotal (Worship, Ali from Cairo, Fortune Thief).
+        let frozen_life = self.life_total_cant_change_players(&before.view().evaluated);
+        gains
+            .retain(|(_, player), _| !prohibited.contains(player) && !frozen_life.contains(player));
+        // Enforce StaticRestriction::ControllerLifeTotalCantChange and StaticDamageRule::MinimumLifeTotal.
         for (&player, loss) in &mut losses {
             if !loss.is_positive() {
+                continue;
+            }
+            if frozen_life.contains(&player) {
+                *loss = 0.into();
                 continue;
             }
             let Some(current_life) = self.life.get(player) else {
                 continue;
             };
             let mut highest_floor: Option<RulesInteger> = None;
+            for active in &self.temporary_rules {
+                if active.consumed || active.controller != player {
+                    continue;
+                }
+                if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+                    && let crate::characteristics::StaticContinuousAbility::DamageRule {
+                        rule:
+                            crate::characteristics::StaticDamageRule::MinimumLifeTotal {
+                                floor,
+                                require_creature,
+                            },
+                        ..
+                    } = ability.as_ref()
+                {
+                    let creature_ok = !*require_creature
+                        || before.view().evaluated.objects.values().any(|c| {
+                            c.zone == ObjectZone::Battlefield
+                                && c.controller == Some(player)
+                                && c.is_creature()
+                        });
+                    if creature_ok {
+                        let f = RulesInteger::from(i64::from(*floor));
+                        if highest_floor.as_ref().is_none_or(|cur| f > *cur) {
+                            highest_floor = Some(f);
+                        }
+                    }
+                }
+            }
             for perm in before
                 .view()
                 .evaluated
@@ -1929,6 +1963,7 @@ impl EffectWindow {
                 }
             }
         }
+        losses.retain(|_, loss| loss.is_positive());
         let life_changes = self
             .life
             .apply_damage_changes(&losses, id, &gains)

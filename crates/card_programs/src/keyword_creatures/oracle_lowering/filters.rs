@@ -1208,6 +1208,13 @@ fn try_specialized_static_source_condition(
 ) -> Option<spellwake_engine::characteristics::StaticSourceCondition> {
     use spellwake_engine::characteristics::StaticSourceCondition;
     match cond {
+        ConditionAst::Marker(GameMarker::AdditionalCostPaid { description: None }) => {
+            Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::event(EventValueKind::AdditionalCostPaid),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1_i64),
+            })))
+        }
         ConditionAst::GainedLifeThisTurn => {
             Some(StaticSourceCondition::ControllerGainedLifeThisTurn)
         }
@@ -1973,9 +1980,9 @@ pub(super) fn lower_object_filter(
         Some(ControllerRelation::NotYou) => ControllerFilter::NotYou,
         Some(ControllerRelation::OwnerYou) => ControllerFilter::OwnerYou,
         Some(ControllerRelation::OwnerOpponent) => ControllerFilter::OwnerOpponent,
-        Some(ControllerRelation::ThatPlayer | ControllerRelation::DefendingPlayer) => {
-            ControllerFilter::RelatedPlayer
-        }
+        Some(ControllerRelation::ThatPlayer) => ControllerFilter::RelatedPlayer,
+        Some(ControllerRelation::DefendingPlayer) => ControllerFilter::DefendingPlayer,
+        Some(ControllerRelation::ActivePlayer) => ControllerFilter::ActivePlayer,
         Some(ControllerRelation::TargetPlayer) => ControllerFilter::TargetPlayer,
         Some(ControllerRelation::TargetOpponent) => ControllerFilter::TargetOpponent,
         _ => return Err("oracle:unsupported-controller-filter"),
@@ -2025,18 +2032,26 @@ pub(super) fn lower_object_filter(
             use spellwake_engine::program::DynamicStatAnchor as A;
             match val {
                 ValueExprAst::ChosenX => Some(A::ChosenX),
-                ValueExprAst::ObjectStat { subject, stat } => {
-                    let is_self = matches!(subject.as_ref(), SubjectRefAst::SelfObject);
-                    let is_trig = matches!(subject.as_ref(), SubjectRefAst::Anaphora(_));
-                    match (is_self, is_trig, stat) {
-                        (true, _, StatKind::Power) => Some(A::SourcePower),
-                        (true, _, StatKind::Toughness) => Some(A::SourceToughness),
-                        (true, _, StatKind::ManaValue) => Some(A::SourceManaValue),
-                        (_, true, StatKind::Power) => Some(A::TriggerSubjectPower),
-                        (_, true, StatKind::ManaValue) => Some(A::TriggerSubjectManaValue),
-                        _ => None,
+                ValueExprAst::ObjectStat { subject, stat } => match (subject.as_ref(), stat) {
+                    (SubjectRefAst::SelfObject, StatKind::Power) => Some(A::SourcePower),
+                    (SubjectRefAst::SelfObject, StatKind::Toughness) => Some(A::SourceToughness),
+                    (SubjectRefAst::SelfObject, StatKind::ManaValue) => Some(A::SourceManaValue),
+                    (SubjectRefAst::TargetObject { .. }, StatKind::Power) => Some(A::TargetPower),
+                    (SubjectRefAst::Anaphora(raw), StatKind::Power)
+                        if raw.to_ascii_lowercase().contains("target") =>
+                    {
+                        Some(A::TargetPower)
                     }
-                }
+                    (
+                        SubjectRefAst::TriggerSubject | SubjectRefAst::Anaphora(_),
+                        StatKind::Power,
+                    ) => Some(A::TriggerSubjectPower),
+                    (
+                        SubjectRefAst::TriggerSubject | SubjectRefAst::Anaphora(_),
+                        StatKind::ManaValue,
+                    ) => Some(A::TriggerSubjectManaValue),
+                    _ => None,
+                },
                 ValueExprAst::CounterCount {
                     subject,
                     counter_kind,
@@ -2797,6 +2812,158 @@ fn lower_stat_kind(stat: StatKind) -> ObjectStatKind {
     }
 }
 
+fn is_self_object_anaphora(low: &str) -> bool {
+    matches!(
+        low,
+        "this creature"
+            | "this permanent"
+            | "this artifact"
+            | "this enchantment"
+            | "this land"
+            | "this planeswalker"
+            | "this card"
+            | "this battle"
+            | "this vehicle"
+    )
+}
+
+fn body_has_object_or_spell_target(target: BodyTarget) -> bool {
+    !matches!(
+        target,
+        BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+    )
+}
+
+fn body_target_guarantees_creature(target: BodyTarget) -> bool {
+    match target {
+        BodyTarget::SingleCreature => true,
+        BodyTarget::FilteredPermanent(filter) => {
+            let is_creature_clause = |c: ObjectClause| {
+                c.any_types == CardTypeMask::CREATURE
+                    || (c.required_types.bits() & CardTypeMask::CREATURE.bits()) != 0
+            };
+            let (a, b) = filter.clauses();
+            is_creature_clause(a) && b.is_none_or(is_creature_clause)
+        }
+        _ => false,
+    }
+}
+
+fn find_value_expr_cost_object_ref(expr: &ValueExpr) -> Option<ValueObjectRef> {
+    match expr {
+        ValueExpr::ObjectStat { subject, .. }
+            if matches!(
+                subject,
+                ValueObjectRef::SacrificedCreature
+                    | ValueObjectRef::LastSacrificedCreature
+                    | ValueObjectRef::SacrificedPermanent
+                    | ValueObjectRef::ExiledCostCreature
+                    | ValueObjectRef::RevealedCostCard
+                    | ValueObjectRef::RevealedTop
+                    | ValueObjectRef::LastAmassedArmy
+            ) =>
+        {
+            Some(*subject)
+        }
+        ValueExpr::Scale { expr: inner, .. } | ValueExpr::DivConst { expr: inner, .. } => {
+            find_value_expr_cost_object_ref(inner)
+        }
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            find_value_expr_cost_object_ref(a).or_else(|| find_value_expr_cost_object_ref(b))
+        }
+        _ => None,
+    }
+}
+
+fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjectRef> {
+    instructions.iter().rev().find_map(|op| match op {
+        Instruction::DrawController { amount }
+        | Instruction::DrawTargetPlayer { amount }
+        | Instruction::DrawEachPlayer { amount }
+        | Instruction::DrawPlayer { amount, .. }
+        | Instruction::DrawControllerAndTarget { amount }
+        | Instruction::GainControllerLife { amount }
+        | Instruction::AdjustPlayersLife { amount, .. }
+        | Instruction::DamageAmount(amount)
+        | Instruction::DamageAmountThenExileIfDies(amount)
+        | Instruction::DamageGroupAmount { amount, .. }
+        | Instruction::DamageOpponentsAmount(amount)
+        | Instruction::DrainOpponents(amount)
+        | Instruction::DrainTargetAndGain(amount)
+        | Instruction::OpponentsLoseAndControllerGains(amount)
+        | Instruction::Mill { amount, .. }
+        | Instruction::Scry { amount, .. }
+        | Instruction::Surveil { amount, .. }
+        | Instruction::PutNamedCounterOnTarget { amount, .. }
+        | Instruction::PutCountersOnSubject { amount, .. }
+        | Instruction::ModifyGroupByAmount { amount, .. }
+        | Instruction::BoostTargetPower { amount, .. } => find_value_expr_cost_object_ref(amount),
+        Instruction::CreateTokens { creations }
+        | Instruction::CreateAttackingTokens { creations } => creations
+            .iter()
+            .find_map(|c| find_value_expr_cost_object_ref(&c.amount)),
+        _ => None,
+    })
+}
+
+fn has_prior_reveal_top(context: Option<(&BodyBuilder, bool)>) -> bool {
+    context.is_some_and(|(b, _)| {
+        b.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::LookTopChoose {
+                    reveal_only: true,
+                    ..
+                } | Instruction::MayRevealLibraryTop
+            )
+        })
+    })
+}
+
+fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
+    context.is_some_and(|(b, _)| {
+        b.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::LookTopChoose {
+                    reveal_only: false,
+                    ..
+                } | Instruction::RevealPlayerHand(_)
+            )
+        })
+    })
+}
+
+fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
+    context.is_some_and(|(b, _)| {
+        b.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::ExileFromZone { .. }
+                    | Instruction::ExileLibraryTop { .. }
+                    | Instruction::ExileTopPlay { .. }
+                    | Instruction::ExileChosenPermanents { .. }
+            )
+        })
+    })
+}
+
+fn has_prior_single_sacrifice(context: Option<(&BodyBuilder, bool)>) -> bool {
+    context.is_some_and(|(b, _)| {
+        b.instructions.iter().any(|op| {
+            matches!(op, Instruction::SacrificeMatching(_))
+                || matches!(
+                    op,
+                    Instruction::Sacrifice {
+                        players: AffectedPlayers::One(_),
+                        amount,
+                        ..
+                    } if *amount == ValueExpr::literal(1)
+                )
+        })
+    })
+}
+
 fn resolve_that_player_for_value_expr(
     context: Option<(&BodyBuilder, bool)>,
     allow_spell_controller: bool,
@@ -2842,6 +3009,92 @@ fn lower_value_expr_inner(
         ValueExprAst::Const(n) => Ok(ValueExpr::literal(i64::from(*n))),
         ValueExprAst::ChosenX => Ok(ValueExpr::chosen_x()),
         ValueExprAst::Count(f) => {
+            if f.any_spell {
+                if f.zone.is_none()
+                    && !f.any_permanent
+                    && !f.any_card
+                    && matches!(f.controller, None | Some(ControllerRelation::You))
+                    && (f.flags.0 & AstFilterFlags::ENTERED_THIS_TURN.0) != 0
+                {
+                    let clean_flags = f.flags.0
+                        & !(AstFilterFlags::ENTERED_THIS_TURN.0 | AstFilterFlags::LKI_PAST_TENSE.0);
+                    if clean_flags == AstFilterFlags::EXCLUDE_SELF.0
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                controller: true,
+                                flags: true,
+                                ..FilterAllow::NONE
+                            },
+                        )
+                    {
+                        return Ok(ValueExpr::PlayerStat(
+                            PlayerStatExpr::OtherSpellsCastThisTurn,
+                        ));
+                    }
+                    if clean_flags == 0
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                controller: true,
+                                flags: true,
+                                ..FilterAllow::NONE
+                            },
+                        )
+                    {
+                        return Ok(ValueExpr::PlayerStat(
+                            PlayerStatExpr::ControllerSpellsCastThisTurn,
+                        ));
+                    }
+                    if clean_flags == 0
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                types: true,
+                                controller: true,
+                                flags: true,
+                                ..FilterAllow::NONE
+                            },
+                        )
+                    {
+                        let types = card_type_mask_to_set(f.any_types)?;
+                        if types.len() == 1
+                            && let Some(&ct) = types.iter().next()
+                        {
+                            return Ok(ValueExpr::PlayerStat(
+                                PlayerStatExpr::CastSpellTypeThisTurn(ct),
+                            ));
+                        }
+                        if f.any_types == AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY) {
+                            return Ok(ValueExpr::Add(
+                                Box::new(ValueExpr::PlayerStat(
+                                    PlayerStatExpr::CastSpellTypeThisTurn(CardType::Instant),
+                                )),
+                                Box::new(ValueExpr::PlayerStat(
+                                    PlayerStatExpr::CastSpellTypeThisTurn(CardType::Sorcery),
+                                )),
+                            ));
+                        }
+                    }
+                    if clean_flags == 0
+                        && f.forbidden_types == AstCardTypeMask::CREATURE
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                forbidden_types: true,
+                                controller: true,
+                                flags: true,
+                                ..FilterAllow::NONE
+                            },
+                        )
+                    {
+                        return Ok(ValueExpr::PlayerStat(
+                            PlayerStatExpr::CastNoncreatureSpellsThisTurn,
+                        ));
+                    }
+                }
+                return Err("oracle:unsupported-spell-count");
+            }
             if let Some(zone) = f.zone {
                 let mut inner = f.as_ref().clone();
                 inner.zone = None;
@@ -2971,10 +3224,29 @@ fn lower_value_expr_inner(
                     Some(resolve_that_player_for_value_expr(context, true)?)
                 }
                 Some(ControllerRelation::TargetPlayer | ControllerRelation::TargetOpponent) => {
+                    if (f.flags.0 & AstFilterFlags::EXCLUDE_SELF.0) != 0 {
+                        return Err("oracle:unsupported-target-player-count");
+                    }
                     Some(ResolvingPlayer::TargetPlayer)
                 }
                 Some(ControllerRelation::DefendingPlayer) => Some(ResolvingPlayer::DefendingPlayer),
-                Some(ControllerRelation::ItsController) => Some(ResolvingPlayer::TargetController),
+                Some(ControllerRelation::ActivePlayer) => Some(ResolvingPlayer::ActivePlayer),
+                Some(ControllerRelation::ItsController) => {
+                    let rp = match context {
+                        Some((builder, true))
+                            if !body_has_object_or_spell_target(builder.target) =>
+                        {
+                            ResolvingPlayer::TriggerSubjectController
+                        }
+                        Some((builder, false))
+                            if !body_has_object_or_spell_target(builder.target) =>
+                        {
+                            return Err("oracle:unbound-target-controller");
+                        }
+                        _ => ResolvingPlayer::TargetController,
+                    };
+                    Some(rp)
+                }
                 _ => None,
             };
             if let Some(scope) = controller_scope {
@@ -3003,10 +3275,24 @@ fn lower_value_expr_inner(
                 PlayerRefAst::ThatPlayer => {
                     resolve_that_player_for_value_expr(context, allow_spell_controller)?
                 }
-                PlayerRefAst::ItsController | PlayerRefAst::ThatObjectController => {
-                    ResolvingPlayer::TargetController
-                }
-                PlayerRefAst::ItsOwner => ResolvingPlayer::TargetOwner,
+                PlayerRefAst::ItsController | PlayerRefAst::ThatObjectController => match context {
+                    Some((builder, true)) if !body_has_object_or_spell_target(builder.target) => {
+                        ResolvingPlayer::TriggerSubjectController
+                    }
+                    Some((builder, false)) if !body_has_object_or_spell_target(builder.target) => {
+                        return Err("oracle:unsupported-player-stat");
+                    }
+                    _ => ResolvingPlayer::TargetController,
+                },
+                PlayerRefAst::ItsOwner => match context {
+                    Some((builder, true)) if !body_has_object_or_spell_target(builder.target) => {
+                        ResolvingPlayer::TriggerSubjectOwner
+                    }
+                    Some((builder, false)) if !body_has_object_or_spell_target(builder.target) => {
+                        return Err("oracle:unsupported-player-stat");
+                    }
+                    _ => ResolvingPlayer::TargetOwner,
+                },
                 _ => return Err("oracle:unsupported-player-stat"),
             };
             let use_count_zone = matches!(
@@ -3114,39 +3400,170 @@ fn lower_value_expr_inner(
                 SubjectRefAst::AttachedHost(_) => ValueObjectRef::AttachedHost,
                 SubjectRefAst::Anaphora(raw) => {
                     let low = raw.trim().to_ascii_lowercase();
-                    let has_prior_reveal = context.is_some_and(|(b, _)| {
+                    let prior_reveal_top = has_prior_reveal_top(context);
+                    let prior_reveal_other = has_prior_reveal_other(context);
+                    let prior_exile_target = context.is_some_and(|(b, _)| {
                         b.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::LookTopChoose { .. }
-                                    | Instruction::MayRevealLibraryTop
-                                    | Instruction::RevealPlayerHand(_)
+                                Instruction::ExileTarget | Instruction::ExileGraveyardTarget
                             )
                         })
                     });
-                    let has_prior_exile = context.is_some_and(|(b, _)| {
+                    let prior_exile_non_target = has_prior_exile_non_target(context);
+                    let prior_single_sacrifice = has_prior_single_sacrifice(context);
+                    let prior_mill = context.is_some_and(|(b, _)| {
+                        b.instructions
+                            .iter()
+                            .any(|op| matches!(op, Instruction::Mill { .. }))
+                    });
+                    let prior_discard = context.is_some_and(|(b, _)| {
                         b.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::ExileTarget
-                                    | Instruction::ExileGraveyardTarget
-                                    | Instruction::ExileFromZone { .. }
-                                    | Instruction::ExileLibraryTop { .. }
+                                Instruction::Discard { .. }
+                                    | Instruction::DiscardFiltered { .. }
+                                    | Instruction::DiscardOneAtRandom(_)
                             )
                         })
                     });
                     let no_target = context.is_none_or(|(b, _)| b.target == BodyTarget::None);
-                    if !has_prior_reveal
-                        && (low.contains("revealed card") || low.contains("revealed creature"))
+                    let has_obj_target =
+                        context.is_some_and(|(b, _)| body_has_object_or_spell_target(b.target));
+
+                    if is_self_object_anaphora(&low) {
+                        ValueObjectRef::AbilitySource
+                    } else if low.contains("amassed army") || low.contains("army you amassed") {
+                        ValueObjectRef::LastAmassedArmy
+                    } else if low.contains("creature that died") || low.contains("dying creature") {
+                        ValueObjectRef::DyingCreature
+                    } else if low.contains("revealed card") || low.contains("revealed creature") {
+                        if prior_reveal_top {
+                            ValueObjectRef::RevealedTop
+                        } else if prior_reveal_other {
+                            return Err("oracle:unsupported-stat-subject");
+                        } else {
+                            ValueObjectRef::RevealedCostCard
+                        }
+                    } else if low.contains("exiled card") || low.contains("exiled creature") {
+                        if !prior_exile_non_target && prior_exile_target && has_obj_target {
+                            ValueObjectRef::TargetObject
+                        } else if !prior_exile_non_target && !prior_exile_target && no_target {
+                            ValueObjectRef::ExiledCostCreature
+                        } else {
+                            return Err("oracle:unsupported-stat-subject");
+                        }
+                    } else if low.contains("sacrificed creature")
+                        || low.contains("sacrificed permanent")
                     {
-                        ValueObjectRef::RevealedCostCard
-                    } else if !has_prior_exile
-                        && no_target
-                        && (low.contains("exiled card") || low.contains("exiled creature"))
+                        if prior_single_sacrifice {
+                            ValueObjectRef::LastSacrificedCreature
+                        } else if low.contains("sacrificed permanent") {
+                            ValueObjectRef::SacrificedPermanent
+                        } else {
+                            ValueObjectRef::SacrificedCreature
+                        }
+                    } else if low.contains("milled card") || low.contains("milled creature") {
+                        if st == ObjectStatKind::ManaValue {
+                            if context.is_some() {
+                                if prior_mill {
+                                    return Ok(ValueExpr::EventValue(
+                                        EventValueKind::MilledCardsManaValueSum,
+                                    ));
+                                }
+                                return Err("oracle:unsupported-stat-subject");
+                            }
+                            ValueObjectRef::TargetObject
+                        } else {
+                            return Err("oracle:unsupported-stat-subject");
+                        }
+                    } else if low.contains("discarded")
+                        || low.contains("ring-bearer")
+                        || low.contains("chosen card")
+                        || low.contains("returned card")
+                        || low.contains("they exiled")
+                        || low.contains("you exiled")
                     {
-                        ValueObjectRef::ExiledCostCreature
-                    } else {
+                        return Err("oracle:unsupported-stat-subject");
+                    } else if let Some((builder, in_trigger)) = context {
+                        let is_pronoun = matches!(low.as_str(), "it" | "its");
+                        if prior_reveal_top
+                            && !has_obj_target
+                            && (is_pronoun || matches!(low.as_str(), "that card" | "the card"))
+                        {
+                            ValueObjectRef::RevealedTop
+                        } else if prior_single_sacrifice
+                            && !has_obj_target
+                            && (is_pronoun
+                                || matches!(low.as_str(), "that creature" | "that permanent"))
+                        {
+                            ValueObjectRef::LastSacrificedCreature
+                        } else if (prior_exile_non_target || prior_discard)
+                            && !has_obj_target
+                            && (is_pronoun
+                                || matches!(
+                                    low.as_str(),
+                                    "that card" | "that creature" | "that permanent"
+                                ))
+                        {
+                            return Err("oracle:unsupported-stat-subject");
+                        } else if prior_mill
+                            && !has_obj_target
+                            && st == ObjectStatKind::ManaValue
+                            && (is_pronoun || low == "that card")
+                        {
+                            return Ok(ValueExpr::EventValue(
+                                EventValueKind::MilledCardsManaValueSum,
+                            ));
+                        } else if in_trigger
+                            && matches!(low.as_str(), "that creature" | "the creature")
+                            && !body_target_guarantees_creature(builder.target)
+                        {
+                            ValueObjectRef::TriggerSubject
+                        } else if has_obj_target {
+                            ValueObjectRef::TargetObject
+                        } else if in_trigger {
+                            if builder.target == BodyTarget::None {
+                                ValueObjectRef::TargetObject
+                            } else {
+                                ValueObjectRef::TriggerSubject
+                            }
+                        } else if is_pronoun
+                            && let Some(prior_ref) =
+                                find_prior_cost_object_ref(&builder.instructions)
+                        {
+                            prior_ref
+                        } else {
+                            return Err("oracle:unsupported-stat-subject");
+                        }
+                    } else if matches!(
+                        low.as_str(),
+                        "it" | "its"
+                            | "his"
+                            | "her"
+                            | "their"
+                            | "that creature"
+                            | "that permanent"
+                            | "that card"
+                            | "that spell"
+                            | "that artifact"
+                            | "that enchantment"
+                            | "that land"
+                            | "that planeswalker"
+                            | "that battle"
+                            | "that vehicle"
+                            | "that token"
+                            | "the creature"
+                            | "the permanent"
+                            | "the card"
+                            | "the spell"
+                            | "that blocked creature"
+                            | "the chosen creature"
+                            | "the targeted creature"
+                    ) {
                         ValueObjectRef::TargetObject
+                    } else {
+                        return Err("oracle:unsupported-stat-subject");
                     }
                 }
                 _ => return Err("oracle:unsupported-stat-subject"),
@@ -3238,8 +3655,42 @@ fn lower_value_expr_inner(
                 SubjectRefAst::AttachedHost(_) => {
                     spellwake_engine::program::CounterSubjectRef::AttachedHost
                 }
-                SubjectRefAst::Anaphora(_) => {
-                    spellwake_engine::program::CounterSubjectRef::TargetObject
+                SubjectRefAst::Anaphora(raw) => {
+                    let low = raw.trim().to_ascii_lowercase();
+                    if is_self_object_anaphora(&low) {
+                        spellwake_engine::program::CounterSubjectRef::AbilitySource
+                    } else if let Some((builder, in_trigger)) = context {
+                        let has_obj_target = body_has_object_or_spell_target(builder.target);
+                        let has_prior_source_counter_op = builder.instructions.iter().any(|op| {
+                            matches!(
+                                op,
+                                Instruction::PutNamedCounterOnSource { .. }
+                                    | Instruction::PutChargeCounterOnSource
+                                    | Instruction::PutBlessingCounterOnSource
+                                    | Instruction::PutQuestCounterOnSource
+                                    | Instruction::PutStorageCounterOnSource
+                                    | Instruction::PutCountersOnSource { .. }
+                            ) || matches!(
+                                op,
+                                Instruction::PutCountersOnSubject { subject, .. }
+                                    if matches!(subject.as_ref(), EffectSubject::AbilitySource)
+                            )
+                        });
+                        if !has_obj_target
+                            && has_prior_source_counter_op
+                            && matches!(low.as_str(), "it" | "its")
+                        {
+                            spellwake_engine::program::CounterSubjectRef::AbilitySource
+                        } else if has_obj_target {
+                            spellwake_engine::program::CounterSubjectRef::TargetObject
+                        } else if in_trigger {
+                            spellwake_engine::program::CounterSubjectRef::TriggerSubject
+                        } else {
+                            return Err("oracle:unsupported-counter-subject");
+                        }
+                    } else {
+                        spellwake_engine::program::CounterSubjectRef::TargetObject
+                    }
                 }
                 _ => unreachable!(),
             };
@@ -3497,12 +3948,7 @@ fn lower_value_expr_inner(
                     Ok(ValueExpr::event(EventValueKind::LastDieRoll))
                 }
                 "the sacrificed creature's power" if player.is_none() => {
-                    let subject = if context.is_some_and(|(builder, _)| {
-                        builder
-                            .instructions
-                            .iter()
-                            .any(|op| matches!(op, Instruction::Sacrifice { .. }))
-                    }) {
+                    let subject = if has_prior_single_sacrifice(context) {
                         ValueObjectRef::LastSacrificedCreature
                     } else {
                         ValueObjectRef::SacrificedCreature
@@ -3512,6 +3958,9 @@ fn lower_value_expr_inner(
                 "the exiled creature card's power" | "the exiled card's power"
                     if player.is_none() =>
                 {
+                    if has_prior_exile_non_target(context) {
+                        return Err("oracle:unsupported-value-expr");
+                    }
                     Ok(ValueExpr::object_stat(
                         ValueObjectRef::ExiledCostCreature,
                         ObjectStatKind::Power,
@@ -3520,6 +3969,9 @@ fn lower_value_expr_inner(
                 "the exiled card's mana value" | "the exiled creature card's mana value"
                     if player.is_none() =>
                 {
+                    if has_prior_exile_non_target(context) {
+                        return Err("oracle:unsupported-value-expr");
+                    }
                     Ok(ValueExpr::object_stat(
                         ValueObjectRef::ExiledCostCreature,
                         ObjectStatKind::ManaValue,
@@ -3528,18 +3980,26 @@ fn lower_value_expr_inner(
                 "the revealed card's power" | "the revealed creature card's power"
                     if player.is_none() =>
                 {
-                    Ok(ValueExpr::object_stat(
-                        ValueObjectRef::RevealedCostCard,
-                        ObjectStatKind::Power,
-                    ))
+                    let subject = if has_prior_reveal_top(context) {
+                        ValueObjectRef::RevealedTop
+                    } else if has_prior_reveal_other(context) {
+                        return Err("oracle:unsupported-value-expr");
+                    } else {
+                        ValueObjectRef::RevealedCostCard
+                    };
+                    Ok(ValueExpr::object_stat(subject, ObjectStatKind::Power))
                 }
                 "the revealed card's mana value" | "the revealed creature card's mana value"
                     if player.is_none() =>
                 {
-                    Ok(ValueExpr::object_stat(
-                        ValueObjectRef::RevealedCostCard,
-                        ObjectStatKind::ManaValue,
-                    ))
+                    let subject = if has_prior_reveal_top(context) {
+                        ValueObjectRef::RevealedTop
+                    } else if has_prior_reveal_other(context) {
+                        return Err("oracle:unsupported-value-expr");
+                    } else {
+                        ValueObjectRef::RevealedCostCard
+                    };
+                    Ok(ValueExpr::object_stat(subject, ObjectStatKind::ManaValue))
                 }
                 "half x" if player.is_none() => Ok(ValueExpr::chosen_x().half_down()),
                 "half that many" if player.is_none() => {

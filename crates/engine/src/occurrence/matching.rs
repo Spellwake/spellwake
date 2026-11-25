@@ -687,7 +687,9 @@ fn matches_evaluated_permanent(
             crate::program::ControllerFilter::OwnerOpponent => candidate.owner != controller,
             crate::program::ControllerFilter::RelatedPlayer
             | crate::program::ControllerFilter::TargetPlayer
-            | crate::program::ControllerFilter::TargetOpponent => false,
+            | crate::program::ControllerFilter::TargetOpponent
+            | crate::program::ControllerFilter::ActivePlayer
+            | crate::program::ControllerFilter::DefendingPlayer => false,
             crate::program::ControllerFilter::Player(seat) => candidate.controller == Some(seat),
         };
         if !controller_ok {

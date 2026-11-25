@@ -1082,6 +1082,31 @@ impl EffectWindow {
                         }
                     }
                 }
+                (ValueObjectRef::LastAmassedArmy, stat) => {
+                    let Some(id) = cursor
+                        .or_else(|| self.resolution_cursor())
+                        .and_then(|c| c.results.last_amassed_army)
+                    else {
+                        return Ok(0.into());
+                    };
+                    match stat {
+                        ObjectStatKind::Power => Ok(self
+                            .current_characteristics(id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.power)),
+                        ObjectStatKind::Toughness => Ok(self
+                            .current_characteristics(id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.toughness)),
+                        ObjectStatKind::ManaValue => Ok(self
+                            .copiable_program(id)
+                            .map(Program::mana_value)
+                            .unwrap_or_else(|| 0.into())),
+                        ObjectStatKind::Loyalty => {
+                            Ok(self.counters_of_kind(id, CounterKind::Loyalty))
+                        }
+                    }
+                }
                 (ValueObjectRef::TriggerSubject, stat) => {
                     let binding = cursor
                         .and_then(|c| self.execution_bindings(c.entry))
@@ -2601,7 +2626,8 @@ impl EffectWindow {
                 | EventValueKind::CastFromExile
                 | EventValueKind::GiftPromised
                 | EventValueKind::Cleaved
-                | EventValueKind::EvidenceCollected => {
+                | EventValueKind::EvidenceCollected
+                | EventValueKind::AdditionalCostPaid => {
                     let summary = self
                         .window
                         .resolving()
@@ -2650,6 +2676,9 @@ impl EffectWindow {
                         }
                         EventValueKind::EvidenceCollected => {
                             i64::from(summary.is_some_and(|s| s.evidence_collected)).into()
+                        }
+                        EventValueKind::AdditionalCostPaid => {
+                            i64::from(summary.is_some_and(|s| s.additional_cost_paid)).into()
                         }
                         _ => 0.into(),
                     };

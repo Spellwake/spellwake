@@ -183,6 +183,10 @@ fn matches_world_clause(
             .related_player
             .is_some_and(|seat| p.controller == Some(seat)),
         ControllerFilter::Player(seat) => p.controller == Some(seat),
+        ControllerFilter::ActivePlayer => p.controller == Some(ctx.active_player),
+        ControllerFilter::DefendingPlayer => ctx
+            .defending_player
+            .is_some_and(|seat| p.controller == Some(seat)),
     };
     if !controller_ok {
         return false;
@@ -357,7 +361,7 @@ fn matches_world_clause(
     }
     let eval_anchor = |anchor: DynamicStatAnchor| -> Option<RulesInteger> {
         match anchor {
-            DynamicStatAnchor::ChosenX => None,
+            DynamicStatAnchor::ChosenX | DynamicStatAnchor::TargetPower => None,
             DynamicStatAnchor::SourcePower => ctx.objects.get(&ctx.source).and_then(|o| {
                 o.power_toughness
                     .as_ref()
@@ -1315,6 +1319,13 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                 .trigger_subject
                 .and_then(|id| ctx.state.cast_summaries.get(&id))
                 .map_or_else(|| 0.into(), |s| s.total_mana.clone()),
+            EventValueKind::AdditionalCostPaid => i64::from(
+                ctx.state
+                    .cast_summaries
+                    .get(&ctx.source)
+                    .is_some_and(|s| s.additional_cost_paid),
+            )
+            .into(),
             _ => 0.into(),
         },
         ValueExpr::PlayerStat(stat) => match stat {

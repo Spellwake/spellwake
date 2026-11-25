@@ -303,6 +303,8 @@ pub(crate) fn evaluate(
             granted_unblockable: false,
             cannot_be_sacrificed: false,
             cannot_be_untapped: false,
+            doesnt_untap_during_untap_step: false,
+            suppressed_activations: None,
             activate_as_though_haste: false,
             cannot_be_targeted_by_auras: false,
             cannot_be_targeted_by_colors: crate::program::ColorMask::EMPTY,
@@ -921,6 +923,7 @@ pub(crate) fn evaluate(
         objects,
         trace,
         player_color_protection: world.state.player_color_protection.clone(),
+        player_granted_keywords: BTreeMap::new(),
         emblem_rules,
     };
     let improvised: Vec<_> = evaluated
@@ -2961,6 +2964,16 @@ fn apply_part(
                 object.inherited_activation_terms.clear();
             }
             object.granted_unblockable |= change.grants_unblockable;
+            object.doesnt_untap_during_untap_step |= change.doesnt_untap;
+            if let Some(suppression) = change.suppressed_activations {
+                object.suppressed_activations = match (object.suppressed_activations, suppression) {
+                    (Some(crate::characteristics::ActivationSuppression::All), _)
+                    | (_, crate::characteristics::ActivationSuppression::All) => {
+                        Some(crate::characteristics::ActivationSuppression::All)
+                    }
+                    _ => Some(crate::characteristics::ActivationSuppression::NonMana),
+                };
+            }
             if let Some(trigger) = &change.granted_trigger {
                 object.granted_triggers.insert(key, (**trigger).clone());
             }

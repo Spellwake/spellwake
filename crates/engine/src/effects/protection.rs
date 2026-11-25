@@ -182,9 +182,84 @@ impl EffectWindow {
                                 source.is_ability,
                             )))
             }),
-            TargetRef::Player(player) => current
-                .player_protection_colors(player)
-                .any(|color| source.colors.contains(&color)),
+            TargetRef::Player(player) => {
+                current
+                    .player_protection_colors(player)
+                    .any(|color| source.colors.contains(&color))
+                    || current
+                        .player_granted_keywords
+                        .get(&player)
+                        .is_some_and(|keywords| {
+                            keywords.iter().any(|kw| match kw {
+                                KeywordAbility::Shroud => true,
+                                KeywordAbility::Hexproof => {
+                                    source.controller.is_some_and(|ctrl| ctrl != player)
+                                }
+                                KeywordAbility::HexproofFrom(quality) => {
+                                    source.controller.is_some_and(|ctrl| ctrl != player)
+                                        && match quality {
+                                            crate::characteristics::HexproofQuality::Color(c) => {
+                                                source.colors.contains(c)
+                                            }
+                                            crate::characteristics::HexproofQuality::Monocolored => {
+                                                source.colors.len() == 1
+                                            }
+                                            crate::characteristics::HexproofQuality::Multicolored => {
+                                                source.colors.len() >= 2
+                                            }
+                                            crate::characteristics::HexproofQuality::CardType(ct) => {
+                                                source.card_types.contains(ct)
+                                            }
+                                            crate::characteristics::HexproofQuality::Subtype(st) => {
+                                                source.creature_subtypes.contains(st)
+                                            }
+                                            crate::characteristics::HexproofQuality::ActivatedOrTriggeredAbility => {
+                                                source.is_ability
+                                            }
+                                        }
+                                }
+                                KeywordAbility::ProtectionFromWhite => {
+                                    source.colors.contains(&Color::White)
+                                }
+                                KeywordAbility::ProtectionFromBlue => {
+                                    source.colors.contains(&Color::Blue)
+                                }
+                                KeywordAbility::ProtectionFromBlack => {
+                                    source.colors.contains(&Color::Black)
+                                }
+                                KeywordAbility::ProtectionFromRed => {
+                                    source.colors.contains(&Color::Red)
+                                }
+                                KeywordAbility::ProtectionFromGreen => {
+                                    source.colors.contains(&Color::Green)
+                                }
+                                KeywordAbility::ProtectionFromMulticolored => {
+                                    source.colors.len() >= 2
+                                }
+                                KeywordAbility::ProtectionFromSubtype(sub) => {
+                                    sub.matches(&source.creature_subtypes, source.is_creature)
+                                }
+                                KeywordAbility::ProtectionFrom(quality) => match quality {
+                                    crate::characteristics::ProtectionFromQuality::Colorless => {
+                                        source.colors.is_empty()
+                                    }
+                                    crate::characteristics::ProtectionFromQuality::Monocolored => {
+                                        source.colors.len() == 1
+                                    }
+                                    crate::characteristics::ProtectionFromQuality::CardType(ct) => {
+                                        source.card_types.contains(ct)
+                                    }
+                                    crate::characteristics::ProtectionFromQuality::Everything => {
+                                        true
+                                    }
+                                    crate::characteristics::ProtectionFromQuality::Player(seat) => {
+                                        source.controller == Some(*seat)
+                                    }
+                                },
+                                _ => false,
+                            })
+                        })
+            }
             TargetRef::Stack(_) => false,
         }
     }

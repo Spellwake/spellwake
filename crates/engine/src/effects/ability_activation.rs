@@ -365,7 +365,44 @@ impl EffectWindow {
                     && (permanent.abilities.continuous == Some(effect.id()) || permanent.abilities.additional_battlefield_abilities.contains(&effect.id()))
             })
         }) { return Err(EffectError::ActivationConditionNotMet); }
-        if evaluated.objects.values().any(|permanent| {
+        if current.suppressed_activations.is_some()
+            || self.temporary_rules.iter().any(|active| {
+                if active.consumed {
+                    return false;
+                }
+                match &active.rule {
+                    crate::program::TemporaryRuleKind::CantActivateAbilities { .. } => {
+                        active.resolved_players.contains(&actor)
+                    }
+                    crate::program::TemporaryRuleKind::TemporaryStatic(effect) => {
+                        if let crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule:
+                                crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                                    selector,
+                                )
+                                | crate::characteristics::StaticRestriction::PreventMatchingNonManaActivations(
+                                    selector,
+                                ),
+                            ..
+                        } = effect.as_ref()
+                        {
+                            crate::characteristics::selector_matches_permanent(
+                                self.window.cards(),
+                                &evaluated,
+                                active.source_object.unwrap_or(ObjectId::SENTINEL),
+                                active.controller,
+                                selector,
+                                source,
+                                &self.name_rules,
+                            )
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            })
+            || evaluated.objects.values().any(|permanent| {
             if permanent.zone != ObjectZone::Battlefield {
                 return false;
             }
@@ -430,7 +467,7 @@ impl EffectWindow {
             }
             let walker = current.has_type(CardType::Planeswalker);
             let normal_limit = if walker
-                && evaluated.controlled_rules(actor, |ability| {
+                && (evaluated.controlled_rules(actor, |ability| {
                     matches!(
                         ability,
                         crate::characteristics::StaticContinuousAbility::Modifier {
@@ -439,6 +476,21 @@ impl EffectWindow {
                         }
                     )
                 }) > 0
+                    || self.temporary_rules.iter().any(|active| {
+                        !active.consumed
+                            && active.controller == actor
+                            && matches!(
+                                &active.rule,
+                                crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                                    if matches!(
+                                        ab.as_ref(),
+                                        crate::characteristics::StaticContinuousAbility::Modifier {
+                                            rule: crate::characteristics::StaticModifierRule::TwiceLoyaltyPerTurn,
+                                            ..
+                                        }
+                                    )
+                            )
+                    }))
             {
                 2.into()
             } else {
@@ -572,6 +624,8 @@ impl EffectWindow {
                 (HandDiscardKeyword::Channel, ActivationOrigin::Targeted(_))
                     if selected.body.target != BodyTarget::None
                         && selected.body.permanent_target_bounds().is_none() => {}
+                (HandDiscardKeyword::Channel, ActivationOrigin::PermanentTargets(_))
+                    if selected.body.permanent_target_bounds().is_some() => {}
                 (HandDiscardKeyword::Channel, ActivationOrigin::Untargeted) => {
                     return Err(EffectError::TargetRequired);
                 }

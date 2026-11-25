@@ -1731,16 +1731,18 @@ impl EffectWindow {
                 }
             }
         }
-        if let Some(&Instruction::CreateTokenCopy {
+        if let Some(Instruction::CreateTokenCopy {
             sacrifice_at_end_step,
             exile_at_end_step,
             ..
         }) = self
             .stack_body(entry)
             .and_then(|body| body.instructions.get(instruction))
-            && (sacrifice_at_end_step || exile_at_end_step)
+            && (*sacrifice_at_end_step || *exile_at_end_step)
             && !objects.is_empty()
         {
+            let sacrifice_at_end_step = *sacrifice_at_end_step;
+            let exile_at_end_step = *exile_at_end_step;
             let ids: Vec<ObjectId> = objects.iter().map(GameObject::id).collect();
             let resolving = self.window.resolving().cloned();
             if let Some(resolving) = resolving {

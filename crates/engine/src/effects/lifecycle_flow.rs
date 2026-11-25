@@ -442,7 +442,7 @@ impl EffectWindow {
         for source in evaluated.objects.values() {
             if source.zone == ObjectZone::Battlefield
                 && source.controller == Some(active)
-                && source.cannot_be_untapped
+                && (source.cannot_be_untapped || source.doesnt_untap_during_untap_step)
             {
                 excluded.insert(source.object);
             }

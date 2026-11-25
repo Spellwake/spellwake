@@ -2744,6 +2744,10 @@ impl EffectWindow {
             | Instruction::CreateTemporaryRule { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -3740,6 +3744,7 @@ impl EffectWindow {
                                 amount,
                                 append,
                             )?;
+                            cursor.results.last_amassed_army = Some(*object);
                         }
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
@@ -5961,6 +5966,13 @@ fn selection_eligible(
                 }
                 crate::program::SourceZoneFilter::Graveyard => {
                     object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
+                }
+                crate::program::SourceZoneFilter::HandOrGraveyard => {
+                    object.card_id().is_some()
+                        && matches!(
+                            object.zone(),
+                            ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player
+                        )
                 }
                 crate::program::SourceZoneFilter::Battlefield => {
                     object.zone() == ObjectZone::Battlefield

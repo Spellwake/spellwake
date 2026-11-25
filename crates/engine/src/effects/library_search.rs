@@ -428,7 +428,24 @@ impl EffectWindow {
                             .view()
                             .players_with_more_lands(player),
                     ),
-                    Some(search) => search.fixed_batch_limit(),
+                    Some(search) => match &search.count {
+                        SearchCount::UpToExpr(expr)
+                            if matches!(
+                                search.destination,
+                                SearchDestination::Hand
+                                    | SearchDestination::Graveyard
+                                    | SearchDestination::Exile { .. }
+                            ) =>
+                        {
+                            Some(
+                                self.resolve_value_expr(entry.controller(), expr)?
+                                    .max(0.into())
+                                    .to_usize()
+                                    .unwrap_or(0),
+                            )
+                        }
+                        _ => search.fixed_batch_limit(),
+                    },
                     None => None,
                 },
                 shared_land_type: filter.is_some_and(|search| {
@@ -785,8 +802,18 @@ impl EffectWindow {
         let Instruction::SearchLibrary { filter } = self.current_instruction()? else {
             return Err(EffectError::WrongLibraryTopFrame);
         };
-        let max_selected = match filter.count {
-            SearchCount::UpTo(n) => usize::from(n),
+        let max_selected = match &filter.count {
+            SearchCount::UpTo(n) => usize::from(*n),
+            SearchCount::UpToExpr(expr) => {
+                let entry = self
+                    .window
+                    .resolving()
+                    .ok_or(EffectError::WrongLibraryTopFrame)?;
+                self.resolve_value_expr(entry.controller(), expr)?
+                    .max(0.into())
+                    .to_usize()
+                    .unwrap_or(0)
+            }
             SearchCount::Exact(n) => usize::from(n.get()),
             SearchCount::UpToPlayersWithMoreLands => 2,
         };

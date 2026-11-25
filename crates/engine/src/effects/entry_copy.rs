@@ -198,7 +198,9 @@ impl EntryCopyPool {
                             }
                             crate::program::ControllerFilter::RelatedPlayer
                             | crate::program::ControllerFilter::TargetPlayer
-                            | crate::program::ControllerFilter::TargetOpponent => false,
+                            | crate::program::ControllerFilter::TargetOpponent
+                            | crate::program::ControllerFilter::ActivePlayer
+                            | crate::program::ControllerFilter::DefendingPlayer => false,
                         };
                         if !ctrl_ok {
                             return false;

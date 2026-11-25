@@ -40,7 +40,43 @@ impl EffectWindow {
             .ok_or(EffectError::InconsistentProgram)?;
         self.check_opponents_turn_restriction(actor, &evaluated, Some(current))?;
         Self::check_artifact_activation_restriction(&evaluated, current)?;
-        if evaluated.objects.values().any(|permanent| {
+        if current.suppressed_activations
+            == Some(crate::characteristics::ActivationSuppression::All)
+            || self.temporary_rules.iter().any(|active| {
+                if active.consumed {
+                    return false;
+                }
+                match &active.rule {
+                    crate::program::TemporaryRuleKind::CantActivateAbilities {
+                        nonmana_only: false,
+                        ..
+                    } => active.resolved_players.contains(&actor),
+                    crate::program::TemporaryRuleKind::TemporaryStatic(effect) => {
+                        if let crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule:
+                                crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                                    selector,
+                                ),
+                            ..
+                        } = effect.as_ref()
+                        {
+                            crate::characteristics::selector_matches_permanent(
+                                self.window.cards(),
+                                &evaluated,
+                                active.source_object.unwrap_or(ObjectId::SENTINEL),
+                                active.controller,
+                                selector,
+                                source,
+                                &self.name_rules,
+                            )
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            })
+            || evaluated.objects.values().any(|permanent| {
             if permanent.zone != ObjectZone::Battlefield {
                 return false;
             }

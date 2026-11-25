@@ -960,6 +960,16 @@ fn bind_filter_player_target_local(
     Ok(())
 }
 
+fn is_permanent_body_target(target: BodyTarget) -> bool {
+    matches!(
+        target,
+        BodyTarget::SingleCreature
+            | BodyTarget::SinglePermanent
+            | BodyTarget::SinglePlaneswalker
+            | BodyTarget::FilteredPermanent(_)
+    )
+}
+
 pub(super) fn lower_modify_pt_part(
     subject: &SubjectRefAst,
     part: ResolvedPartSpec,
@@ -1044,7 +1054,7 @@ pub(super) fn lower_modify_pt_part(
                 });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
+        SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
             builder
                 .instructions
                 .push(Instruction::CreateContinuousEffect {
@@ -1054,7 +1064,7 @@ pub(super) fn lower_modify_pt_part(
             Ok(())
         }
         SubjectRefAst::Anaphora(_)
-            if builder.target == BodyTarget::None
+            if !is_permanent_body_target(builder.target)
                 && let Some(group_obj) = builder.last_group_filter =>
         {
             builder.instructions.push(Instruction::ChangeGroup {
@@ -1166,7 +1176,7 @@ pub(super) fn lower_modify_pt_target(
             Ok(())
         }
         SubjectRefAst::Anaphora(_)
-            if builder.target == BodyTarget::None
+            if !is_permanent_body_target(builder.target)
                 && dur == ResolvedDuration::UntilEndOfTurn
                 && let Some(group_obj) = builder.last_group_filter =>
         {
@@ -1935,6 +1945,118 @@ fn extract_single_basic_land_type(f: &ObjectFilterAst) -> Option<LandType> {
     }
 }
 
+fn search_count_role_supported(role: ResolvingPlayer) -> bool {
+    matches!(
+        role,
+        ResolvingPlayer::Controller
+            | ResolvingPlayer::ActivePlayer
+            | ResolvingPlayer::DefendingPlayer
+    )
+}
+
+fn search_count_expr_supported(expr: &ValueExpr) -> bool {
+    if expr.uses_target() {
+        return false;
+    }
+    match expr {
+        ValueExpr::Literal(v) => *v >= 0.into(),
+        ValueExpr::Count {
+            zone,
+            filter,
+            controller_scope,
+        } => {
+            if filter.has_target_player() || filter.has_related_player() {
+                return false;
+            }
+            if controller_scope.is_some_and(|r| !search_count_role_supported(r)) {
+                return false;
+            }
+            match zone {
+                ValueZone::Battlefield | ValueZone::AllGraveyards | ValueZone::Exile(None) => true,
+                ValueZone::Hand(r)
+                | ValueZone::Graveyard(r)
+                | ValueZone::Library(r)
+                | ValueZone::Exile(Some(r)) => search_count_role_supported(*r),
+            }
+        }
+        ValueExpr::OpponentMaxCount { filter, .. }
+        | ValueExpr::OpponentMinCount { filter, .. }
+        | ValueExpr::Aggregate { filter, .. }
+        | ValueExpr::DistinctColors { filter } => {
+            !filter.has_target_player() && !filter.has_related_player()
+        }
+        ValueExpr::DistinctManaValuesInGraveyard(r) => search_count_role_supported(*r),
+        ValueExpr::PartyCount(_)
+        | ValueExpr::CountAttackingController
+        | ValueExpr::DomainCount
+        | ValueExpr::OpponentsCount
+        | ValueExpr::Devotion(_)
+        | ValueExpr::SourceState(_) => true,
+        ValueExpr::ObjectStat { subject, .. } => matches!(
+            subject,
+            ValueObjectRef::AbilitySource
+                | ValueObjectRef::AttachedHost
+                | ValueObjectRef::LastAmassedArmy
+                | ValueObjectRef::RevealedTop
+        ),
+        ValueExpr::CounterCount { subject, .. } => matches!(
+            subject,
+            spellwake_engine::program::CounterSubjectRef::AbilitySource
+                | spellwake_engine::program::CounterSubjectRef::AttachedHost
+                | spellwake_engine::program::CounterSubjectRef::ControllerExperience
+                | spellwake_engine::program::CounterSubjectRef::ControllerEnergy
+                | spellwake_engine::program::CounterSubjectRef::ControllerPoison
+        ),
+        ValueExpr::PlayerStat(ps) => match ps {
+            PlayerStatExpr::PlayerLife(r)
+            | PlayerStatExpr::PlayerHandSize(r)
+            | PlayerStatExpr::PlayerLibrarySize(r)
+            | PlayerStatExpr::PlayerGraveyardSize(r)
+            | PlayerStatExpr::LandsEnteredThisTurn(r) => search_count_role_supported(*r),
+            _ => true,
+        },
+        ValueExpr::EventValue(kind) => matches!(
+            kind,
+            EventValueKind::ChosenX
+                | EventValueKind::KickerCount(_)
+                | EventValueKind::EnteredKickerX
+                | EventValueKind::EnteredKickerCount(_)
+                | EventValueKind::ManaSpentToCast
+                | EventValueKind::ColorsSpentToCast
+                | EventValueKind::ManaTypeSpentToCast(_)
+                | EventValueKind::SnowManaSpentToCast
+                | EventValueKind::TreasureManaSpentToCast
+                | EventValueKind::CreatureManaSpentToCast
+                | EventValueKind::LastDieRoll
+                | EventValueKind::ChosenNumber
+                | EventValueKind::AdditionalCostPaid
+        ),
+        ValueExpr::Scale {
+            expr: inner,
+            factor,
+        } => factor.is_positive() && search_count_expr_supported(inner),
+        ValueExpr::DivConst { expr: inner, .. } => search_count_expr_supported(inner),
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            search_count_expr_supported(a) && search_count_expr_supported(b)
+        }
+        ValueExpr::Conditional {
+            left,
+            right,
+            then_value,
+            else_value,
+            ..
+        } => {
+            search_count_expr_supported(left)
+                && search_count_expr_supported(right)
+                && search_count_expr_supported(then_value)
+                && search_count_expr_supported(else_value)
+        }
+        ValueExpr::CountOtherSharingSourceSubtype
+        | ValueExpr::AttachedCount(_)
+        | ValueExpr::ObjectMatches { .. } => false,
+    }
+}
+
 // Internal lowering helper taking the orthogonal fields of `InstructionAst::SearchLibrary` plus lowering flags.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_library_search_ext(
@@ -1989,31 +2111,35 @@ pub(super) fn lower_library_search_ext(
     let mut substituted_filter_owned: Option<ObjectFilterAst> = None;
     let mut substituted_secondary_owned: Option<ObjectFilterAst> = None;
     let mut where_x_count: Option<SearchCount> = None;
+    let mut dynamic_count_ast: Option<&ValueExprAst> = None;
     if let Some(where_expr) = extra.where_x {
         if any_number || value_expr_references_chosen_x(where_expr) {
             return Err("oracle:unsupported-search-where-x");
         }
         if matches!(count, ValueExprAst::ChosenX) {
-            let ValueExprAst::CountPlayersMatching { predicate } = where_expr else {
-                return Err("oracle:unsupported-search-where-x");
-            };
-            let pred_low = predicate.trim().to_ascii_lowercase();
-            let is_more_lands = matches!(
-                pred_low.as_str(),
-                "the number of players who control more lands than you"
-                    | "players who control more lands than you"
-                    | "the number of opponents who control more lands than you"
-                    | "opponents who control more lands than you"
-            );
-            if !is_more_lands
-                || filter_references_chosen_x(filter)
+            if filter_references_chosen_x(filter)
                 || extra
                     .secondary_filter
                     .is_some_and(filter_references_chosen_x)
             {
                 return Err("oracle:unsupported-search-where-x");
             }
-            where_x_count = Some(SearchCount::UpToPlayersWithMoreLands);
+            let is_more_lands = matches!(
+                where_expr,
+                ValueExprAst::CountPlayersMatching { predicate }
+                    if matches!(
+                        predicate.trim().to_ascii_lowercase().as_str(),
+                        "the number of players who control more lands than you"
+                            | "players who control more lands than you"
+                            | "the number of opponents who control more lands than you"
+                            | "opponents who control more lands than you"
+                    )
+            );
+            if is_more_lands {
+                where_x_count = Some(SearchCount::UpToPlayersWithMoreLands);
+            } else {
+                dynamic_count_ast = Some(where_expr);
+            }
         } else {
             let mut substituted = false;
             if let Some(sub_f) = substitute_chosen_x_in_filter(filter, where_expr) {
@@ -2049,7 +2175,10 @@ pub(super) fn lower_library_search_ext(
                 None,
             )
         } else {
-            if any_number || where_x_count.is_some() || !matches!(count, ValueExprAst::Const(1 | 2))
+            if any_number
+                || where_x_count.is_some()
+                || dynamic_count_ast.is_some()
+                || !matches!(count, ValueExprAst::Const(1 | 2))
             {
                 return Err("oracle:unsupported-secondary-search-filter");
             }
@@ -2081,16 +2210,14 @@ pub(super) fn lower_library_search_ext(
         )
     };
 
+    let effective_count = dynamic_count_ast.unwrap_or(count);
     let search_count = if let Some(pair_cnt) = pair_count_override {
         pair_cnt
     } else if let Some(wx_cnt) = where_x_count {
         wx_cnt
     } else if any_number {
         SearchCount::UpTo(u8::MAX)
-    } else {
-        let ValueExprAst::Const(n) = count else {
-            return Err("oracle:dynamic-search-count");
-        };
+    } else if let ValueExprAst::Const(n) = effective_count {
         let n_u8 = u8::try_from(*n).map_err(|_| "oracle:search-count-ovf")?;
         if n_u8 == 0 {
             return Err("oracle:search-zero");
@@ -2100,9 +2227,27 @@ pub(super) fn lower_library_search_ext(
         } else {
             SearchCount::UpTo(n_u8)
         }
+    } else if up_to || optional_search || matcher != SearchCardMatcher::Any {
+        let expr = lower_value_expr(effective_count, vocabulary)
+            .map_err(|_| "oracle:dynamic-search-count")?;
+        if !search_count_expr_supported(&expr) {
+            return Err("oracle:dynamic-search-count");
+        }
+        SearchCount::UpToExpr(Box::new(expr))
+    } else {
+        return Err("oracle:dynamic-search-count");
     };
 
     let dest_low = to_zone.to_ascii_lowercase();
+    if dest_low.contains("under your control") && searcher != ResolvingPlayer::Controller {
+        return Err("oracle:unsupported-search-controller");
+    }
+    if (dest_low.contains("under their control")
+        || dest_low.contains("under that player's control"))
+        && searcher == ResolvingPlayer::Controller
+    {
+        return Err("oracle:unsupported-search-controller");
+    }
     let mut destination = if dest_low.contains("hand") {
         SearchDestination::Hand
     } else if dest_low.contains("graveyard") {
@@ -2163,6 +2308,20 @@ pub(super) fn lower_library_search_ext(
             }
             _ => return Err("oracle:unsupported-search-dest"),
         };
+    }
+    if matches!(search_count, SearchCount::UpToExpr(_))
+        && !matches!(
+            destination,
+            SearchDestination::Hand
+                | SearchDestination::Graveyard
+                | SearchDestination::Exile { .. }
+                | SearchDestination::Battlefield {
+                    post_entry: spellwake_engine::program::SearchBattlefieldPostEntry::None,
+                    ..
+                }
+        )
+    {
+        return Err("oracle:dynamic-search-count");
     }
 
     let mut ls = LibrarySearch {
@@ -2274,6 +2433,20 @@ pub(super) fn lower_search_matcher(
             }
         };
     }
+    if (f.flags.0 & AstFilterFlags::MATCHES_NAMED_AGENDA.0) != 0 {
+        let mut stripped = f.clone();
+        stripped.flags = AstFilterFlags(stripped.flags.0 & !AstFilterFlags::MATCHES_NAMED_AGENDA.0);
+        stripped.zone = None;
+        let extra = if is_unrestricted_filter(&stripped) {
+            None
+        } else {
+            Some(Box::new(lower_object_filter(&stripped, vocabulary)?))
+        };
+        return Ok(SearchCardMatcher::SameNameAs {
+            reference: MoveSubjectRef::TriggeringObject,
+            extra,
+        });
+    }
     let has_complex = !f.any_colors.is_empty()
         || !f.forbidden_colors.is_empty()
         || f.color_arity.is_some()
@@ -2347,6 +2520,8 @@ pub(super) fn lower_search_matcher(
 
 fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
     let mut s = raw
+        .trim()
+        .trim_end_matches([',', ';'])
         .trim()
         .replace("this token", "~")
         .replace("This token", "~")
@@ -2444,27 +2619,22 @@ fn lower_token_face_ast(
             .iter()
             .any(|st| matches!(st, StaticAbilityAst::AttachmentRestriction { .. }))
     {
-        let restriction = find_aura_restriction(&face_ast.statics, vocabulary)
-            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+        let restriction = find_aura_restriction(&face_ast.statics, vocabulary)?;
         if let ProgramKind::Permanent(def) = &mut program.kind {
             def.attachment = Some(AttachmentKind::Aura(restriction));
         }
     }
     for (k_idx, kw_ast) in face_ast.keywords.iter().enumerate() {
-        lower_keyword(kw_ast, k_idx, face_ast, program, vocabulary, tok_ids, false)
-            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+        lower_keyword(kw_ast, k_idx, face_ast, program, vocabulary, tok_ids, false)?;
     }
     for st in &face_ast.statics {
-        lower_static(st, program, vocabulary, tok_ids, false)
-            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+        lower_static(st, program, vocabulary, tok_ids, false)?;
     }
     for rep in &face_ast.replacements {
-        lower_replacement(rep, program, vocabulary, tok_ids)
-            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+        lower_replacement(rep, program, vocabulary, tok_ids)?;
     }
     for ab in &face_ast.abilities {
-        lower_ability(ab, program, vocabulary, tok_ids)
-            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+        lower_ability(ab, program, vocabulary, tok_ids)?;
     }
     Ok(())
 }
@@ -2667,7 +2837,13 @@ pub(super) fn lower_token_spec(
                         leading_text.push_str(&rest[..open]);
                         let after_open = &rest[open + 1..];
                         if let Some(close) = after_open.find('"') {
-                            quoted_texts.push(after_open[..close].trim().to_string());
+                            let cleaned = after_open[..close]
+                                .trim()
+                                .trim_end_matches([',', ';'])
+                                .trim();
+                            if !cleaned.is_empty() {
+                                quoted_texts.push(cleaned.to_string());
+                            }
                             rest = &after_open[close + 1..];
                         } else {
                             return Err("oracle:unsupported-granted-keyword");
@@ -2678,7 +2854,12 @@ pub(super) fn lower_token_spec(
                         .split([',', ';'])
                         .flat_map(|s| s.split(" and "))
                     {
-                        let trimmed = part.trim().trim_start_matches("with ").trim();
+                        let trimmed = part
+                            .trim()
+                            .trim_start_matches("with ")
+                            .trim()
+                            .trim_matches(['.', ',', ';'])
+                            .trim();
                         if trimmed.is_empty() {
                             continue;
                         }
@@ -2702,15 +2883,24 @@ pub(super) fn lower_token_spec(
                             if !parsed_kw.strictly_compiled {
                                 return Err("oracle:unsupported-granted-keyword");
                             }
-                            if let Some(face_ast) = parsed_kw.faces.first() {
-                                lower_token_face_ast(
-                                    face_ast,
-                                    is_aura,
-                                    &mut p,
-                                    vocabulary,
-                                    &mut tok_ids,
-                                )?;
+                            let Some(face_ast) = parsed_kw.faces.first() else {
+                                return Err("oracle:unsupported-granted-keyword");
+                            };
+                            if !face_ast.spell_effects.is_empty()
+                                || (face_ast.keywords.is_empty()
+                                    && face_ast.statics.is_empty()
+                                    && face_ast.replacements.is_empty()
+                                    && face_ast.abilities.is_empty())
+                            {
+                                return Err("oracle:unsupported-granted-keyword");
                             }
+                            lower_token_face_ast(
+                                face_ast,
+                                is_aura,
+                                &mut p,
+                                vocabulary,
+                                &mut tok_ids,
+                            )?;
                         }
                     }
                     for q in quoted_texts {
@@ -2737,43 +2927,54 @@ pub(super) fn lower_token_spec(
                         let Some(face_ast) = compiled_q.faces.first() else {
                             return Err("oracle:unsupported-granted-keyword");
                         };
-                        if !face_ast.spell_effects.is_empty() {
+                        if !face_ast.spell_effects.is_empty()
+                            || (face_ast.keywords.is_empty()
+                                && face_ast.statics.is_empty()
+                                && face_ast.replacements.is_empty()
+                                && face_ast.abilities.is_empty())
+                        {
                             return Err("oracle:unsupported-granted-keyword");
                         }
                         lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
                     }
-                } else if let Some(kw) = lower_keyword_ability_name(kw_raw) {
-                    p.printed_keywords.insert(kw);
                 } else {
-                    let norm_kw = normalize_token_ability_text(kw_raw, tok_name);
-                    let compiled_kw = compile_card(
-                        &CardInput {
-                            oracle_id: "",
-                            name: tok_name,
-                            layout: "normal",
-                            faces: vec![FaceInput {
+                    let kw_trimmed = kw_raw.trim().trim_end_matches(['.', ',', ';']).trim();
+                    if kw_trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Some(kw) = lower_keyword_ability_name(kw_trimmed) {
+                        p.printed_keywords.insert(kw);
+                    } else {
+                        let norm_kw = normalize_token_ability_text(kw_trimmed, tok_name);
+                        let compiled_kw = compile_card(
+                            &CardInput {
+                                oracle_id: "",
                                 name: tok_name,
-                                type_line: &tok_type_line,
-                                oracle_text: &norm_kw,
-                            }],
-                        },
-                        &compiler_vocab,
-                    );
-                    if !compiled_kw.strictly_compiled {
-                        return Err("oracle:unsupported-granted-keyword");
+                                layout: "normal",
+                                faces: vec![FaceInput {
+                                    name: tok_name,
+                                    type_line: &tok_type_line,
+                                    oracle_text: &norm_kw,
+                                }],
+                            },
+                            &compiler_vocab,
+                        );
+                        if !compiled_kw.strictly_compiled {
+                            return Err("oracle:unsupported-granted-keyword");
+                        }
+                        let Some(face_ast) = compiled_kw.faces.first() else {
+                            return Err("oracle:unsupported-granted-keyword");
+                        };
+                        if !face_ast.spell_effects.is_empty()
+                            || (face_ast.keywords.is_empty()
+                                && face_ast.statics.is_empty()
+                                && face_ast.replacements.is_empty()
+                                && face_ast.abilities.is_empty())
+                        {
+                            return Err("oracle:unsupported-granted-keyword");
+                        }
+                        lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
                     }
-                    let Some(face_ast) = compiled_kw.faces.first() else {
-                        return Err("oracle:unsupported-granted-keyword");
-                    };
-                    if !face_ast.spell_effects.is_empty()
-                        || (face_ast.keywords.is_empty()
-                            && face_ast.statics.is_empty()
-                            && face_ast.replacements.is_empty()
-                            && face_ast.abilities.is_empty())
-                    {
-                        return Err("oracle:unsupported-granted-keyword");
-                    }
-                    lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
                 }
             }
             if is_aura

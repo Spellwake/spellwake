@@ -449,6 +449,14 @@ pub enum KeywordAbility {
     /// CR 702.179. A state-based action starts the controller at speed one.
     StartYourEngines,
 }
+/// Scope of activated abilities suppressed on a permanent by a layer-6 ability effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationSuppression {
+    /// Permanent's activated abilities cannot be activated (including mana abilities).
+    All,
+    /// Permanent's activated abilities cannot be activated unless they're mana abilities.
+    NonMana,
+}
 /// One layer-6 component: remove first, then grant the specified keywords. Both
 /// operations share this effect's timestamp, duration and affected set.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -459,6 +467,10 @@ pub struct AbilityChange {
     pub granted_keywords: BTreeSet<KeywordAbility>,
     /// Lose these keywords and suppress later grants while this effect lasts.
     pub suppressed_keywords: BTreeSet<KeywordAbility>,
+    /// Suppress activating abilities of this permanent while this effect lasts.
+    pub suppressed_activations: Option<ActivationSuppression>,
+    /// This permanent doesn't untap during its controller's untap step while this effect lasts.
+    pub doesnt_untap: bool,
     /// Separate instances of the triggered ability, each with its own stack entry.
     pub granted_exalted: u16,
     /// Grants the static ability that this creature cannot be blocked.
@@ -491,26 +503,14 @@ impl AbilityChange {
     pub fn remove(removal: AbilityRemoval) -> Self {
         Self {
             removal: Some(removal),
-            granted_keywords: BTreeSet::new(),
-            suppressed_keywords: BTreeSet::new(),
-            granted_exalted: 0,
-            grants_unblockable: false,
-            granted_trigger: None,
-            granted_toxic: None,
-            granted_combat_keywords: Vec::new(),
+            ..Self::default()
         }
     }
     /// Construct a keyword grant with no removal.
     pub fn grant_keywords(keywords: impl IntoIterator<Item = KeywordAbility>) -> Self {
         Self {
-            removal: None,
             granted_keywords: keywords.into_iter().collect(),
-            suppressed_keywords: BTreeSet::new(),
-            granted_exalted: 0,
-            grants_unblockable: false,
-            granted_trigger: None,
-            granted_toxic: None,
-            granted_combat_keywords: Vec::new(),
+            ..Self::default()
         }
     }
 }
@@ -685,6 +685,8 @@ pub enum BlockingRestriction {
     AssignNoCombatDamage,
     /// Permanent cannot be regenerated (CR 701.19c).
     CannotBeRegenerated,
+    /// Blocker must block each attacking creature this turn if able (CR 509.1c, Blaze of Glory).
+    MustBlockAllAttackers,
 }
 // Embeds `Copy` `BlockingRestriction` inline to avoid indirection in small resolved part lists.
 #[allow(clippy::large_enum_variant)]
@@ -2206,6 +2208,10 @@ pub struct ObjectCharacteristics {
     pub cannot_be_sacrificed: bool,
     /// Active static restriction prevents untapping this permanent.
     pub cannot_be_untapped: bool,
+    /// Layer-6 ability effect prevents untapping this permanent during its controller's untap step.
+    pub doesnt_untap_during_untap_step: bool,
+    /// Layer-6 ability effect suppresses activating abilities of this permanent.
+    pub suppressed_activations: Option<ActivationSuppression>,
     /// Active static restriction lets controller activate tap/untap abilities as though this creature had haste.
     pub activate_as_though_haste: bool,
     /// Active static restriction prevents Aura spells from targeting this permanent.
@@ -2584,6 +2590,7 @@ pub struct EvaluatedCharacteristics {
     pub objects: BTreeMap<ObjectId, ObjectCharacteristics>,
     pub trace: EvaluationTrace,
     pub(crate) player_color_protection: BTreeMap<SeatId, BTreeSet<Color>>,
+    pub(crate) player_granted_keywords: BTreeMap<SeatId, BTreeSet<KeywordAbility>>,
     pub(crate) emblem_rules: Vec<(SeatId, StaticContinuousAbility)>,
 }
 impl EvaluatedCharacteristics {

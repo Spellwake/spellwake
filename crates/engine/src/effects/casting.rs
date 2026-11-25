@@ -932,25 +932,43 @@ impl EffectWindow {
         if returns.next().is_some() {
             return Err(EffectError::InvalidCastResource);
         }
-        let flash = sneak_defender.is_some()
+        let mut consumed_temp_rules = Vec::new();
+        let mut flash_extra_mana: Option<ManaCost> = None;
+        let mut flash = sneak_defender.is_some()
             || current_spell.has_keyword(KeywordAbility::Flash)
             || self.flash_through_cleanup.contains(&actor)
-            || self.temporary_rules.iter().any(|active| {
-                !active.consumed
-                    && active.resolved_players.contains(&actor)
-                    && matches!(
-                        &active.rule,
-                        crate::program::TemporaryRuleKind::FilteredFlash { filter, .. }
-                            if self.matches_object_filter(
-                                *filter,
-                                current_spell,
-                                active.controller,
-                                None,
-                                &BTreeSet::new(),
-                                &current,
-                            )
-                    )
-            })
+            || {
+                let mut matched_idx = None;
+                let mut matched_any = false;
+                for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
+                    if !active.consumed
+                        && active.resolved_players.contains(&actor)
+                        && let crate::program::TemporaryRuleKind::FilteredFlash {
+                            filter,
+                            next_only,
+                            ..
+                        } = &active.rule
+                        && self.matches_object_filter(
+                            *filter,
+                            current_spell,
+                            active.controller,
+                            None,
+                            &BTreeSet::new(),
+                            &current,
+                        )
+                    {
+                        matched_any = true;
+                        if *next_only {
+                            matched_idx = Some(rule_idx);
+                        }
+                        break;
+                    }
+                }
+                if let Some(idx) = matched_idx {
+                    consumed_temp_rules.push(idx);
+                }
+                matched_any
+            }
             || current.objects.values().any(|source| {
                 source.zone == ObjectZone::Battlefield
                 && source
@@ -1013,6 +1031,26 @@ impl EffectWindow {
                         }
                     )
                 });
+        if !flash && let Some(self_flash) = &program.conditional_flash {
+            match self_flash {
+                crate::program::SelfFlashPermission::Condition(cond) => {
+                    let lhs = self.resolve_value_expr_at(actor, &cond.left, None)?;
+                    let rhs = self.resolve_value_expr_at(actor, &cond.right, None)?;
+                    if cond.comparison.evaluate(&lhs, &rhs) {
+                        flash = true;
+                    }
+                }
+                crate::program::SelfFlashPermission::PayExtraMana(extra) => {
+                    if resolving_parent.is_none()
+                        && !current_spell.has_type(CardType::Instant)
+                        && validate_main_phase(&self.window, turn, actor).is_err()
+                    {
+                        flash = true;
+                        flash_extra_mana = Some(extra.clone());
+                    }
+                }
+            }
+        }
         let spliced = self.prepare_splice(&payment.splice, actor, current_spell, &current)?;
         let mut mode_targets = Vec::new();
         let mut mode_clauses = Vec::new();
@@ -1596,7 +1634,38 @@ impl EffectWindow {
         } else {
             cost.clone()
         };
+        let mut next_spell_free_used = false;
+        for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
+            if active.consumed || active.controller != actor {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::NextSpellFree { filter } = &active.rule
+                && filter.is_none_or(|f| {
+                    self.matches_object_filter(
+                        f,
+                        current_spell,
+                        actor,
+                        None,
+                        &BTreeSet::new(),
+                        &current,
+                    )
+                })
+            {
+                cost = ManaCost::free();
+                consumed_temp_rules.push(rule_idx);
+                next_spell_free_used = true;
+                break;
+            }
+        }
+        if let Some(extra) = &flash_extra_mana {
+            cost.generic = cost.generic.plus(&extra.generic);
+            for (&color, amount) in &extra.required {
+                let slot = cost.required.entry(color).or_insert_with(|| 0.into());
+                *slot = slot.plus(amount);
+            }
+        }
         let pays_printed_cost = disturb.is_none()
+            && !next_spell_free_used
             && !from_free_exile
             && external_alternative.is_none()
             && source.face_down().is_none()
@@ -1847,7 +1916,6 @@ impl EffectWindow {
         if let Some(discount) = emerge_discount {
             cost.generic = cost.generic.minus(&discount).max(0.into());
         }
-        let mut consumed_temp_rules = Vec::new();
         for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
             if active.consumed {
                 continue;
@@ -2297,6 +2365,22 @@ impl EffectWindow {
         if bought_back || bargained || !kicked.is_empty() {
             window.set_additional_costs(entry, bought_back, bargained, kicked)?;
         }
+        if !payment.additional.is_empty()
+            || !replicated.is_empty()
+            || payment.objects.iter().any(|r| {
+                matches!(
+                    r,
+                    CastResource::SacrificeForSpell(_)
+                        | CastResource::DiscardForSpell(_)
+                        | CastResource::TapCreatureForSpell(_)
+                        | CastResource::ExileGraveyardCreatureForSpell(_)
+                        | CastResource::ExileGraveyardCardForSpell(_)
+                        | CastResource::ExtraCost(_)
+                )
+            })
+        {
+            window.mark_additional_cost_paid(entry)?;
+        }
         let paid_granted_replicate = !granted_replicate.is_empty();
         if !replicated.is_empty() {
             window.set_replicate(entry, replicated, granted_replicate)?;
@@ -2317,10 +2401,43 @@ impl EffectWindow {
         if let Some(idx) = temp_zone_consumed_idx {
             consumed_temp_rules.push(idx);
         }
+        let mut mark_entry_uncounterable = false;
+        for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::CantBeCountered {
+                filter,
+                controller_only,
+                next_only: true,
+            } = &active.rule
+            {
+                if *controller_only && active.controller != actor {
+                    continue;
+                }
+                let matches_spell = filter.is_none_or(|f| {
+                    self.matches_object_filter(
+                        f,
+                        current_spell,
+                        active.controller,
+                        None,
+                        &BTreeSet::new(),
+                        &current,
+                    )
+                });
+                if matches_spell {
+                    consumed_temp_rules.push(rule_idx);
+                    mark_entry_uncounterable = true;
+                }
+            }
+        }
         for rule_idx in consumed_temp_rules {
             if let Some(active) = next.temporary_rules.get_mut(rule_idx) {
                 active.consumed = true;
             }
+        }
+        if mark_entry_uncounterable {
+            next.uncounterable_stack_entries.insert(entry);
         }
         next.revision = revision;
         next.payloads.insert(entry, payload);

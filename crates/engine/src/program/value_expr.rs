@@ -67,6 +67,8 @@ pub enum ValueObjectRef {
     TriggerSubject,
     /// Permanent to which the ability source Aura or Equipment is attached.
     AttachedHost,
+    /// Army token most recently created or grown by `Instruction::Amass` in this resolution.
+    LastAmassedArmy,
 }
 
 /// Subject whose counters are counted by [`ValueExpr::CounterCount`].
@@ -376,6 +378,8 @@ pub enum EventValueKind {
     LastNonlandDiscarded,
     /// Total mana spent to cast the spell that caused this triggered ability to trigger.
     TriggeringSpellManaSpent,
+    /// `1` if an optional additional cost (kicker, bargain, buyback, entwine, etc.) was paid when casting this spell.
+    AdditionalCostPaid,
 }
 
 /// Composable numeric expression unifying effect amounts and resolution-condition operands.
@@ -799,6 +803,7 @@ impl ValueExpr {
                     | EventValueKind::EvidenceCollected
                     | EventValueKind::PaidAlternative
                     | EventValueKind::KickerCount(_)
+                    | EventValueKind::AdditionalCostPaid
             ),
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => expr.is_world_evaluable(),
             Self::Add(a, b) | Self::Sub(a, b) => a.is_world_evaluable() && b.is_world_evaluable(),
@@ -939,6 +944,7 @@ impl ValueExpr {
                     | EventValueKind::PaidAlternative
                     | EventValueKind::KickerCount(_)
                     | EventValueKind::TriggeringSpellManaSpent
+                    | EventValueKind::AdditionalCostPaid
             ),
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.is_trigger_world_evaluable()
@@ -1521,10 +1527,10 @@ impl ValueExpr {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
-                ValueObjectRef::RevealedTop => Ok(()),
+                ValueObjectRef::RevealedTop | ValueObjectRef::LastAmassedArmy => Ok(()),
                 ValueObjectRef::TargetObject => match stat {
                     ObjectStatKind::Power | ObjectStatKind::Toughness => {
-                        if facts.exact_creature_target {
+                        if facts.exact_creature_target || facts.has_object_or_spell_target {
                             Ok(())
                         } else {
                             Err(DefinitionError::OperandFamily)
@@ -2064,7 +2070,8 @@ impl ValueExpr {
                 | EventValueKind::VoteCount(_)
                 | EventValueKind::WinningVoteOption
                 | EventValueKind::LastNonlandDiscarded
-                | EventValueKind::TriggeringSpellManaSpent => Ok(()),
+                | EventValueKind::TriggeringSpellManaSpent
+                | EventValueKind::AdditionalCostPaid => Ok(()),
             },
         }
     }
@@ -2301,7 +2308,8 @@ impl ValueExpr {
                 | EventValueKind::VoteCount(_)
                 | EventValueKind::WinningVoteOption
                 | EventValueKind::LastNonlandDiscarded
-                | EventValueKind::TriggeringSpellManaSpent => Ok(()),
+                | EventValueKind::TriggeringSpellManaSpent
+                | EventValueKind::AdditionalCostPaid => Ok(()),
             },
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.validate_condition(context, vocabulary)

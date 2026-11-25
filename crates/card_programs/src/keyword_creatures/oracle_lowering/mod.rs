@@ -62,15 +62,15 @@ use spellwake_engine::{
         PlayerRelation, PlayerStatExpr, PlayerTriggerAction, PowerDamageSource, PowerFilter,
         Program, ProgramKind, ProtectionRecipients, PublicZoneDestination, ResolutionCondition,
         ResolvingPlayer, SearchCardMatcher, SearchCount, SearchDestination, SearchExileLink,
-        SearchManaValue, SearchSource, SourceRelation, SourceStateExpr, SourceZoneFilter,
-        SpellDefinition, SpellFilter, SpellModes, SpellSubtype, SpliceAbility, SpliceQuality,
-        SplitCard, StatAggregate, StateThresholdKind, StatusTriggerKind, SubjectDestination,
-        SubtypeFilter, Supertype, SupertypeMask, TemporaryRuleKind, ToughnessFilter,
-        TransferKeyword, TriggerCondition, TriggerEvent, TriggerFromZone, TriggerGrouping,
-        TriggerKeywordEvent, TriggerPlayerScope, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
-        TriggeredModes, UpkeepKeyword, ValueExpr, ValueObjectRef, ValueZone, ZoneActionKind,
-        ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
-        ZoneReplacementChoice, ZoneReplacementSubject,
+        SearchManaValue, SearchSource, SelfFlashPermission, SourceRelation, SourceStateExpr,
+        SourceZoneFilter, SpellDefinition, SpellFilter, SpellModes, SpellSubtype, SpliceAbility,
+        SpliceQuality, SplitCard, StatAggregate, StateThresholdKind, StatusTriggerKind,
+        SubjectDestination, SubtypeFilter, Supertype, SupertypeMask, TemporaryRuleKind,
+        ToughnessFilter, TransferKeyword, TriggerCondition, TriggerEvent, TriggerFromZone,
+        TriggerGrouping, TriggerKeywordEvent, TriggerPlayerScope, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, TriggeredModes, UpkeepKeyword, ValueExpr, ValueObjectRef, ValueZone,
+        ZoneActionKind, ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility,
+        ZoneReplacementAbilityId, ZoneReplacementChoice, ZoneReplacementSubject,
     },
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients, TokenSize, TokenSubtype},
     turn::Step,
@@ -1443,10 +1443,70 @@ fn lower_face(
             casting_cost.ok_or("oracle:spell-without-cost")?
         };
         let mut cast_during_own_combat = false;
+        let mut cannot_be_copied = false;
+        let mut conditional_flash: Option<SelfFlashPermission> = None;
         let mut cast_timings: Vec<spellwake_engine::program::CastTimingRestriction> = Vec::new();
         let mut conditional_free_cast: Option<ConditionalCastCost> = None;
         let mut filtered_spell_effects = Vec::with_capacity(face_ast.spell_effects.len());
         for ins in &face_ast.spell_effects {
+            if let InstructionAst::CombatRuleMod {
+                subject,
+                rule,
+                duration: DurationAst::Instant,
+            } = ins
+                && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                && rule.eq_ignore_ascii_case("cant_be_copied")
+            {
+                cannot_be_copied = true;
+                continue;
+            }
+            if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
+                && let StaticAbilityAst::PlayOrCastPermission {
+                    cast_only: true,
+                    filter,
+                    permission,
+                    condition: Some(cond),
+                } = static_ability.as_ref()
+                && permission
+                    .trim()
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case("as though it had flash")
+                && is_self_flash_filter(filter)
+            {
+                if conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                conditional_flash = Some(lower_self_flash_condition(cond, vocabulary)?);
+                continue;
+            }
+            if let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = ins
+                && let [InstructionAst::TemporaryStatic { static_ability, .. }] =
+                    then_body.as_slice()
+                && let StaticAbilityAst::PlayOrCastPermission {
+                    cast_only: true,
+                    filter,
+                    permission,
+                    condition: inner_cond,
+                } = static_ability.as_ref()
+                && permission
+                    .trim()
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case("as though it had flash")
+                && is_self_flash_filter(filter)
+            {
+                if conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                let combined_cond = match inner_cond.as_deref() {
+                    Some(ic) => ConditionAst::And(condition.clone(), Box::new(ic.clone())),
+                    None => condition.as_ref().clone(),
+                };
+                conditional_flash = Some(lower_self_flash_condition(&combined_cond, vocabulary)?);
+                continue;
+            }
             if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
                 && conditional_free_cast.is_none()
                 && let StaticAbilityAst::AlternativeCastCost {
@@ -1591,6 +1651,8 @@ fn lower_face(
         p.x_mana_symbols = x_symbols;
         p.hybrid_symbols = hybrid_symbols;
         p.cast_during_own_combat = cast_during_own_combat;
+        p.cannot_be_copied = cannot_be_copied;
+        p.conditional_flash = conditional_flash;
         p.cast_timing = cast_timing;
         if let Some(cc) = conditional_free_cast {
             p.conditional_cost = Some(cc);
@@ -1939,6 +2001,99 @@ fn lower_face(
             }
             StaticAbilityAst::DieRollBand { roll, payload } => {
                 die_roll_bands_raw.push((roll.as_str(), payload.as_str()));
+            }
+            StaticAbilityAst::PlayOrCastPermission {
+                cast_only: true,
+                filter,
+                permission,
+                condition: Some(cond),
+            } if permission
+                .trim()
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case("as though it had flash")
+                && is_self_flash_filter(filter) =>
+            {
+                if program.conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                program.conditional_flash = Some(lower_self_flash_condition(cond, vocabulary)?);
+            }
+            StaticAbilityAst::RuleOrCombatRestriction {
+                subject,
+                rule,
+                filter: None,
+                condition: None,
+            } if matches!(subject.as_deref(), None | Some(SubjectRefAst::SelfObject))
+                && matches!(
+                    rule.trim()
+                        .trim_end_matches('.')
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "cant_be_copied"
+                        | "~ can't be copied"
+                        | "can't be copied"
+                        | "this spell can't be copied"
+                ) =>
+            {
+                program.cannot_be_copied = true;
+            }
+            StaticAbilityAst::Compound(parts)
+                if parts.iter().any(|part| {
+                    is_hoistable_self_flash_static(part)
+                        || (parts.iter().any(|other| {
+                            matches!(
+                                other,
+                                StaticAbilityAst::AlternativeCastCost {
+                                    for_spells: None,
+                                    next_only: false,
+                                    ..
+                                }
+                            )
+                        }) && is_self_conditional_flash_keyword_grant(part))
+                }) =>
+            {
+                let has_self_alt_cost = parts.iter().any(|other| {
+                    matches!(
+                        other,
+                        StaticAbilityAst::AlternativeCastCost {
+                            for_spells: None,
+                            next_only: false,
+                            ..
+                        }
+                    )
+                });
+                let mut remaining = Vec::with_capacity(parts.len());
+                for part in parts {
+                    if let StaticAbilityAst::PlayOrCastPermission {
+                        condition: Some(cond),
+                        ..
+                    } = part
+                        && is_hoistable_self_flash_static(part)
+                    {
+                        if program.conditional_flash.is_some() {
+                            return Err("oracle:duplicate-conditional-flash");
+                        }
+                        program.conditional_flash =
+                            Some(lower_self_flash_condition(cond, vocabulary)?);
+                    } else if has_self_alt_cost
+                        && let StaticAbilityAst::GrantKeywords {
+                            condition: Some(cond),
+                            ..
+                        } = part
+                        && is_self_conditional_flash_keyword_grant(part)
+                    {
+                        if program.conditional_flash.is_some() {
+                            return Err("oracle:duplicate-conditional-flash");
+                        }
+                        program.conditional_flash =
+                            Some(lower_self_flash_condition(cond, vocabulary)?);
+                    } else {
+                        remaining.push(part.clone());
+                    }
+                }
+                for rem in &remaining {
+                    lower_static(rem, &mut program, vocabulary, &mut ids, is_spell)?;
+                }
             }
             _ => {
                 if let Some(prev) = &prev_static_subject
@@ -2395,6 +2550,8 @@ fn lower_gated_section(
         || !scratch.cast_reductions.is_empty()
         || !scratch.entry_counter_abilities.is_empty()
         || scratch.cannot_be_countered
+        || scratch.cannot_be_copied
+        || scratch.conditional_flash.is_some()
         || scratch.attack_requirement.is_some()
         || scratch.combat_limits != Default::default()
         || scratch.conditional_cost.is_some()
@@ -2723,4 +2880,156 @@ fn push_primary_static_ability(
         program.continuous = Some(ability);
         Ok(())
     }
+}
+
+fn is_self_flash_filter(filter: &ObjectFilterAst) -> bool {
+    !filter.any_spell && !filter.any_permanent && is_unrestricted_filter(filter)
+}
+
+fn is_hoistable_self_flash_static(st: &StaticAbilityAst) -> bool {
+    matches!(
+        st,
+        StaticAbilityAst::PlayOrCastPermission {
+            cast_only: true,
+            filter,
+            permission,
+            condition: Some(_),
+        } if permission
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("as though it had flash")
+            && is_self_flash_filter(filter)
+    )
+}
+
+fn is_self_conditional_flash_keyword_grant(st: &StaticAbilityAst) -> bool {
+    matches!(
+        st,
+        StaticAbilityAst::GrantKeywords {
+            subject,
+            keywords,
+            condition: Some(_),
+            paired_rule: None,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+            && keywords.len() == 1
+            && keywords[0].trim().eq_ignore_ascii_case("flash")
+    )
+}
+
+fn value_expr_needs_cast_source(expr: &ValueExpr) -> bool {
+    if expr.references_ability_source() {
+        return true;
+    }
+    let bad_player = |p: ResolvingPlayer| {
+        matches!(
+            p,
+            ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::AttachedHostController
+                | ResolvingPlayer::SourceChosenPlayer
+        )
+    };
+    match expr {
+        ValueExpr::CountOtherSharingSourceSubtype
+        | ValueExpr::AttachedCount(_)
+        | ValueExpr::EventValue(
+            EventValueKind::SourceAttackedThisTurn
+            | EventValueKind::ManaSpentToCast
+            | EventValueKind::ColorsSpentToCast
+            | EventValueKind::ManaTypeSpentToCast(_)
+            | EventValueKind::SnowManaSpentToCast
+            | EventValueKind::TreasureManaSpentToCast
+            | EventValueKind::CreatureManaSpentToCast
+            | EventValueKind::CastFromOutsideHand
+            | EventValueKind::CastFromExile
+            | EventValueKind::CastFromGraveyard
+            | EventValueKind::CastDuringOwnMain
+            | EventValueKind::Bargained
+            | EventValueKind::GiftPromised
+            | EventValueKind::Cleaved
+            | EventValueKind::EvidenceCollected
+            | EventValueKind::PaidAlternative
+            | EventValueKind::KickerCount(_)
+            | EventValueKind::AdditionalCostPaid,
+        ) => true,
+        ValueExpr::Count {
+            zone,
+            controller_scope,
+            ..
+        } => {
+            let bad_zone = match *zone {
+                ValueZone::Graveyard(p)
+                | ValueZone::Hand(p)
+                | ValueZone::Library(p)
+                | ValueZone::Exile(Some(p)) => bad_player(p),
+                _ => false,
+            };
+            bad_zone || controller_scope.is_some_and(bad_player)
+        }
+        ValueExpr::DistinctManaValuesInGraveyard(p)
+        | ValueExpr::PlayerStat(
+            PlayerStatExpr::PlayerLife(p)
+            | PlayerStatExpr::PlayerHandSize(p)
+            | PlayerStatExpr::PlayerLibrarySize(p)
+            | PlayerStatExpr::PlayerGraveyardSize(p)
+            | PlayerStatExpr::LandsEnteredThisTurn(p),
+        ) => bad_player(*p),
+        ValueExpr::ObjectStat { subject, .. } => matches!(
+            subject,
+            ValueObjectRef::AbilitySource
+                | ValueObjectRef::TriggerSource
+                | ValueObjectRef::AttachedHost
+        ),
+        ValueExpr::CounterCount { subject, .. } => matches!(
+            subject,
+            spellwake_engine::program::CounterSubjectRef::AbilitySource
+                | spellwake_engine::program::CounterSubjectRef::TriggerSource
+                | spellwake_engine::program::CounterSubjectRef::AttachedHost
+        ),
+        ValueExpr::Scale { expr, .. } | ValueExpr::DivConst { expr, .. } => {
+            value_expr_needs_cast_source(expr)
+        }
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            value_expr_needs_cast_source(a) || value_expr_needs_cast_source(b)
+        }
+        ValueExpr::Conditional {
+            left,
+            right,
+            then_value,
+            else_value,
+            ..
+        } => {
+            value_expr_needs_cast_source(left)
+                || value_expr_needs_cast_source(right)
+                || value_expr_needs_cast_source(then_value)
+                || value_expr_needs_cast_source(else_value)
+        }
+        _ => false,
+    }
+}
+
+fn lower_self_flash_condition(
+    cond: &ConditionAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<SelfFlashPermission, &'static str> {
+    if let ConditionAst::Marker(GameMarker::PayCostCondition(cost_atom)) = cond {
+        if let CostAtomAst::PayMana(raw) = cost_atom.as_ref()
+            && let Some(extra_cost) = parse_fixed_mana_cost(&raw.trim().to_ascii_uppercase())
+            && extra_cost.total().is_positive()
+        {
+            return Ok(SelfFlashPermission::PayExtraMana(extra_cost));
+        }
+        return Err("oracle:unsupported-conditional-flash");
+    }
+    let mut tmp = BodyBuilder::new();
+    let rc = lower_resolution_condition(cond, &mut tmp, vocabulary, false, None)
+        .map_err(|_| "oracle:unsupported-conditional-flash")?;
+    if tmp.target != BodyTarget::None
+        || !rc.is_world_evaluable()
+        || rc.validate_world(vocabulary).is_err()
+        || value_expr_needs_cast_source(&rc.left)
+        || value_expr_needs_cast_source(&rc.right)
+    {
+        return Err("oracle:unsupported-conditional-flash");
+    }
+    Ok(SelfFlashPermission::Condition(Box::new(rc)))
 }

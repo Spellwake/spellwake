@@ -1,4 +1,5 @@
 use super::*;
+use spellwake_engine::characteristics::ActivationSuppression;
 
 pub(super) fn lower_static(
     st: &StaticAbilityAst,
@@ -1531,21 +1532,75 @@ pub(super) fn lower_static(
                     },
                 );
             }
-            if condition.is_none() && rule == "DoesntUntap" && filter.is_none() {
-                let untap_rule = match subject.as_deref() {
-                    Some(SubjectRefAst::SelfObject) | None => StaticUntapRule::SourceSkipsUntap,
-                    Some(SubjectRefAst::AttachedHost(_)) => {
-                        StaticUntapRule::EnchantedCreatureSkipsUntap
+            if filter.is_none()
+                && let Some(lock) = parse_static_ability_lock(rule, condition.is_some())
+            {
+                let mut selectors = match subject.as_deref() {
+                    Some(SubjectRefAst::Anaphora(pron))
+                        if pron.eq_ignore_ascii_case("it")
+                            && lock.singular_attached_fallback
+                            && is_permanent_attachment_program(program) =>
+                    {
+                        vec![PermanentSelector {
+                            attached_to_source: true,
+                            ..PermanentSelector::default()
+                        }]
                     }
-                    _ => return Err("oracle:unsupported-untap-rule"),
+                    None if lock.singular_attached_fallback
+                        && is_permanent_attachment_program(program) =>
+                    {
+                        vec![PermanentSelector {
+                            attached_to_source: true,
+                            ..PermanentSelector::default()
+                        }]
+                    }
+                    None if lock.allow_none_as_self => vec![PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        ..PermanentSelector::default()
+                    }],
+                    Some(subj) if !matches!(subj, SubjectRefAst::Anaphora(_)) => {
+                        lower_permanent_selectors_with_context(
+                            subj,
+                            condition.as_deref(),
+                            vocabulary,
+                        )?
+                    }
+                    _ => return Err("oracle:unsupported-rule-restriction"),
                 };
-                return push_static_ability(
-                    program,
-                    StaticContinuousAbility::UntapRule {
-                        id: ids.static_id(),
-                        rule: untap_rule,
-                    },
-                );
+                if lock.requires_source_controller
+                    && !selectors
+                        .iter()
+                        .all(|sel| selector_guaranteed_source_controller(sel, program))
+                {
+                    return Err("oracle:unsupported-untap-rule");
+                }
+                for sel in &mut selectors {
+                    if let Some(cond) = condition {
+                        apply_selector_condition(sel, cond, vocabulary)?;
+                    }
+                }
+                let mut parts = Vec::new();
+                if lock.cannot_attack_or_block {
+                    parts.push(StaticPart::BlockingRestriction(
+                        BlockingRestriction::CannotAttackOrBlock,
+                    ));
+                }
+                parts.push(StaticPart::Abilities(AbilityChange {
+                    suppressed_activations: lock.suppressed_activations,
+                    doesnt_untap: lock.doesnt_untap,
+                    ..AbilityChange::default()
+                }));
+                for selector in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Battlefield {
+                            id: ids.static_id(),
+                            selector,
+                            parts: StaticParts(parts.clone()),
+                        },
+                    )?;
+                }
+                return Ok(());
             }
             if condition.is_none() && rule == "UntapEachOtherUntapStep" && filter.is_none() {
                 match subject.as_deref() {
@@ -1863,32 +1918,40 @@ pub(super) fn lower_static(
                 && subject.is_none()
                 && let Some(flt) = filter.as_deref()
             {
-                let selector = lower_filter_to_permanent_selector(flt, vocabulary)?;
-                return push_conditional_static(
+                let mut selector = lower_filter_to_permanent_selector(flt, vocabulary)?;
+                if let Some(cond) = condition {
+                    apply_selector_condition(&mut selector, cond, vocabulary)?;
+                }
+                return push_static_ability(
                     program,
-                    StaticContinuousAbility::Restriction {
+                    StaticContinuousAbility::Battlefield {
                         id: ids.static_id(),
-                        rule: StaticRestriction::PreventMatchingActivations(Box::new(selector)),
+                        selector,
+                        parts: StaticParts(vec![StaticPart::Abilities(AbilityChange {
+                            suppressed_activations: Some(ActivationSuppression::All),
+                            ..AbilityChange::default()
+                        })]),
                     },
-                    condition.as_deref(),
-                    vocabulary,
                 );
             }
             if rule == "NonManaActivatedAbilitiesCantBeActivated"
                 && subject.is_none()
                 && let Some(flt) = filter.as_deref()
             {
-                let selector = lower_filter_to_permanent_selector(flt, vocabulary)?;
-                return push_conditional_static(
+                let mut selector = lower_filter_to_permanent_selector(flt, vocabulary)?;
+                if let Some(cond) = condition {
+                    apply_selector_condition(&mut selector, cond, vocabulary)?;
+                }
+                return push_static_ability(
                     program,
-                    StaticContinuousAbility::Restriction {
+                    StaticContinuousAbility::Battlefield {
                         id: ids.static_id(),
-                        rule: StaticRestriction::PreventMatchingNonManaActivations(Box::new(
-                            selector,
-                        )),
+                        selector,
+                        parts: StaticParts(vec![StaticPart::Abilities(AbilityChange {
+                            suppressed_activations: Some(ActivationSuppression::NonMana),
+                            ..AbilityChange::default()
+                        })]),
                     },
-                    condition.as_deref(),
-                    vocabulary,
                 );
             }
             if rule == "ActivateAbilitiesAsThoughHaste"
@@ -2517,80 +2580,6 @@ pub(super) fn lower_static(
                 program.cannot_be_countered = true;
                 return Ok(());
             }
-            if (r_low == "activatedabilitiescantbeactivated" || r_low == "cantactivateabilities")
-                && let Some(subj) = subject.as_deref()
-            {
-                let selectors = lower_permanent_selectors(subj, vocabulary)?;
-                for selector in selectors {
-                    push_static_ability(
-                        program,
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::PreventMatchingActivations(Box::new(selector)),
-                        },
-                    )?;
-                }
-                return Ok(());
-            }
-            if let Some(lock_raw) = r_low.strip_prefix("abilitytimingorlock:").or_else(|| {
-                (r_low
-                    == "its activated abilities can't be activated unless they're mana abilities"
-                    || r_low == "its activated abilities can't be activated")
-                    .then_some(r_low.as_str())
-            }) {
-                let lock = lock_raw.trim().trim_end_matches('.').trim();
-                let lock_kind: Option<(bool, bool)> = match lock {
-                    "its activated abilities can't be activated" => Some((false, true)),
-                    "their activated abilities can't be activated" => Some((false, false)),
-                    "its activated abilities can't be activated unless they're mana abilities" => {
-                        Some((true, true))
-                    }
-                    "their activated abilities can't be activated unless they're mana abilities" => {
-                        Some((true, false))
-                    }
-                    _ => None,
-                };
-                if let Some((non_mana_only, is_singular_its)) = lock_kind {
-                    let is_perm_attachment = is_permanent_attachment_program(program);
-                    let selectors = match subject.as_deref() {
-                        Some(SubjectRefAst::Anaphora(pron))
-                            if pron.eq_ignore_ascii_case("it")
-                                && is_singular_its
-                                && is_perm_attachment =>
-                        {
-                            vec![PermanentSelector {
-                                attached_to_source: true,
-                                ..PermanentSelector::default()
-                            }]
-                        }
-                        None if is_singular_its && is_perm_attachment => {
-                            vec![PermanentSelector {
-                                attached_to_source: true,
-                                ..PermanentSelector::default()
-                            }]
-                        }
-                        Some(subj) if !matches!(subj, SubjectRefAst::Anaphora(_)) => {
-                            lower_permanent_selectors(subj, vocabulary)?
-                        }
-                        _ => return Err("oracle:unsupported-rule-restriction"),
-                    };
-                    for selector in selectors {
-                        let restriction = if non_mana_only {
-                            StaticRestriction::PreventMatchingNonManaActivations(Box::new(selector))
-                        } else {
-                            StaticRestriction::PreventMatchingActivations(Box::new(selector))
-                        };
-                        push_static_ability(
-                            program,
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: restriction,
-                            },
-                        )?;
-                    }
-                    return Ok(());
-                }
-            }
             if let Some(as_though) = r_low.strip_prefix("as_though:") {
                 let at = as_though.trim().trim_end_matches('.').trim();
                 if matches!(
@@ -2689,28 +2678,6 @@ pub(super) fn lower_static(
             {
                 push_attack_requirement(program, AttackRequirement::EnchantedCreatureIsGoaded);
                 return Ok(());
-            }
-            if r_low == "can't attack or block, and its activated abilities can't be activated"
-                && let Some(subj) = subject.as_deref()
-            {
-                let selector = lower_permanent_selector(subj, vocabulary)?;
-                push_static_ability(
-                    program,
-                    StaticContinuousAbility::Battlefield {
-                        id: ids.static_id(),
-                        selector: selector.clone(),
-                        parts: StaticParts(vec![StaticPart::BlockingRestriction(
-                            BlockingRestriction::CannotAttackOrBlock,
-                        )]),
-                    },
-                )?;
-                return push_static_ability(
-                    program,
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::PreventMatchingActivations(Box::new(selector)),
-                    },
-                );
             }
             if r_low == "you may look at the top card of your library any time"
                 || r_low == "look_top_library_any_time"
@@ -2956,6 +2923,20 @@ pub(super) fn lower_static(
                     },
                 );
             }
+            if r_low == "your life total can't change"
+                && matches!(
+                    subject.as_deref(),
+                    None | Some(SubjectRefAst::Player(PlayerRefAst::You))
+                )
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerLifeTotalCantChange,
+                    },
+                );
+            }
             if r_low == "you don't lose the game for having 0 or less life" {
                 return push_static_ability(
                     program,
@@ -3023,6 +3004,62 @@ pub(super) fn lower_static(
                     StaticContinuousAbility::Restriction {
                         id: ids.static_id(),
                         rule: StaticRestriction::CantPlayLands(PlayerRelation::Controller),
+                    },
+                );
+            }
+            if matches!(
+                r_low.as_str(),
+                "players can't search libraries" | "each player can't search libraries"
+            ) && matches!(
+                subject.as_deref(),
+                None | Some(SubjectRefAst::Player(
+                    PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer
+                ))
+            ) {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::PlayersCantSearchLibraries(
+                            PlayerRelation::AnyParticipant,
+                        ),
+                    },
+                );
+            }
+            if matches!(
+                r_low.as_str(),
+                "your opponents can't search libraries"
+                    | "opponents can't search libraries"
+                    | "each opponent can't search libraries"
+            ) && matches!(
+                subject.as_deref(),
+                None | Some(SubjectRefAst::Player(
+                    PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent
+                ))
+            ) {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::PlayersCantSearchLibraries(
+                            PlayerRelation::Opponent,
+                        ),
+                    },
+                );
+            }
+            if r_low == "you can't search libraries"
+                && matches!(
+                    subject.as_deref(),
+                    None | Some(SubjectRefAst::Player(PlayerRefAst::You))
+                )
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::PlayersCantSearchLibraries(
+                            PlayerRelation::Controller,
+                        ),
                     },
                 );
             }
@@ -3117,30 +3154,6 @@ pub(super) fn lower_static(
                     StaticContinuousAbility::DamageRule {
                         id: ids.static_id(),
                         rule: StaticDamageRule::DamageCannotBePrevented,
-                    },
-                );
-            }
-            if matches!(
-                r_low.as_str(),
-                "doesn't untap during its controller's untap step"
-                    | "doesn't untap during your untap step"
-                    | "~ doesn't untap during your untap step"
-                    | "~ doesn't untap during its controller's untap step"
-                    | "enchanted creature doesn't untap during its controller's untap step"
-                    | "enchanted permanent doesn't untap during its controller's untap step"
-            ) {
-                let untap_rule = match subject.as_deref() {
-                    Some(SubjectRefAst::SelfObject) | None => StaticUntapRule::SourceSkipsUntap,
-                    Some(SubjectRefAst::AttachedHost(_)) => {
-                        StaticUntapRule::EnchantedCreatureSkipsUntap
-                    }
-                    _ => return Err("oracle:unsupported-untap-rule"),
-                };
-                return push_static_ability(
-                    program,
-                    StaticContinuousAbility::UntapRule {
-                        id: ids.static_id(),
-                        rule: untap_rule,
                     },
                 );
             }
@@ -3595,6 +3608,32 @@ pub(super) fn lower_static(
                     rule,
                 },
             )
+        }
+        StaticAbilityAst::CantBeBlockedExceptByAny {
+            subject,
+            allowed_filters,
+            condition,
+        } => {
+            let br = lower_cant_be_blocked_except_by_any(allowed_filters, vocabulary)
+                .ok_or("oracle:unsupported-blocking-restriction")?;
+            let mut selectors =
+                lower_permanent_selectors_with_context(subject, condition.as_deref(), vocabulary)?;
+            for sel in &mut selectors {
+                if let Some(cond) = condition {
+                    apply_selector_condition(sel, cond, vocabulary)?;
+                }
+            }
+            for selector in selectors {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector,
+                        parts: StaticParts(vec![StaticPart::BlockingRestriction(br.clone())]),
+                    },
+                )?;
+            }
+            Ok(())
         }
         StaticAbilityAst::DeckConstructionRule(text) => {
             let low = text.trim().to_ascii_lowercase();
@@ -4103,7 +4142,8 @@ pub(super) fn static_ast_subject(st: &StaticAbilityAst) -> Option<&SubjectRefAst
         | StaticAbilityAst::GrantAbilityText { subject, .. }
         | StaticAbilityAst::SetOrAddType { subject, .. }
         | StaticAbilityAst::ContinuousLayerEffect { subject, .. }
-        | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_ref()),
+        | StaticAbilityAst::PreventCounters { subject, .. }
+        | StaticAbilityAst::CantBeBlockedExceptByAny { subject, .. } => Some(subject.as_ref()),
         StaticAbilityAst::RuleOrCombatRestriction { subject, .. } => subject.as_deref(),
         _ => None,
     }
@@ -4113,13 +4153,47 @@ pub(super) fn resolve_static_anaphora_subject_across_statics(
     st: &mut StaticAbilityAst,
     prev: &SubjectRefAst,
 ) {
+    if let StaticAbilityAst::RuleOrCombatRestriction {
+        subject: Some(subject),
+        rule,
+        filter: None,
+        ..
+    } = st
+        && matches!(
+            subject.as_ref(),
+            SubjectRefAst::Anaphora(raw) if raw.trim().eq_ignore_ascii_case("it")
+        )
+        && !matches!(prev, SubjectRefAst::Player(_))
+    {
+        let r_low = rule
+            .trim()
+            .trim_end_matches('.')
+            .trim()
+            .to_ascii_lowercase();
+        let lock_body = r_low
+            .strip_prefix("abilitytimingorlock:")
+            .unwrap_or(&r_low)
+            .trim();
+        if matches!(
+            lock_body,
+            "its activated abilities can't be activated"
+                | "their activated abilities can't be activated"
+                | "its activated abilities can't be activated unless they're mana abilities"
+                | "their activated abilities can't be activated unless they're mana abilities"
+                | "cant_activate_nonmana_abilities"
+        ) {
+            *subject.as_mut() = prev.clone();
+            return;
+        }
+    }
     let slot: Option<&mut SubjectRefAst> = match st {
         StaticAbilityAst::ContinuousModifyPT { subject, .. }
         | StaticAbilityAst::GrantKeywords { subject, .. }
         | StaticAbilityAst::GrantAbilityText { subject, .. }
         | StaticAbilityAst::SetOrAddType { subject, .. }
         | StaticAbilityAst::ContinuousLayerEffect { subject, .. }
-        | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_mut()),
+        | StaticAbilityAst::PreventCounters { subject, .. }
+        | StaticAbilityAst::CantBeBlockedExceptByAny { subject, .. } => Some(subject.as_mut()),
         StaticAbilityAst::RuleOrCombatRestriction {
             subject: Some(subject),
             ..
@@ -4146,7 +4220,8 @@ fn resolve_static_anaphora_subject(st: &mut StaticAbilityAst, prev: &SubjectRefA
         | StaticAbilityAst::GrantAbilityText { subject, .. }
         | StaticAbilityAst::SetOrAddType { subject, .. }
         | StaticAbilityAst::ContinuousLayerEffect { subject, .. }
-        | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_mut()),
+        | StaticAbilityAst::PreventCounters { subject, .. }
+        | StaticAbilityAst::CantBeBlockedExceptByAny { subject, .. } => Some(subject.as_mut()),
         StaticAbilityAst::RuleOrCombatRestriction {
             subject: Some(subject),
             ..
@@ -4179,7 +4254,8 @@ fn static_ast_condition(st: &StaticAbilityAst) -> Option<&ConditionAst> {
         | StaticAbilityAst::ContinuousLayerEffect { condition, .. }
         | StaticAbilityAst::CostModifier { condition, .. }
         | StaticAbilityAst::PlayOrCastPermission { condition, .. }
-        | StaticAbilityAst::RuleOrCombatRestriction { condition, .. } => condition.as_deref(),
+        | StaticAbilityAst::RuleOrCombatRestriction { condition, .. }
+        | StaticAbilityAst::CantBeBlockedExceptByAny { condition, .. } => condition.as_deref(),
         _ => None,
     }
 }
@@ -4193,7 +4269,8 @@ fn attach_ast_condition(st: &mut StaticAbilityAst, cond: ConditionAst) {
         | StaticAbilityAst::ContinuousLayerEffect { condition, .. }
         | StaticAbilityAst::CostModifier { condition, .. }
         | StaticAbilityAst::PlayOrCastPermission { condition, .. }
-        | StaticAbilityAst::RuleOrCombatRestriction { condition, .. } => condition,
+        | StaticAbilityAst::RuleOrCombatRestriction { condition, .. }
+        | StaticAbilityAst::CantBeBlockedExceptByAny { condition, .. } => condition,
         _ => return,
     };
     *slot = Some(match slot.take() {
@@ -4445,6 +4522,58 @@ fn lower_paired_static(
                 }
                 return Ok(());
             }
+            if filter.is_none()
+                && let Some(lock) = parse_static_ability_lock(rule, condition.is_some())
+            {
+                if lock.requires_source_controller
+                    && !outer_selectors
+                        .iter()
+                        .all(|sel| selector_guaranteed_source_controller(sel, program))
+                {
+                    return Err("oracle:unsupported-paired-static");
+                }
+                let extra_sc = match condition {
+                    Some(cond) => Some(
+                        lower_static_source_condition(cond, vocabulary)
+                            .ok_or("oracle:unsupported-static-cond")?,
+                    ),
+                    None => None,
+                };
+                let mut parts = Vec::new();
+                if lock.cannot_attack_or_block {
+                    parts.push(StaticPart::BlockingRestriction(
+                        BlockingRestriction::CannotAttackOrBlock,
+                    ));
+                }
+                parts.push(StaticPart::Abilities(AbilityChange {
+                    suppressed_activations: lock.suppressed_activations,
+                    doesnt_untap: lock.doesnt_untap,
+                    ..AbilityChange::default()
+                }));
+                for sel in outer_selectors {
+                    let mut sel = sel.clone();
+                    if let Some(sc) = &extra_sc {
+                        sel.source_condition = Some(match sel.source_condition.take() {
+                            Some(prev) => {
+                                spellwake_engine::characteristics::StaticSourceCondition::And(
+                                    Box::new(prev),
+                                    Box::new(sc.clone()),
+                                )
+                            }
+                            None => sc.clone(),
+                        });
+                    }
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Battlefield {
+                            id: ids.static_id(),
+                            selector: sel,
+                            parts: StaticParts(parts.clone()),
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
             if let Some(br) = lower_rule_blocking_restriction(rule, filter.as_deref(), vocabulary) {
                 for sel in outer_selectors {
                     let mut sel = sel.clone();
@@ -4559,6 +4688,44 @@ fn lower_paired_static(
         StaticAbilityAst::FollowUp(ins) => {
             lower_followup_instructions(ins, program, vocabulary, ids)
                 .map_err(|_| "oracle:unsupported-paired-static")
+        }
+        StaticAbilityAst::CantBeBlockedExceptByAny {
+            allowed_filters,
+            condition,
+            ..
+        } => {
+            let br = lower_cant_be_blocked_except_by_any(allowed_filters, vocabulary)
+                .ok_or("oracle:unsupported-paired-static")?;
+            let extra_sc = match condition {
+                Some(cond) => Some(
+                    lower_static_source_condition(cond, vocabulary)
+                        .ok_or("oracle:unsupported-static-cond")?,
+                ),
+                None => None,
+            };
+            for sel in outer_selectors {
+                let mut sel = sel.clone();
+                if let Some(sc) = &extra_sc {
+                    sel.source_condition = Some(match sel.source_condition.take() {
+                        Some(prev) => {
+                            spellwake_engine::characteristics::StaticSourceCondition::And(
+                                Box::new(prev),
+                                Box::new(sc.clone()),
+                            )
+                        }
+                        None => sc.clone(),
+                    });
+                }
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector: sel,
+                        parts: StaticParts(vec![StaticPart::BlockingRestriction(br.clone())]),
+                    },
+                )?;
+            }
+            Ok(())
         }
         StaticAbilityAst::Compound(items) => {
             for item in items {
@@ -4853,10 +5020,21 @@ fn push_granted_ability_change(
     {
         let mut check = change.clone();
         check.granted_keywords.clear();
+        check.doesnt_untap = false;
+        check.suppressed_activations = None;
         if check != AbilityChange::default() {
             return Err("oracle:unsupported-grant-ability-text");
         }
         existing.granted_keywords.extend(change.granted_keywords);
+        existing.doesnt_untap |= change.doesnt_untap;
+        if let Some(suppression) = change.suppressed_activations {
+            existing.suppressed_activations = match (existing.suppressed_activations, suppression) {
+                (Some(ActivationSuppression::All), _) | (_, ActivationSuppression::All) => {
+                    Some(ActivationSuppression::All)
+                }
+                _ => Some(ActivationSuppression::NonMana),
+            };
+        }
         Ok(())
     } else {
         parts.push(StaticPart::Abilities(change));
@@ -4921,6 +5099,25 @@ fn lower_granted_static_parts(
             filter,
             condition: None,
         } if matches!(subject.as_deref(), None | Some(SubjectRefAst::SelfObject)) => {
+            if filter.is_none()
+                && let Some(lock) = parse_static_ability_lock(rule, false)
+                && (!lock.singular_attached_fallback
+                    || matches!(subject.as_deref(), Some(SubjectRefAst::SelfObject)))
+            {
+                if lock.cannot_attack_or_block {
+                    parts.push(StaticPart::BlockingRestriction(
+                        BlockingRestriction::CannotAttackOrBlock,
+                    ));
+                }
+                return push_granted_ability_change(
+                    parts,
+                    AbilityChange {
+                        suppressed_activations: lock.suppressed_activations,
+                        doesnt_untap: lock.doesnt_untap,
+                        ..AbilityChange::default()
+                    },
+                );
+            }
             if let Some(obj) =
                 parse_cant_block_or_be_blocked_by_filter(rule, filter.as_deref(), vocabulary)
             {
@@ -5004,6 +5201,16 @@ fn lower_granted_static_parts(
                 }
             }
             Err("oracle:unsupported-grant-ability-text")
+        }
+        StaticAbilityAst::CantBeBlockedExceptByAny {
+            subject,
+            allowed_filters,
+            condition: None,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+            let br = lower_cant_be_blocked_except_by_any(allowed_filters, vocabulary)
+                .ok_or("oracle:unsupported-grant-ability-text")?;
+            parts.push(StaticPart::BlockingRestriction(br));
+            Ok(())
         }
         _ => Err("oracle:unsupported-grant-ability-text"),
     }
@@ -6229,6 +6436,19 @@ pub(super) fn lower_blocking_restriction(rule: &str) -> Option<BlockingRestricti
         "must_block:it" | "must block it" | "must block ~" => {
             Some(BlockingRestriction::MustBlockSource)
         }
+        "must_block:each attacking creature"
+        | "must_block:all attacking creatures"
+        | "must_block:every attacking creature"
+        | "blocks each attacking creature if able"
+        | "block each attacking creature if able"
+        | "blocks all attacking creatures if able"
+        | "block all attacking creatures if able"
+        | "must block each attacking creature if able"
+        | "must block each attacking creature"
+        | "must block all attacking creatures if able"
+        | "must block all attacking creatures"
+        | "must_block_all_attackers"
+        | "mustblockallattackers" => Some(BlockingRestriction::MustBlockAllAttackers),
         "can't block alone" | "cant_block_alone" | "cantblockalone" => {
             Some(BlockingRestriction::CannotBlockAlone)
         }
@@ -7306,4 +7526,501 @@ fn lower_loses_all_other_abilities(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StaticAbilityLock {
+    doesnt_untap: bool,
+    suppressed_activations: Option<ActivationSuppression>,
+    cannot_attack_or_block: bool,
+    requires_source_controller: bool,
+    singular_attached_fallback: bool,
+    allow_none_as_self: bool,
+}
+
+fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAbilityLock> {
+    if rule == "DoesntUntap" {
+        return Some(StaticAbilityLock {
+            doesnt_untap: true,
+            suppressed_activations: None,
+            cannot_attack_or_block: false,
+            requires_source_controller: false,
+            singular_attached_fallback: false,
+            allow_none_as_self: true,
+        });
+    }
+    if rule == "DoesntUntapIf" {
+        return has_condition.then_some(StaticAbilityLock {
+            doesnt_untap: true,
+            suppressed_activations: None,
+            cannot_attack_or_block: false,
+            requires_source_controller: false,
+            singular_attached_fallback: false,
+            allow_none_as_self: true,
+        });
+    }
+    let r_low = rule
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+    match r_low.as_str() {
+        "doesn't untap during its controller's untap step"
+        | "don't untap during their controllers' untap steps"
+        | "~ doesn't untap during its controller's untap step" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: true,
+                suppressed_activations: None,
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: true,
+            });
+        }
+        "enchanted creature doesn't untap during its controller's untap step"
+        | "enchanted permanent doesn't untap during its controller's untap step" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: true,
+                suppressed_activations: None,
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: true,
+                allow_none_as_self: false,
+            });
+        }
+        "doesn't untap during your untap step" | "~ doesn't untap during your untap step" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: true,
+                suppressed_activations: None,
+                cannot_attack_or_block: false,
+                requires_source_controller: true,
+                singular_attached_fallback: false,
+                allow_none_as_self: true,
+            });
+        }
+        "activatedabilitiescantbeactivated"
+        | "cantactivateabilities"
+        | "activated_abilities_cant_be_activated" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::All),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            });
+        }
+        "nonmanaactivatedabilitiescantbeactivated" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            });
+        }
+        "cant_activate_nonmana_abilities" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: true,
+                allow_none_as_self: false,
+            });
+        }
+        "can't attack or block, and its activated abilities can't be activated"
+        | "can't attack or block and its activated abilities can't be activated"
+        | "can't attack or block, and their activated abilities can't be activated"
+        | "can't attack or block and their activated abilities can't be activated" => {
+            return Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::All),
+                cannot_attack_or_block: true,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            });
+        }
+        "can't attack or block, and its activated abilities can't be activated unless they're mana abilities"
+        | "can't attack or block and its activated abilities can't be activated unless they're mana abilities"
+        | "can't attack or block, and their activated abilities can't be activated unless they're mana abilities"
+        | "can't attack or block and their activated abilities can't be activated unless they're mana abilities" =>
+        {
+            return Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: true,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            });
+        }
+        "doesn't untap during its controller's untap step, and its activated abilities can't be activated"
+        | "doesn't untap during its controller's untap step and its activated abilities can't be activated"
+        | "don't untap during their controllers' untap steps, and their activated abilities can't be activated"
+        | "don't untap during their controllers' untap steps and their activated abilities can't be activated" =>
+        {
+            return Some(StaticAbilityLock {
+                doesnt_untap: true,
+                suppressed_activations: Some(ActivationSuppression::All),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            });
+        }
+        "doesn't untap during its controller's untap step, and its activated abilities can't be activated unless they're mana abilities"
+        | "doesn't untap during its controller's untap step and its activated abilities can't be activated unless they're mana abilities"
+        | "don't untap during their controllers' untap steps, and their activated abilities can't be activated unless they're mana abilities"
+        | "don't untap during their controllers' untap steps and their activated abilities can't be activated unless they're mana abilities" =>
+        {
+            return Some(StaticAbilityLock {
+                doesnt_untap: true,
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            });
+        }
+        _ => {}
+    }
+    let lock_raw = r_low
+        .strip_prefix("abilitytimingorlock:")
+        .unwrap_or(&r_low)
+        .trim()
+        .trim_end_matches('.')
+        .trim();
+    match lock_raw {
+        "its activated abilities can't be activated" => Some(StaticAbilityLock {
+            doesnt_untap: false,
+            suppressed_activations: Some(ActivationSuppression::All),
+            cannot_attack_or_block: false,
+            requires_source_controller: false,
+            singular_attached_fallback: true,
+            allow_none_as_self: false,
+        }),
+        "their activated abilities can't be activated" => Some(StaticAbilityLock {
+            doesnt_untap: false,
+            suppressed_activations: Some(ActivationSuppression::All),
+            cannot_attack_or_block: false,
+            requires_source_controller: false,
+            singular_attached_fallback: false,
+            allow_none_as_self: false,
+        }),
+        "its activated abilities can't be activated unless they're mana abilities" => {
+            Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: true,
+                allow_none_as_self: false,
+            })
+        }
+        "their activated abilities can't be activated unless they're mana abilities" => {
+            Some(StaticAbilityLock {
+                doesnt_untap: false,
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: false,
+                requires_source_controller: false,
+                singular_attached_fallback: false,
+                allow_none_as_self: false,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn clause_supported_by_blocking_static_characteristics(c: &ObjectClause) -> bool {
+    !c.forbidden_types.contains(CardType::Creature)
+        && c.controller == ControllerFilter::Any
+        && c.source_relation == SourceRelation::Any
+        && c.combat == CombatFilter::Any
+        && c.tapped.is_none()
+        && c.token.is_none()
+        && (c.flags == ObjectFilterFlags::EMPTY || c.flags == ObjectFilterFlags::HISTORIC)
+        && !matches!(
+            c.subtypes,
+            SubtypeFilter::ExceptChosenSlot(_)
+                | SubtypeFilter::MatchesChosenSlot(_)
+                | SubtypeFilter::OutsideNamedSlots
+        )
+        && matches!(
+            c.power,
+            PowerFilter::Any
+                | PowerFilter::AtLeast(_)
+                | PowerFilter::AtMost(_)
+                | PowerFilter::Equal(_)
+                | PowerFilter::PowerOrToughnessAtMost(_)
+        )
+        && matches!(
+            c.toughness,
+            ToughnessFilter::Any
+                | ToughnessFilter::AtLeast(_)
+                | ToughnessFilter::AtMost(_)
+                | ToughnessFilter::Equal(_)
+        )
+        && matches!(
+            c.mana_value,
+            ManaValueFilter::Any
+                | ManaValueFilter::AtMost(_)
+                | ManaValueFilter::AtLeast(_)
+                | ManaValueFilter::Equal(_)
+                | ManaValueFilter::Even
+                | ManaValueFilter::Odd
+        )
+}
+
+fn normalize_blocker_filter_ast(
+    flt: &ObjectFilterAst,
+) -> Option<(Vec<ObjectFilterAst>, CardTypeMask)> {
+    if flt.zone.is_some()
+        || !flt.extra_zones.is_empty()
+        || flt.owner.is_some()
+        || flt.any_permanent
+        || flt.any_card
+        || flt.any_spell
+        || flt.is_ability
+        || flt.named.is_some()
+    {
+        return None;
+    }
+    let req_type = if flt.any_types.is_empty() || flt.any_types == AstCardTypeMask::CREATURE {
+        CardTypeMask::EMPTY
+    } else if flt.any_types == AstCardTypeMask::ARTIFACT
+        || flt.any_types == AstCardTypeMask::ARTIFACT.union(AstCardTypeMask::CREATURE)
+    {
+        CardTypeMask::ARTIFACT
+    } else if flt.any_types == AstCardTypeMask::ENCHANTMENT
+        || flt.any_types == AstCardTypeMask::ENCHANTMENT.union(AstCardTypeMask::CREATURE)
+    {
+        CardTypeMask::ENCHANTMENT
+    } else if flt.any_types == AstCardTypeMask::LAND
+        || flt.any_types == AstCardTypeMask::LAND.union(AstCardTypeMask::CREATURE)
+    {
+        CardTypeMask::LAND
+    } else {
+        return None;
+    };
+    let mut norm = flt.clone();
+    norm.any_types = AstCardTypeMask::CREATURE;
+    if norm.required_keywords.len() == 1
+        && norm.required_keywords[0]
+            .trim()
+            .eq_ignore_ascii_case("flying or reach")
+    {
+        let mut with_flying = norm.clone();
+        with_flying.required_keywords = vec!["flying".to_string()];
+        let mut with_reach = norm;
+        with_reach.required_keywords = vec!["reach".to_string()];
+        return Some((vec![with_flying, with_reach], req_type));
+    }
+    Some((vec![norm], req_type))
+}
+
+fn merge_disjunctive_blocker_clauses(clauses: Vec<ObjectClause>) -> Vec<ObjectClause> {
+    let mut unique: Vec<ObjectClause> = Vec::with_capacity(clauses.len());
+    for clause in clauses {
+        if !unique.contains(&clause) {
+            unique.push(clause);
+        }
+    }
+    let mut color_merged: Vec<ObjectClause> = Vec::with_capacity(unique.len());
+    for clause in unique {
+        if let ObjectColorFilter::Mask { any_of, none_of } = clause.color
+            && !any_of.is_empty()
+            && none_of.is_empty()
+        {
+            let mut key = clause;
+            key.color = ObjectColorFilter::Any;
+            if let Some(prev) = color_merged.iter_mut().find(|prev| {
+                if let ObjectColorFilter::Mask {
+                    any_of: prev_any,
+                    none_of: prev_none,
+                } = prev.color
+                    && !prev_any.is_empty()
+                    && prev_none.is_empty()
+                {
+                    let mut prev_key = **prev;
+                    prev_key.color = ObjectColorFilter::Any;
+                    prev_key == key
+                } else {
+                    false
+                }
+            }) && let ObjectColorFilter::Mask {
+                any_of: prev_any, ..
+            } = prev.color
+            {
+                prev.color = ObjectColorFilter::Mask {
+                    any_of: prev_any.union(any_of),
+                    none_of: ColorMask::EMPTY,
+                };
+                continue;
+            }
+        }
+        color_merged.push(clause);
+    }
+    let mut out: Vec<ObjectClause> = Vec::with_capacity(color_merged.len());
+    let mut subtype_groups: Vec<(ObjectClause, Vec<CreatureTypeId>)> = Vec::new();
+    for clause in color_merged {
+        let group_types = match clause.subtypes {
+            SubtypeFilter::Has(ct) => Some(vec![ct]),
+            SubtypeFilter::AnyOf(cts) => Some(cts.to_vec()),
+            _ => None,
+        };
+        if let Some(cts) = group_types {
+            let mut key = clause;
+            key.subtypes = SubtypeFilter::Any;
+            if let Some((_, existing)) = subtype_groups.iter_mut().find(|(k, _)| *k == key) {
+                for ct in cts {
+                    if !existing.contains(&ct) {
+                        existing.push(ct);
+                    }
+                }
+            } else {
+                let mut deduped = Vec::new();
+                for ct in cts {
+                    if !deduped.contains(&ct) {
+                        deduped.push(ct);
+                    }
+                }
+                subtype_groups.push((key, deduped));
+            }
+        } else {
+            out.push(clause);
+        }
+    }
+    for (base, cts) in subtype_groups {
+        for chunk in cts.chunks(3) {
+            let mut built = base;
+            built.subtypes = match chunk {
+                [a] => SubtypeFilter::Has(*a),
+                [a, b] => SubtypeFilter::AnyOf([*a, *b, *a]),
+                [a, b, c] => SubtypeFilter::AnyOf([*a, *b, *c]),
+                _ => continue,
+            };
+            out.push(built);
+        }
+    }
+    out
+}
+
+fn lower_cant_be_blocked_except_by_any(
+    allowed_filters: &[ObjectFilterAst],
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<BlockingRestriction> {
+    if allowed_filters.is_empty() {
+        return None;
+    }
+    let mut clauses = Vec::with_capacity(allowed_filters.len());
+    for flt in allowed_filters {
+        let (expanded, req_type) = normalize_blocker_filter_ast(flt)?;
+        for norm in expanded {
+            let lowered = lower_object_filter(&norm, vocabulary).ok()?;
+            match lowered {
+                ObjectFilter::Clause(mut c) => {
+                    c.required_types = c.required_types.union(req_type);
+                    if !clause_supported_by_blocking_static_characteristics(&c) {
+                        return None;
+                    }
+                    clauses.push(c);
+                }
+                ObjectFilter::Either(mut a, mut b) => {
+                    a.required_types = a.required_types.union(req_type);
+                    b.required_types = b.required_types.union(req_type);
+                    if !clause_supported_by_blocking_static_characteristics(&a)
+                        || !clause_supported_by_blocking_static_characteristics(&b)
+                    {
+                        return None;
+                    }
+                    clauses.push(a);
+                    clauses.push(b);
+                }
+            }
+        }
+    }
+    let merged = merge_disjunctive_blocker_clauses(clauses);
+    let single_color_of = |c: &ObjectClause| -> Option<Color> {
+        let ObjectColorFilter::Mask { any_of, none_of } = c.color else {
+            return None;
+        };
+        if !none_of.is_empty() {
+            return None;
+        }
+        let color = if any_of == ColorMask::WHITE {
+            Color::White
+        } else if any_of == ColorMask::BLUE {
+            Color::Blue
+        } else if any_of == ColorMask::BLACK {
+            Color::Black
+        } else if any_of == ColorMask::RED {
+            Color::Red
+        } else if any_of == ColorMask::GREEN {
+            Color::Green
+        } else {
+            return None;
+        };
+        let mut stripped = *c;
+        stripped.color = ObjectColorFilter::Any;
+        (stripped == ObjectClause::creature()).then_some(color)
+    };
+    let is_plain_artifact = |c: &ObjectClause| -> bool {
+        let mut stripped = *c;
+        stripped.required_types = CardTypeMask::EMPTY;
+        c.required_types == CardTypeMask::ARTIFACT && stripped == ObjectClause::creature()
+    };
+    let plain_keyword_of = |c: &ObjectClause| -> Option<KeywordAbility> {
+        let kw = c.keyword?;
+        let mut stripped = *c;
+        stripped.keyword = None;
+        (stripped == ObjectClause::creature()).then_some(kw)
+    };
+    let plain_subtype_of = |c: &ObjectClause| -> Option<CreatureTypeId> {
+        let SubtypeFilter::Has(ct) = c.subtypes else {
+            return None;
+        };
+        let mut stripped = *c;
+        stripped.subtypes = SubtypeFilter::Any;
+        (stripped == ObjectClause::creature()).then_some(ct)
+    };
+    match merged.as_slice() {
+        [only] => {
+            if is_plain_artifact(only) {
+                Some(BlockingRestriction::OnlyBlockedByArtifact)
+            } else if let Some(color) = single_color_of(only) {
+                Some(BlockingRestriction::OnlyBlockedByColor(color))
+            } else if let Some(ct) = plain_subtype_of(only) {
+                Some(BlockingRestriction::OnlyBlockedBySubtype(ct))
+            } else {
+                Some(BlockingRestriction::OnlyBlockedByMatching(
+                    ObjectFilter::Clause(*only),
+                ))
+            }
+        }
+        [a, b] => {
+            if matches!(
+                (plain_keyword_of(a), plain_keyword_of(b)),
+                (Some(KeywordAbility::Flying), Some(KeywordAbility::Reach))
+                    | (Some(KeywordAbility::Reach), Some(KeywordAbility::Flying))
+            ) {
+                Some(BlockingRestriction::OnlyBlockedByFlyingOrReach)
+            } else if is_plain_artifact(a)
+                && let Some(color) = single_color_of(b)
+            {
+                Some(BlockingRestriction::OnlyBlockedByColorOrArtifact(color))
+            } else if is_plain_artifact(b)
+                && let Some(color) = single_color_of(a)
+            {
+                Some(BlockingRestriction::OnlyBlockedByColorOrArtifact(color))
+            } else {
+                Some(BlockingRestriction::OnlyBlockedByMatching(
+                    ObjectFilter::Either(*a, *b),
+                ))
+            }
+        }
+        _ => None,
+    }
 }

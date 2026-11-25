@@ -1294,6 +1294,8 @@ pub(crate) struct ActiveTemporaryRule {
     pub(crate) duration: crate::characteristics::ResolvedDuration,
     pub(crate) resolved_players: BTreeSet<SeatId>,
     pub(crate) resolved_objects: BTreeSet<ObjectId>,
+    pub(crate) target: Option<TargetRef>,
+    pub(crate) second_target: Option<TargetRef>,
     pub(crate) consumed: bool,
 }
 
@@ -1390,6 +1392,7 @@ pub struct EffectWindow {
     chosen_modal_modes_ever: BTreeMap<(ObjectId, crate::program::TriggeredAbilityId), BTreeSet<u8>>,
     temporary_rules: Vec<ActiveTemporaryRule>,
     next_temp_rule_id: u64,
+    uncounterable_stack_entries: BTreeSet<StackEntryId>,
     source_cast_uses: BTreeSet<(ObjectId, crate::characteristics::StaticAbilityId)>,
     source_cast_pending:
         BTreeMap<StackEntryId, Vec<(ObjectId, crate::characteristics::StaticAbilityId)>>,
@@ -1824,6 +1827,8 @@ struct InstructionPayload {
     rebound_over_buyback: Option<bool>,
     exile_on_resolve: bool,
     return_to_hand_on_resolve: bool,
+    library_on_resolve: Option<crate::program::LibraryPlacement>,
+    cannot_be_countered_by_temp: bool,
     copiable_traits: Option<CopiableSpellTraits>,
     body: ExecutableBody,
     bindings: ExecutionBindings,
@@ -1909,6 +1914,8 @@ impl StackPayload {
             rebound_over_buyback: None,
             exile_on_resolve: false,
             return_to_hand_on_resolve: false,
+            library_on_resolve: None,
+            cannot_be_countered_by_temp: false,
             cascade: None,
             copy_run: None,
             pending_copy_targets: Vec::new(),
@@ -1981,6 +1988,7 @@ struct ResolutionResults {
     sampled_graveyard_cards: Option<BTreeSet<ObjectId>>,
     revealed_top_types: BTreeSet<CardType>,
     revealed_top_card: Option<ObjectId>,
+    last_amassed_army: Option<ObjectId>,
     countered_spell_controller: Option<(StackEntryId, SeatId)>,
     counter_target_types: BTreeSet<CardType>,
     shuffled_source_owner: Option<SeatId>,
@@ -2479,6 +2487,7 @@ impl EffectWindow {
             chosen_modal_modes_ever: BTreeMap::new(),
             temporary_rules: Vec::new(),
             next_temp_rule_id: 1,
+            uncounterable_stack_entries: BTreeSet::new(),
             source_cast_uses: BTreeSet::new(),
             source_cast_pending: BTreeMap::new(),
             cast_history: programs
@@ -2891,7 +2900,14 @@ impl EffectWindow {
         let Some(traits) = self.stack_copiable_traits(id) else {
             return Ok(false);
         };
-        if traits.cannot_be_countered || entry.protected_by_spent_mana() {
+        if traits.cannot_be_countered
+            || entry.protected_by_spent_mana()
+            || matches!(
+                self.payloads.get(&id),
+                Some(StackPayload::Instructions(p)) if p.cannot_be_countered_by_temp
+            )
+            || self.uncounterable_stack_entries.contains(&id)
+        {
             return Ok(true);
         }
         let evaluated = self.evaluated_characteristics()?;
@@ -2912,10 +2928,14 @@ impl EffectWindow {
             let crate::program::TemporaryRuleKind::CantBeCountered {
                 filter,
                 controller_only,
+                next_only,
             } = &active.rule
             else {
                 return false;
             };
+            if active.consumed || *next_only {
+                return false;
+            }
             if *controller_only && entry.controller() != active.controller {
                 return false;
             }
@@ -3224,6 +3244,8 @@ impl EffectWindow {
                     rebound_over_buyback: None,
                     exile_on_resolve: false,
                     return_to_hand_on_resolve: false,
+                    library_on_resolve: None,
+                    cannot_be_countered_by_temp: false,
                     cascade: None,
                     copy_run: None,
                     pending_copy_targets: Vec::new(),
@@ -3598,6 +3620,10 @@ impl EffectWindow {
                     crate::program::SourceZoneFilter::Graveyard => {
                         card.zone() == ObjectZone::Graveyard(player)
                     }
+                    crate::program::SourceZoneFilter::HandOrGraveyard => {
+                        card.zone() == ObjectZone::Hand(player)
+                            || card.zone() == ObjectZone::Graveyard(player)
+                    }
                     crate::program::SourceZoneFilter::OpponentGraveyard => {
                         matches!(card.zone(), ObjectZone::Graveyard(owner) if owner != player)
                     }
@@ -3956,7 +3982,7 @@ impl EffectWindow {
         &self,
         participants: &[SeatId],
     ) -> Result<EvaluatedCharacteristics, EffectError> {
-        Ok(evaluate(CharacteristicWorld {
+        let mut evaluated = evaluate(CharacteristicWorld {
             active_player: self.window.active_player(),
             participants,
             life: Some(&self.life),
@@ -3968,7 +3994,24 @@ impl EffectWindow {
             state: &self.characteristics,
             vocabulary: &self.creature_vocabulary,
             name_rules: &self.name_rules,
-        })?)
+        })?;
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::PlayerGrantKeyword { keywords, .. } =
+                &active.rule
+            {
+                for &player in &active.resolved_players {
+                    evaluated
+                        .player_granted_keywords
+                        .entry(player)
+                        .or_default()
+                        .extend(keywords.iter().copied());
+                }
+            }
+        }
+        Ok(evaluated)
     }
     pub fn current_characteristics(
         &self,
@@ -5441,6 +5484,12 @@ impl EffectWindow {
         }) || self.temporary_rules.iter().any(|active| {
             if active.consumed {
                 return false;
+            }
+            if matches!(
+                active.rule,
+                crate::program::TemporaryRuleKind::CantPlayLands { .. }
+            ) {
+                return active.resolved_players.contains(&actor);
             }
             let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule else {
                 return false;
@@ -7742,6 +7791,14 @@ impl EffectWindow {
             && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.exile_on_resolve);
         let self_return_to_hand = resolved
             && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.return_to_hand_on_resolve);
+        let self_library = if resolved {
+            match self.payloads.get(&entry.id()) {
+                Some(StackPayload::Instructions(payload)) => payload.library_on_resolve,
+                _ => None,
+            }
+        } else {
+            None
+        };
         let temp_exile_spell = self.temporary_rules.iter().any(|active| {
             let crate::program::TemporaryRuleKind::ExileSpellOnResolve { filter, .. } =
                 &active.rule
@@ -7774,6 +7831,17 @@ impl EffectWindow {
         });
         let destination = if self_exile || temp_exile_spell {
             ObjectDestination::Exile
+        } else if let Some(placement) = self_library {
+            match placement {
+                crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
+                crate::program::LibraryPlacement::Bottom
+                | crate::program::LibraryPlacement::ChoiceTopOrBottom { .. } => {
+                    ObjectDestination::LibraryBottom
+                }
+                crate::program::LibraryPlacement::FromTop(offset) => {
+                    ObjectDestination::LibraryFromTop(offset)
+                }
+            }
         } else if self_return_to_hand || (resolved && entry.bought_back() && !rebound_selected) {
             ObjectDestination::Hand
         } else {
@@ -8060,6 +8128,10 @@ impl EffectWindow {
             ControllerFilter::RelatedPlayer => false,
             ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent => self
                 .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                .is_ok_and(|seat| p.controller == Some(seat)),
+            ControllerFilter::ActivePlayer => p.controller == Some(self.window.active_player()),
+            ControllerFilter::DefendingPlayer => self
+                .resolving_player(crate::program::ResolvingPlayer::DefendingPlayer)
                 .is_ok_and(|seat| p.controller == Some(seat)),
             ControllerFilter::Player(seat) => p.controller == Some(seat),
         };
@@ -8377,6 +8449,22 @@ impl EffectWindow {
                     .and_then(|t| t.causes.members().first())
                     .and_then(|c| c.subject_object_id())
                     .and_then(|tid| self.permanent_mana_value(tid)),
+                A::TargetPower => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.instruction_target(e).ok())
+                    .and_then(|t| match t.choice().target {
+                        TargetRef::Object(tid) => evaluated
+                            .get(tid)
+                            .and_then(|o| o.power_toughness.as_ref())
+                            .map(|pt| pt.derived.power.clone())
+                            .or_else(|| {
+                                self.resolution_cursor()
+                                    .and_then(|c| c.results.target_lki.get(&tid))
+                                    .and_then(|lki| lki.power.clone())
+                            }),
+                        _ => None,
+                    }),
             }
         };
         if let PowerFilter::CompareAnchor { op, anchor } = clause.power
@@ -8515,7 +8603,11 @@ impl EffectWindow {
                                     }
                                 )
                         )
-                });
+                })
+                || evaluated
+                    .player_granted_keywords
+                    .get(&player)
+                    .is_some_and(|kws| kws.contains(&KeywordAbility::Shroud));
             if has_shroud {
                 return false;
             }
@@ -8532,6 +8624,10 @@ impl EffectWindow {
                         }
                     )
                 }) > 0
+                    || evaluated
+                        .player_granted_keywords
+                        .get(&player)
+                        .is_some_and(|kws| kws.contains(&KeywordAbility::Hexproof))
                     || self.temporary_rules.iter().any(|active| {
                         !active.consumed
                             && active.controller == player
@@ -8867,11 +8963,15 @@ impl EffectWindow {
                                 crate::program::ControllerFilter::Player(seat) => {
                                     entry.controller() == seat
                                 }
+                                crate::program::ControllerFilter::ActivePlayer => {
+                                    entry.controller() == self.window.active_player()
+                                }
                                 crate::program::ControllerFilter::OwnerYou
                                 | crate::program::ControllerFilter::OwnerOpponent
                                 | crate::program::ControllerFilter::RelatedPlayer
                                 | crate::program::ControllerFilter::TargetPlayer
-                                | crate::program::ControllerFilter::TargetOpponent => false,
+                                | crate::program::ControllerFilter::TargetOpponent
+                                | crate::program::ControllerFilter::DefendingPlayer => false,
                             },
                             crate::program::ObjectFilter::Either(_, _) => true,
                         };
@@ -9168,6 +9268,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }

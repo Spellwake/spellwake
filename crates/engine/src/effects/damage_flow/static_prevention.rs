@@ -647,6 +647,7 @@ impl EffectWindow {
                                 affected,
                                 controller,
                                 Some(permanent.object),
+                                None,
                                 &opponents,
                                 evaluated,
                             );
@@ -657,6 +658,7 @@ impl EffectWindow {
                                 *to,
                                 controller,
                                 Some(permanent.object),
+                                None,
                                 None,
                                 attempt.source.controller(),
                                 evaluated,
@@ -770,81 +772,16 @@ impl EffectWindow {
                     }
                     let affected =
                         self.damage_recipient_controller_at(evaluated, attempt.target)?;
-                    let recipient_ok = match recipient {
-                        crate::characteristics::StaticDamageRecipient::Any => true,
-                        crate::characteristics::StaticDamageRecipient::Opponents => {
-                            matches!(attempt.target, DamageRecipient::Player(p) if opponents.contains(&p))
-                        }
-                        crate::characteristics::StaticDamageRecipient::OpponentOrOpponentPermanent => {
-                            opponents.contains(&affected)
-                        }
-                        crate::characteristics::StaticDamageRecipient::Controller => {
-                            attempt.target == DamageRecipient::Player(controller)
-                        }
-                        crate::characteristics::StaticDamageRecipient::ControllerOrControlledPermanent => {
-                            affected == controller
-                        }
-                        crate::characteristics::StaticDamageRecipient::ControllerOrControlledCreatures => {
-                            attempt.target == DamageRecipient::Player(controller)
-                                || (matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && affected == controller)
-                        }
-                        crate::characteristics::StaticDamageRecipient::ControlledCreatures => {
-                            matches!(attempt.target, DamageRecipient::Creature(_))
-                                && affected == controller
-                        }
-                        crate::characteristics::StaticDamageRecipient::Creatures => {
-                            matches!(attempt.target, DamageRecipient::Creature(_))
-                        }
-                        crate::characteristics::StaticDamageRecipient::OpponentCreatures => {
-                            matches!(attempt.target, DamageRecipient::Creature(_))
-                                && opponents.contains(&affected)
-                        }
-                        crate::characteristics::StaticDamageRecipient::Players => {
-                            matches!(attempt.target, DamageRecipient::Player(_))
-                        }
-                        crate::characteristics::StaticDamageRecipient::SelfObject => {
-                            matches!(
-                                attempt.target,
-                                DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id)
-                                    if id == permanent.object
-                            )
-                        }
-                        crate::characteristics::StaticDamageRecipient::AttachedHost => {
-                            let target_obj = match attempt.target {
-                                DamageRecipient::Creature(id)
-                                | DamageRecipient::Planeswalker(id)
-                                | DamageRecipient::Battle(id) => Some(id),
-                                DamageRecipient::Player(_) => None,
-                            };
-                            matches!(
-                                (permanent.attached_to, target_obj),
-                                (Some(TargetRef::Object(host)), Some(obj)) if host == obj
-                            )
-                        }
-                        crate::characteristics::StaticDamageRecipient::MatchingPermanent(filter) => {
-                            let target_obj = match attempt.target {
-                                DamageRecipient::Creature(id)
-                                | DamageRecipient::Planeswalker(id)
-                                | DamageRecipient::Battle(id) => Some(id),
-                                DamageRecipient::Player(_) => None,
-                            };
-                            target_obj
-                                .and_then(|obj| evaluated.get(obj))
-                                .is_some_and(|view| {
-                                    self.matches_object_filter(
-                                        *filter,
-                                        view,
-                                        controller,
-                                        Some(permanent.object),
-                                        &excluded,
-                                        evaluated,
-                                    )
-                                })
-                        }
-                    };
+                    let recipient_ok = self.damage_recipient_matches_static(
+                        *recipient,
+                        attempt.target,
+                        affected,
+                        controller,
+                        Some(permanent.object),
+                        None,
+                        &opponents,
+                        evaluated,
+                    );
                     if !recipient_ok {
                         continue;
                     }
@@ -996,91 +933,16 @@ impl EffectWindow {
                         }
                         let affected =
                             self.damage_recipient_controller_at(evaluated, attempt.target)?;
-                        let recipient_ok = match recipient {
-                            crate::characteristics::StaticDamageRecipient::Any => true,
-                            crate::characteristics::StaticDamageRecipient::Opponents => {
-                                matches!(attempt.target, DamageRecipient::Player(p) if opponents.contains(&p))
-                            }
-                            crate::characteristics::StaticDamageRecipient::OpponentOrOpponentPermanent => {
-                                opponents.contains(&affected)
-                            }
-                            crate::characteristics::StaticDamageRecipient::Controller => {
-                                attempt.target == DamageRecipient::Player(controller)
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControllerOrControlledPermanent => {
-                                affected == controller
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControllerOrControlledCreatures => {
-                                attempt.target == DamageRecipient::Player(controller)
-                                    || (matches!(attempt.target, DamageRecipient::Creature(_))
-                                        && affected == controller)
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControlledCreatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && affected == controller
-                            }
-                            crate::characteristics::StaticDamageRecipient::Creatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                            }
-                            crate::characteristics::StaticDamageRecipient::OpponentCreatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && opponents.contains(&affected)
-                            }
-                            crate::characteristics::StaticDamageRecipient::Players => {
-                                matches!(attempt.target, DamageRecipient::Player(_))
-                            }
-                            crate::characteristics::StaticDamageRecipient::SelfObject => {
-                                active.source_object.is_some_and(|src| {
-                                    matches!(
-                                        attempt.target,
-                                        DamageRecipient::Creature(id)
-                                            | DamageRecipient::Planeswalker(id)
-                                            | DamageRecipient::Battle(id)
-                                            if id == src
-                                    )
-                                })
-                            }
-                            crate::characteristics::StaticDamageRecipient::AttachedHost => {
-                                let target_obj = match attempt.target {
-                                    DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id) => Some(id),
-                                    DamageRecipient::Player(_) => None,
-                                };
-                                active
-                                    .source_object
-                                    .and_then(|src| evaluated.get(src))
-                                    .and_then(|perm| perm.attached_to)
-                                    .is_some_and(|att| {
-                                        matches!(
-                                            (att, target_obj),
-                                            (TargetRef::Object(host), Some(obj)) if host == obj
-                                        )
-                                    })
-                            }
-                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(
-                                filter,
-                            ) => {
-                                let target_obj = match attempt.target {
-                                    DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id) => Some(id),
-                                    DamageRecipient::Player(_) => None,
-                                };
-                                target_obj
-                                    .and_then(|obj| evaluated.get(obj))
-                                    .is_some_and(|view| {
-                                        self.matches_object_filter(
-                                            *filter,
-                                            view,
-                                            controller,
-                                            active.source_object,
-                                            &excluded,
-                                            evaluated,
-                                        )
-                                    })
-                            }
-                        };
+                        let recipient_ok = self.damage_recipient_matches_static(
+                            *recipient,
+                            attempt.target,
+                            affected,
+                            controller,
+                            active.source_object,
+                            active.target,
+                            &opponents,
+                            evaluated,
+                        );
                         if !recipient_ok {
                             continue;
                         }
@@ -1141,91 +1003,16 @@ impl EffectWindow {
                         }
                         let affected =
                             self.damage_recipient_controller_at(evaluated, attempt.target)?;
-                        let recipient_ok = match recipient {
-                            crate::characteristics::StaticDamageRecipient::Any => true,
-                            crate::characteristics::StaticDamageRecipient::Opponents => {
-                                matches!(attempt.target, DamageRecipient::Player(p) if opponents.contains(&p))
-                            }
-                            crate::characteristics::StaticDamageRecipient::OpponentOrOpponentPermanent => {
-                                opponents.contains(&affected)
-                            }
-                            crate::characteristics::StaticDamageRecipient::Controller => {
-                                attempt.target == DamageRecipient::Player(controller)
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControllerOrControlledPermanent => {
-                                affected == controller
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControllerOrControlledCreatures => {
-                                attempt.target == DamageRecipient::Player(controller)
-                                    || (matches!(attempt.target, DamageRecipient::Creature(_))
-                                        && affected == controller)
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControlledCreatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && affected == controller
-                            }
-                            crate::characteristics::StaticDamageRecipient::Creatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                            }
-                            crate::characteristics::StaticDamageRecipient::OpponentCreatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && opponents.contains(&affected)
-                            }
-                            crate::characteristics::StaticDamageRecipient::Players => {
-                                matches!(attempt.target, DamageRecipient::Player(_))
-                            }
-                            crate::characteristics::StaticDamageRecipient::SelfObject => {
-                                active.source_object.is_some_and(|src| {
-                                    matches!(
-                                        attempt.target,
-                                        DamageRecipient::Creature(id)
-                                            | DamageRecipient::Planeswalker(id)
-                                            | DamageRecipient::Battle(id)
-                                            if id == src
-                                    )
-                                })
-                            }
-                            crate::characteristics::StaticDamageRecipient::AttachedHost => {
-                                let target_obj = match attempt.target {
-                                    DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id) => Some(id),
-                                    DamageRecipient::Player(_) => None,
-                                };
-                                active
-                                    .source_object
-                                    .and_then(|src| evaluated.get(src))
-                                    .and_then(|perm| perm.attached_to)
-                                    .is_some_and(|att| {
-                                        matches!(
-                                            (att, target_obj),
-                                            (TargetRef::Object(host), Some(obj)) if host == obj
-                                        )
-                                    })
-                            }
-                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(
-                                filter,
-                            ) => {
-                                let target_obj = match attempt.target {
-                                    DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id) => Some(id),
-                                    DamageRecipient::Player(_) => None,
-                                };
-                                target_obj
-                                    .and_then(|obj| evaluated.get(obj))
-                                    .is_some_and(|view| {
-                                        self.matches_object_filter(
-                                            *filter,
-                                            view,
-                                            controller,
-                                            active.source_object,
-                                            &excluded,
-                                            evaluated,
-                                        )
-                                    })
-                            }
-                        };
+                        let recipient_ok = self.damage_recipient_matches_static(
+                            *recipient,
+                            attempt.target,
+                            affected,
+                            controller,
+                            active.source_object,
+                            active.target,
+                            &opponents,
+                            evaluated,
+                        );
                         if !recipient_ok {
                             continue;
                         }
@@ -1244,6 +1031,7 @@ impl EffectWindow {
                 crate::program::TemporaryRuleKind::PreventNextTimeDamage {
                     source: source_filter,
                     source_chosen_color,
+                    source_is_target,
                     recipient,
                     combat_only,
                 } => {
@@ -1292,6 +1080,18 @@ impl EffectWindow {
                             continue;
                         }
                         let attempt = component.attempt();
+                        if *source_is_target {
+                            let target_match = match (&attempt.source, active.target) {
+                                (
+                                    crate::damage::DamageSource::Object { object, .. },
+                                    Some(TargetRef::Object(tid)),
+                                ) => object.id() == tid,
+                                _ => false,
+                            };
+                            if !target_match {
+                                continue;
+                            }
+                        }
                         if let Some(color) = chosen_color {
                             let color_ok = match &attempt.source {
                                 crate::damage::DamageSource::Object { object, .. } => evaluated
@@ -1325,91 +1125,16 @@ impl EffectWindow {
                         }
                         let affected =
                             self.damage_recipient_controller_at(evaluated, attempt.target)?;
-                        let recipient_ok = match recipient {
-                            crate::characteristics::StaticDamageRecipient::Any => true,
-                            crate::characteristics::StaticDamageRecipient::Opponents => {
-                                matches!(attempt.target, DamageRecipient::Player(p) if opponents.contains(&p))
-                            }
-                            crate::characteristics::StaticDamageRecipient::OpponentOrOpponentPermanent => {
-                                opponents.contains(&affected)
-                            }
-                            crate::characteristics::StaticDamageRecipient::Controller => {
-                                attempt.target == DamageRecipient::Player(controller)
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControllerOrControlledPermanent => {
-                                affected == controller
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControllerOrControlledCreatures => {
-                                attempt.target == DamageRecipient::Player(controller)
-                                    || (matches!(attempt.target, DamageRecipient::Creature(_))
-                                        && affected == controller)
-                            }
-                            crate::characteristics::StaticDamageRecipient::ControlledCreatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && affected == controller
-                            }
-                            crate::characteristics::StaticDamageRecipient::Creatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                            }
-                            crate::characteristics::StaticDamageRecipient::OpponentCreatures => {
-                                matches!(attempt.target, DamageRecipient::Creature(_))
-                                    && opponents.contains(&affected)
-                            }
-                            crate::characteristics::StaticDamageRecipient::Players => {
-                                matches!(attempt.target, DamageRecipient::Player(_))
-                            }
-                            crate::characteristics::StaticDamageRecipient::SelfObject => {
-                                active.source_object.is_some_and(|src| {
-                                    matches!(
-                                        attempt.target,
-                                        DamageRecipient::Creature(id)
-                                            | DamageRecipient::Planeswalker(id)
-                                            | DamageRecipient::Battle(id)
-                                            if id == src
-                                    )
-                                })
-                            }
-                            crate::characteristics::StaticDamageRecipient::AttachedHost => {
-                                let target_obj = match attempt.target {
-                                    DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id) => Some(id),
-                                    DamageRecipient::Player(_) => None,
-                                };
-                                active
-                                    .source_object
-                                    .and_then(|src| evaluated.get(src))
-                                    .and_then(|perm| perm.attached_to)
-                                    .is_some_and(|att| {
-                                        matches!(
-                                            (att, target_obj),
-                                            (TargetRef::Object(host), Some(obj)) if host == obj
-                                        )
-                                    })
-                            }
-                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(
-                                filter,
-                            ) => {
-                                let target_obj = match attempt.target {
-                                    DamageRecipient::Creature(id)
-                                    | DamageRecipient::Planeswalker(id)
-                                    | DamageRecipient::Battle(id) => Some(id),
-                                    DamageRecipient::Player(_) => None,
-                                };
-                                target_obj
-                                    .and_then(|obj| evaluated.get(obj))
-                                    .is_some_and(|view| {
-                                        self.matches_object_filter(
-                                            *filter,
-                                            view,
-                                            controller,
-                                            active.source_object,
-                                            &excluded,
-                                            evaluated,
-                                        )
-                                    })
-                            }
-                        };
+                        let recipient_ok = self.damage_recipient_matches_static(
+                            *recipient,
+                            attempt.target,
+                            affected,
+                            controller,
+                            active.source_object,
+                            active.target,
+                            &opponents,
+                            evaluated,
+                        );
                         if !recipient_ok {
                             continue;
                         }
@@ -1427,6 +1152,7 @@ impl EffectWindow {
                 }
                 crate::program::TemporaryRuleKind::RedirectNextDamage {
                     source: source_filter,
+                    source_is_target,
                     from,
                     to,
                     combat_only,
@@ -1441,12 +1167,23 @@ impl EffectWindow {
                     let opponents = self
                         .combat_rules
                         .opponents(self.window.participants(), controller)?;
-                    let resolved_target_obj = active.resolved_objects.iter().next().copied();
                     for component in batch
                         .components()
                         .filter(|component| component.remaining().is_positive())
                     {
                         let attempt = component.attempt();
+                        if *source_is_target {
+                            let target_match = match (&attempt.source, active.target) {
+                                (
+                                    crate::damage::DamageSource::Object { object, .. },
+                                    Some(TargetRef::Object(tid)),
+                                ) => object.id() == tid,
+                                _ => false,
+                            };
+                            if !target_match {
+                                continue;
+                            }
+                        }
                         if let Some(filter) = source_filter {
                             let source_ok = match &attempt.source {
                                 crate::damage::DamageSource::Object { object, .. } => {
@@ -1475,6 +1212,7 @@ impl EffectWindow {
                             affected,
                             controller,
                             active.source_object,
+                            active.target,
                             &opponents,
                             evaluated,
                         );
@@ -1485,7 +1223,8 @@ impl EffectWindow {
                             *to,
                             controller,
                             active.source_object,
-                            resolved_target_obj,
+                            active.target,
+                            active.second_target,
                             attempt.source.controller(),
                             evaluated,
                         ) else {
@@ -1520,6 +1259,7 @@ impl EffectWindow {
         affected: SeatId,
         controller: SeatId,
         source_object: Option<ObjectId>,
+        bound_target: Option<TargetRef>,
         opponents: &[SeatId],
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
@@ -1565,6 +1305,27 @@ impl EffectWindow {
                     )
                 })
             }
+            crate::characteristics::StaticDamageRecipient::TargetObject => match bound_target {
+                Some(TargetRef::Object(tid)) => matches!(
+                    target,
+                    DamageRecipient::Creature(id)
+                        | DamageRecipient::Planeswalker(id)
+                        | DamageRecipient::Battle(id)
+                        if id == tid
+                ),
+                _ => false,
+            },
+            crate::characteristics::StaticDamageRecipient::TargetAny => match bound_target {
+                Some(TargetRef::Object(tid)) => matches!(
+                    target,
+                    DamageRecipient::Creature(id)
+                        | DamageRecipient::Planeswalker(id)
+                        | DamageRecipient::Battle(id)
+                        if id == tid
+                ),
+                Some(TargetRef::Player(seat)) => target == DamageRecipient::Player(seat),
+                _ => false,
+            },
             crate::characteristics::StaticDamageRecipient::AttachedHost => {
                 let target_obj = match target {
                     DamageRecipient::Creature(id)
@@ -1609,7 +1370,8 @@ impl EffectWindow {
         to: crate::characteristics::DamageRedirectTarget,
         controller: SeatId,
         source_object: Option<ObjectId>,
-        target_object: Option<ObjectId>,
+        target: Option<TargetRef>,
+        second_target: Option<TargetRef>,
         damage_source_controller: SeatId,
         evaluated: &EvaluatedCharacteristics,
     ) -> Option<DamageRecipient> {
@@ -1628,6 +1390,13 @@ impl EffectWindow {
                 None
             }
         };
+        let target_recipient = |t: TargetRef| -> Option<DamageRecipient> {
+            match t {
+                TargetRef::Object(id) => obj_recipient(id),
+                TargetRef::Player(p) => Some(DamageRecipient::Player(p)),
+                TargetRef::Stack(_) => None,
+            }
+        };
         match to {
             crate::characteristics::DamageRedirectTarget::AbilitySource => {
                 source_object.and_then(obj_recipient)
@@ -1635,16 +1404,19 @@ impl EffectWindow {
             crate::characteristics::DamageRedirectTarget::AttachedHost => source_object
                 .and_then(|src| evaluated.get(src))
                 .and_then(|perm| perm.attached_to)
-                .and_then(|att| match att {
-                    TargetRef::Object(host) => obj_recipient(host),
-                    TargetRef::Player(p) => Some(DamageRecipient::Player(p)),
-                    TargetRef::Stack(_) => None,
-                }),
+                .and_then(target_recipient),
             crate::characteristics::DamageRedirectTarget::Controller => {
                 Some(DamageRecipient::Player(controller))
             }
-            crate::characteristics::DamageRedirectTarget::TargetObject => {
-                target_object.and_then(obj_recipient)
+            crate::characteristics::DamageRedirectTarget::TargetObject => match target {
+                Some(TargetRef::Object(id)) => obj_recipient(id),
+                _ => None,
+            },
+            crate::characteristics::DamageRedirectTarget::TargetAny => {
+                target.and_then(target_recipient)
+            }
+            crate::characteristics::DamageRedirectTarget::SecondTargetObject => {
+                second_target.and_then(target_recipient)
             }
             crate::characteristics::DamageRedirectTarget::DamageSourceController => {
                 Some(DamageRecipient::Player(damage_source_controller))
@@ -1723,6 +1495,7 @@ impl EffectWindow {
                         *to,
                         source_ctrl,
                         Some(source),
+                        None,
                         None,
                         src_ctrl,
                         &view.evaluated,
@@ -2038,8 +1811,10 @@ impl EffectWindow {
                     Redirect {
                         controller: SeatId,
                         source_object: Option<ObjectId>,
-                        target_object: Option<ObjectId>,
+                        target: Option<TargetRef>,
+                        second_target: Option<TargetRef>,
                         to: crate::characteristics::DamageRedirectTarget,
+                        amount: Option<RulesInteger>,
                         one_shot: bool,
                     },
                 }
@@ -2072,13 +1847,16 @@ impl EffectWindow {
                             }
                             crate::program::TemporaryRuleKind::RedirectNextDamage {
                                 to,
+                                amount,
                                 one_shot,
                                 ..
                             } => Some(TempDamageAction::Redirect {
                                 controller: active.controller,
                                 source_object: active.source_object,
-                                target_object: active.resolved_objects.iter().next().copied(),
+                                target: active.target,
+                                second_target: active.second_target,
                                 to: *to,
+                                amount: amount.clone(),
                                 one_shot: *one_shot,
                             }),
                             _ => None,
@@ -2089,8 +1867,10 @@ impl EffectWindow {
                     TempDamageAction::Redirect {
                         controller: r_ctrl,
                         source_object,
-                        target_object,
+                        target,
+                        second_target,
                         to,
+                        amount,
                         one_shot,
                     } => {
                         let view = before.view();
@@ -2105,18 +1885,46 @@ impl EffectWindow {
                             to,
                             r_ctrl,
                             source_object,
-                            target_object,
+                            target,
+                            second_target,
                             src_ctrl,
                             &view.evaluated,
                         )
                         .ok_or(DamageError::InapplicableEffect)?;
-                        work.batch
-                            .redirect_static_component(application, new_target)?;
-                        if one_shot
-                            && let Some(active) =
+                        if let Some(rem) = amount {
+                            let split_id = self.damage_state.alloc_attempt_id()?;
+                            let moved = work.batch.redirect_partial_component(
+                                application,
+                                new_target,
+                                rem,
+                                split_id,
+                            )?;
+                            if let Some(active) =
                                 self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
-                        {
-                            active.consumed = true;
+                            {
+                                if let crate::program::TemporaryRuleKind::RedirectNextDamage {
+                                    amount: Some(cur),
+                                    ..
+                                } = &mut active.rule
+                                {
+                                    *cur = cur.minus(&moved);
+                                    if !cur.is_positive() {
+                                        active.consumed = true;
+                                    }
+                                }
+                                if one_shot {
+                                    active.consumed = true;
+                                }
+                            }
+                        } else {
+                            work.batch
+                                .redirect_static_component(application, new_target)?;
+                            if one_shot
+                                && let Some(active) =
+                                    self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
+                            {
+                                active.consumed = true;
+                            }
                         }
                         return Ok(());
                     }

@@ -2353,6 +2353,17 @@ impl StackWindow {
             .chosen_x = Some(x);
         Ok(())
     }
+    /// Bind X on the currently resolving stack entry (for `Instruction::BindResolutionX`).
+    pub(crate) fn set_resolving_chosen_x(
+        &mut self,
+        x: RulesInteger,
+    ) -> Result<(), StackWindowError> {
+        let Status::Resolving { entry, .. } = &mut self.status else {
+            return Err(StackWindowError::InconsistentStack);
+        };
+        entry.chosen_x = Some(x);
+        Ok(())
+    }
     pub(crate) fn mark_sunburst_colors(
         &mut self,
         entry: StackEntryId,
@@ -2400,8 +2411,23 @@ impl StackWindow {
             .ok_or(StackWindowError::InconsistentStack)?;
         entry.bargained = bargained;
         entry.cast_summary.bargained = bargained;
+        if buyback || bargained || !kicked.is_empty() {
+            entry.cast_summary.additional_cost_paid = true;
+        }
         entry.buyback = buyback;
         entry.kicked = kicked;
+        Ok(())
+    }
+    pub(crate) fn mark_additional_cost_paid(
+        &mut self,
+        id: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|s| s.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.cast_summary.additional_cost_paid = true;
         Ok(())
     }
     /// Mark the freshly announced physical spell. Copies allocate their own entry.
@@ -2538,6 +2564,7 @@ impl StackWindow {
         entry.cast_summary.cleaved = source.cast_summary.cleaved;
         entry.cast_summary.evidence_collected = source.cast_summary.evidence_collected;
         entry.cast_summary.paid_alternative = source.cast_summary.paid_alternative;
+        entry.cast_summary.additional_cost_paid = source.cast_summary.additional_cost_paid;
         entry.cast_summary.squad_count = source.cast_summary.squad_count;
         entry.buyback = buyback;
         entry.kicked = kicked;

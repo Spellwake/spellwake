@@ -422,6 +422,10 @@ pub enum ControllerFilter {
     TargetPlayer,
     /// Controlled by the targeted opponent of the resolving spell or ability.
     TargetOpponent,
+    /// Controlled by the current active player.
+    ActivePlayer,
+    /// Controlled by the defending player in combat (or opponent of active player if none).
+    DefendingPlayer,
     /// Controlled by this exact player.
     Player(SeatId),
 }
@@ -442,6 +446,8 @@ pub enum DynamicStatAnchor {
     ControllerSubtypeCount(CreatureTypeId),
     TriggerSubjectPower,
     TriggerSubjectManaValue,
+    /// Power of the resolving spell or ability's targeted object (CR 608.2h).
+    TargetPower,
 }
 
 impl DynamicStatAnchor {
@@ -1036,6 +1042,17 @@ impl ObjectClause {
     #[must_use]
     pub const fn guarantees_creature(self) -> bool {
         self.any_types.0 == CardTypeMask::CREATURE.0
+            || matches!(
+                self.combat,
+                CombatFilter::Attacking
+                    | CombatFilter::Blocking
+                    | CombatFilter::AttackingOrBlocking
+                    | CombatFilter::Blocked
+                    | CombatFilter::Unblocked
+                    | CombatFilter::BlockingSource
+                    | CombatFilter::BlockedBySource
+                    | CombatFilter::BlockingOrBlockedBySource
+            )
     }
 
     /// Bind unbound trigger/ability source exclusions to `source`.
@@ -2413,7 +2430,9 @@ impl ObjectFilter {
                 ControllerFilter::OwnerOpponent => object.object.owner() != controller,
                 ControllerFilter::RelatedPlayer
                 | ControllerFilter::TargetPlayer
-                | ControllerFilter::TargetOpponent => false,
+                | ControllerFilter::TargetOpponent
+                | ControllerFilter::ActivePlayer
+                | ControllerFilter::DefendingPlayer => false,
                 ControllerFilter::Player(seat) => object.object.controller() == Some(seat),
             };
             if !controller_ok {

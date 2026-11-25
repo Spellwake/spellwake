@@ -77,6 +77,10 @@ impl EffectWindow {
                             crate::program::SourceZoneFilter::Graveyard => {
                                 obj.zone() == ObjectZone::Graveyard(controller)
                             }
+                            crate::program::SourceZoneFilter::HandOrGraveyard => {
+                                obj.zone() == ObjectZone::Hand(controller)
+                                    || obj.zone() == ObjectZone::Graveyard(controller)
+                            }
                             crate::program::SourceZoneFilter::OpponentGraveyard => {
                                 matches!(obj.zone(), ObjectZone::Graveyard(p) if opponents.contains(&p))
                             }

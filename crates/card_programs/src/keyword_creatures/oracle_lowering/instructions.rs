@@ -1,5 +1,7 @@
 use super::*;
-use spellwake_engine::program::{ExchangeSpec, ExchangeZone, StackCopyTarget};
+use spellwake_engine::characteristics::ActivationSuppression;
+use spellwake_engine::day_night::DayNight;
+use spellwake_engine::program::{DynamicStatAnchor, ExchangeSpec, ExchangeZone, StackCopyTarget};
 use spellwake_oracle_compiler::ast::ExchangeKind;
 
 pub(super) fn lower_target_subject(
@@ -152,13 +154,229 @@ pub(super) fn lower_battlefield_body_target(
     {
         return Ok(BodyTarget::SinglePermanent);
     }
-    let obj = lower_object_filter(f, vocabulary)?;
+    let mut obj = lower_object_filter(f, vocabulary)?;
+    if f.controller == Some(ControllerRelation::DefendingPlayer) {
+        rewrite_object_filter_controller(
+            &mut obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::DefendingPlayer,
+        );
+    }
     if obj == ObjectFilter::creature() {
         Ok(BodyTarget::SingleCreature)
     } else if obj == ObjectFilter::planeswalker() {
         Ok(BodyTarget::SinglePlaneswalker)
     } else {
         Ok(BodyTarget::FilteredPermanent(obj))
+    }
+}
+
+fn rewrite_object_filter_controller(
+    obj: &mut ObjectFilter,
+    from: ControllerFilter,
+    to: ControllerFilter,
+) {
+    let patch = |c: &mut ObjectClause| {
+        if c.controller == from {
+            c.controller = to;
+        }
+    };
+    match obj {
+        ObjectFilter::Clause(c) => patch(c),
+        ObjectFilter::Either(a, b) => {
+            patch(a);
+            patch(b);
+        }
+    }
+}
+
+fn rewrite_trigger_power_to_target_power(obj: &mut ObjectFilter) {
+    let patch = |c: &mut ObjectClause| {
+        if let PowerFilter::CompareAnchor { op, anchor } = c.power
+            && anchor == DynamicStatAnchor::TriggerSubjectPower
+        {
+            c.power = PowerFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            };
+        }
+        if let ToughnessFilter::CompareAnchor { op, anchor } = c.toughness
+            && anchor == DynamicStatAnchor::TriggerSubjectPower
+        {
+            c.toughness = ToughnessFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            };
+        }
+        if let ManaValueFilter::CompareAnchor { op, anchor } = c.mana_value
+            && anchor == DynamicStatAnchor::TriggerSubjectPower
+        {
+            c.mana_value = ManaValueFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            };
+        }
+    };
+    match obj {
+        ObjectFilter::Clause(c) => patch(c),
+        ObjectFilter::Either(a, b) => {
+            patch(a);
+            patch(b);
+        }
+    }
+}
+
+fn filter_uses_target_power(obj: &ObjectFilter) -> bool {
+    let check = |c: &ObjectClause| {
+        matches!(
+            c.power,
+            PowerFilter::CompareAnchor {
+                anchor: DynamicStatAnchor::TargetPower,
+                ..
+            }
+        ) || matches!(
+            c.toughness,
+            ToughnessFilter::CompareAnchor {
+                anchor: DynamicStatAnchor::TargetPower,
+                ..
+            }
+        ) || matches!(
+            c.mana_value,
+            ManaValueFilter::CompareAnchor {
+                anchor: DynamicStatAnchor::TargetPower,
+                ..
+            }
+        )
+    };
+    match obj {
+        ObjectFilter::Clause(c) => check(c),
+        ObjectFilter::Either(a, b) => check(a) || check(b),
+    }
+}
+
+fn ensure_target_power_consumed(builder: &mut BodyBuilder, obj: &ObjectFilter) {
+    if filter_uses_target_power(obj)
+        && is_permanent_body_target(builder.target)
+        && !builder
+            .instructions
+            .iter()
+            .any(Instruction::uses_mode_target)
+        && !builder.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::RememberPermanentTarget | Instruction::FixedTargetClause(_)
+            )
+        })
+    {
+        prepend_instruction_at(
+            &mut builder.instructions,
+            0,
+            Instruction::RememberPermanentTarget,
+        );
+    }
+}
+
+fn lower_battlefield_body_target_in_context(
+    f: &ObjectFilterAst,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<BodyTarget, &'static str> {
+    let mut bt = lower_battlefield_body_target(f, vocabulary)?;
+    if !in_trigger
+        && builder.target == BodyTarget::None
+        && builder.instructions.is_empty()
+        && f.controller == Some(ControllerRelation::ThatPlayer)
+        && let BodyTarget::FilteredPermanent(ref mut obj) = bt
+    {
+        rewrite_object_filter_controller(
+            obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::ActivePlayer,
+        );
+    }
+    Ok(bt)
+}
+
+fn lower_object_filter_in_context(
+    f: &ObjectFilterAst,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<ObjectFilter, &'static str> {
+    let mut obj = lower_object_filter(f, vocabulary)?;
+    if f.controller == Some(ControllerRelation::DefendingPlayer) {
+        rewrite_object_filter_controller(
+            &mut obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::DefendingPlayer,
+        );
+    } else if !in_trigger
+        && builder.target == BodyTarget::None
+        && builder.instructions.is_empty()
+        && f.controller == Some(ControllerRelation::ThatPlayer)
+    {
+        rewrite_object_filter_controller(
+            &mut obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::ActivePlayer,
+        );
+    }
+    if !in_trigger && is_permanent_body_target(builder.target) {
+        rewrite_trigger_power_to_target_power(&mut obj);
+    }
+    Ok(obj)
+}
+
+fn unwrap_in_zone_subject(subj: &SubjectRefAst) -> Option<SubjectRefAst> {
+    let SubjectRefAst::InZone { subject, zone } = subj else {
+        return None;
+    };
+    let fold_filter = |f: &ObjectFilterAst| -> Option<ObjectFilterAst> {
+        if f.zone.is_none() || f.zone == Some(*zone) {
+            let mut cloned = f.clone();
+            cloned.zone = Some(*zone);
+            Some(cloned)
+        } else {
+            None
+        }
+    };
+    match subject.as_ref() {
+        SubjectRefAst::TargetObject { filter, count } => Some(SubjectRefAst::TargetObject {
+            filter: Box::new(fold_filter(filter)?),
+            count: *count,
+        }),
+        SubjectRefAst::Group(f) => Some(SubjectRefAst::Group(Box::new(fold_filter(f)?))),
+        SubjectRefAst::All(f) => Some(SubjectRefAst::All(Box::new(fold_filter(f)?))),
+        SubjectRefAst::Each(f) => Some(SubjectRefAst::Each(Box::new(fold_filter(f)?))),
+        SubjectRefAst::Compound(items) if !items.is_empty() => {
+            let mut out = Vec::with_capacity(items.len());
+            for it in items {
+                out.push(
+                    unwrap_in_zone_subject(&SubjectRefAst::InZone {
+                        subject: Box::new(it.clone()),
+                        zone: *zone,
+                    })
+                    .unwrap_or_else(|| it.clone()),
+                );
+            }
+            Some(SubjectRefAst::Compound(out))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_resolving_spell_lib_placement(
+    pl: LibraryPlacement,
+    target: BodyTarget,
+) -> LibraryPlacement {
+    match pl {
+        LibraryPlacement::ChoiceTopOrBottom {
+            chooser: ResolvingPlayer::TargetOwner,
+        } if target == BodyTarget::None => LibraryPlacement::ChoiceTopOrBottom {
+            chooser: ResolvingPlayer::Controller,
+        },
+        other => other,
     }
 }
 
@@ -1064,13 +1282,33 @@ pub(super) fn lower_instruction(
                         SubjectRefAst::Player(PlayerRefAst::EachPlayer) => {
                             Some(DamageRecipientsRef::Group(DamageGroup::Players))
                         }
+                        SubjectRefAst::Player(PlayerRefAst::ActivePlayer) => {
+                            Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
+                                AffectedPlayers::One(ResolvingPlayer::ActivePlayer),
+                            )))
+                        }
+                        SubjectRefAst::Player(PlayerRefAst::DefendingPlayer) => {
+                            Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
+                                AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
+                            )))
+                        }
+                        SubjectRefAst::Player(PlayerRefAst::EnchantedPlayer) => {
+                            Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
+                                AffectedPlayers::One(ResolvingPlayer::EnchantedPlayer),
+                            )))
+                        }
+                        SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                            if !in_trigger && is_permanent_body_target(builder.target) =>
+                        {
+                            Some(DamageRecipientsRef::TargetController)
+                        }
                         SubjectRefAst::Player(
                             PlayerRefAst::ThatPlayer
-                            | PlayerRefAst::DefendingPlayer
-                            | PlayerRefAst::EnchantedPlayer
                             | PlayerRefAst::ItsController
                             | PlayerRefAst::ThatObjectController,
-                        ) => Some(DamageRecipientsRef::Group(DamageGroup::RelatedPlayer)),
+                        ) if in_trigger => {
+                            Some(DamageRecipientsRef::Group(DamageGroup::RelatedPlayer))
+                        }
                         SubjectRefAst::All(f) | SubjectRefAst::Each(f) if f.zone.is_none() => {
                             let group = lower_damage_group(f, vocabulary)?;
                             if let DamageGroup::Filtered(obj) = group {
@@ -1109,6 +1347,17 @@ pub(super) fn lower_instruction(
                 builder,
             );
             match target.as_ref() {
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(1),
+                } if filter.zone.is_none() && !filter.is_ability && !filter.any_spell => {
+                    let bt = lower_battlefield_body_target_in_context(
+                        filter, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    push_damage_target(&mut builder.instructions, amt_expr);
+                    Ok(())
+                }
                 SubjectRefAst::AnyTarget
                 | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
                 | SubjectRefAst::TargetPlayer { .. }
@@ -1876,8 +2125,9 @@ pub(super) fn lower_instruction(
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
-                let obj = lower_object_filter(f, vocabulary)?;
+                let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
+                ensure_target_power_consumed(builder, &obj);
                 builder.last_group_filter = Some(obj);
                 builder
                     .instructions
@@ -1885,8 +2135,9 @@ pub(super) fn lower_instruction(
                 Ok(())
             }
             SubjectRefAst::Group(f) if f.zone.is_none() => {
-                let obj = lower_object_filter(f, vocabulary)?;
+                let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
+                ensure_target_power_consumed(builder, &obj);
                 builder.last_group_filter = Some(obj);
                 builder.instructions.push(Instruction::DestroyChosen {
                     chooser: ResolvingPlayer::Controller,
@@ -2267,8 +2518,9 @@ pub(super) fn lower_instruction(
             SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                 if f.zone.is_none() && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0 =>
             {
-                let obj = lower_object_filter(f, vocabulary)?;
+                let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
+                ensure_target_power_consumed(builder, &obj);
                 builder.instructions.push(Instruction::MoveGroup {
                     group: Box::new(obj),
                     destination: PublicZoneDestination::Exile,
@@ -3101,6 +3353,47 @@ pub(super) fn lower_instruction(
             transformed,
             with_counter,
             attached_to,
+            random,
+            except,
+            count,
+            up_to,
+            any_number,
+            actor,
+        } if matches!(subject.as_ref(), SubjectRefAst::InZone { .. }) => {
+            let unwrapped =
+                unwrap_in_zone_subject(subject).ok_or("oracle:unsupported-return-zone")?;
+            lower_instruction(
+                &InstructionAst::ReturnZone {
+                    subject: Box::new(unwrapped),
+                    from_zone: from_zone.clone(),
+                    to: to.clone(),
+                    tapped: *tapped,
+                    transformed: *transformed,
+                    with_counter: with_counter.clone(),
+                    attached_to: attached_to.clone(),
+                    random: *random,
+                    except: except.clone(),
+                    count: count.clone(),
+                    up_to: *up_to,
+                    any_number: *any_number,
+                    actor: *actor,
+                },
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )
+        }
+        InstructionAst::ReturnZone {
+            subject,
+            from_zone,
+            to,
+            tapped,
+            transformed,
+            with_counter,
+            attached_to,
             random: false,
             except: Some(ex),
             count,
@@ -3171,6 +3464,9 @@ pub(super) fn lower_instruction(
             let (destination, default_zone) = if to_hand && !has_bf_only_mods {
                 (SubjectDestination::Hand, SourceZoneFilter::Battlefield)
             } else if let Some(bf_f) = bf_flags {
+                if bf_f.attach_to_self && !(in_trigger || self_pronoun_valid) {
+                    return Err("oracle:unsupported-return-attach");
+                }
                 let counter = parse_return_with_counter(with_counter.as_deref())?;
                 (
                     SubjectDestination::Battlefield {
@@ -3179,7 +3475,7 @@ pub(super) fn lower_instruction(
                         transformed: *transformed || bf_f.transformed,
                         under_owner_control: bf_f.under_owner_control,
                         with_counter: counter,
-                        attach_to_self: false,
+                        attach_to_self: bf_f.attach_to_self,
                     },
                     SourceZoneFilter::Graveyard,
                 )
@@ -3353,10 +3649,17 @@ pub(super) fn lower_instruction(
                         return Ok(());
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AbilitySource,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        if !in_trigger && !self_pronoun_valid {
+                            let adj = normalize_resolving_spell_lib_placement(pl, builder.target);
+                            builder
+                                .instructions
+                                .push(Instruction::PutResolvingSpellInLibrary(adj));
+                        } else {
+                            builder.instructions.push(Instruction::MoveSubject {
+                                subject: MoveSubjectRef::AbilitySource,
+                                destination: SubjectDestination::Library(pl),
+                            });
+                        }
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -3631,7 +3934,16 @@ pub(super) fn lower_instruction(
                                 BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                             ) =>
                     {
-                        builder.instructions.push(Instruction::ReturnToOwnersHand);
+                        if is_permanent_body_target(builder.target)
+                            || builder.target == BodyTarget::OwnedExiledFlashbackCard
+                        {
+                            builder.instructions.push(Instruction::ReturnToOwnersHand);
+                        } else {
+                            builder.instructions.push(Instruction::MoveSubject {
+                                subject: MoveSubjectRef::TargetObject,
+                                destination: SubjectDestination::Hand,
+                            });
+                        }
                         Ok(())
                     }
                     SubjectRefAst::Anaphora(_)
@@ -3901,12 +4213,14 @@ pub(super) fn lower_instruction(
                         Some((ck, qty))
                     }
                 };
-                let attach_to_self = attached_to.as_deref().is_some_and(|a| {
-                    (in_trigger || self_pronoun_valid)
-                        && (is_self_pronoun(a, builder, self_pronoun_valid)
-                            || matches!(a, SubjectRefAst::Anaphora(_)))
-                });
-                if attached_to.is_some() && !attach_to_self {
+                let attach_to_self = (bf_flags.attach_to_self
+                    && (in_trigger || self_pronoun_valid))
+                    || attached_to.as_deref().is_some_and(|a| {
+                        (in_trigger || self_pronoun_valid)
+                            && (is_self_pronoun(a, builder, self_pronoun_valid)
+                                || matches!(a, SubjectRefAst::Anaphora(_)))
+                    });
+                if (attached_to.is_some() || bf_flags.attach_to_self) && !attach_to_self {
                     return Err("oracle:unsupported-return-attach");
                 }
                 let is_transformed = *transformed || bf_flags.transformed;
@@ -3982,12 +4296,10 @@ pub(super) fn lower_instruction(
                                 builder.bind_target(bt)?;
                                 if !has_extra_bf_mods
                                     && !enters_tapped
-                                    && filter.any_types == AstCardTypeMask::CREATURE
-                                    && filter.forbidden_types.is_empty()
-                                    && filter.subtypes.is_empty()
-                                    && filter.stat_bounds.is_empty()
-                                    && filter.any_colors.is_empty()
-                                    && filter.forbidden_colors.is_empty()
+                                    && bt
+                                        == BodyTarget::FilteredOwnGraveyardCard(
+                                            ObjectFilter::creature(),
+                                        )
                                 {
                                     builder
                                         .instructions
@@ -4244,6 +4556,13 @@ pub(super) fn lower_instruction(
                             } else if fl.contains("all graveyards") || fl.contains("any graveyard")
                             {
                                 (ResolvingPlayer::Controller, SourceZoneFilter::AnyGraveyard)
+                            } else if fl.contains("hand or graveyard")
+                                || fl.contains("hand and/or graveyard")
+                            {
+                                (
+                                    ResolvingPlayer::Controller,
+                                    SourceZoneFilter::HandOrGraveyard,
+                                )
                             } else if fl.contains("graveyard") {
                                 (ResolvingPlayer::Controller, SourceZoneFilter::Graveyard)
                             } else if fl.contains("exile") {
@@ -4318,9 +4637,30 @@ pub(super) fn lower_instruction(
                 Err("oracle:unsupported-return-dest")
             }
         }
+        InstructionAst::MoveZone { subject, to }
+            if matches!(subject.as_ref(), SubjectRefAst::InZone { .. }) =>
+        {
+            let unwrapped =
+                unwrap_in_zone_subject(subject).ok_or("oracle:unsupported-move-zone")?;
+            lower_instruction(
+                &InstructionAst::MoveZone {
+                    subject: Box::new(unwrapped),
+                    to: to.clone(),
+                },
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )
+        }
         InstructionAst::MoveZone { subject, to } => {
             let dest = to.trim().to_ascii_lowercase();
             if let Some(bf_flags) = parse_battlefield_dest(&dest) {
+                if bf_flags.attach_to_self && !(in_trigger || self_pronoun_valid) {
+                    return Err("oracle:unsupported-move-zone");
+                }
                 let enters_tapped = bf_flags.tapped;
                 let attacking = bf_flags.attacking;
                 let to_bf = !bf_flags.under_owner_control;
@@ -4330,7 +4670,7 @@ pub(super) fn lower_instruction(
                     transformed: bf_flags.transformed,
                     under_owner_control: bf_flags.under_owner_control,
                     with_counter: None,
-                    attach_to_self: false,
+                    attach_to_self: bf_flags.attach_to_self,
                 };
                 match subject.as_ref() {
                     SubjectRefAst::TargetObject {
@@ -4338,6 +4678,7 @@ pub(super) fn lower_instruction(
                         count: TargetCountAst::Exact(1),
                     } if !attacking
                         && !bf_flags.transformed
+                        && !bf_flags.attach_to_self
                         && (filter.zone == Some(ZoneFilter::YourGraveyard)
                             || (to_bf
                                 && matches!(
@@ -4379,6 +4720,92 @@ pub(super) fn lower_instruction(
                             subject: MoveSubjectRef::TargetObject,
                             destination: bf_dest,
                         });
+                        return Ok(());
+                    }
+                    SubjectRefAst::TargetObject { filter, count }
+                        if matches!(
+                            filter.zone,
+                            Some(
+                                ZoneFilter::YourGraveyard
+                                    | ZoneFilter::OpponentGraveyard
+                                    | ZoneFilter::AnyGraveyard
+                            )
+                        ) && (matches!(count, TargetCountAst::Exact(n) if *n >= 2)
+                            || matches!(count, TargetCountAst::UpTo(max) if *max > 0)
+                            || matches!(count, TargetCountAst::AnyNumber)
+                            || (matches!(count, TargetCountAst::ChosenX) && !in_trigger)) =>
+                    {
+                        let (min_t, max_t, is_x) = match *count {
+                            TargetCountAst::Exact(n) => (usize::from(n), usize::from(n), false),
+                            TargetCountAst::UpTo(max) => (0, usize::from(max), false),
+                            TargetCountAst::AnyNumber => (0, usize::MAX, false),
+                            TargetCountAst::ChosenX => (0, usize::MAX, true),
+                            _ => return Err("oracle:unsupported-move-zone"),
+                        };
+                        let mut inner = filter.as_ref().clone();
+                        inner.zone = None;
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter(&inner, vocabulary)?
+                        };
+                        let bt = match filter.zone {
+                            Some(ZoneFilter::YourGraveyard) => {
+                                BodyTarget::FilteredOwnGraveyardCard(obj)
+                            }
+                            Some(ZoneFilter::OpponentGraveyard) => {
+                                BodyTarget::FilteredAnyGraveyardCard {
+                                    filter: obj,
+                                    opponents_only: true,
+                                }
+                            }
+                            Some(ZoneFilter::AnyGraveyard) => {
+                                BodyTarget::FilteredAnyGraveyardCard {
+                                    filter: obj,
+                                    opponents_only: false,
+                                }
+                            }
+                            _ => return Err("oracle:unsupported-move-zone"),
+                        };
+                        builder.bind_target(bt)?;
+                        builder.graveyard_target_bounds = Some((min_t, max_t));
+                        if is_x {
+                            builder.x_target_count = true;
+                        }
+                        builder.instructions.push(Instruction::MoveSubject {
+                            subject: MoveSubjectRef::TargetObject,
+                            destination: bf_dest,
+                        });
+                        return Ok(());
+                    }
+                    SubjectRefAst::TargetObject { filter, count }
+                        if filter.zone.is_none()
+                            && (matches!(count, TargetCountAst::Exact(n) if *n >= 2)
+                                || matches!(count, TargetCountAst::UpTo(max) if *max > 0)
+                                || matches!(count, TargetCountAst::AnyNumber)
+                                || (matches!(count, TargetCountAst::ChosenX) && !in_trigger)) =>
+                    {
+                        let (min_t, max_t, is_x) = match *count {
+                            TargetCountAst::Exact(n) => (n, n, false),
+                            TargetCountAst::UpTo(max) => (0, max, false),
+                            TargetCountAst::AnyNumber => (0, u16::MAX, false),
+                            TargetCountAst::ChosenX => (0, u16::MAX, true),
+                            _ => return Err("oracle:unsupported-move-zone"),
+                        };
+                        let bt = lower_battlefield_body_target_in_context(
+                            filter, builder, in_trigger, vocabulary,
+                        )?;
+                        builder.bind_target(bt)?;
+                        if is_x {
+                            builder.x_target_count = true;
+                        }
+                        builder
+                            .instructions
+                            .push(Instruction::AffectPermanentTargets {
+                                minimum: min_t,
+                                maximum: max_t,
+                                action: PermanentTargetAction::MoveTo(bf_dest),
+                            });
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) => {
@@ -4452,6 +4879,7 @@ pub(super) fn lower_instruction(
                         if !attacking
                             && !bf_flags.transformed
                             && !bf_flags.under_owner_control
+                            && !bf_flags.attach_to_self
                             && matches!(f.zone, Some(ZoneFilter::YourHand))
                         {
                             let simple_types = f.forbidden_types.is_empty()
@@ -4611,6 +5039,82 @@ pub(super) fn lower_instruction(
                         return Ok(());
                     }
                     _ => {}
+                }
+            }
+            if let Some(offset_expr) =
+                parse_dynamic_lib_from_top_offset(&dest, allow_your_lib, bound_x, vocabulary)?
+            {
+                if is_self_pronoun(subject, builder, self_pronoun_valid)
+                    && !in_trigger
+                    && !self_pronoun_valid
+                {
+                    if let ValueExpr::Literal(n) = &offset_expr
+                        && let Some(idx) = n.to_usize().and_then(|v| u8::try_from(v).ok())
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::PutResolvingSpellInLibrary(
+                                LibraryPlacement::FromTop(idx),
+                            ));
+                        return Ok(());
+                    }
+                } else {
+                    let subj_ref = match subject.as_ref() {
+                        s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+                            Some(MoveSubjectRef::AbilitySource)
+                        }
+                        SubjectRefAst::TargetObject {
+                            count: TargetCountAst::Exact(1),
+                            ..
+                        } => {
+                            let bt = lower_target_subject(subject, vocabulary)?;
+                            if is_valid_put_target_in_library_target(&bt) {
+                                builder.bind_target(bt)?;
+                                Some(MoveSubjectRef::TargetObject)
+                            } else {
+                                None
+                            }
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if is_valid_put_target_in_library_target(&builder.target) =>
+                        {
+                            Some(MoveSubjectRef::TargetObject)
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if last_instruction_created_tokens(&builder.instructions) =>
+                        {
+                            Some(MoveSubjectRef::CreatedTokens)
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if last_instruction_moved_object(&builder.instructions) =>
+                        {
+                            Some(MoveSubjectRef::LastMoved)
+                        }
+                        SubjectRefAst::TriggerSubject if in_trigger => {
+                            Some(MoveSubjectRef::TriggeringObject)
+                        }
+                        SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
+                            Some(MoveSubjectRef::AttachedHost)
+                        }
+                        SubjectRefAst::Anaphora(_) if in_trigger => {
+                            Some(MoveSubjectRef::TriggeringObject)
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if has_checked_revealed_top_strict(&builder.instructions) =>
+                        {
+                            Some(MoveSubjectRef::RevealedCard)
+                        }
+                        _ => None,
+                    };
+                    if let Some(subj_ref) = subj_ref {
+                        builder
+                            .instructions
+                            .push(Instruction::PutSubjectIntoLibraryFromTop {
+                                subject: subj_ref,
+                                offset: offset_expr,
+                            });
+                        return Ok(());
+                    }
                 }
             }
             if let Some(pl) = parse_lib_placement_for_subject(&dest, allow_your_lib, subject) {
@@ -4794,10 +5298,17 @@ pub(super) fn lower_instruction(
                         return Ok(());
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AbilitySource,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        if !in_trigger && !self_pronoun_valid {
+                            let adj = normalize_resolving_spell_lib_placement(pl, builder.target);
+                            builder
+                                .instructions
+                                .push(Instruction::PutResolvingSpellInLibrary(adj));
+                        } else {
+                            builder.instructions.push(Instruction::MoveSubject {
+                                subject: MoveSubjectRef::AbilitySource,
+                                destination: SubjectDestination::Library(pl),
+                            });
+                        }
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -6069,7 +6580,9 @@ pub(super) fn lower_instruction(
                 filter,
                 count: TargetCountAst::Exact(n),
             } if filter.zone.is_none() && *n > 0 => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                let bt = lower_battlefield_body_target_in_context(
+                    filter, builder, in_trigger, vocabulary,
+                )?;
                 builder.bind_target(bt)?;
                 builder
                     .instructions
@@ -6084,7 +6597,9 @@ pub(super) fn lower_instruction(
                 filter,
                 count: TargetCountAst::UpTo(n),
             } if filter.zone.is_none() && *n > 0 => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                let bt = lower_battlefield_body_target_in_context(
+                    filter, builder, in_trigger, vocabulary,
+                )?;
                 builder.bind_target(bt)?;
                 builder
                     .instructions
@@ -6099,7 +6614,9 @@ pub(super) fn lower_instruction(
                 filter,
                 count: TargetCountAst::ChosenX,
             } if filter.zone.is_none() => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                let bt = lower_battlefield_body_target_in_context(
+                    filter, builder, in_trigger, vocabulary,
+                )?;
                 builder.bind_target(bt)?;
                 builder.x_target_count = true;
                 builder
@@ -6803,6 +7320,78 @@ pub(super) fn lower_instruction(
                 Ok(())
             }
         }
+        InstructionAst::Counter {
+            target,
+            unless_pay: None,
+            unless_action: Some(act),
+        } => {
+            let is_trigger_target = in_trigger
+                && builder.target == BodyTarget::None
+                && matches!(target.as_ref(), SubjectRefAst::Anaphora(raw) if matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "that spell" | "that spell or ability" | "that ability" | "it"
+                ));
+            let chooser = if is_trigger_target {
+                ResolvingPlayer::TriggerSubjectController
+            } else {
+                let bt = lower_target_subject(target, vocabulary)?;
+                builder.bind_target(bt)?;
+                ResolvingPlayer::TargetSpellController
+            };
+            let act_slice: &[InstructionAst] = match act.as_slice() {
+                [InstructionAst::Optional(inner)] => inner.as_slice(),
+                [InstructionAst::OptionalPlayer { body, .. }] => body.as_slice(),
+                other => other,
+            };
+            let mut act_builder = BodyBuilder::new();
+            act_builder.target = builder.target;
+            lower_instruction_seq(
+                act_slice,
+                &mut act_builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            if act_builder.target != builder.target
+                || act_builder.instructions.is_empty()
+                || act_builder.graveyard_target_bounds.is_some()
+                || act_builder.x_target_count
+                || !act_builder
+                    .instructions
+                    .iter()
+                    .all(is_allowed_inside_optional_effect)
+            {
+                return Err("oracle:counter-unless-action");
+            }
+            if act_builder.instructions.len() == 1 {
+                builder
+                    .instructions
+                    .push(Instruction::OptionalEffect { chooser });
+            } else {
+                builder.instructions.push(Instruction::OptionalSequence {
+                    chooser,
+                    instructions: act_builder.instructions.len(),
+                });
+            }
+            builder.instructions.extend(act_builder.instructions);
+            let branch_idx = builder.instructions.len();
+            builder.instructions.push(Instruction::BranchIfFalse {
+                condition: ResolutionCondition {
+                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                    comparison: Comparison::Less,
+                    right: ValueExpr::literal(1),
+                },
+                destination: branch_idx + 2,
+            });
+            builder.instructions.push(if is_trigger_target {
+                Instruction::CounterTriggeringStackObject
+            } else {
+                Instruction::CounterSpell
+            });
+            Ok(())
+        }
         InstructionAst::ModifyPT {
             subject,
             dx,
@@ -7306,28 +7895,44 @@ pub(super) fn lower_instruction(
                         });
                     Ok(())
                 }
-                SubjectRefAst::Player(PlayerRefAst::You)
+                SubjectRefAst::Player(p)
                     if pure_kws.as_ref().is_some_and(|kws| {
-                        kws.len() == 1
-                            && (kws.contains(&KeywordAbility::Hexproof)
-                                || kws.contains(&KeywordAbility::Shroud))
+                        !kws.is_empty() && kws.iter().all(is_player_keyword)
                     }) =>
                 {
-                    let restriction = if pure_kws
-                        .as_ref()
-                        .is_some_and(|kws| kws.contains(&KeywordAbility::Shroud))
-                    {
-                        StaticRestriction::ControllerHasShroud
-                    } else {
-                        StaticRestriction::ControllerHasHexproof
+                    let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
+                    let Some(kws) = pure_kws else {
+                        return Err("oracle:unsupported-grant-kw");
                     };
                     builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: restriction,
-                            },
-                        ))),
+                        rule: Box::new(TemporaryRuleKind::PlayerGrantKeyword {
+                            players,
+                            keywords: kws,
+                        }),
+                        duration: dur,
+                    });
+                    Ok(())
+                }
+                SubjectRefAst::TargetPlayer {
+                    opponent_only,
+                    count: TargetCountAst::Exact(1),
+                } if pure_kws
+                    .as_ref()
+                    .is_some_and(|kws| !kws.is_empty() && kws.iter().all(is_player_keyword)) =>
+                {
+                    builder.bind_target(if *opponent_only {
+                        BodyTarget::SingleOpponent
+                    } else {
+                        BodyTarget::SinglePlayer
+                    })?;
+                    let Some(kws) = pure_kws else {
+                        return Err("oracle:unsupported-grant-kw");
+                    };
+                    builder.instructions.push(Instruction::CreateTemporaryRule {
+                        rule: Box::new(TemporaryRuleKind::PlayerGrantKeyword {
+                            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                            keywords: kws,
+                        }),
                         duration: dur,
                     });
                     Ok(())
@@ -7556,25 +8161,18 @@ pub(super) fn lower_instruction(
         }
         InstructionAst::RemoveAllAbilities { subject, duration } => {
             let dur = lower_duration(duration)?;
-            if let SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::Exact(1),
-            } = subject.as_ref()
-                && filter.zone.is_none()
-            {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                            AbilityChange::remove(AbilityRemoval::All),
-                        )]),
-                        duration: dur,
-                    });
-                return Ok(());
-            }
-            Err("oracle:unsupported-remove-abilities")
+            emit_resolved_parts_for_subject(
+                subject,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
+                    AbilityRemoval::All,
+                ))]),
+                dur,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )
+            .map_err(|_| "oracle:unsupported-remove-abilities")
         }
         InstructionAst::Suspect { subject } => lower_instruction(
             &InstructionAst::PutCounters {
@@ -8099,18 +8697,20 @@ pub(super) fn lower_instruction(
             Ok(())
         }
         InstructionAst::CreateToken { controller, token } => {
-            if *controller == PlayerRefAst::You
-                && let TokenSpecAst::Copy {
-                    count,
-                    source,
-                    tapped,
-                    attacking,
-                    exception,
-                } = token
+            if let TokenSpecAst::Copy {
+                count,
+                source,
+                tapped,
+                attacking,
+                exception,
+            } = token
             {
+                let mut trial = builder.clone();
                 let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
-                let src_ref = match source.as_ref() {
-                    s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+                let eff_source =
+                    unwrap_in_zone_subject(source).unwrap_or_else(|| (**source).clone());
+                let src_ref = match &eff_source {
+                    s if is_self_pronoun(s, &trial, self_pronoun_valid) => {
                         Some(MoveSubjectRef::AbilitySource)
                     }
                     SubjectRefAst::TargetObject {
@@ -8127,26 +8727,28 @@ pub(super) fn lower_instruction(
                         ) =>
                     {
                         let bt = if filter.zone.is_none() {
-                            lower_battlefield_body_target(filter, vocabulary)?
+                            lower_battlefield_body_target_in_context(
+                                filter, &trial, in_trigger, vocabulary,
+                            )?
                         } else {
-                            lower_target_subject(source, vocabulary)?
+                            lower_target_subject(&eff_source, vocabulary)?
                         };
-                        builder.bind_target(bt)?;
+                        trial.bind_target(bt)?;
                         Some(MoveSubjectRef::TargetObject)
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_created_tokens(&builder.instructions) =>
+                        if last_instruction_created_tokens(&trial.instructions) =>
                     {
                         Some(MoveSubjectRef::CreatedTokens)
                     }
                     SubjectRefAst::Anaphora(_)
-                        if is_permanent_body_target(builder.target)
-                            || is_graveyard_body_target(builder.target) =>
+                        if is_permanent_body_target(trial.target)
+                            || is_graveyard_body_target(trial.target) =>
                     {
                         Some(MoveSubjectRef::TargetObject)
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_moved_object(&builder.instructions) =>
+                        if last_instruction_moved_object(&trial.instructions) =>
                     {
                         Some(MoveSubjectRef::LastMoved)
                     }
@@ -8163,172 +8765,36 @@ pub(super) fn lower_instruction(
                     }
                     _ => None,
                 };
-                if let Some(src_ref) = src_ref {
-                    let exc_low = exception
-                        .as_deref()
-                        .unwrap_or("")
-                        .trim()
-                        .to_ascii_lowercase();
-                    let nonlegendary = exc_low.contains("isn't legendary")
-                        || exc_low.contains("aren't legendary")
-                        || exc_low.contains("not legendary");
-                    let grant_haste = exc_low.contains("haste");
-                    let mut sacrifice_at_end_step =
-                        exc_low.contains("sacrifice") && exc_low.contains("end step");
-                    let mut exile_at_end_step =
-                        exc_low.contains("exile") && exc_low.contains("end step");
-                    let strip_mana_cost = exc_low.contains("has no mana cost")
-                        || exc_low.contains("have no mana cost")
-                        || exc_low.contains("no mana cost");
-                    let mut remainder = exc_low.clone();
-                    strip_quoted_end_step_token_cleanup(
-                        &mut remainder,
-                        &mut sacrifice_at_end_step,
-                        &mut exile_at_end_step,
-                    );
-                    for pat in [
-                        "except it isn't legendary",
-                        "except they aren't legendary",
-                        "except it's not legendary",
-                        "except they're not legendary",
-                        "it isn't legendary",
-                        "they aren't legendary",
-                        "it's not legendary",
-                        "they're not legendary",
-                        "not legendary",
-                        "except it has haste",
-                        "except they have haste",
-                        "except it gains haste",
-                        "except they gain haste",
-                        "it has haste",
-                        "they have haste",
-                        "it gains haste",
-                        "they gain haste",
-                        "with haste",
-                        "it has no mana cost",
-                        "they have no mana cost",
-                        "has no mana cost",
-                        "have no mana cost",
-                        "no mana cost",
-                        "sacrifice it at the beginning of the next end step",
-                        "sacrifice them at the beginning of the next end step",
-                        "sacrifice it at the beginning of your next end step",
-                        "sacrifice them at the beginning of your next end step",
-                        "exile it at the beginning of the next end step",
-                        "exile them at the beginning of the next end step",
-                        "exile it at the beginning of your next end step",
-                        "exile them at the beginning of your next end step",
-                        "in addition to its other types",
-                        "in addition to their other types",
-                        "with base power and toughness",
-                        "except it's a",
-                        "except it's an",
-                        "except it's",
-                        "except they're",
-                        "except",
-                        "it's a",
-                        "it's an",
-                        "it's",
-                        "they're",
-                        "and",
-                        ",",
-                        ".",
-                    ] {
-                        remainder = remainder.replace(pat, " ");
-                    }
-                    let mut override_pt: Option<(u8, u8)> = None;
-                    let mut parsed_colors: BTreeSet<Color> = BTreeSet::new();
-                    let mut saw_colorless = false;
-                    let mut add_subtype: Option<CreatureTypeId> = None;
-                    let mut parse_ok = true;
-                    for raw_tok in remainder.split_whitespace() {
-                        let tok = raw_tok
-                            .trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '-');
-                        if tok.is_empty()
-                            || matches!(
-                                tok,
-                                "a" | "an"
-                                    | "the"
-                                    | "is"
-                                    | "are"
-                                    | "with"
-                                    | "creature"
-                                    | "creatures"
-                                    | "token"
-                                    | "tokens"
-                                    | "that"
-                                    | "that's"
-                            )
-                        {
-                            continue;
-                        }
-                        if let Some((ps, ts)) = tok.split_once('/')
-                            && let (Ok(p), Ok(t)) = (ps.parse::<u8>(), ts.parse::<u8>())
-                            && override_pt.is_none()
-                        {
-                            override_pt = Some((p, t));
-                            continue;
-                        }
-                        match tok {
-                            "white" => {
-                                parsed_colors.insert(Color::White);
-                                continue;
-                            }
-                            "blue" => {
-                                parsed_colors.insert(Color::Blue);
-                                continue;
-                            }
-                            "black" => {
-                                parsed_colors.insert(Color::Black);
-                                continue;
-                            }
-                            "red" => {
-                                parsed_colors.insert(Color::Red);
-                                continue;
-                            }
-                            "green" => {
-                                parsed_colors.insert(Color::Green);
-                                continue;
-                            }
-                            "colorless" => {
-                                saw_colorless = true;
-                                continue;
-                            }
-                            _ => {}
-                        }
-                        if add_subtype.is_none()
-                            && let Some(ct) = resolve_protection_subtype(tok, vocabulary)
-                        {
-                            add_subtype = Some(ct);
-                            continue;
-                        }
-                        parse_ok = false;
-                        break;
-                    }
-                    let override_colors = if !parsed_colors.is_empty() {
-                        Some(parsed_colors)
-                    } else if saw_colorless {
-                        Some(BTreeSet::new())
-                    } else {
-                        None
-                    };
-                    if parse_ok {
-                        builder.instructions.push(Instruction::CreateTokenCopy {
-                            source: src_ref,
-                            count: cnt,
-                            tapped: *tapped,
-                            attacking: *attacking,
-                            sacrifice_at_end_step,
-                            exile_at_end_step,
-                            grant_haste,
-                            nonlegendary,
-                            override_pt,
-                            override_colors,
-                            add_subtype,
-                            strip_mana_cost,
-                        });
-                        return Ok(());
-                    }
+                let recipients_opt = match controller {
+                    PlayerRefAst::You => Some(TokenRecipients::Controller),
+                    PlayerRefAst::EachOpponent => Some(TokenRecipients::EachOpponent),
+                    PlayerRefAst::EachPlayer => Some(TokenRecipients::EachPlayer),
+                    other => lower_resolving_player_in_context(*other, &mut trial, in_trigger)
+                        .ok()
+                        .map(TokenRecipients::Player),
+                };
+                if let (Some(src_ref), Some(recipients)) = (src_ref, recipients_opt)
+                    && let Some(parsed) =
+                        parse_token_copy_exceptions(exception.as_deref(), vocabulary)
+                {
+                    trial.instructions.push(Instruction::CreateTokenCopy {
+                        source: src_ref,
+                        count: cnt,
+                        tapped: *tapped,
+                        attacking: *attacking,
+                        sacrifice_at_end_step: parsed.sacrifice_at_end_step,
+                        exile_at_end_step: parsed.exile_at_end_step,
+                        grant_keywords: parsed.grant_keywords,
+                        nonlegendary: parsed.nonlegendary,
+                        override_pt: parsed.override_pt,
+                        override_colors: parsed.override_colors,
+                        add_subtypes: parsed.add_subtypes,
+                        add_card_types: parsed.add_card_types,
+                        strip_mana_cost: parsed.strip_mana_cost,
+                        recipients,
+                    });
+                    *builder = trial;
+                    return Ok(());
                 }
             }
             if *controller == PlayerRefAst::You
@@ -9011,17 +9477,191 @@ pub(super) fn lower_instruction(
         InstructionAst::PreventDamage {
             amount,
             target,
-            duration: DurationAst::UntilEndOfTurn,
+            duration,
         } => {
-            let ValueExpr::Literal(n) = lower_value_expr(resolve_x(amount, bound_x), vocabulary)?
-            else {
-                return Err("oracle:dynamic-prevent-damage");
+            let dur = lower_duration(duration)?;
+            let amt_expr = lower_value_expr(resolve_x(amount, bound_x), vocabulary)?;
+            let is_target_subj = matches!(
+                target.as_ref(),
+                SubjectRefAst::AnyTarget
+                    | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
+                    | SubjectRefAst::TargetPlayer { .. }
+                    | SubjectRefAst::TargetObject { .. }
+                    | SubjectRefAst::Player(
+                        PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent
+                    )
+            );
+            if is_target_subj {
+                let bt = match target.as_ref() {
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: TargetCountAst::Exact(1),
+                    } if filter.zone.is_none() && !filter.is_ability && !filter.any_spell => {
+                        lower_battlefield_body_target_in_context(
+                            filter, builder, in_trigger, vocabulary,
+                        )?
+                    }
+                    SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => BodyTarget::SinglePlayer,
+                    SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
+                        BodyTarget::SingleOpponent
+                    }
+                    _ => lower_target_subject(target, vocabulary)?,
+                };
+                builder.bind_target(bt)?;
+                if dur == ResolvedDuration::UntilEndOfTurn
+                    && let ValueExpr::Literal(n) = &amt_expr
+                    && n.is_positive()
+                {
+                    builder
+                        .instructions
+                        .push(Instruction::CreatePreventionShield { amount: n.clone() });
+                    return Ok(());
+                }
+                let recipient = if is_permanent_body_target(bt) {
+                    StaticDamageRecipient::TargetObject
+                } else if matches!(
+                    bt,
+                    BodyTarget::SingleAnyTarget
+                        | BodyTarget::SingleCreatureOrPlayer
+                        | BodyTarget::SinglePlayerOrPlaneswalker
+                        | BodyTarget::SingleOpponentOrPlaneswalker
+                        | BodyTarget::SinglePlayer
+                        | BodyTarget::SingleOpponent
+                ) {
+                    StaticDamageRecipient::TargetAny
+                } else {
+                    return Err("oracle:unsupported-prevent-damage");
+                };
+                let rule = match amt_expr {
+                    ValueExpr::Literal(n) if n.is_positive() => {
+                        TemporaryRuleKind::PreventNextDamage {
+                            amount: n,
+                            source: None,
+                            recipient,
+                            combat_only: false,
+                        }
+                    }
+                    expr => TemporaryRuleKind::PreventNextDamageExpr {
+                        amount: Box::new(expr),
+                        source: None,
+                        recipient,
+                        combat_only: false,
+                    },
+                };
+                builder.instructions.push(Instruction::CreateTemporaryRule {
+                    rule: Box::new(rule),
+                    duration: dur,
+                });
+                return Ok(());
+            }
+            let has_source = in_trigger || self_pronoun_valid;
+            let recipient = if matches!(target.as_ref(), SubjectRefAst::Anaphora(_)) {
+                if is_permanent_body_target(builder.target) {
+                    StaticDamageRecipient::TargetObject
+                } else if matches!(
+                    builder.target,
+                    BodyTarget::SingleAnyTarget
+                        | BodyTarget::SingleCreatureOrPlayer
+                        | BodyTarget::SinglePlayerOrPlaneswalker
+                        | BodyTarget::SingleOpponentOrPlaneswalker
+                        | BodyTarget::SinglePlayer
+                        | BodyTarget::SingleOpponent
+                ) {
+                    StaticDamageRecipient::TargetAny
+                } else {
+                    return Err("oracle:unsupported-prevent-damage");
+                }
+            } else {
+                lower_redirect_from_subject(target, has_source, vocabulary)
+                    .ok_or("oracle:unsupported-prevent-damage")?
             };
-            let bt = lower_target_subject(target, vocabulary)?;
-            builder.bind_target(bt)?;
+            let rule = match amt_expr {
+                ValueExpr::Literal(n) if n.is_positive() => TemporaryRuleKind::PreventNextDamage {
+                    amount: n,
+                    source: None,
+                    recipient,
+                    combat_only: false,
+                },
+                expr => TemporaryRuleKind::PreventNextDamageExpr {
+                    amount: Box::new(expr),
+                    source: None,
+                    recipient,
+                    combat_only: false,
+                },
+            };
+            builder.instructions.push(Instruction::CreateTemporaryRule {
+                rule: Box::new(rule),
+                duration: dur,
+            });
+            Ok(())
+        }
+        InstructionAst::PreventNextSourceDamage {
+            source_desc,
+            target,
+        } => {
+            let has_source = in_trigger || self_pronoun_valid;
+            let src_low = source_desc.trim().to_ascii_lowercase();
+            let mut trial = builder.clone();
+            let (source, source_chosen_color, source_is_target) =
+                parse_next_time_source_with_target(
+                    &src_low, &mut trial, has_source, in_trigger, vocabulary,
+                )
+                .ok_or("oracle:unsupported-prevent-damage")??;
+            let recipient = lower_prevent_recipient_subject(
+                target, &mut trial, has_source, in_trigger, vocabulary,
+            )?;
+            if source_is_target
+                && matches!(
+                    recipient,
+                    StaticDamageRecipient::TargetObject | StaticDamageRecipient::TargetAny
+                )
+            {
+                return Err("oracle:unsupported-prevent-damage");
+            }
+            trial.instructions.push(Instruction::CreateTemporaryRule {
+                rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
+                    source,
+                    source_chosen_color,
+                    source_is_target,
+                    recipient,
+                    combat_only: false,
+                }),
+                duration: ResolvedDuration::UntilEndOfTurn,
+            });
+            *builder = trial;
+            Ok(())
+        }
+        InstructionAst::PutInLibraryAtPosition {
+            player: _,
+            subject,
+            from_top,
+        } if *from_top >= 1 => {
+            let offset_u8 = from_top - 1;
+            let eff_subj = unwrap_in_zone_subject(subject).unwrap_or_else(|| (**subject).clone());
+            if is_self_pronoun(&eff_subj, builder, self_pronoun_valid)
+                && !in_trigger
+                && !self_pronoun_valid
+            {
+                builder
+                    .instructions
+                    .push(Instruction::PutResolvingSpellInLibrary(
+                        LibraryPlacement::FromTop(offset_u8),
+                    ));
+                return Ok(());
+            }
+            let subj_ref = lower_move_subject_ref(
+                &eff_subj,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )?;
             builder
                 .instructions
-                .push(Instruction::CreatePreventionShield { amount: n });
+                .push(Instruction::PutSubjectIntoLibraryFromTop {
+                    subject: subj_ref,
+                    offset: ValueExpr::literal(i64::from(offset_u8)),
+                });
             Ok(())
         }
         InstructionAst::BecomeMonarch {
@@ -9186,6 +9826,18 @@ pub(super) fn lower_instruction(
             }
             let dur = lower_duration(duration)?;
             let low = rule.to_ascii_lowercase();
+            if low == "it becomes day" || low == "becomes_day" {
+                builder
+                    .instructions
+                    .push(Instruction::SetDayNight(DayNight::Day));
+                return Ok(());
+            }
+            if low == "it becomes night" || low == "becomes_night" {
+                builder
+                    .instructions
+                    .push(Instruction::SetDayNight(DayNight::Night));
+                return Ok(());
+            }
             if let Some(same_tail) = low.strip_prefix("same_is_true_for:") {
                 let parsed_kws = parse_same_is_true_for_keywords(same_tail)?;
                 let len = builder.instructions.len();
@@ -9377,32 +10029,191 @@ pub(super) fn lower_instruction(
                     rule: Box::new(TemporaryRuleKind::CantBeCountered {
                         filter: flt,
                         controller_only: true,
+                        next_only: low == "next_spell_cant_be_countered",
                     }),
                     duration: dur,
                 });
                 return Ok(());
             }
-            if matches!(low.as_str(), "cant_play_lands" | "can't play lands") {
-                let rel = match subject.as_ref() {
-                    SubjectRefAst::Player(PlayerRefAst::You) => PlayerRelation::Controller,
-                    SubjectRefAst::Player(
-                        PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent,
-                    ) => PlayerRelation::Opponent,
-                    SubjectRefAst::Player(PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer) => {
-                        PlayerRelation::AnyParticipant
+            if matches!(
+                low.as_str(),
+                "cant_play_lands" | "can't play lands" | "cantplaylands"
+            ) {
+                let players = match subject.as_ref() {
+                    SubjectRefAst::Player(p) => {
+                        lower_affected_players_in_context(*p, builder, in_trigger)?
+                    }
+                    SubjectRefAst::TargetPlayer {
+                        opponent_only,
+                        count: TargetCountAst::Exact(1),
+                    } => {
+                        builder.bind_target(if *opponent_only {
+                            BodyTarget::SingleOpponent
+                        } else {
+                            BodyTarget::SinglePlayer
+                        })?;
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                     }
                     _ => return Err("oracle:unsupported-combat-mod"),
                 };
                 builder.instructions.push(Instruction::CreateTemporaryRule {
+                    rule: Box::new(TemporaryRuleKind::CantPlayLands { players }),
+                    duration: dur,
+                });
+                return Ok(());
+            }
+            if matches!(
+                low.as_str(),
+                "your life total can't change"
+                    | "life total can't change"
+                    | "life_total_cant_change"
+            ) && matches!(
+                subject.as_ref(),
+                SubjectRefAst::Player(PlayerRefAst::You) | SubjectRefAst::SelfObject
+            ) {
+                builder.instructions.push(Instruction::CreateTemporaryRule {
                     rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
                         StaticContinuousAbility::Restriction {
                             id: ids.static_id(),
-                            rule: StaticRestriction::CantPlayLands(rel),
+                            rule: StaticRestriction::ControllerLifeTotalCantChange,
                         },
                     ))),
                     duration: dur,
                 });
                 return Ok(());
+            }
+            if matches!(
+                low.as_str(),
+                "players can't search libraries"
+                    | "your opponents can't search libraries"
+                    | "opponents can't search libraries"
+                    | "can't search libraries"
+                    | "cant_search_libraries"
+            ) {
+                let rel = if low.contains("opponent") {
+                    Some(PlayerRelation::Opponent)
+                } else if low.starts_with("players ") {
+                    Some(PlayerRelation::AnyParticipant)
+                } else {
+                    match subject.as_ref() {
+                        SubjectRefAst::Player(PlayerRefAst::You) => {
+                            Some(PlayerRelation::Controller)
+                        }
+                        SubjectRefAst::Player(
+                            PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent,
+                        ) => Some(PlayerRelation::Opponent),
+                        SubjectRefAst::Player(
+                            PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer,
+                        ) => Some(PlayerRelation::AnyParticipant),
+                        _ => None,
+                    }
+                };
+                if let Some(rel) = rel {
+                    builder.instructions.push(Instruction::CreateTemporaryRule {
+                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::PlayersCantSearchLibraries(rel),
+                            },
+                        ))),
+                        duration: dur,
+                    });
+                    return Ok(());
+                }
+            }
+            if let Some((rule_body, eff_dur)) = strip_trailing_temp_duration(&low, dur) {
+                if let Some(nonmana_only) = parse_player_cant_activate_rule(&rule_body)
+                    && matches!(
+                        subject.as_ref(),
+                        SubjectRefAst::Player(_)
+                            | SubjectRefAst::TargetPlayer {
+                                count: TargetCountAst::Exact(1),
+                                ..
+                            }
+                    )
+                {
+                    let players = match subject.as_ref() {
+                        SubjectRefAst::Player(p) => {
+                            lower_affected_players_in_context(*p, builder, in_trigger)?
+                        }
+                        SubjectRefAst::TargetPlayer {
+                            opponent_only,
+                            count: TargetCountAst::Exact(1),
+                        } => {
+                            builder.bind_target(if *opponent_only {
+                                BodyTarget::SingleOpponent
+                            } else {
+                                BodyTarget::SinglePlayer
+                            })?;
+                            AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                        }
+                        _ => return Err("oracle:unsupported-combat-mod"),
+                    };
+                    builder.instructions.push(Instruction::CreateTemporaryRule {
+                        rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                            players,
+                            nonmana_only,
+                        }),
+                        duration: eff_dur,
+                    });
+                    return Ok(());
+                }
+                if let Some(lock_parts) = parse_temp_permanent_lock_parts(&rule_body) {
+                    if eff_dur.requires_ability_source() && !(in_trigger || self_pronoun_valid) {
+                        return Err("oracle:unsupported-combat-mod");
+                    }
+                    let use_skip_next_untap = lock_parts.len() == 1
+                        && matches!(
+                            lock_parts[0],
+                            ResolvedPartSpec::Abilities(ref ab)
+                                if ab.doesnt_untap && ab.suppressed_activations.is_none()
+                        )
+                        && matches!(
+                            eff_dur,
+                            ResolvedDuration::NoStatedDuration | ResolvedDuration::UntilEndOfTurn
+                        );
+                    if !use_skip_next_untap {
+                        return emit_resolved_parts_for_subject(
+                            subject,
+                            ResolvedPartsSpec(lock_parts),
+                            eff_dur,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            self_pronoun_valid,
+                        );
+                    }
+                }
+                if let Some((flt_raw, nonmana_only)) = rule_body
+                    .strip_prefix("activated abilities of ")
+                    .and_then(|r| {
+                        r.strip_suffix(" can't be activated unless they're mana abilities")
+                            .map(|f| (f, true))
+                            .or_else(|| r.strip_suffix(" can't be activated").map(|f| (f, false)))
+                    })
+                    && let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
+                        flt_raw.trim(),
+                        &cached_compiler_vocab(vocabulary),
+                    )
+                    && let Ok(sel) =
+                        lower_permanent_selector(&SubjectRefAst::Group(Box::new(ast_f)), vocabulary)
+                {
+                    let rule = if nonmana_only {
+                        StaticRestriction::PreventMatchingNonManaActivations(Box::new(sel))
+                    } else {
+                        StaticRestriction::PreventMatchingActivations(Box::new(sel))
+                    };
+                    builder.instructions.push(Instruction::CreateTemporaryRule {
+                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule,
+                            },
+                        ))),
+                        duration: eff_dur,
+                    });
+                    return Ok(());
+                }
             }
             if matches!(
                 low.as_str(),
@@ -9714,6 +10525,11 @@ pub(super) fn lower_instruction(
                     && !low.contains("by three"))
             {
                 Some(CombatActionKind::MustBeBlocked)
+            } else if low == "becomes_blocked"
+                || low == "becomes blocked"
+                || low == "become blocked"
+            {
+                Some(CombatActionKind::BecomeBlocked)
             } else if low.contains("prevent all combat damage that would be dealt to and dealt by")
                 || low.contains("prevent all combat damage that would be dealt by and to")
                 || low.contains("prevent all combat damage that would be dealt to and by")
@@ -9934,6 +10750,21 @@ pub(super) fn lower_instruction(
             ] {
                 if let Some(stripped) = rule_for_br.strip_suffix(suffix) {
                     rule_for_br = stripped.trim().to_owned();
+                    if br_dur == ResolvedDuration::NoStatedDuration
+                        || (br_dur == ResolvedDuration::UntilEndOfTurn
+                            && implied_dur != ResolvedDuration::UntilEndOfTurn)
+                    {
+                        br_dur = implied_dur;
+                    }
+                    break;
+                }
+            }
+            for (infix, implied_dur) in [
+                (" this turn if able", ResolvedDuration::UntilEndOfTurn),
+                (" this combat if able", ResolvedDuration::UntilEndOfCombat),
+            ] {
+                if let Some(prefix) = rule_for_br.strip_suffix(infix) {
+                    rule_for_br = format!("{} if able", prefix.trim());
                     if br_dur == ResolvedDuration::NoStatedDuration
                         || (br_dur == ResolvedDuration::UntilEndOfTurn
                             && implied_dur != ResolvedDuration::UntilEndOfTurn)
@@ -10191,6 +11022,7 @@ pub(super) fn lower_instruction(
             };
             let src_zone = match f.zone {
                 Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand) => SourceZoneFilter::Hand,
+                Some(ZoneFilter::YourHandOrGraveyard) => SourceZoneFilter::HandOrGraveyard,
                 Some(ZoneFilter::YourGraveyard) => SourceZoneFilter::Graveyard,
                 Some(ZoneFilter::OpponentGraveyard) => SourceZoneFilter::OpponentGraveyard,
                 Some(ZoneFilter::AnyGraveyard) => SourceZoneFilter::AnyGraveyard,
@@ -10277,21 +11109,40 @@ pub(super) fn lower_instruction(
                 return Ok(());
             }
             if matches!(target.as_ref(), SubjectRefAst::Anaphora(_)) {
-                if let Some(Instruction::CopyStackObject {
-                    may_choose_new_targets,
-                    ..
-                }) = builder.instructions.last_mut()
-                {
-                    *may_choose_new_targets = true;
-                    return Ok(());
-                }
-                if let Some(last @ Instruction::CopySpell) = builder.instructions.last_mut() {
-                    *last = Instruction::CopyStackObject {
-                        target: StackCopyTarget::TargetSpell,
-                        count: ValueExpr::literal(1),
-                        may_choose_new_targets: true,
-                    };
-                    return Ok(());
+                if let Some(copy_op) = builder.instructions.iter_mut().rev().find(|op| {
+                    matches!(
+                        op,
+                        Instruction::CopyStackObject { .. }
+                            | Instruction::CopySpell
+                            | Instruction::CopyAbility
+                    )
+                }) {
+                    match copy_op {
+                        Instruction::CopyStackObject {
+                            may_choose_new_targets,
+                            ..
+                        } => {
+                            *may_choose_new_targets = true;
+                            return Ok(());
+                        }
+                        Instruction::CopySpell => {
+                            *copy_op = Instruction::CopyStackObject {
+                                target: StackCopyTarget::TargetSpell,
+                                count: ValueExpr::literal(1),
+                                may_choose_new_targets: true,
+                            };
+                            return Ok(());
+                        }
+                        Instruction::CopyAbility => {
+                            *copy_op = Instruction::CopyStackObject {
+                                target: StackCopyTarget::TargetAbility,
+                                count: ValueExpr::literal(1),
+                                may_choose_new_targets: true,
+                            };
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
                 }
                 if is_stack_body_target(builder.target) {
                     builder.instructions.push(Instruction::ChooseNewTargets);
@@ -10419,32 +11270,41 @@ pub(super) fn lower_instruction(
                 _ => Err("oracle:unsupported-copy"),
             }
         }
-        InstructionAst::MayChooseNewTargetsForCopy => match builder.instructions.last_mut() {
-            Some(Instruction::CopyStackObject {
-                may_choose_new_targets,
-                ..
-            }) => {
-                *may_choose_new_targets = true;
-                Ok(())
+        InstructionAst::MayChooseNewTargetsForCopy => {
+            match builder.instructions.iter_mut().rev().find(|op| {
+                matches!(
+                    op,
+                    Instruction::CopyStackObject { .. }
+                        | Instruction::CopySpell
+                        | Instruction::CopyAbility
+                )
+            }) {
+                Some(Instruction::CopyStackObject {
+                    may_choose_new_targets,
+                    ..
+                }) => {
+                    *may_choose_new_targets = true;
+                    Ok(())
+                }
+                Some(last @ Instruction::CopySpell) => {
+                    *last = Instruction::CopyStackObject {
+                        target: StackCopyTarget::TargetSpell,
+                        count: ValueExpr::literal(1),
+                        may_choose_new_targets: true,
+                    };
+                    Ok(())
+                }
+                Some(last @ Instruction::CopyAbility) => {
+                    *last = Instruction::CopyStackObject {
+                        target: StackCopyTarget::TargetAbility,
+                        count: ValueExpr::literal(1),
+                        may_choose_new_targets: true,
+                    };
+                    Ok(())
+                }
+                _ => Err("oracle:unsupported-choose-new-targets-for-copy"),
             }
-            Some(last @ Instruction::CopySpell) => {
-                *last = Instruction::CopyStackObject {
-                    target: StackCopyTarget::TargetSpell,
-                    count: ValueExpr::literal(1),
-                    may_choose_new_targets: true,
-                };
-                Ok(())
-            }
-            Some(last @ Instruction::CopyAbility) => {
-                *last = Instruction::CopyStackObject {
-                    target: StackCopyTarget::TargetAbility,
-                    count: ValueExpr::literal(1),
-                    may_choose_new_targets: true,
-                };
-                Ok(())
-            }
-            _ => Err("oracle:unsupported-choose-new-targets-for-copy"),
-        },
+        }
         InstructionAst::Exchange { kind, left, right } => match kind {
             ExchangeKind::Control => {
                 let (a, b) = match (left.as_ref(), right.as_deref()) {
@@ -10578,29 +11438,86 @@ pub(super) fn lower_instruction(
             amount,
             from,
             to,
-            source_choice: None,
-            duration: None,
+            source_choice,
+            duration,
         } => {
             let has_source = in_trigger || self_pronoun_valid;
-            let amt_opt = match resolve_x(amount, bound_x) {
-                ValueExprAst::PriorResult => None,
-                ValueExprAst::Const(n) if *n > 0 => Some(i64::from(*n).into()),
-                _ => return Err("oracle:unsupported-redirect-damage"),
+            let dur = match duration {
+                Some(d) => lower_duration(d)?,
+                None => ResolvedDuration::UntilEndOfTurn,
             };
-            let from_rec = lower_redirect_from_subject(from, has_source, vocabulary)
-                .ok_or("oracle:unsupported-redirect-damage")?;
-            let to_dst = lower_redirect_to_subject(to, builder, has_source, vocabulary)?;
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                    source: None,
+            let mut trial = builder.clone();
+            let (source, source_is_target) = match source_choice.as_deref() {
+                None => (None, false),
+                Some(sc) => {
+                    let sc_low = sc.trim().to_ascii_lowercase();
+                    let (src, chosen_color, is_tgt) = parse_next_time_source_with_target(
+                        &sc_low, &mut trial, has_source, in_trigger, vocabulary,
+                    )
+                    .ok_or("oracle:unsupported-redirect-damage")??;
+                    if chosen_color {
+                        return Err("oracle:unsupported-redirect-damage");
+                    }
+                    (src, is_tgt)
+                }
+            };
+            let from_rec = lower_redirect_from_subject_with_target(
+                from, &mut trial, has_source, in_trigger, vocabulary,
+            )?;
+            let to_dst = lower_redirect_to_subject(to, &mut trial, has_source, vocabulary)?;
+            let target_slots = usize::from(source_is_target)
+                + usize::from(matches!(
+                    from_rec,
+                    StaticDamageRecipient::TargetObject | StaticDamageRecipient::TargetAny
+                ))
+                + usize::from(matches!(
+                    to_dst,
+                    DamageRedirectTarget::TargetObject | DamageRedirectTarget::TargetAny
+                ));
+            if target_slots > 1 {
+                return Err("oracle:unsupported-redirect-damage");
+            }
+            let resolved_amt = resolve_x(amount, bound_x);
+            let rule = if matches!(resolved_amt, ValueExprAst::PriorResult) {
+                TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    source_is_target,
                     from: from_rec,
                     to: to_dst,
                     combat_only: false,
-                    amount: amt_opt,
+                    amount: None,
                     one_shot: false,
-                }),
-                duration: ResolvedDuration::UntilEndOfTurn,
+                }
+            } else {
+                let expr = lower_value_expr(resolved_amt, vocabulary)?;
+                match expr {
+                    ValueExpr::Literal(n) if n.is_positive() => {
+                        TemporaryRuleKind::RedirectNextDamage {
+                            source,
+                            source_is_target,
+                            from: from_rec,
+                            to: to_dst,
+                            combat_only: false,
+                            amount: Some(n),
+                            one_shot: false,
+                        }
+                    }
+                    dyn_expr => TemporaryRuleKind::RedirectNextDamageExpr {
+                        source,
+                        source_is_target,
+                        from: from_rec,
+                        to: to_dst,
+                        combat_only: false,
+                        amount: Box::new(dyn_expr),
+                        one_shot: false,
+                    },
+                }
+            };
+            trial.instructions.push(Instruction::CreateTemporaryRule {
+                rule: Box::new(rule),
+                duration: dur,
             });
+            *builder = trial;
             Ok(())
         }
         InstructionAst::RemoveFromCombat { subject } => {
@@ -12333,6 +13250,34 @@ pub(super) fn lower_instruction(
                     condition: None,
                     paired_rule,
                 } => {
+                    if paired_rule.is_none()
+                        && keywords.len() == 1
+                        && keywords[0].trim().eq_ignore_ascii_case("flash")
+                        && let SubjectRefAst::Group(f) = subject.as_ref()
+                        && f.zone.is_none()
+                        && (f.any_spell
+                            || (f.any_types.0
+                                & (AstCardTypeMask::INSTANT.0 | AstCardTypeMask::SORCERY.0))
+                                != 0)
+                    {
+                        let dur = lower_duration(duration)?;
+                        let mut inner = f.as_ref().clone();
+                        inner.any_spell = false;
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter(&inner, vocabulary)?
+                        };
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                                player: ResolvingPlayer::Controller,
+                                filter: obj,
+                                next_only: true,
+                            }),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
                     let mut seq = vec![InstructionAst::GrantKeywords {
                         subject: subject.clone(),
                         keywords: keywords.clone(),
@@ -12724,10 +13669,99 @@ pub(super) fn lower_instruction(
                             rule: Box::new(TemporaryRuleKind::CantBeCountered {
                                 filter: flt,
                                 controller_only: true,
+                                next_only: rule_low.contains("next "),
                             }),
                             duration: dur,
                         });
                         return Ok(());
+                    }
+                    if matches!(
+                        rule_low.as_str(),
+                        "cant_play_lands" | "can't play lands" | "cantplaylands"
+                    ) {
+                        let players = match subject.as_deref() {
+                            Some(SubjectRefAst::Player(p)) => {
+                                lower_affected_players_in_context(*p, builder, in_trigger)?
+                            }
+                            Some(SubjectRefAst::TargetPlayer {
+                                opponent_only,
+                                count: TargetCountAst::Exact(1),
+                            }) => {
+                                builder.bind_target(if *opponent_only {
+                                    BodyTarget::SingleOpponent
+                                } else {
+                                    BodyTarget::SinglePlayer
+                                })?;
+                                AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                            }
+                            None => AffectedPlayers::EachPlayer,
+                            _ => return Err("oracle:unsupported-temp-static"),
+                        };
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::CantPlayLands { players }),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
+                    if let Some((rule_body, eff_dur)) = strip_trailing_temp_duration(&rule_low, dur)
+                    {
+                        if let Some(nonmana_only) = parse_player_cant_activate_rule(&rule_body)
+                            && matches!(
+                                subject.as_deref(),
+                                Some(
+                                    SubjectRefAst::Player(_)
+                                        | SubjectRefAst::TargetPlayer {
+                                            count: TargetCountAst::Exact(1),
+                                            ..
+                                        }
+                                )
+                            )
+                        {
+                            let players = match subject.as_deref() {
+                                Some(SubjectRefAst::Player(p)) => {
+                                    lower_affected_players_in_context(*p, builder, in_trigger)?
+                                }
+                                Some(SubjectRefAst::TargetPlayer {
+                                    opponent_only,
+                                    count: TargetCountAst::Exact(1),
+                                }) => {
+                                    builder.bind_target(if *opponent_only {
+                                        BodyTarget::SingleOpponent
+                                    } else {
+                                        BodyTarget::SinglePlayer
+                                    })?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                }
+                                _ => return Err("oracle:unsupported-temp-static"),
+                            };
+                            builder.instructions.push(Instruction::CreateTemporaryRule {
+                                rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                                    players,
+                                    nonmana_only,
+                                }),
+                                duration: eff_dur,
+                            });
+                            return Ok(());
+                        }
+                        if filter.is_none()
+                            && let Some(subj) = subject.as_deref()
+                            && let Some(lock_parts) = parse_temp_permanent_lock_parts(&rule_body)
+                        {
+                            if eff_dur.requires_ability_source()
+                                && !(in_trigger || self_pronoun_valid)
+                            {
+                                return Err("oracle:unsupported-temp-static");
+                            }
+                            return emit_resolved_parts_for_subject(
+                                subj,
+                                ResolvedPartsSpec(lock_parts),
+                                eff_dur,
+                                builder,
+                                vocabulary,
+                                in_trigger,
+                                self_pronoun_valid,
+                            );
+                        }
                     }
                     if rule_low.contains("can't gain life") || rule_low == "cant_gain_life" {
                         let players = match subject.as_deref() {
@@ -12841,6 +13875,59 @@ pub(super) fn lower_instruction(
                     condition: None,
                 } => {
                     let p_low = permission.trim().trim_end_matches('.').to_ascii_lowercase();
+                    if p_low == "can be cast as though it had flash" {
+                        let dur = lower_duration(duration)?;
+                        let mut inner = filter.as_ref().clone();
+                        inner.any_spell = false;
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter(&inner, vocabulary)?
+                        };
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                                player: ResolvingPlayer::Controller,
+                                filter: obj,
+                                next_only: true,
+                            }),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
+                    if p_low == "can be cast without paying its mana cost" {
+                        let dur = lower_duration(duration)?;
+                        let mut inner = filter.as_ref().clone();
+                        inner.any_spell = false;
+                        let flt = if is_unrestricted_filter(&inner) {
+                            None
+                        } else {
+                            Some(lower_object_filter(&inner, vocabulary)?)
+                        };
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::NextSpellFree { filter: flt }),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
+                    if p_low == "can't be countered" {
+                        let dur = lower_duration(duration)?;
+                        let mut inner = filter.as_ref().clone();
+                        inner.any_spell = false;
+                        let flt = if is_unrestricted_filter(&inner) {
+                            None
+                        } else {
+                            Some(lower_object_filter(&inner, vocabulary)?)
+                        };
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::CantBeCountered {
+                                filter: flt,
+                                controller_only: true,
+                                next_only: true,
+                            }),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
                     if matches!(
                         p_low.as_str(),
                         "flash" | "as though they had flash" | "cast_as_though_flash"
@@ -12859,12 +13946,17 @@ pub(super) fn lower_instruction(
                             rule: Box::new(TemporaryRuleKind::FilteredFlash {
                                 player: ResolvingPlayer::Controller,
                                 filter: obj,
+                                next_only: false,
                             }),
                             duration: dur,
                         });
                         return Ok(());
                     }
-                    let zone_opt = if p_low.contains("from your graveyard")
+                    let zone_opt = if p_low.contains("from your hand or graveyard")
+                        || p_low.contains("from your hand and/or graveyard")
+                    {
+                        Some(SourceZoneFilter::HandOrGraveyard)
+                    } else if p_low.contains("from your graveyard")
                         || p_low == "play_from_graveyard"
                         || p_low == "cast_from_graveyard"
                     {
@@ -13171,7 +14263,9 @@ pub(super) fn lower_instruction(
                     &ev_low,
                     &rep_low,
                     &mut trial,
+                    in_trigger,
                     in_trigger || self_pronoun_valid,
+                    bound_x,
                     vocabulary,
                 ) {
                     res?;
@@ -13182,15 +14276,14 @@ pub(super) fn lower_instruction(
                         }) = trial.instructions.last_mut()
                         && matches!(
                             rule.as_ref(),
-                            TemporaryRuleKind::RedirectNextDamage { amount: None, .. }
+                            TemporaryRuleKind::RedirectNextDamage { .. }
+                                | TemporaryRuleKind::RedirectNextDamageExpr { .. }
                         )
                     {
                         *rule_dur = dur;
                         *builder = trial;
                         return Ok(());
                     }
-                    // Fail closed for amount-limited damage redirects until static_prevention.rs
-                    // enforces RedirectNextDamage.amount.
                     return Err("oracle:unsupported-temp-replacement");
                 }
             }
@@ -13210,7 +14303,6 @@ pub(super) fn lower_instruction(
                 && scratch.triggered.is_empty()
                 && scratch.activated.is_empty()
                 && scratch.mana.is_empty()
-                && scratch.zone_replacements.is_empty()
                 && scratch.entry_counter_abilities.is_empty()
                 && scratch.entry_tap_unless.is_none()
                 && scratch.entry_copy.is_none()
@@ -13231,20 +14323,44 @@ pub(super) fn lower_instruction(
                     })
                 )
             {
-                let abilities: Vec<StaticContinuousAbility> = scratch
-                    .continuous
-                    .into_iter()
-                    .chain(scratch.additional_battlefield_abilities)
-                    .collect();
-                if let Some(lowered_ops) = lower_temp_static_abilities_to_ops(
-                    abilities,
-                    dur,
-                    builder,
-                    in_trigger,
-                    self_pronoun_valid,
-                ) {
-                    builder.instructions.extend(lowered_ops);
-                    return Ok(());
+                let zone_repls_valid =
+                    scratch.zone_replacements.is_empty() || scratch.validate(vocabulary).is_ok();
+                if zone_repls_valid {
+                    let abilities: Vec<StaticContinuousAbility> = scratch
+                        .continuous
+                        .into_iter()
+                        .chain(scratch.additional_battlefield_abilities)
+                        .collect();
+                    let zone_repls = scratch.zone_replacements;
+                    let mut emitted = Vec::new();
+                    let abilities_ok = if abilities.is_empty() {
+                        true
+                    } else if let Some(lowered_ops) = lower_temp_static_abilities_to_ops(
+                        abilities,
+                        dur,
+                        builder,
+                        in_trigger,
+                        self_pronoun_valid,
+                    ) {
+                        emitted.extend(lowered_ops);
+                        true
+                    } else {
+                        false
+                    };
+                    if abilities_ok {
+                        for zr in zone_repls {
+                            emitted.push(Instruction::CreateTemporaryRule {
+                                rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(
+                                    Box::new(zr),
+                                )),
+                                duration: dur,
+                            });
+                        }
+                        if !emitted.is_empty() {
+                            builder.instructions.extend(emitted);
+                            return Ok(());
+                        }
+                    }
                 }
             }
             if dur == ResolvedDuration::UntilEndOfTurn
@@ -14193,52 +15309,40 @@ pub(super) fn lower_instruction(
                         .or_else(|| dst_raw.split_once("damage"))
                         .map(|(_, r)| r.trim())
                         .unwrap_or("");
-                    let recipient = match after_dmg {
-                        "" => Some(StaticDamageRecipient::Any),
-                        "to you or a permanent you control"
-                        | "to you and/or permanents you control"
-                        | "to you and permanents you control" => {
-                            Some(StaticDamageRecipient::ControllerOrControlledPermanent)
-                        }
-                        "to you or a creature you control"
-                        | "to you or creatures you control"
-                        | "to you and/or creatures you control"
-                        | "to you and creatures you control" => {
-                            Some(StaticDamageRecipient::ControllerOrControlledCreatures)
-                        }
-                        "to creatures you control" | "to a creature you control" => {
-                            Some(StaticDamageRecipient::ControlledCreatures)
-                        }
-                        "to you" => Some(StaticDamageRecipient::Controller),
-                        "to ~" | "to this creature" | "to this permanent" if self_pronoun_valid => {
-                            Some(StaticDamageRecipient::SelfObject)
-                        }
-                        "to enchanted creature"
-                        | "to equipped creature"
-                        | "to enchanted permanent"
-                            if self_pronoun_valid =>
+                    let mut trial = builder.clone();
+                    let has_source = in_trigger || self_pronoun_valid;
+                    let src_parsed = parse_next_time_source_with_target(
+                        src_raw, &mut trial, has_source, in_trigger, vocabulary,
+                    );
+                    if let Some(Ok((source, source_chosen_color, source_is_target))) = src_parsed {
+                        let rec_parsed = if after_dmg.is_empty() {
+                            Some(Ok(StaticDamageRecipient::Any))
+                        } else {
+                            parse_damage_recipient_phrase_with_target(
+                                after_dmg, &mut trial, has_source, in_trigger, vocabulary,
+                            )
+                        };
+                        if let Some(Ok(recipient)) = rec_parsed
+                            && !(source_is_target
+                                && matches!(
+                                    recipient,
+                                    StaticDamageRecipient::TargetObject
+                                        | StaticDamageRecipient::TargetAny
+                                ))
                         {
-                            Some(StaticDamageRecipient::AttachedHost)
+                            trial.instructions.push(Instruction::CreateTemporaryRule {
+                                rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
+                                    source,
+                                    source_chosen_color,
+                                    source_is_target,
+                                    recipient,
+                                    combat_only,
+                                }),
+                                duration: ResolvedDuration::UntilEndOfTurn,
+                            });
+                            *builder = trial;
+                            return Ok(());
                         }
-                        _ => None,
-                    };
-                    if let Some(recipient) = recipient
-                        && let Some((source, source_chosen_color)) = parse_next_time_damage_source(
-                            src_raw,
-                            in_trigger || self_pronoun_valid,
-                            vocabulary,
-                        )
-                    {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
-                                source,
-                                source_chosen_color,
-                                recipient,
-                                combat_only,
-                            }),
-                            duration: ResolvedDuration::UntilEndOfTurn,
-                        });
-                        return Ok(());
                     }
                 }
             }
@@ -14350,28 +15454,31 @@ pub(super) fn lower_instruction(
                     let mut parts = after_next.split_whitespace();
                     let amt_tok = parts.next().unwrap_or("");
                     let combat_only = after_next.contains("combat damage");
-                    let recipient = if after_next.contains("to you or a permanent you control")
-                        || after_next.contains("to you and/or permanents you control")
-                    {
-                        Some(StaticDamageRecipient::ControllerOrControlledPermanent)
-                    } else if after_next.contains("to you or a creature you control") {
-                        Some(StaticDamageRecipient::ControllerOrControlledCreatures)
-                    } else if after_next.contains("to creatures you control") {
-                        Some(StaticDamageRecipient::ControlledCreatures)
-                    } else if after_next.contains("to you") {
-                        Some(StaticDamageRecipient::Controller)
-                    } else if after_next.contains("to ~") && self_pronoun_valid {
-                        Some(StaticDamageRecipient::SelfObject)
+                    let mut trial = builder.clone();
+                    let has_source = in_trigger || self_pronoun_valid;
+                    let after_dealt_owned = after_next.replace(" this turn", "");
+                    let rec_phrase = after_dealt_owned
+                        .split_once(" dealt to ")
+                        .or_else(|| after_dealt_owned.split_once(" to "))
+                        .map(|(_, r)| r.trim())
+                        .unwrap_or("");
+                    let recipient_opt = if !rec_phrase.is_empty() {
+                        match parse_damage_recipient_phrase_with_target(
+                            rec_phrase, &mut trial, has_source, in_trigger, vocabulary,
+                        ) {
+                            Some(Ok(r)) => Some(r),
+                            _ => None,
+                        }
                     } else {
                         None
                     };
-                    if let Some(recipient) = recipient {
+                    if let Some(recipient) = recipient_opt {
                         if amt_tok == "x" {
                             let x_expr = match bound_x {
                                 Some(expr) => lower_value_expr(expr, vocabulary)?,
                                 None => ValueExpr::chosen_x(),
                             };
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
+                            trial.instructions.push(Instruction::CreateTemporaryRule {
                                 rule: Box::new(TemporaryRuleKind::PreventNextDamageExpr {
                                     amount: Box::new(x_expr),
                                     source: None,
@@ -14380,19 +15487,21 @@ pub(super) fn lower_instruction(
                                 }),
                                 duration: ResolvedDuration::UntilEndOfTurn,
                             });
+                            *builder = trial;
                             return Ok(());
-                        } else if let Ok(n) = amt_tok.parse::<i64>()
+                        } else if let Some(n) = parse_small_number_word(amt_tok)
                             && n > 0
                         {
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
+                            trial.instructions.push(Instruction::CreateTemporaryRule {
                                 rule: Box::new(TemporaryRuleKind::PreventNextDamage {
-                                    amount: n.into(),
+                                    amount: i64::from(n).into(),
                                     source: None,
                                     recipient,
                                     combat_only,
                                 }),
                                 duration: ResolvedDuration::UntilEndOfTurn,
                             });
+                            *builder = trial;
                             return Ok(());
                         }
                     }
@@ -14467,7 +15576,9 @@ pub(super) fn lower_instruction(
                 &ev_low,
                 &rep_low,
                 builder,
+                in_trigger,
                 in_trigger || self_pronoun_valid,
+                bound_x,
                 vocabulary,
             ) {
                 return res;
@@ -14502,6 +15613,51 @@ pub(super) fn lower_instruction(
                         ))),
                         duration: ResolvedDuration::UntilEndOfTurn,
                     });
+                    return Ok(());
+                }
+            }
+            if instead_body.is_none() {
+                let mut scratch = Program::new(
+                    BTreeSet::from([CardType::Enchantment]),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    ProgramKind::Permanent(PermanentDefinition {
+                        entry_tap: None,
+                        attachment: None,
+                        printed_pt: None,
+                        casting_cost: Some(ManaCost::free()),
+                    }),
+                );
+                let mut scratch_ids = LoweringIds::default();
+                let synth_repl = ReplacementEffectAst::EventInstead {
+                    subject_or_event: subject.clone(),
+                    would: ev_norm.to_owned(),
+                    instead: rep_norm.to_owned(),
+                    instead_body: None,
+                };
+                if lower_replacement(&synth_repl, &mut scratch, vocabulary, &mut scratch_ids)
+                    .is_ok()
+                    && !scratch.zone_replacements.is_empty()
+                    && scratch.continuous.is_none()
+                    && scratch.additional_battlefield_abilities.is_empty()
+                    && scratch.triggered.is_empty()
+                    && scratch.activated.is_empty()
+                    && scratch.mana.is_empty()
+                    && scratch.entry_counter_abilities.is_empty()
+                    && scratch.entry_tap_unless.is_none()
+                    && scratch.entry_copy.is_none()
+                    && scratch.conditional_cost.is_none()
+                    && scratch.static_conditions.is_empty()
+                    && scratch.validate(vocabulary).is_ok()
+                {
+                    for zr in scratch.zone_replacements {
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(Box::new(
+                                zr,
+                            ))),
+                            duration: ResolvedDuration::UntilEndOfTurn,
+                        });
+                    }
                     return Ok(());
                 }
             }
@@ -15124,6 +16280,9 @@ pub(super) fn lower_instruction(
                         } else {
                             match f.zone {
                                 Some(ZoneFilter::YourHand) => SourceZoneFilter::Hand,
+                                Some(ZoneFilter::YourHandOrGraveyard) => {
+                                    SourceZoneFilter::HandOrGraveyard
+                                }
                                 Some(ZoneFilter::YourGraveyard) => SourceZoneFilter::Graveyard,
                                 Some(
                                     ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
@@ -15322,37 +16481,32 @@ pub(super) fn lower_instruction(
                     bound_x,
                 );
             }
-            let is_controls_self = matches!(
-                condition.as_ref(),
-                ConditionAst::Marker(spellwake_oracle_compiler::ast::GameMarker::ControlsSelf)
-            ) || matches!(
-                condition.as_ref(),
-                ConditionAst::GameStateFlag(flag)
-                    if flag.trim().trim_end_matches('.').eq_ignore_ascii_case("you control ~")
-            );
-            if is_controls_self
-                && (self_pronoun_valid || in_trigger)
-                && let [
-                    InstructionAst::GainControl {
-                        controller,
-                        subject,
-                        duration: _,
-                    },
-                ] = body.as_slice()
+            if (self_pronoun_valid || in_trigger)
+                && !body.is_empty()
+                && let Some(as_long_dur) = condition_to_for_as_long_as_duration(condition)
             {
-                return lower_instruction(
-                    &InstructionAst::GainControl {
-                        controller: *controller,
-                        subject: subject.clone(),
-                        duration: DurationAst::UntilSourceLeaves,
-                    },
-                    builder,
-                    vocabulary,
-                    ids,
-                    in_trigger,
-                    self_pronoun_valid,
-                    bound_x,
-                );
+                let mut rewritten = Vec::with_capacity(body.len());
+                let mut all_ok = true;
+                for ins in body {
+                    if let Some(r) = rewrite_instruction_duration_for_as_long_as(ins, &as_long_dur)
+                    {
+                        rewritten.push(r);
+                    } else {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                if all_ok {
+                    return lower_instruction_seq(
+                        &rewritten,
+                        builder,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    );
+                }
             }
             Err("oracle:unsupported-for-as-long-as")
         }
@@ -15448,6 +16602,10 @@ fn resolve_select_zone(
             Ok((ResolvingPlayer::Controller, SourceZoneFilter::Battlefield))
         }
         Some(ZoneFilter::YourHand) => Ok((ResolvingPlayer::Controller, SourceZoneFilter::Hand)),
+        Some(ZoneFilter::YourHandOrGraveyard) => Ok((
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::HandOrGraveyard,
+        )),
         Some(ZoneFilter::ThatPlayerHand) => Ok((
             lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)?,
             SourceZoneFilter::Hand,
@@ -15923,6 +17081,138 @@ fn parse_exchange_zone_from_subject(subj: &SubjectRefAst) -> Option<ExchangeZone
     }
 }
 
+type ParsedNextTimeSource = (Option<ObjectFilter>, bool, bool);
+
+fn parse_next_time_source_with_target(
+    src_raw: &str,
+    builder: &mut BodyBuilder,
+    has_source: bool,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Result<ParsedNextTimeSource, &'static str>> {
+    let trimmed = src_raw.trim().to_ascii_lowercase();
+    if let Some(filter_raw) = trimmed.strip_prefix("target ") {
+        let filter_clean = filter_raw.trim().trim_end_matches('.');
+        if matches!(filter_clean, "source" | "permanent") {
+            return Some(
+                builder
+                    .bind_target(BodyTarget::SinglePermanent)
+                    .map(|()| (None, false, true)),
+            );
+        }
+        let mut ast_f = spellwake_oracle_compiler::filter::parse_object_filter(
+            filter_clean,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        ast_f.zone = None;
+        let bt = lower_battlefield_body_target_in_context(&ast_f, builder, in_trigger, vocabulary)
+            .ok()?;
+        if !is_permanent_body_target(bt) {
+            return None;
+        }
+        return Some(builder.bind_target(bt).map(|()| (None, false, true)));
+    }
+    if matches!(
+        trimmed.as_str(),
+        "that creature" | "that permanent" | "that source" | "it"
+    ) && is_permanent_body_target(builder.target)
+    {
+        return Some(Ok((None, false, true)));
+    }
+    parse_next_time_damage_source(&trimmed, has_source, vocabulary)
+        .map(|(src, chosen)| Ok((src, chosen, false)))
+}
+
+fn parse_damage_recipient_phrase_with_target(
+    raw: &str,
+    builder: &mut BodyBuilder,
+    has_source: bool,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Result<StaticDamageRecipient, &'static str>> {
+    let cleaned = raw
+        .trim()
+        .trim_end_matches('.')
+        .strip_prefix("to ")
+        .unwrap_or_else(|| raw.trim().trim_end_matches('.'))
+        .trim();
+    match cleaned {
+        "any target" | "target creature, planeswalker, or player" | "target creature or player" => {
+            return Some(
+                builder
+                    .bind_target(BodyTarget::SingleAnyTarget)
+                    .map(|()| StaticDamageRecipient::TargetAny),
+            );
+        }
+        "target player or planeswalker" => {
+            return Some(
+                builder
+                    .bind_target(BodyTarget::SinglePlayerOrPlaneswalker)
+                    .map(|()| StaticDamageRecipient::TargetAny),
+            );
+        }
+        "target opponent or planeswalker" => {
+            return Some(
+                builder
+                    .bind_target(BodyTarget::SingleOpponentOrPlaneswalker)
+                    .map(|()| StaticDamageRecipient::TargetAny),
+            );
+        }
+        "target player" => {
+            return Some(
+                builder
+                    .bind_target(BodyTarget::SinglePlayer)
+                    .map(|()| StaticDamageRecipient::TargetAny),
+            );
+        }
+        "target opponent" => {
+            return Some(
+                builder
+                    .bind_target(BodyTarget::SingleOpponent)
+                    .map(|()| StaticDamageRecipient::TargetAny),
+            );
+        }
+        "that creature" | "that permanent" | "it" if is_permanent_body_target(builder.target) => {
+            return Some(Ok(StaticDamageRecipient::TargetObject));
+        }
+        "that player"
+            if matches!(
+                builder.target,
+                BodyTarget::SinglePlayer
+                    | BodyTarget::SingleOpponent
+                    | BodyTarget::SingleAnyTarget
+                    | BodyTarget::SinglePlayerOrPlaneswalker
+                    | BodyTarget::SingleOpponentOrPlaneswalker
+            ) =>
+        {
+            return Some(Ok(StaticDamageRecipient::TargetAny));
+        }
+        other if other.starts_with("target ") => {
+            let filter_raw = other.strip_prefix("target ")?.trim();
+            let mut ast_f = spellwake_oracle_compiler::filter::parse_object_filter(
+                filter_raw,
+                &cached_compiler_vocab(vocabulary),
+            )
+            .ok()?;
+            ast_f.zone = None;
+            let bt =
+                lower_battlefield_body_target_in_context(&ast_f, builder, in_trigger, vocabulary)
+                    .ok()?;
+            if !is_permanent_body_target(bt) {
+                return None;
+            }
+            return Some(
+                builder
+                    .bind_target(bt)
+                    .map(|()| StaticDamageRecipient::TargetObject),
+            );
+        }
+        _ => {}
+    }
+    parse_damage_recipient_phrase(cleaned, has_source, vocabulary).map(Ok)
+}
+
 fn parse_damage_recipient_phrase(
     raw: &str,
     has_source: bool,
@@ -15938,7 +17228,7 @@ fn parse_damage_recipient_phrase(
         "a permanent or player"
         | "a creature, planeswalker, or player"
         | "a creature or player"
-        | "any target" => Some(StaticDamageRecipient::Any),
+        | "one or more players" => Some(StaticDamageRecipient::Any),
         "an opponent" => Some(StaticDamageRecipient::Opponents),
         "an opponent or a permanent an opponent controls"
         | "an opponent or a permanent they control" => {
@@ -15990,6 +17280,7 @@ fn parse_damage_redirect_target(
     raw: &str,
     builder: &mut BodyBuilder,
     has_source: bool,
+    in_trigger: bool,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Result<DamageRedirectTarget, &'static str>> {
     let cleaned = raw.trim().trim_end_matches('.').trim();
@@ -16005,6 +17296,33 @@ fn parse_damage_redirect_target(
         | "that creature's controller"
         | "that source's controller"
         | "that permanent's controller" => Some(Ok(DamageRedirectTarget::DamageSourceController)),
+        "any target" | "target creature, planeswalker, or player" | "target creature or player" => {
+            Some(
+                builder
+                    .bind_target(BodyTarget::SingleAnyTarget)
+                    .map(|()| DamageRedirectTarget::TargetAny),
+            )
+        }
+        "target player or planeswalker" => Some(
+            builder
+                .bind_target(BodyTarget::SinglePlayerOrPlaneswalker)
+                .map(|()| DamageRedirectTarget::TargetAny),
+        ),
+        "target opponent or planeswalker" => Some(
+            builder
+                .bind_target(BodyTarget::SingleOpponentOrPlaneswalker)
+                .map(|()| DamageRedirectTarget::TargetAny),
+        ),
+        "target player" => Some(
+            builder
+                .bind_target(BodyTarget::SinglePlayer)
+                .map(|()| DamageRedirectTarget::TargetAny),
+        ),
+        "target opponent" => Some(
+            builder
+                .bind_target(BodyTarget::SingleOpponent)
+                .map(|()| DamageRedirectTarget::TargetAny),
+        ),
         "that creature" | "that permanent" | "it" if is_permanent_body_target(builder.target) => {
             Some(Ok(DamageRedirectTarget::TargetObject))
         }
@@ -16016,7 +17334,9 @@ fn parse_damage_redirect_target(
             )
             .ok()?;
             ast_f.zone = None;
-            let bt = lower_battlefield_body_target(&ast_f, vocabulary).ok()?;
+            let bt =
+                lower_battlefield_body_target_in_context(&ast_f, builder, in_trigger, vocabulary)
+                    .ok()?;
             if !is_permanent_body_target(bt) {
                 return None;
             }
@@ -16029,6 +17349,76 @@ fn parse_damage_redirect_target(
     }
 }
 
+fn lower_redirect_from_subject_with_target(
+    subj: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    has_source: bool,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<StaticDamageRecipient, &'static str> {
+    match subj {
+        SubjectRefAst::AnyTarget => {
+            builder.bind_target(BodyTarget::SingleAnyTarget)?;
+            Ok(StaticDamageRecipient::TargetAny)
+        }
+        SubjectRefAst::TargetPlayerOrPlaneswalker { opponent_only } => {
+            builder.bind_target(if *opponent_only {
+                BodyTarget::SingleOpponentOrPlaneswalker
+            } else {
+                BodyTarget::SinglePlayerOrPlaneswalker
+            })?;
+            Ok(StaticDamageRecipient::TargetAny)
+        }
+        SubjectRefAst::TargetPlayer {
+            opponent_only,
+            count: TargetCountAst::Exact(1),
+        } => {
+            builder.bind_target(if *opponent_only {
+                BodyTarget::SingleOpponent
+            } else {
+                BodyTarget::SinglePlayer
+            })?;
+            Ok(StaticDamageRecipient::TargetAny)
+        }
+        SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
+            builder.bind_target(BodyTarget::SinglePlayer)?;
+            Ok(StaticDamageRecipient::TargetAny)
+        }
+        SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
+            builder.bind_target(BodyTarget::SingleOpponent)?;
+            Ok(StaticDamageRecipient::TargetAny)
+        }
+        SubjectRefAst::TargetObject {
+            filter,
+            count: TargetCountAst::Exact(1),
+        } if filter.zone.is_none() => {
+            let bt =
+                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
+            if !is_permanent_body_target(bt) {
+                return Err("oracle:unsupported-redirect-damage");
+            }
+            builder.bind_target(bt)?;
+            Ok(StaticDamageRecipient::TargetObject)
+        }
+        SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+            Ok(StaticDamageRecipient::TargetObject)
+        }
+        other => lower_redirect_from_subject(other, has_source, vocabulary)
+            .ok_or("oracle:unsupported-redirect-damage"),
+    }
+}
+
+fn lower_prevent_recipient_subject(
+    subj: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    has_source: bool,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<StaticDamageRecipient, &'static str> {
+    lower_redirect_from_subject_with_target(subj, builder, has_source, in_trigger, vocabulary)
+        .map_err(|_| "oracle:unsupported-prevent-damage")
+}
+
 fn lower_redirect_from_subject(
     subj: &SubjectRefAst,
     has_source: bool,
@@ -16036,6 +17426,12 @@ fn lower_redirect_from_subject(
 ) -> Option<StaticDamageRecipient> {
     match subj {
         SubjectRefAst::Player(PlayerRefAst::You) => Some(StaticDamageRecipient::Controller),
+        SubjectRefAst::Player(PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent) => {
+            Some(StaticDamageRecipient::Opponents)
+        }
+        SubjectRefAst::Player(PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer) => {
+            Some(StaticDamageRecipient::Players)
+        }
         SubjectRefAst::SelfObject if has_source => Some(StaticDamageRecipient::SelfObject),
         SubjectRefAst::AttachedHost(_) if has_source => Some(StaticDamageRecipient::AttachedHost),
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -16101,6 +17497,37 @@ fn lower_redirect_to_subject(
         SubjectRefAst::Player(PlayerRefAst::ItsController | PlayerRefAst::ThatObjectController) => {
             Ok(DamageRedirectTarget::DamageSourceController)
         }
+        SubjectRefAst::AnyTarget => {
+            builder.bind_target(BodyTarget::SingleAnyTarget)?;
+            Ok(DamageRedirectTarget::TargetAny)
+        }
+        SubjectRefAst::TargetPlayerOrPlaneswalker { opponent_only } => {
+            builder.bind_target(if *opponent_only {
+                BodyTarget::SingleOpponentOrPlaneswalker
+            } else {
+                BodyTarget::SinglePlayerOrPlaneswalker
+            })?;
+            Ok(DamageRedirectTarget::TargetAny)
+        }
+        SubjectRefAst::TargetPlayer {
+            opponent_only,
+            count: TargetCountAst::Exact(1),
+        } => {
+            builder.bind_target(if *opponent_only {
+                BodyTarget::SingleOpponent
+            } else {
+                BodyTarget::SinglePlayer
+            })?;
+            Ok(DamageRedirectTarget::TargetAny)
+        }
+        SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
+            builder.bind_target(BodyTarget::SinglePlayer)?;
+            Ok(DamageRedirectTarget::TargetAny)
+        }
+        SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
+            builder.bind_target(BodyTarget::SingleOpponent)?;
+            Ok(DamageRedirectTarget::TargetAny)
+        }
         SubjectRefAst::TargetObject {
             filter,
             count: TargetCountAst::Exact(1),
@@ -16146,12 +17573,15 @@ fn extract_redirect_destination_phrase(rep_norm: &str) -> Option<&str> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_lower_redirect_next_damage(
     subj_low: &str,
     ev_low: &str,
     rep_low: &str,
     builder: &mut BodyBuilder,
+    in_trigger: bool,
     has_source: bool,
+    bound_x: Option<&ValueExprAst>,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Result<(), &'static str>> {
     let rep_no_dot = rep_low.trim_end_matches('.').trim();
@@ -16163,6 +17593,29 @@ fn try_lower_redirect_next_damage(
     let rep_norm = rep_norm_owned.trim();
     let to_raw = extract_redirect_destination_phrase(rep_norm)?;
 
+    let check_single_target_slot = |source_is_target: bool,
+                                    from: StaticDamageRecipient,
+                                    to: DamageRedirectTarget,
+                                    allow_same_source_and_to: bool|
+     -> bool {
+        let from_uses = matches!(
+            from,
+            StaticDamageRecipient::TargetObject | StaticDamageRecipient::TargetAny
+        );
+        let to_uses = matches!(
+            to,
+            DamageRedirectTarget::TargetObject | DamageRedirectTarget::TargetAny
+        );
+        if allow_same_source_and_to
+            && source_is_target
+            && !from_uses
+            && to == DamageRedirectTarget::TargetObject
+        {
+            return true;
+        }
+        usize::from(source_is_target) + usize::from(from_uses) + usize::from(to_uses) <= 1
+    };
+
     if ev_low == "next_time_this_turn" {
         let (src_raw, dst_raw) = subj_low.split_once(" would deal ")?;
         if !dst_raw.contains("damage") {
@@ -16173,33 +17626,34 @@ fn try_lower_redirect_next_damage(
             .split_once("combat damage")
             .or_else(|| dst_raw.split_once("damage"))
             .map_or("", |(_, r)| r.trim());
-        let from = if after_dmg.is_empty() {
-            StaticDamageRecipient::Any
-        } else {
-            parse_damage_recipient_phrase(after_dmg, has_source, vocabulary)?
-        };
+        let mut trial = builder.clone();
         if to_raw == "itself" {
-            let filter_raw = src_raw.trim().strip_prefix("target ")?;
-            let mut ast_f = spellwake_oracle_compiler::filter::parse_object_filter(
-                filter_raw,
-                &cached_compiler_vocab(vocabulary),
-            )
-            .ok()?;
-            ast_f.zone = None;
-            let bt = lower_battlefield_body_target(&ast_f, vocabulary).ok()?;
-            if !is_permanent_body_target(bt) {
+            let (source, chosen_color, source_is_target) = match parse_next_time_source_with_target(
+                src_raw, &mut trial, has_source, in_trigger, vocabulary,
+            )? {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            if chosen_color || !source_is_target {
                 return None;
             }
-            let src_obj = lower_object_filter(&ast_f, vocabulary).ok()?;
-            if src_obj.has_target_player() {
+            let from = if after_dmg.is_empty() {
+                StaticDamageRecipient::Any
+            } else {
+                match parse_damage_recipient_phrase_with_target(
+                    after_dmg, &mut trial, has_source, in_trigger, vocabulary,
+                )? {
+                    Ok(r) => r,
+                    Err(e) => return Some(Err(e)),
+                }
+            };
+            if !check_single_target_slot(true, from, DamageRedirectTarget::TargetObject, true) {
                 return None;
             }
-            if let Err(e) = builder.bind_target(bt) {
-                return Some(Err(e));
-            }
-            builder.instructions.push(Instruction::CreateTemporaryRule {
+            trial.instructions.push(Instruction::CreateTemporaryRule {
                 rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                    source: Some(src_obj),
+                    source,
+                    source_is_target: true,
                     from,
                     to: DamageRedirectTarget::TargetObject,
                     combat_only,
@@ -16208,20 +17662,41 @@ fn try_lower_redirect_next_damage(
                 }),
                 duration: ResolvedDuration::UntilEndOfTurn,
             });
+            *builder = trial;
             return Some(Ok(()));
         }
-        let (source, chosen_color) =
-            parse_next_time_damage_source(src_raw, has_source, vocabulary)?;
+        let (source, chosen_color, source_is_target) = match parse_next_time_source_with_target(
+            src_raw, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
         if chosen_color {
             return None;
         }
-        let to = match parse_damage_redirect_target(to_raw, builder, has_source, vocabulary)? {
+        let from = if after_dmg.is_empty() {
+            StaticDamageRecipient::Any
+        } else {
+            match parse_damage_recipient_phrase_with_target(
+                after_dmg, &mut trial, has_source, in_trigger, vocabulary,
+            )? {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            }
+        };
+        let to = match parse_damage_redirect_target(
+            to_raw, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
             Ok(t) => t,
             Err(e) => return Some(Err(e)),
         };
-        builder.instructions.push(Instruction::CreateTemporaryRule {
+        if !check_single_target_slot(source_is_target, from, to, false) {
+            return None;
+        }
+        trial.instructions.push(Instruction::CreateTemporaryRule {
             rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
                 source,
+                source_is_target,
                 from,
                 to,
                 combat_only,
@@ -16230,6 +17705,7 @@ fn try_lower_redirect_next_damage(
             }),
             duration: ResolvedDuration::UntilEndOfTurn,
         });
+        *builder = trial;
         return Some(Ok(()));
     }
 
@@ -16241,48 +17717,132 @@ fn try_lower_redirect_next_damage(
         .map(|rest| (rest, ev_norm))
         .or_else(|| ev_norm.strip_prefix("the next ").map(|rest| (rest, "")))
         && let Some((amt_tok, kind_rest)) = after_next.split_once(' ')
-        && let Some(n) = parse_small_number_word(amt_tok)
-        && n > 0
         && kind_rest.contains("damage")
     {
-        let combat_only = kind_rest.contains("combat damage");
-        let after_dealt = fallback_ev
-            .strip_prefix("be dealt to ")
-            .or_else(|| fallback_ev.strip_prefix("dealt to "))
-            .or_else(|| kind_rest.split_once("be dealt to ").map(|(_, r)| r))
-            .or_else(|| kind_rest.split_once("dealt to ").map(|(_, r)| r))?
-            .trim();
-        let after_dealt_owned = after_dealt.replace(" this turn", "");
-        let after_dealt = after_dealt_owned.trim();
-        let (from_part, source) = if let Some((f_part, s_part)) = after_dealt
-            .split_once(" by ")
-            .or_else(|| after_dealt.split_once(" from "))
-        {
-            let (src, chosen_color) =
-                parse_next_time_damage_source(s_part, has_source, vocabulary)?;
-            if chosen_color {
-                return None;
-            }
-            (f_part.trim(), src)
+        let is_x = amt_tok == "x";
+        let lit_n = if is_x {
+            None
         } else {
-            (after_dealt, None)
+            parse_small_number_word(amt_tok).filter(|&n| n > 0)
         };
-        let from = parse_damage_recipient_phrase(from_part, has_source, vocabulary)?;
-        let to = match parse_damage_redirect_target(to_raw, builder, has_source, vocabulary)? {
+        if !is_x && lit_n.is_none() {
+            return None;
+        }
+        let combat_only = kind_rest.contains("combat damage");
+        let kind_norm = kind_rest.replace(" this turn", "");
+        let fb_norm = fallback_ev.replace(" this turn", "");
+        let mut trial = builder.clone();
+        let (from_part, source, source_is_target) =
+            if let Some((before_would, dst_part)) = kind_norm.split_once(" would deal to ") {
+                let src_raw = before_would
+                    .split_once(" that ")
+                    .map_or("", |(_, s)| s.trim());
+                let (src, chosen_color, is_tgt) = if src_raw.is_empty() {
+                    (None, false, false)
+                } else {
+                    match parse_next_time_source_with_target(
+                        src_raw, &mut trial, has_source, in_trigger, vocabulary,
+                    )? {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    }
+                };
+                if chosen_color {
+                    return None;
+                }
+                (dst_part.trim().to_owned(), src, is_tgt)
+            } else if let Some((before_would, dst_part)) = fb_norm.split_once(" would deal to ") {
+                let src_raw = before_would
+                    .split_once(" that ")
+                    .map_or(before_would.trim(), |(_, s)| s.trim());
+                let (src, chosen_color, is_tgt) = if src_raw.is_empty() {
+                    (None, false, false)
+                } else {
+                    match parse_next_time_source_with_target(
+                        src_raw, &mut trial, has_source, in_trigger, vocabulary,
+                    )? {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    }
+                };
+                if chosen_color {
+                    return None;
+                }
+                (dst_part.trim().to_owned(), src, is_tgt)
+            } else {
+                let after_dealt = fb_norm
+                    .trim()
+                    .strip_prefix("be dealt to ")
+                    .or_else(|| fb_norm.trim().strip_prefix("dealt to "))
+                    .or_else(|| kind_norm.split_once("be dealt to ").map(|(_, r)| r))
+                    .or_else(|| kind_norm.split_once("dealt to ").map(|(_, r)| r))?
+                    .trim();
+                if let Some((f_part, s_part)) = after_dealt
+                    .split_once(" by ")
+                    .or_else(|| after_dealt.split_once(" from "))
+                {
+                    let (src, chosen_color, is_tgt) = match parse_next_time_source_with_target(
+                        s_part, &mut trial, has_source, in_trigger, vocabulary,
+                    )? {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if chosen_color {
+                        return None;
+                    }
+                    (f_part.trim().to_owned(), src, is_tgt)
+                } else {
+                    (after_dealt.to_owned(), None, false)
+                }
+            };
+        let from = match parse_damage_recipient_phrase_with_target(
+            &from_part, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e)),
+        };
+        let to = match parse_damage_redirect_target(
+            to_raw, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
             Ok(t) => t,
             Err(e) => return Some(Err(e)),
         };
-        builder.instructions.push(Instruction::CreateTemporaryRule {
-            rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
+        if !check_single_target_slot(source_is_target, from, to, false) {
+            return None;
+        }
+        let rule = if let Some(n) = lit_n {
+            TemporaryRuleKind::RedirectNextDamage {
                 source,
+                source_is_target,
                 from,
                 to,
                 combat_only,
                 amount: Some(i64::from(n).into()),
                 one_shot: false,
-            }),
+            }
+        } else {
+            let x_expr = match bound_x {
+                Some(expr) => match lower_value_expr(expr, vocabulary) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                },
+                None => ValueExpr::chosen_x(),
+            };
+            TemporaryRuleKind::RedirectNextDamageExpr {
+                source,
+                source_is_target,
+                from,
+                to,
+                combat_only,
+                amount: Box::new(x_expr),
+                one_shot: false,
+            }
+        };
+        trial.instructions.push(Instruction::CreateTemporaryRule {
+            rule: Box::new(rule),
             duration: ResolvedDuration::UntilEndOfTurn,
         });
+        *builder = trial;
         return Some(Ok(()));
     }
 
@@ -16292,24 +17852,43 @@ fn try_lower_redirect_next_damage(
     ) && let Some(after_dealt) = ev_norm.strip_prefix("be dealt to ")
     {
         let combat_only = subj_low.contains("combat");
-        let (from_part, source) = if let Some((f_part, s_part)) = after_dealt.split_once(" by ") {
-            let (src, chosen_color) =
-                parse_next_time_damage_source(s_part, has_source, vocabulary)?;
+        let mut trial = builder.clone();
+        let (from_part, source, source_is_target) = if let Some((f_part, s_part)) = after_dealt
+            .split_once(" by ")
+            .or_else(|| after_dealt.split_once(" from "))
+        {
+            let (src, chosen_color, is_tgt) = match parse_next_time_source_with_target(
+                s_part, &mut trial, has_source, in_trigger, vocabulary,
+            )? {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
             if chosen_color {
                 return None;
             }
-            (f_part.trim(), src)
+            (f_part.trim(), src, is_tgt)
         } else {
-            (after_dealt.trim(), None)
+            (after_dealt.trim(), None, false)
         };
-        let from = parse_damage_recipient_phrase(from_part, has_source, vocabulary)?;
-        let to = match parse_damage_redirect_target(to_raw, builder, has_source, vocabulary)? {
+        let from = match parse_damage_recipient_phrase_with_target(
+            from_part, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e)),
+        };
+        let to = match parse_damage_redirect_target(
+            to_raw, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
             Ok(t) => t,
             Err(e) => return Some(Err(e)),
         };
-        builder.instructions.push(Instruction::CreateTemporaryRule {
+        if !check_single_target_slot(source_is_target, from, to, false) {
+            return None;
+        }
+        trial.instructions.push(Instruction::CreateTemporaryRule {
             rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
                 source,
+                source_is_target,
                 from,
                 to,
                 combat_only,
@@ -16318,6 +17897,7 @@ fn try_lower_redirect_next_damage(
             }),
             duration: ResolvedDuration::UntilEndOfTurn,
         });
+        *builder = trial;
         return Some(Ok(()));
     }
 
@@ -16326,19 +17906,35 @@ fn try_lower_redirect_next_damage(
         .map(|r| (true, r))
         .or_else(|| ev_norm.strip_prefix("deal damage to ").map(|r| (false, r)))
     {
-        let from = parse_damage_recipient_phrase(from_raw, has_source, vocabulary)?;
-        let (source, chosen_color) =
-            parse_next_time_damage_source(subj_low, has_source, vocabulary)?;
+        let mut trial = builder.clone();
+        let (source, chosen_color, source_is_target) = match parse_next_time_source_with_target(
+            subj_low, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
         if chosen_color {
             return None;
         }
-        let to = match parse_damage_redirect_target(to_raw, builder, has_source, vocabulary)? {
+        let from = match parse_damage_recipient_phrase_with_target(
+            from_raw, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e)),
+        };
+        let to = match parse_damage_redirect_target(
+            to_raw, &mut trial, has_source, in_trigger, vocabulary,
+        )? {
             Ok(t) => t,
             Err(e) => return Some(Err(e)),
         };
-        builder.instructions.push(Instruction::CreateTemporaryRule {
+        if !check_single_target_slot(source_is_target, from, to, false) {
+            return None;
+        }
+        trial.instructions.push(Instruction::CreateTemporaryRule {
             rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
                 source,
+                source_is_target,
                 from,
                 to,
                 combat_only,
@@ -16347,6 +17943,7 @@ fn try_lower_redirect_next_damage(
             }),
             duration: ResolvedDuration::UntilEndOfTurn,
         });
+        *builder = trial;
         return Some(Ok(()));
     }
 
@@ -16504,6 +18101,7 @@ fn lower_temp_static_abilities_to_ops(
                     lowered_ops.push(Instruction::CreateTemporaryRule {
                         rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
                             source: *source,
+                            source_is_target: false,
                             from: *from,
                             to: *to,
                             combat_only: *combat_only,
@@ -16528,7 +18126,8 @@ fn lower_temp_static_abilities_to_ops(
                         | StaticDamageRule::DoubleToOpponents
                         | StaticDamageRule::ReplaceSubtypeCombatWithMill(_)
                         | StaticDamageRule::LethalUsesPower
-                        | StaticDamageRule::DamageCannotBePrevented => true,
+                        | StaticDamageRule::DamageCannotBePrevented
+                        | StaticDamageRule::MinimumLifeTotal { .. } => true,
                         StaticDamageRule::ModifyDamage { recipient, .. } => {
                             (in_trigger || self_pronoun_valid)
                                 || !matches!(
@@ -16568,6 +18167,7 @@ fn lower_temp_static_abilities_to_ops(
                             | StaticModifierRule::IgnoreLegendRuleForController
                             | StaticModifierRule::IgnoreLegendForSubtype(_)
                             | StaticModifierRule::RetainMana(_)
+                            | StaticModifierRule::TwiceLoyaltyPerTurn
                             | StaticModifierRule::AdditionalCreatureDeathTrigger
                     ),
                     StaticContinuousAbility::CostModifier { modifier, .. } => matches!(
@@ -17403,6 +19003,7 @@ struct BattlefieldDestFlags {
     attacking: bool,
     transformed: bool,
     under_owner_control: bool,
+    attach_to_self: bool,
 }
 
 fn parse_battlefield_dest(dest: &str) -> Option<BattlefieldDestFlags> {
@@ -17415,9 +19016,22 @@ fn parse_battlefield_dest(dest: &str) -> Option<BattlefieldDestFlags> {
         || dest.contains("as a copy")
         || dest.contains("as a ")
         || dest.contains("melded")
-        || dest.contains("attached to")
         || dest.contains(" with ")
     {
+        return None;
+    }
+    let attach_to_self = if let Some((_, after_attach)) = dest.split_once("attached to ") {
+        let target_clean = after_attach.trim().trim_end_matches('.');
+        matches!(
+            target_clean,
+            "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment" | "it"
+        )
+    } else if dest.contains("attached to") {
+        return None;
+    } else {
+        false
+    };
+    if dest.contains("attached to") && !attach_to_self {
         return None;
     }
     let under_owner_control = dest.contains("owner's control") || dest.contains("owners' control");
@@ -17432,7 +19046,634 @@ fn parse_battlefield_dest(dest: &str) -> Option<BattlefieldDestFlags> {
         attacking,
         transformed,
         under_owner_control,
+        attach_to_self,
     })
+}
+
+struct ParsedTokenCopyExceptions {
+    nonlegendary: bool,
+    sacrifice_at_end_step: bool,
+    exile_at_end_step: bool,
+    strip_mana_cost: bool,
+    override_pt: Option<(u8, u8)>,
+    override_colors: Option<BTreeSet<Color>>,
+    grant_keywords: BTreeSet<KeywordAbility>,
+    add_subtypes: BTreeSet<CreatureTypeId>,
+    add_card_types: BTreeSet<CardType>,
+}
+
+fn parse_token_copy_exceptions(
+    exception: Option<&str>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ParsedTokenCopyExceptions> {
+    let exc_low = exception.unwrap_or("").trim().to_ascii_lowercase();
+    for forbidden in [
+        "loses all other card types",
+        "lose all other card types",
+        "loses all abilities",
+        "lose all abilities",
+        "isn't a creature",
+        "aren't creatures",
+        "isn't an artifact",
+        "aren't artifacts",
+        "isn't an enchantment",
+        "aren't enchantments",
+        "name is",
+        "named ",
+        "attached to",
+        "enters with",
+        "enter with",
+        "counter",
+    ] {
+        if exc_low.contains(forbidden) {
+            return None;
+        }
+    }
+    let nonlegendary = exc_low.contains("isn't legendary")
+        || exc_low.contains("aren't legendary")
+        || exc_low.contains("not legendary");
+    let mut sacrifice_at_end_step = exc_low.contains("sacrifice") && exc_low.contains("end step");
+    let mut exile_at_end_step = exc_low.contains("exile") && exc_low.contains("end step");
+    let strip_mana_cost = exc_low.contains("has no mana cost")
+        || exc_low.contains("have no mana cost")
+        || exc_low.contains("no mana cost");
+    let in_addition = exc_low.contains("in addition to its other types")
+        || exc_low.contains("in addition to their other types")
+        || exc_low.contains("in addition to its other colors and types")
+        || exc_low.contains("in addition to their other colors and types");
+    let mut remainder = exc_low;
+    strip_quoted_end_step_token_cleanup(
+        &mut remainder,
+        &mut sacrifice_at_end_step,
+        &mut exile_at_end_step,
+    );
+    if remainder.contains('"') {
+        return None;
+    }
+    let mut grant_keywords: BTreeSet<KeywordAbility> = BTreeSet::new();
+    for (phrase, kw) in [
+        ("first strike", KeywordAbility::FirstStrike),
+        ("double strike", KeywordAbility::DoubleStrike),
+    ] {
+        if remainder.contains(phrase) {
+            grant_keywords.insert(kw);
+            remainder = remainder.replace(phrase, " ");
+        }
+    }
+    while let Some(idx) = remainder.find("protection from ") {
+        let after = &remainder[idx + "protection from ".len()..];
+        let end_rel = after
+            .find([',', '.'])
+            .or_else(|| after.find(" in addition"))
+            .or_else(|| after.find(" and it "))
+            .or_else(|| after.find(" and they "))
+            .unwrap_or(after.len());
+        let qual = after[..end_rel].trim();
+        let parsed = parse_protection_keywords(qual, vocabulary)?;
+        grant_keywords.extend(parsed);
+        remainder.replace_range(idx..idx + "protection from ".len() + end_rel, " ");
+    }
+    while let Some(idx) = remainder.find("hexproof from ") {
+        let after = &remainder[idx + "hexproof from ".len()..];
+        let end_rel = after
+            .find([',', '.'])
+            .or_else(|| after.find(" in addition"))
+            .or_else(|| after.find(" and it "))
+            .or_else(|| after.find(" and they "))
+            .unwrap_or(after.len());
+        let qual = after[..end_rel].trim();
+        let parsed = parse_hexproof_from_qualities(qual, vocabulary)?;
+        for q in parsed {
+            grant_keywords.insert(KeywordAbility::HexproofFrom(q));
+        }
+        remainder.replace_range(idx..idx + "hexproof from ".len() + end_rel, " ");
+    }
+    for pat in [
+        "except it isn't legendary",
+        "except they aren't legendary",
+        "except it's not legendary",
+        "except they're not legendary",
+        "it isn't legendary",
+        "they aren't legendary",
+        "it's not legendary",
+        "they're not legendary",
+        "not legendary",
+        "it has no mana cost",
+        "they have no mana cost",
+        "has no mana cost",
+        "have no mana cost",
+        "no mana cost",
+        "sacrifice it at the beginning of the next end step",
+        "sacrifice them at the beginning of the next end step",
+        "sacrifice it at the beginning of your next end step",
+        "sacrifice them at the beginning of your next end step",
+        "exile it at the beginning of the next end step",
+        "exile them at the beginning of the next end step",
+        "exile it at the beginning of your next end step",
+        "exile them at the beginning of your next end step",
+        "in addition to its other colors and types",
+        "in addition to their other colors and types",
+        "in addition to its other types",
+        "in addition to their other types",
+        "with base power and toughness",
+        "has base power and toughness",
+        "have base power and toughness",
+        "base power and toughness",
+        "except it has",
+        "except they have",
+        "except it gains",
+        "except they gain",
+        "except it's a",
+        "except it's an",
+        "except it's",
+        "except they're",
+        "except the token is",
+        "except the tokens are",
+        "except",
+        "it has",
+        "they have",
+        "it gains",
+        "they gain",
+        "it's a",
+        "it's an",
+        "it's",
+        "they're",
+        "and",
+        ",",
+        ".",
+    ] {
+        remainder = remainder.replace(pat, " ");
+    }
+    let mut override_pt: Option<(u8, u8)> = None;
+    let mut parsed_colors: BTreeSet<Color> = BTreeSet::new();
+    let mut saw_colorless = false;
+    let mut add_subtypes: BTreeSet<CreatureTypeId> = BTreeSet::new();
+    let mut add_card_types: BTreeSet<CardType> = BTreeSet::new();
+    let mut saw_creature_word = false;
+    for raw_tok in remainder.split_whitespace() {
+        let tok = raw_tok.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '-');
+        if tok.is_empty()
+            || matches!(
+                tok,
+                "a" | "an" | "the" | "is" | "are" | "with" | "token" | "tokens" | "that" | "that's"
+            )
+        {
+            continue;
+        }
+        if matches!(tok, "creature" | "creatures") {
+            saw_creature_word = true;
+            continue;
+        }
+        if let Some((ps, ts)) = tok.split_once('/')
+            && let (Ok(p), Ok(t)) = (ps.parse::<u8>(), ts.parse::<u8>())
+            && override_pt.is_none()
+        {
+            override_pt = Some((p, t));
+            continue;
+        }
+        match tok {
+            "white" => {
+                parsed_colors.insert(Color::White);
+                continue;
+            }
+            "blue" => {
+                parsed_colors.insert(Color::Blue);
+                continue;
+            }
+            "black" => {
+                parsed_colors.insert(Color::Black);
+                continue;
+            }
+            "red" => {
+                parsed_colors.insert(Color::Red);
+                continue;
+            }
+            "green" => {
+                parsed_colors.insert(Color::Green);
+                continue;
+            }
+            "colorless" => {
+                saw_colorless = true;
+                continue;
+            }
+            "artifact" | "artifacts" if in_addition => {
+                add_card_types.insert(CardType::Artifact);
+                continue;
+            }
+            "enchantment" | "enchantments" if in_addition => {
+                add_card_types.insert(CardType::Enchantment);
+                continue;
+            }
+            "land" | "lands" if in_addition => {
+                add_card_types.insert(CardType::Land);
+                continue;
+            }
+            "planeswalker" | "planeswalkers" if in_addition => {
+                add_card_types.insert(CardType::Planeswalker);
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(kw) = lower_keyword_ability_name(tok) {
+            grant_keywords.insert(kw);
+            continue;
+        }
+        if let Some(ct) = resolve_protection_subtype(tok, vocabulary) {
+            add_subtypes.insert(ct);
+            continue;
+        }
+        return None;
+    }
+    if saw_creature_word && (in_addition || override_pt.is_some()) {
+        add_card_types.insert(CardType::Creature);
+    }
+    let override_colors = if !parsed_colors.is_empty() {
+        Some(parsed_colors)
+    } else if saw_colorless {
+        Some(BTreeSet::new())
+    } else {
+        None
+    };
+    Some(ParsedTokenCopyExceptions {
+        nonlegendary,
+        sacrifice_at_end_step,
+        exile_at_end_step,
+        strip_mana_cost,
+        override_pt,
+        override_colors,
+        grant_keywords,
+        add_subtypes,
+        add_card_types,
+    })
+}
+
+fn parse_dynamic_lib_from_top_offset(
+    dest: &str,
+    allow_your_library: bool,
+    bound_x: Option<&ValueExprAst>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<Option<ValueExpr>, &'static str> {
+    if dest.contains("after_shuffle") || dest.contains("random") {
+        return Ok(None);
+    }
+    let owner_ok = dest.contains("owner's library")
+        || dest.contains("owners' libraries")
+        || dest.contains("their library")
+        || dest.contains("that player's library")
+        || (allow_your_library && dest.contains("your library"));
+    if !owner_ok {
+        return Ok(None);
+    }
+    if let Some((_, after)) = dest.split_once("just beneath the top ") {
+        let count_raw = after
+            .split_once(" card")
+            .map_or(after.trim(), |(c, _)| c.trim());
+        if count_raw == "x" {
+            let expr = match bound_x {
+                Some(e) => lower_value_expr(e, vocabulary)?,
+                None => ValueExpr::chosen_x(),
+            };
+            return Ok(Some(expr));
+        }
+        if let Some(n) = parse_small_number_word(count_raw) {
+            return Ok(Some(ValueExpr::literal(i64::from(n))));
+        }
+        return Err("oracle:unsupported-move-zone");
+    }
+    if let Some(before_from) = dest.strip_suffix(" from the top") {
+        let pos_tok = before_from.split_whitespace().last().unwrap_or("");
+        if matches!(pos_tok, "xth" | "x") {
+            let expr = match bound_x {
+                Some(e) => lower_value_expr(e, vocabulary)?,
+                None => ValueExpr::chosen_x(),
+            };
+            return Ok(Some(ValueExpr::Sub(
+                Box::new(expr),
+                Box::new(ValueExpr::literal(1)),
+            )));
+        }
+        if let Some(num_s) = pos_tok
+            .strip_suffix("th")
+            .or_else(|| pos_tok.strip_suffix("st"))
+            .or_else(|| pos_tok.strip_suffix("nd"))
+            .or_else(|| pos_tok.strip_suffix("rd"))
+            && let Ok(n) = num_s.parse::<u16>()
+            && n >= 1
+        {
+            return Ok(Some(ValueExpr::literal(i64::from(n - 1))));
+        }
+    }
+    Ok(None)
+}
+
+fn is_player_keyword(kw: &KeywordAbility) -> bool {
+    matches!(
+        kw,
+        KeywordAbility::Shroud
+            | KeywordAbility::Hexproof
+            | KeywordAbility::HexproofFrom(_)
+            | KeywordAbility::ProtectionFromWhite
+            | KeywordAbility::ProtectionFromBlue
+            | KeywordAbility::ProtectionFromBlack
+            | KeywordAbility::ProtectionFromRed
+            | KeywordAbility::ProtectionFromGreen
+            | KeywordAbility::ProtectionFromMulticolored
+            | KeywordAbility::ProtectionFromSubtype(_)
+            | KeywordAbility::ProtectionFrom(_)
+    )
+}
+
+fn strip_trailing_temp_duration(
+    low: &str,
+    dur: ResolvedDuration,
+) -> Option<(String, ResolvedDuration)> {
+    let mut body = low.trim().trim_end_matches('.').trim().to_owned();
+    let mut eff_dur = dur;
+    for (suffix, implied) in [
+        (
+            " until your next turn",
+            ResolvedDuration::UntilControllerNextTurn,
+        ),
+        (" until the end of turn", ResolvedDuration::UntilEndOfTurn),
+        (" until end of turn", ResolvedDuration::UntilEndOfTurn),
+        (
+            " until the end of combat",
+            ResolvedDuration::UntilEndOfCombat,
+        ),
+        (" until end of combat", ResolvedDuration::UntilEndOfCombat),
+        (" this combat", ResolvedDuration::UntilEndOfCombat),
+        (" this turn", ResolvedDuration::UntilEndOfTurn),
+    ] {
+        if let Some(stripped) = body.strip_suffix(suffix) {
+            body = stripped.trim().to_owned();
+            if eff_dur == ResolvedDuration::NoStatedDuration
+                || (eff_dur == ResolvedDuration::UntilEndOfTurn
+                    && implied != ResolvedDuration::UntilEndOfTurn)
+            {
+                eff_dur = implied;
+            }
+            break;
+        }
+    }
+    (!body.is_empty()).then_some((body, eff_dur))
+}
+
+fn parse_player_cant_activate_rule(rule_body: &str) -> Option<bool> {
+    match rule_body {
+        "cant_activate_abilities"
+        | "cantactivateabilities"
+        | "can't activate abilities"
+        | "cannot activate abilities" => Some(false),
+        "cant_activate_nonmana_abilities"
+        | "cantactivatenonmanaabilities"
+        | "can't activate abilities that aren't mana abilities"
+        | "can't activate abilities unless they're mana abilities"
+        | "cannot activate abilities that aren't mana abilities"
+        | "cannot activate abilities unless they're mana abilities" => Some(true),
+        _ => None,
+    }
+}
+
+fn parse_temp_permanent_lock_parts(rule_body: &str) -> Option<Vec<ResolvedPartSpec>> {
+    let cleaned = rule_body
+        .strip_prefix("abilitytimingorlock:")
+        .unwrap_or(rule_body)
+        .trim();
+    let (doesnt_untap, suppressed, cant_attack_or_block) = match cleaned {
+        "doesnt_untap"
+        | "doesntuntap"
+        | "doesn't untap during its controller's untap step"
+        | "don't untap during their controllers' untap steps"
+        | "doesn't untap during your untap step" => (true, None, false),
+        "activatedabilitiescantbeactivated"
+        | "cantactivateabilities"
+        | "activated_abilities_cant_be_activated"
+        | "cant_activate_abilities"
+        | "its activated abilities can't be activated"
+        | "their activated abilities can't be activated" => {
+            (false, Some(ActivationSuppression::All), false)
+        }
+        "nonmanaactivatedabilitiescantbeactivated"
+        | "cant_activate_nonmana_abilities"
+        | "its activated abilities can't be activated unless they're mana abilities"
+        | "their activated abilities can't be activated unless they're mana abilities" => {
+            (false, Some(ActivationSuppression::NonMana), false)
+        }
+        "detain"
+        | "detained"
+        | "can't attack or block, and its activated abilities can't be activated"
+        | "can't attack or block and its activated abilities can't be activated"
+        | "can't attack or block, and their activated abilities can't be activated"
+        | "can't attack or block and their activated abilities can't be activated" => {
+            (false, Some(ActivationSuppression::All), true)
+        }
+        "can't attack or block, and its activated abilities can't be activated unless they're mana abilities"
+        | "can't attack or block and its activated abilities can't be activated unless they're mana abilities"
+        | "can't attack or block, and their activated abilities can't be activated unless they're mana abilities"
+        | "can't attack or block and their activated abilities can't be activated unless they're mana abilities" => {
+            (false, Some(ActivationSuppression::NonMana), true)
+        }
+        "doesn't untap during its controller's untap step, and its activated abilities can't be activated"
+        | "doesn't untap during its controller's untap step and its activated abilities can't be activated"
+        | "don't untap during their controllers' untap steps, and their activated abilities can't be activated"
+        | "don't untap during their controllers' untap steps and their activated abilities can't be activated" => {
+            (true, Some(ActivationSuppression::All), false)
+        }
+        "doesn't untap during its controller's untap step, and its activated abilities can't be activated unless they're mana abilities"
+        | "doesn't untap during its controller's untap step and its activated abilities can't be activated unless they're mana abilities"
+        | "don't untap during their controllers' untap steps, and their activated abilities can't be activated unless they're mana abilities"
+        | "don't untap during their controllers' untap steps and their activated abilities can't be activated unless they're mana abilities" => {
+            (true, Some(ActivationSuppression::NonMana), false)
+        }
+        _ => return None,
+    };
+    let mut parts = Vec::new();
+    if cant_attack_or_block {
+        parts.push(ResolvedPartSpec::BlockingRestriction(
+            BlockingRestriction::CannotAttackOrBlock,
+        ));
+    }
+    parts.push(ResolvedPartSpec::Abilities(AbilityChange {
+        suppressed_activations: suppressed,
+        doesnt_untap,
+        ..AbilityChange::default()
+    }));
+    Some(parts)
+}
+
+fn condition_to_for_as_long_as_duration(condition: &ConditionAst) -> Option<DurationAst> {
+    let as_marker = |c: &ConditionAst| -> Option<GameMarker> {
+        match c {
+            ConditionAst::Marker(
+                m @ (GameMarker::ControlsSelf
+                | GameMarker::RemainsOnBattlefield
+                | GameMarker::RemainsTapped),
+            ) => Some(m.clone()),
+            ConditionAst::GameStateFlag(flag) => {
+                match flag
+                    .trim()
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "you control ~"
+                    | "you control this creature"
+                    | "you control this permanent"
+                    | "you control this artifact"
+                    | "you control this enchantment"
+                    | "you control this saga"
+                    | "you control it" => Some(GameMarker::ControlsSelf),
+                    "~ remains on the battlefield"
+                    | "this creature remains on the battlefield"
+                    | "this permanent remains on the battlefield"
+                    | "this artifact remains on the battlefield"
+                    | "this enchantment remains on the battlefield"
+                    | "this saga remains on the battlefield"
+                    | "it remains on the battlefield" => Some(GameMarker::RemainsOnBattlefield),
+                    "~ remains tapped"
+                    | "this creature remains tapped"
+                    | "this permanent remains tapped"
+                    | "this artifact remains tapped"
+                    | "this enchantment remains tapped"
+                    | "it remains tapped" => Some(GameMarker::RemainsTapped),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    };
+    if let Some(m) = as_marker(condition) {
+        return Some(DurationAst::ForAsLongAs(Box::new(ConditionAst::Marker(m))));
+    }
+    if let ConditionAst::And(a, b) = condition
+        && let (Some(ma), Some(mb)) = (as_marker(a), as_marker(b))
+        && matches!(
+            (ma, mb),
+            (GameMarker::ControlsSelf, GameMarker::RemainsTapped)
+                | (GameMarker::RemainsTapped, GameMarker::ControlsSelf)
+        )
+    {
+        return Some(DurationAst::ForAsLongAs(Box::new(ConditionAst::And(
+            Box::new(ConditionAst::Marker(GameMarker::ControlsSelf)),
+            Box::new(ConditionAst::Marker(GameMarker::RemainsTapped)),
+        ))));
+    }
+    None
+}
+
+fn rewrite_instruction_duration_for_as_long_as(
+    ins: &InstructionAst,
+    dur: &DurationAst,
+) -> Option<InstructionAst> {
+    match ins {
+        InstructionAst::GainControl {
+            controller,
+            subject,
+            ..
+        } => Some(InstructionAst::GainControl {
+            controller: *controller,
+            subject: subject.clone(),
+            duration: dur.clone(),
+        }),
+        InstructionAst::CombatRuleMod { subject, rule, .. } => {
+            Some(InstructionAst::CombatRuleMod {
+                subject: subject.clone(),
+                rule: rule.clone(),
+                duration: dur.clone(),
+            })
+        }
+        InstructionAst::TemporaryStatic { static_ability, .. } => {
+            Some(InstructionAst::TemporaryStatic {
+                static_ability: static_ability.clone(),
+                duration: dur.clone(),
+            })
+        }
+        InstructionAst::GrantKeywords {
+            subject, keywords, ..
+        } => Some(InstructionAst::GrantKeywords {
+            subject: subject.clone(),
+            keywords: keywords.clone(),
+            duration: dur.clone(),
+        }),
+        InstructionAst::ModifyPT {
+            subject,
+            dx,
+            dy,
+            scale,
+            ..
+        } => Some(InstructionAst::ModifyPT {
+            subject: subject.clone(),
+            dx: dx.clone(),
+            dy: dy.clone(),
+            duration: dur.clone(),
+            scale: scale.clone(),
+        }),
+        InstructionAst::RemoveAllAbilities { subject, .. } => {
+            Some(InstructionAst::RemoveAllAbilities {
+                subject: subject.clone(),
+                duration: dur.clone(),
+            })
+        }
+        InstructionAst::AnimateOrSetBasePT {
+            subject,
+            power,
+            toughness,
+            description,
+            keywords,
+            ..
+        } => Some(InstructionAst::AnimateOrSetBasePT {
+            subject: subject.clone(),
+            power: power.clone(),
+            toughness: toughness.clone(),
+            description: description.clone(),
+            keywords: keywords.clone(),
+            duration: dur.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
+    matches!(
+        op,
+        Instruction::DamageGroup { .. }
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DamageOpponentsAmount(_)
+            | Instruction::DealDamageFrom { .. }
+            | Instruction::PayLife { .. }
+            | Instruction::PayEnergy { .. }
+            | Instruction::PayControllerLife(_)
+            | Instruction::PayControllerEnergy(_)
+            | Instruction::AdjustPlayersLife { .. }
+            | Instruction::AdjustControllerLife { .. }
+            | Instruction::Discard {
+                players: AffectedPlayers::One(_),
+                ..
+            }
+            | Instruction::DiscardFiltered {
+                players: AffectedPlayers::One(_),
+                ..
+            }
+            | Instruction::DiscardOneAtRandom(_)
+            | Instruction::Sacrifice {
+                players: AffectedPlayers::One(_),
+                ..
+            }
+            | Instruction::SacrificeSubject { .. }
+            | Instruction::SacrificeMatching(_)
+            | Instruction::ExileFromZone {
+                players: AffectedPlayers::One(_),
+                ..
+            }
+            | Instruction::ExileGroupFromZone { .. }
+            | Instruction::Mill { .. }
+            | Instruction::MoveSubject { .. }
+            | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::DestroyGroup(_)
+            | Instruction::MoveGroup { .. }
+            | Instruction::Blight { .. }
+            | Instruction::CollectEvidence { .. }
+    )
 }
 
 fn is_battlefield_owner_control_dest(dest: &str) -> bool {
@@ -17996,6 +20237,11 @@ fn resolve_return_select_zone(
         ))
     } else if fl.contains("all graveyards") || fl.contains("any graveyard") {
         Ok((ResolvingPlayer::Controller, SourceZoneFilter::AnyGraveyard))
+    } else if fl.contains("hand or graveyard") || fl.contains("hand and/or graveyard") {
+        Ok((
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::HandOrGraveyard,
+        ))
     } else if fl.contains("graveyard") {
         Ok((ResolvingPlayer::Controller, SourceZoneFilter::Graveyard))
     } else if fl.contains("exile") {
@@ -18552,7 +20798,8 @@ fn emit_resolved_parts_for_subject(
             filter,
             count: TargetCountAst::Exact(1),
         } if filter.zone.is_none() => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt =
+                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -18566,7 +20813,8 @@ fn emit_resolved_parts_for_subject(
             filter,
             count: TargetCountAst::Exact(n),
         } if filter.zone.is_none() && *n >= 2 => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt =
+                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -18584,7 +20832,8 @@ fn emit_resolved_parts_for_subject(
             filter,
             count: TargetCountAst::UpTo(max),
         } if filter.zone.is_none() && *max > 0 => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt =
+                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -18602,7 +20851,8 @@ fn emit_resolved_parts_for_subject(
             filter,
             count: TargetCountAst::ChosenX,
         } if filter.zone.is_none() && !in_trigger => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt =
+                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(bt)?;
             builder.x_target_count = true;
             builder
@@ -18621,7 +20871,7 @@ fn emit_resolved_parts_for_subject(
             filter,
             count: TargetCountAst::AnyNumber,
         } if filter.zone.is_none() => {
-            let obj = lower_object_filter(filter, vocabulary)?;
+            let obj = lower_object_filter_in_context(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
@@ -18700,8 +20950,9 @@ fn emit_resolved_parts_for_subject(
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
             if f.zone.is_none() =>
         {
-            let obj = lower_object_filter(f, vocabulary)?;
+            let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
             bind_filter_player_target(builder, &obj)?;
+            ensure_target_power_consumed(builder, &obj);
             builder.last_group_filter = Some(obj);
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::Matching(obj)),

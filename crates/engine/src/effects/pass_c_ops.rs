@@ -1949,33 +1949,42 @@ impl EffectWindow {
                         target_entry.kind(),
                         StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
                     );
-                    for _ in 0..copies {
-                        let before = self.rules_snapshot(None)?;
-                        let occ = if is_spell {
-                            let Ok(copy_src) = self.capture_copy_source(target_id, 0.into()) else {
+                    let copy_prohibited = is_spell
+                        && self
+                            .window
+                            .spell_object(&target_entry)
+                            .and_then(|obj| self.copiable_program(obj))
+                            .is_some_and(|program| program.cannot_be_copied);
+                    if !copy_prohibited {
+                        for _ in 0..copies {
+                            let before = self.rules_snapshot(None)?;
+                            let occ = if is_spell {
+                                let Ok(copy_src) = self.capture_copy_source(target_id, 0.into())
+                                else {
+                                    break;
+                                };
+                                self.create_copy(&copy_src, entry.controller(), vec![])?
+                            } else if let Some(payload) = self.payloads.get(&target_id).cloned() {
+                                self.create_ability_copy(
+                                    &target_entry,
+                                    payload,
+                                    entry.controller(),
+                                    vec![],
+                                )?
+                            } else {
                                 break;
                             };
-                            self.create_copy(&copy_src, entry.controller(), vec![])?
-                        } else if let Some(payload) = self.payloads.get(&target_id).cloned() {
-                            self.create_ability_copy(
-                                &target_entry,
-                                payload,
-                                entry.controller(),
-                                vec![],
-                            )?
-                        } else {
-                            break;
-                        };
-                        self.emit_from(
-                            EventCause::Instruction {
-                                entry: entry.id(),
-                                instruction: index,
-                            },
-                            &before,
-                            None,
-                            ctx.append,
-                            |_, _, _| Ok(vec![occ]),
-                        )?;
+                            self.emit_from(
+                                EventCause::Instruction {
+                                    entry: entry.id(),
+                                    instruction: index,
+                                },
+                                &before,
+                                None,
+                                ctx.append,
+                                |_, _, _| Ok(vec![occ]),
+                            )?;
+                        }
                     }
                 }
                 self.advance_instruction()?;
@@ -2011,6 +2020,9 @@ impl EffectWindow {
                             }
                             crate::program::SourceZoneFilter::Graveyard => {
                                 matches!(obj.zone(), ObjectZone::Graveyard(p) if seats.contains(&p))
+                            }
+                            crate::program::SourceZoneFilter::HandOrGraveyard => {
+                                matches!(obj.zone(), ObjectZone::Hand(p) | ObjectZone::Graveyard(p) if seats.contains(&p))
                             }
                             crate::program::SourceZoneFilter::OpponentGraveyard => {
                                 matches!(obj.zone(), ObjectZone::Graveyard(p) if p != entry.controller())

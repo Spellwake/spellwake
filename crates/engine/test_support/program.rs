@@ -2411,6 +2411,8 @@ fn ability_change(
             .into_iter()
             .map(CombatKeywordWire::native)
             .collect(),
+        suppressed_activations: None,
+        doesnt_untap: false,
     })
 }
 #[derive(Deserialize)]
@@ -2572,6 +2574,9 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
         }
         BlockingRestriction::BlockerPowerAtLeastSource => {
             json!({"tag":"BlockerPowerAtLeastSource"})
+        }
+        BlockingRestriction::MustBlockAllAttackers => {
+            json!({"tag":"MustBlockAllAttackers"})
         }
         BlockingRestriction::AdditionalBlock => json!({"tag":"AdditionalBlock"}),
         BlockingRestriction::RequiresSoulbondPartner => json!({"tag":"RequiresSoulbondPartner"}),
@@ -7892,6 +7897,7 @@ pub fn decode_for_owner(
                     Ok::<_, String>(spellwake_engine::program::SpellModes {
                         minimum: spec.minimum,
                         maximum: spec.maximum,
+                        conditional_maximum: None,
                         allow_repeat: spec.allow_repeat,
                         distinct_targets: false,
                         uniqueness: spellwake_engine::program::ModalUniqueness::None,
@@ -8154,6 +8160,8 @@ pub fn decode_for_owner(
         .map(|ability| ability.native(vocabulary))
         .collect::<Result<Vec<_>, String>>()?;
     let program = Program {
+        cannot_be_copied: false,
+        conditional_flash: None,
         cast_timing: None,
         activation_modes: Default::default(),
         entry_copy: raw.entry_copy.map(|rule| match rule.as_str() {
@@ -9394,6 +9402,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticRestriction::OpponentsCannotGainLife => {
                     json!({"tag":"OpponentsCannotGainLife","id":id.0})
+                }
+                StaticRestriction::ControllerLifeTotalCantChange => {
+                    json!({"tag":"ControllerLifeTotalCantChange","id":id.0})
+                }
+                StaticRestriction::PlayersCantSearchLibraries(rel) => {
+                    json!({"tag":"PlayersCantSearchLibraries","id":id.0,"players":format!("{rel:?}")})
                 }
                 StaticRestriction::RestrictOpponentsDuringOwnTurn => {
                     json!({"tag":"RestrictOpponentsDuringOwnTurn","id":id.0})
@@ -10704,8 +10718,9 @@ pub fn body(value: &ExecutableBody) -> Value {
                         json!({"tag":"EqualToSourceCounters","kind":format!("{kind:?}")})
                     }
                 });
-                let count = match filter.count {
+                let count = match &filter.count {
                     SearchCount::UpTo(n) => json!({"tag":"UpTo","count":n}),
+                    SearchCount::UpToExpr(expr) => json!({"tag":"UpToExpr","expr":instruction_amount(expr)}),
                     SearchCount::Exact(n) => json!({"tag":"Exact","count":n.get()}),
                     SearchCount::UpToPlayersWithMoreLands => {
                         json!({"tag":"UpToPlayersWithMoreLands"})
@@ -11282,8 +11297,20 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::GrantCardPlayPermission { player, subject, duration, cast_only, free, any_color } => {
                 json!({"op":"GrantCardPlayPermission","player":format!("{player:?}"),"subject":format!("{subject:?}"),"duration":format!("{duration:?}"),"cast_only":cast_only,"free":free,"any_color":any_color})
             }
-            Instruction::CreateTokenCopy { source, count, tapped, attacking, sacrifice_at_end_step, exile_at_end_step, grant_haste, nonlegendary, override_pt, override_colors, add_subtype, strip_mana_cost } => {
-                json!({"op":"CreateTokenCopy","source":format!("{source:?}"),"count":instruction_amount(count),"tapped":tapped,"attacking":attacking,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"grant_haste":grant_haste,"nonlegendary":nonlegendary,"override_pt":override_pt,"override_colors":format!("{override_colors:?}"),"add_subtype":format!("{add_subtype:?}"),"strip_mana_cost":strip_mana_cost})
+            Instruction::CreateTokenCopy { source, count, tapped, attacking, sacrifice_at_end_step, exile_at_end_step, grant_keywords, nonlegendary, override_pt, override_colors, add_subtypes, add_card_types, strip_mana_cost, recipients } => {
+                json!({"op":"CreateTokenCopy","source":format!("{source:?}"),"count":instruction_amount(count),"tapped":tapped,"attacking":attacking,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"grant_keywords":format!("{grant_keywords:?}"),"nonlegendary":nonlegendary,"override_pt":override_pt,"override_colors":format!("{override_colors:?}"),"add_subtypes":format!("{add_subtypes:?}"),"add_card_types":format!("{add_card_types:?}"),"strip_mana_cost":strip_mana_cost,"recipients":format!("{recipients:?}")})
+            }
+            Instruction::BindResolutionX(expr) => {
+                json!({"op":"BindResolutionX","expr":instruction_amount(expr)})
+            }
+            Instruction::PutResolvingSpellInLibrary(placement) => {
+                json!({"op":"PutResolvingSpellInLibrary","placement":format!("{placement:?}")})
+            }
+            Instruction::PutSubjectIntoLibraryFromTop { subject, offset } => {
+                json!({"op":"PutSubjectIntoLibraryFromTop","subject":format!("{subject:?}"),"offset":instruction_amount(offset)})
+            }
+            Instruction::SetDayNight(clock) => {
+                json!({"op":"SetDayNight","clock":format!("{clock:?}")})
             }
             Instruction::CreateAuraTokenAttached { definition, host, up_to_one } => {
                 json!({"op":"CreateAuraTokenAttached","definition":format!("{definition:?}"),"host":format!("{host:?}"),"up_to_one":up_to_one})

@@ -1062,7 +1062,13 @@ impl ExtraActivationCost {
             | Self::BouncePermanent { filter, .. }
             | Self::RevealHand { filter, .. }
             | Self::ExileObjects { filter, .. } => filter.validate_vocabulary(vocabulary),
-            Self::PayEnergyExpr(expr) => expr.validate_world_condition(vocabulary),
+            Self::PayEnergyExpr(expr) => {
+                if expr.is_chosen_x() {
+                    Ok(())
+                } else {
+                    expr.validate_world_condition(vocabulary)
+                }
+            }
             Self::Waterbend(cost) | Self::PayMana(cost) => {
                 if cost.valid() {
                     Ok(())

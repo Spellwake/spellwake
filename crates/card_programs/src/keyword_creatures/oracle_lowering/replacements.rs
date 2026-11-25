@@ -165,12 +165,23 @@ pub(super) fn lower_replacement(
                     return Err("oracle:unsupported-entry-counters");
                 }
                 let mut inner = per_filter.as_ref().clone();
+                let is_exiled_with_self = (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0;
                 let zone = match inner.zone.take() {
+                    None if is_exiled_with_self => {
+                        spellwake_engine::program::ValueZone::Exile(None)
+                    }
                     None => spellwake_engine::program::ValueZone::Battlefield,
                     Some(ZoneFilter::YourGraveyard) => {
                         spellwake_engine::program::ValueZone::Graveyard(ResolvingPlayer::Controller)
                     }
-                    Some(ZoneFilter::AllGraveyards) => {
+                    Some(ZoneFilter::AllGraveyards | ZoneFilter::AnyGraveyard) => {
+                        spellwake_engine::program::ValueZone::AllGraveyards
+                    }
+                    Some(ZoneFilter::OpponentsGraveyards) => {
+                        if inner.controller.is_some() {
+                            return Err("oracle:unsupported-entry-counters");
+                        }
+                        inner.controller = Some(ControllerRelation::OwnerOpponent);
                         spellwake_engine::program::ValueZone::AllGraveyards
                     }
                     Some(ZoneFilter::YourHand) => {
@@ -890,26 +901,46 @@ fn lower_event_instead_replacement(
     let is_permanent = matches!(program.kind, ProgramKind::Permanent(_));
 
     // 1. Special full-sentence damage prevention / replacement shapes emitted by clauses.rs
-    if is_permanent && would_norm == "reduce_life_below_floor" {
-        let floor = instead_raw
-            .split("less than ")
-            .nth(1)
-            .and_then(|s| s.split_whitespace().next())
-            .and_then(|tok| tok.parse::<u8>().ok())
-            .filter(|&n| n > 0);
-        if let Some(floor) = floor {
-            let require_creature = instead_raw.contains("if you control a creature");
-            return Some(push_static_ability(
-                program,
-                StaticContinuousAbility::DamageRule {
-                    id: ids.static_id(),
-                    rule: StaticDamageRule::MinimumLifeTotal {
-                        floor,
-                        require_creature,
-                    },
+    let parse_min_life_floor = |after_less: &str| -> Option<u8> {
+        let (floor_part, target_part) = after_less.split_once(" reduces it to ")?;
+        let floor_raw = floor_part
+            .trim()
+            .strip_suffix(" this turn")
+            .unwrap_or(floor_part.trim())
+            .trim();
+        let target_no_instead = target_part
+            .trim()
+            .trim_end_matches('.')
+            .trim()
+            .strip_suffix(" instead")
+            .unwrap_or(target_part.trim().trim_end_matches('.').trim())
+            .trim();
+        let target_raw = target_no_instead
+            .strip_suffix(" this turn")
+            .unwrap_or(target_no_instead)
+            .trim();
+        let floor = floor_raw.parse::<u8>().ok()?;
+        let target = target_raw.parse::<u8>().ok()?;
+        (floor > 0 && floor == target).then_some(floor)
+    };
+    if is_permanent
+        && would_norm == "reduce_life_below_floor"
+        && let Some(after_less) = instead_raw
+            .split_once("reduce your life total to less than ")
+            .map(|(_, rest)| rest)
+        && let Some(floor) = parse_min_life_floor(after_less)
+    {
+        let require_creature = instead_raw.contains("if you control a creature");
+        return Some(push_static_ability(
+            program,
+            StaticContinuousAbility::DamageRule {
+                id: ids.static_id(),
+                rule: StaticDamageRule::MinimumLifeTotal {
+                    floor,
+                    require_creature,
                 },
-            ));
-        }
+            },
+        ));
     }
     if is_permanent
         && would_norm == "would_event"
@@ -918,13 +949,7 @@ fn lower_event_instead_replacement(
             "damage" | "if you control a creature, damage"
         )
         && let Some(after_less) = instead_norm.strip_prefix("reduce your life total to less than ")
-        && let Some((floor_raw, target_raw)) = after_less.split_once(" reduces it to ")
-        && let (Ok(floor), Ok(target)) = (
-            floor_raw.trim().parse::<u8>(),
-            target_raw.trim().parse::<u8>(),
-        )
-        && floor > 0
-        && floor == target
+        && let Some(floor) = parse_min_life_floor(after_less)
     {
         return Some(push_static_ability(
             program,
@@ -1326,11 +1351,15 @@ fn lower_event_instead_replacement(
         });
         return Some(Ok(()));
     }
+    let would_zone_norm = would_norm
+        .strip_suffix(" this turn")
+        .unwrap_or(would_norm)
+        .trim();
     if matches!(
         subj_low.as_str(),
         "a card or token" | "a card" | "any card" | "any card or token"
     ) && matches!(
-        would_norm,
+        would_zone_norm,
         "be put into an opponent's graveyard from anywhere"
             | "be put into a graveyard from anywhere"
             | "be put into your graveyard from anywhere"
@@ -1346,12 +1375,12 @@ fn lower_event_instead_replacement(
         } else {
             ZoneObjectKind::Either
         };
-        let subject = if would_norm.contains("opponent's graveyard") {
+        let subject = if would_zone_norm.contains("opponent's graveyard") {
             ZoneReplacementSubject::Matching {
                 filter: Box::new(ObjectFilter::any()),
                 owner_relation: Some(PlayerRelation::Opponent),
             }
-        } else if would_norm.contains("your graveyard") {
+        } else if would_zone_norm.contains("your graveyard") {
             ZoneReplacementSubject::Matching {
                 filter: Box::new(ObjectFilter::any()),
                 owner_relation: Some(PlayerRelation::Controller),
@@ -1371,7 +1400,7 @@ fn lower_event_instead_replacement(
         return Some(Ok(()));
     }
     if subj_low == "a card you didn't control"
-        && would_norm == "be put into an opponent's graveyard from anywhere"
+        && would_zone_norm == "be put into an opponent's graveyard from anywhere"
         && matches!(instead_norm, "exile it" | "exile that card")
     {
         let id = next_zone_rep_id(program);
@@ -1390,7 +1419,7 @@ fn lower_event_instead_replacement(
         return Some(Ok(()));
     }
     if subj_low == "a nontoken creature an opponent owns"
-        && would_norm
+        && would_zone_norm
             == "die or a creature card not on the battlefield would be put into an opponent's graveyard"
         && matches!(instead_norm, "exile that card" | "exile it")
     {
@@ -1410,7 +1439,7 @@ fn lower_event_instead_replacement(
         return Some(Ok(()));
     }
     if subj_low == "a black or red permanent, spell, or card not on the battlefield"
-        && would_norm == "be put into a graveyard"
+        && would_zone_norm == "be put into a graveyard"
         && matches!(instead_norm, "exile it" | "exile that card")
     {
         let id = next_zone_rep_id(program);
@@ -1432,14 +1461,14 @@ fn lower_event_instead_replacement(
         return Some(Ok(()));
     }
     let is_battlefield_to_gy = matches!(
-        would_norm,
+        would_zone_norm,
         "die"
             | "be put into a graveyard from the battlefield"
             | "be put into an opponent's graveyard from the battlefield"
             | "be put into your graveyard from the battlefield"
             | "be put into its owner's graveyard from the battlefield"
     ) || (matches!(
-        would_norm,
+        would_zone_norm,
         "be put into a graveyard"
             | "be put into an opponent's graveyard"
             | "be put into your graveyard"
@@ -1475,9 +1504,9 @@ fn lower_event_instead_replacement(
             None
         };
         if let Some(replace_with) = replace_dest {
-            let owner_relation = if would_norm.contains("opponent's graveyard") {
+            let owner_relation = if would_zone_norm.contains("opponent's graveyard") {
                 Some(PlayerRelation::Opponent)
-            } else if would_norm.contains("your graveyard") {
+            } else if would_zone_norm.contains("your graveyard") {
                 Some(PlayerRelation::Controller)
             } else {
                 None
@@ -1750,10 +1779,12 @@ fn lower_event_instead_replacement(
         }
     }
     if matches!(
-        would_norm,
+        would_zone_norm,
         "be put into a graveyard from anywhere"
             | "be put into an opponent's graveyard from anywhere"
             | "be put into your graveyard from anywhere"
+            | "be put into a player's graveyard from anywhere"
+            | "be put into its owner's graveyard from anywhere"
     ) && matches!(
         instead_norm,
         "exile it" | "exile that card" | "exile that permanent" | "exile that creature"
@@ -1771,9 +1802,9 @@ fn lower_event_instead_replacement(
             }
             None => ZoneObjectKind::Either,
         };
-        let owner_relation = if would_norm.contains("opponent's graveyard") {
+        let owner_relation = if would_zone_norm.contains("opponent's graveyard") {
             Some(PlayerRelation::Opponent)
-        } else if would_norm.contains("your graveyard") {
+        } else if would_zone_norm.contains("your graveyard") {
             Some(PlayerRelation::Controller)
         } else {
             None

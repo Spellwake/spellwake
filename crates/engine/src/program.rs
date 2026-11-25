@@ -860,10 +860,12 @@ pub enum SearchManaValue {
 }
 
 /// Cardinality policy for a library search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchCount {
     /// Find up to `n` matching cards (fail-to-find permitted).
     UpTo(u8),
+    /// Find up to a dynamically evaluated number of matching cards (fail-to-find permitted).
+    UpToExpr(Box<ValueExpr>),
     /// Unrestricted required search: find exactly `n` cards (or the whole library if smaller).
     Exact(std::num::NonZeroU8),
     /// Find up to the number of players controlling more lands than the searcher.
@@ -1188,14 +1190,20 @@ impl LibrarySearch {
     #[must_use]
     pub fn is_battlefield_batch(&self) -> bool {
         matches!(self.destination, SearchDestination::Battlefield { .. })
-            && matches!(self.count, SearchCount::UpTo(n) if n > 1)
+            && matches!(
+                self.count,
+                SearchCount::UpTo(n) if n > 1
+            )
+            || matches!(self.destination, SearchDestination::Battlefield { .. })
+                && matches!(self.count, SearchCount::UpToExpr(_))
     }
 
     /// Whether this search uses the multi-card exile batch reply.
     #[must_use]
     pub fn is_exile_batch(&self) -> bool {
         matches!(self.destination, SearchDestination::Exile { .. })
-            && matches!(self.count, SearchCount::UpTo(n) if n > 1)
+            && (matches!(self.count, SearchCount::UpTo(n) if n > 1)
+                || matches!(self.count, SearchCount::UpToExpr(_)))
     }
 
     /// Fixed maximum selection count for bounded hand, graveyard, or exile batch searches.
@@ -1424,6 +1432,8 @@ pub enum SubjectDestination {
 pub enum SourceZoneFilter {
     Hand,
     Graveyard,
+    /// Either the player's hand or their graveyard (e.g. Swift Warkite).
+    HandOrGraveyard,
     Battlefield,
     Exile,
     OpponentGraveyard,
@@ -1541,6 +1551,8 @@ pub enum CombatActionKind {
     RemoveFromCombat,
     UntapAndRemoveFromCombat,
     PreventCombatDamageByAndTo,
+    /// Cause an attacking creature to become blocked without adding a blocker (CR 509.1h).
+    BecomeBlocked,
 }
 
 /// Temporary game-rule modification installed by `Instruction::CreateTemporaryRule`.
@@ -1549,6 +1561,7 @@ pub enum TemporaryRuleKind {
     CantBeCountered {
         filter: Option<ObjectFilter>,
         controller_only: bool,
+        next_only: bool,
     },
     PlayerCantGainLife {
         players: AffectedPlayers,
@@ -1557,6 +1570,26 @@ pub enum TemporaryRuleKind {
         players: AffectedPlayers,
         filter: Option<ObjectFilter>,
     },
+    /// Affected players can't activate abilities (or non-mana abilities when `nonmana_only` is true).
+    CantActivateAbilities {
+        players: AffectedPlayers,
+        nonmana_only: bool,
+    },
+    /// Affected players can't play lands while this temporary rule lasts (e.g. Solfatara, Turf Wound).
+    CantPlayLands {
+        players: AffectedPlayers,
+    },
+    /// Grant player-applicable keywords (Hexproof, Shroud, Protection) to affected players (e.g. Veil of Summer, Teferi's Protection).
+    PlayerGrantKeyword {
+        players: AffectedPlayers,
+        keywords: BTreeSet<KeywordAbility>,
+    },
+    /// The next matching spell the controller casts this turn may be cast without paying its mana cost.
+    NextSpellFree {
+        filter: Option<ObjectFilter>,
+    },
+    /// Duration-scoped zone replacement effect (e.g. Yawgmoth's Will, Hallowed Moonlight, Cosmic Intervention).
+    TemporaryZoneReplacement(Box<ZoneReplacementAbility>),
     DamageCantBePrevented,
     ExileIfDies {
         subject: Box<EffectSubject>,
@@ -1587,6 +1620,7 @@ pub enum TemporaryRuleKind {
     FilteredFlash {
         player: ResolvingPlayer,
         filter: ObjectFilter,
+        next_only: bool,
     },
     /// Temporary zone-wide play/cast permission for cards matching `filter` in `zone`.
     ZoneCastPermission {
@@ -1618,6 +1652,7 @@ pub enum TemporaryRuleKind {
     PreventNextTimeDamage {
         source: Option<ObjectFilter>,
         source_chosen_color: bool,
+        source_is_target: bool,
         recipient: crate::characteristics::StaticDamageRecipient,
         combat_only: bool,
     },
@@ -1633,10 +1668,21 @@ pub enum TemporaryRuleKind {
     /// Duration-scoped damage redirection shield (CR 614.9, e.g. Shield Dancer, Blood of the Martyr, Harm's Way).
     RedirectNextDamage {
         source: Option<ObjectFilter>,
+        source_is_target: bool,
         from: crate::characteristics::StaticDamageRecipient,
         to: crate::characteristics::DamageRedirectTarget,
         combat_only: bool,
         amount: Option<RulesInteger>,
+        one_shot: bool,
+    },
+    /// Dynamic damage redirection shield whose `amount` is evaluated when `CreateTemporaryRule` resolves (CR 611.2c).
+    RedirectNextDamageExpr {
+        source: Option<ObjectFilter>,
+        source_is_target: bool,
+        from: crate::characteristics::StaticDamageRecipient,
+        to: crate::characteristics::DamageRedirectTarget,
+        combat_only: bool,
+        amount: Box<ValueExpr>,
         one_shot: bool,
     },
 }
@@ -2161,13 +2207,26 @@ pub enum Instruction {
         attacking: bool,
         sacrifice_at_end_step: bool,
         exile_at_end_step: bool,
-        grant_haste: bool,
+        grant_keywords: BTreeSet<KeywordAbility>,
         nonlegendary: bool,
         override_pt: Option<(u8, u8)>,
         override_colors: Option<BTreeSet<Color>>,
-        add_subtype: Option<CreatureTypeId>,
+        add_subtypes: BTreeSet<CreatureTypeId>,
+        add_card_types: BTreeSet<CardType>,
         strip_mana_cost: bool,
+        recipients: crate::token::TokenRecipients,
     },
+    /// Evaluate `ValueExpr` and bind the resolving stack entry's `chosen_x` for downstream instructions and reflexive triggers.
+    BindResolutionX(ValueExpr),
+    /// Put the resolving spell card into its owner's library at `placement` instead of the graveyard (CR 608.2n).
+    PutResolvingSpellInLibrary(LibraryPlacement),
+    /// Put `subject` into its owner's library at a dynamically computed zero-based offset from the top (CR 401.2).
+    PutSubjectIntoLibraryFromTop {
+        subject: MoveSubjectRef,
+        offset: ValueExpr,
+    },
+    /// Explicitly change the game's day/night designation (CR 730.2, e.g. Into the Night, The Celestus, Unnatural Moonrise).
+    SetDayNight(crate::day_night::DayNight),
     /// Create an Aura token (such as a Role token) attached to `host`.
     CreateAuraTokenAttached {
         definition: Box<crate::token::TokenDefinition>,
@@ -3645,6 +3704,10 @@ impl Instruction {
             | Self::DestroySubject { .. }
             | Self::GrantCardPlayPermission { .. }
             | Self::CreateTokenCopy { .. }
+            | Self::BindResolutionX(_)
+            | Self::PutResolvingSpellInLibrary(_)
+            | Self::PutSubjectIntoLibraryFromTop { .. }
+            | Self::SetDayNight(_)
             | Self::CreateAuraTokenAttached { .. }
             | Self::ExploreSubject(_)
             | Self::ScheduleDelayedEventTrigger { .. }
@@ -4407,12 +4470,36 @@ impl Instruction {
                 matches!(attachment, MoveSubjectRef::TargetObject)
                     || matches!(host, MoveSubjectRef::TargetObject)
             }
-            Self::CreateTokenCopy { source, .. }
-            | Self::CreateAuraTokenAttached { host: source, .. }
-            | Self::ExploreSubject(source) => matches!(source, MoveSubjectRef::TargetObject),
+            Self::CreateTokenCopy {
+                source,
+                count,
+                recipients,
+                ..
+            } => {
+                matches!(source, MoveSubjectRef::TargetObject)
+                    || count.uses_target()
+                    || matches!(
+                        recipients,
+                        crate::token::TokenRecipients::Player(p) if is_target_player(*p)
+                    )
+            }
+            Self::BindResolutionX(expr) => expr.uses_target(),
+            Self::PutResolvingSpellInLibrary(LibraryPlacement::ChoiceTopOrBottom { chooser }) => {
+                is_target_player(*chooser)
+            }
+            Self::PutResolvingSpellInLibrary(_) | Self::SetDayNight(_) => false,
+            Self::PutSubjectIntoLibraryFromTop { subject, offset } => {
+                matches!(subject, MoveSubjectRef::TargetObject) || offset.uses_target()
+            }
+            Self::CreateAuraTokenAttached { host: source, .. } | Self::ExploreSubject(source) => {
+                matches!(source, MoveSubjectRef::TargetObject)
+            }
             Self::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
                 TemporaryRuleKind::PlayerCantGainLife { players }
                 | TemporaryRuleKind::CantCastSpells { players, .. }
+                | TemporaryRuleKind::CantActivateAbilities { players, .. }
+                | TemporaryRuleKind::CantPlayLands { players }
+                | TemporaryRuleKind::PlayerGrantKeyword { players, .. }
                 | TemporaryRuleKind::SpellCostIncrease { players, .. }
                 | TemporaryRuleKind::ExileSpellOnResolve { players, .. } => {
                     is_target_affected(*players)
@@ -4423,6 +4510,73 @@ impl Instruction {
                 TemporaryRuleKind::ExileIfDies { subject }
                 | TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
                     matches!(subject.as_ref(), EffectSubject::TargetObject)
+                }
+                TemporaryRuleKind::RedirectNextDamage {
+                    source_is_target,
+                    from,
+                    to,
+                    ..
+                } => {
+                    *source_is_target
+                        || matches!(
+                            from,
+                            crate::characteristics::StaticDamageRecipient::TargetObject
+                                | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
+                        || matches!(
+                            to,
+                            crate::characteristics::DamageRedirectTarget::TargetObject
+                                | crate::characteristics::DamageRedirectTarget::TargetAny
+                                | crate::characteristics::DamageRedirectTarget::SecondTargetObject
+                        )
+                }
+                TemporaryRuleKind::RedirectNextDamageExpr {
+                    source_is_target,
+                    from,
+                    to,
+                    amount,
+                    ..
+                } => {
+                    *source_is_target
+                        || amount.uses_target()
+                        || matches!(
+                            from,
+                            crate::characteristics::StaticDamageRecipient::TargetObject
+                                | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
+                        || matches!(
+                            to,
+                            crate::characteristics::DamageRedirectTarget::TargetObject
+                                | crate::characteristics::DamageRedirectTarget::TargetAny
+                                | crate::characteristics::DamageRedirectTarget::SecondTargetObject
+                        )
+                }
+                TemporaryRuleKind::PreventNextDamage { recipient, .. } => matches!(
+                    recipient,
+                    crate::characteristics::StaticDamageRecipient::TargetObject
+                        | crate::characteristics::StaticDamageRecipient::TargetAny
+                ),
+                TemporaryRuleKind::PreventNextDamageExpr {
+                    amount, recipient, ..
+                } => {
+                    amount.uses_target()
+                        || matches!(
+                            recipient,
+                            crate::characteristics::StaticDamageRecipient::TargetObject
+                                | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
+                }
+                TemporaryRuleKind::PreventNextTimeDamage {
+                    source_is_target,
+                    recipient,
+                    ..
+                } => {
+                    *source_is_target
+                        || matches!(
+                            recipient,
+                            crate::characteristics::StaticDamageRecipient::TargetObject
+                                | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
                 }
                 _ => false,
             },
@@ -5027,6 +5181,10 @@ impl Instruction {
             | Self::DestroySubject { .. }
             | Self::GrantCardPlayPermission { .. }
             | Self::CreateTokenCopy { .. }
+            | Self::BindResolutionX(_)
+            | Self::PutResolvingSpellInLibrary(_)
+            | Self::PutSubjectIntoLibraryFromTop { .. }
+            | Self::SetDayNight(_)
             | Self::CreateAuraTokenAttached { .. }
             | Self::ExploreSubject(_)
             | Self::ScheduleDelayedEventTrigger { .. }
@@ -6082,6 +6240,10 @@ impl ExecutableBody {
                 || matches!(self.target, BodyTarget::AnyGraveyardCreature)
                 || matches!(
                     self.target,
+                    BodyTarget::SingleSpell(sf) if sf.object.guarantees_creature()
+                )
+                || matches!(
+                    self.target,
                     BodyTarget::FilteredOwnGraveyardCard(filter)
                         | BodyTarget::FilteredAnyGraveyardCard { filter, .. }
                         if filter.guarantees_creature()
@@ -6641,6 +6803,7 @@ impl ExecutableBody {
                             | BodyTarget::FilteredAnyGraveyardCard { .. }
                     ) =>
                 {
+                    facts.definitely_exiled_target = true;
                     Some(OperandFamily::GraveyardCard)
                 }
                 Instruction::ExileGraveyardTarget => return Err(DefinitionError::OperandFamily),
@@ -7888,10 +8051,28 @@ impl ExecutableBody {
                     } else {
                         TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant)
                     };
-                    let delayed_spec = TriggerSpec::new(TriggerEvent::StepBegan {
+                    let mut delayed_spec = TriggerSpec::new(TriggerEvent::StepBegan {
                         step: *step,
                         player,
                     });
+                    if matches!(
+                        context,
+                        BodyContext::TriggerBound {
+                            condition: TriggerSpec {
+                                zone: TriggerZone::Graveyard,
+                                ..
+                            } | TriggerSpec {
+                                event: TriggerEvent::PlayerAction {
+                                    action: PlayerTriggerAction::DiscardedByOpponent(_),
+                                    ..
+                                },
+                                ..
+                            },
+                            ..
+                        }
+                    ) {
+                        delayed_spec.zone = TriggerZone::Graveyard;
+                    }
                     body.validate_in(
                         vocabulary,
                         BodyContext::TriggerBound {
@@ -8021,7 +8202,7 @@ impl ExecutableBody {
                 }
                 Instruction::PhaseOut(PhasingSubject::Target) => Some(OperandFamily::Permanent),
                 Instruction::PhaseOut(PhasingSubject::Source) => {
-                    if self.target != BodyTarget::None || !context.has_source() {
+                    if !context.has_source() {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     None
@@ -9467,7 +9648,8 @@ impl ExecutableBody {
                             | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                             | BodyTarget::FilteredOwnGraveyardCard(_)
                             | BodyTarget::FilteredAnyGraveyardCard { .. }
-                                if facts.returned_graveyard_target =>
+                                if facts.returned_graveyard_target
+                                    || facts.definitely_exiled_target =>
                             {
                                 Some(OperandFamily::GraveyardCard)
                             }
@@ -9509,7 +9691,8 @@ impl ExecutableBody {
                             | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                             | BodyTarget::FilteredOwnGraveyardCard(_)
                             | BodyTarget::FilteredAnyGraveyardCard { .. }
-                                if facts.returned_graveyard_target =>
+                                if facts.returned_graveyard_target
+                                    || facts.definitely_exiled_target =>
                             {
                                 Some(OperandFamily::GraveyardCard)
                             }
@@ -10406,6 +10589,35 @@ impl ExecutableBody {
                             _ => None,
                         }
                     }
+                    TemporaryRuleKind::CantActivateAbilities { players, .. }
+                    | TemporaryRuleKind::CantPlayLands { players } => match players {
+                        AffectedPlayers::One(p) => {
+                            p.validate(context, self.target, facts.definitely_exiled_target)?
+                        }
+                        _ => None,
+                    },
+                    TemporaryRuleKind::PlayerGrantKeyword { players, keywords } => {
+                        if keywords.is_empty() {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        match players {
+                            AffectedPlayers::One(p) => {
+                                p.validate(context, self.target, facts.definitely_exiled_target)?
+                            }
+                            _ => None,
+                        }
+                    }
+                    TemporaryRuleKind::NextSpellFree { filter } => {
+                        if let Some(f) = filter {
+                            f.validate_vocabulary(vocabulary)
+                                .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        }
+                        None
+                    }
+                    TemporaryRuleKind::TemporaryZoneReplacement(ability) => {
+                        zone_replacement::validate_ability(ability, true, vocabulary)?;
+                        None
+                    }
                     TemporaryRuleKind::ExileIfDies { subject } => {
                         subject
                             .validate_vocabulary(vocabulary)
@@ -10458,7 +10670,7 @@ impl ExecutableBody {
                             _ => None,
                         }
                     }
-                    TemporaryRuleKind::FilteredFlash { player, filter } => {
+                    TemporaryRuleKind::FilteredFlash { player, filter, .. } => {
                         filter
                             .validate_vocabulary(vocabulary)
                             .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -10490,7 +10702,8 @@ impl ExecutableBody {
                                 | StaticDamageRule::DoubleToOpponents
                                 | StaticDamageRule::ReplaceSubtypeCombatWithMill(_)
                                 | StaticDamageRule::LethalUsesPower
-                                | StaticDamageRule::DamageCannotBePrevented => true,
+                                | StaticDamageRule::DamageCannotBePrevented
+                                | StaticDamageRule::MinimumLifeTotal { .. } => true,
                                 StaticDamageRule::ModifyDamage { recipient, .. } => {
                                     context.has_source()
                                         || !matches!(
@@ -10542,6 +10755,7 @@ impl ExecutableBody {
                                     | StaticModifierRule::IgnoreLegendRuleForController
                                     | StaticModifierRule::IgnoreLegendForSubtype(_)
                                     | StaticModifierRule::RetainMana(_)
+                                    | StaticModifierRule::TwiceLoyaltyPerTurn
                                     | StaticModifierRule::AdditionalCreatureDeathTrigger
                             ),
                             StaticContinuousAbility::CostModifier { modifier, .. } => matches!(
@@ -10587,6 +10801,7 @@ impl ExecutableBody {
                     }
                     TemporaryRuleKind::RedirectNextDamage {
                         source,
+                        source_is_target,
                         from,
                         to,
                         amount,
@@ -10623,11 +10838,90 @@ impl ExecutableBody {
                         {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        if *to == crate::characteristics::DamageRedirectTarget::TargetObject {
-                            Some(OperandFamily::Permanent)
-                        } else {
-                            None
+                        let mut fam = None;
+                        if *source_is_target {
+                            fam = merge_family(fam, Some(OperandFamily::Permanent))?;
                         }
+                        match from {
+                            crate::characteristics::StaticDamageRecipient::TargetObject => {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            crate::characteristics::StaticDamageRecipient::TargetAny => {
+                                fam = merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                            }
+                            _ => {}
+                        }
+                        match to {
+                            crate::characteristics::DamageRedirectTarget::TargetObject
+                            | crate::characteristics::DamageRedirectTarget::SecondTargetObject => {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            crate::characteristics::DamageRedirectTarget::TargetAny => {
+                                fam = merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                            }
+                            _ => {}
+                        }
+                        fam
+                    }
+                    TemporaryRuleKind::RedirectNextDamageExpr {
+                        source,
+                        source_is_target,
+                        from,
+                        to,
+                        amount,
+                        ..
+                    } => {
+                        amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                        if let Some(f) = source {
+                            f.validate_vocabulary(vocabulary)
+                                .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        }
+                        if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
+                            from
+                        {
+                            f.validate_vocabulary(vocabulary)
+                                .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        }
+                        if matches!(
+                            from,
+                            crate::characteristics::StaticDamageRecipient::SelfObject
+                                | crate::characteristics::StaticDamageRecipient::AttachedHost
+                        ) && !context.has_source()
+                        {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        if matches!(
+                            to,
+                            crate::characteristics::DamageRedirectTarget::AbilitySource
+                                | crate::characteristics::DamageRedirectTarget::AttachedHost
+                        ) && !context.has_source()
+                        {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        let mut fam = amount.required_operand_family(self.target)?;
+                        if *source_is_target {
+                            fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                        }
+                        match from {
+                            crate::characteristics::StaticDamageRecipient::TargetObject => {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            crate::characteristics::StaticDamageRecipient::TargetAny => {
+                                fam = merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                            }
+                            _ => {}
+                        }
+                        match to {
+                            crate::characteristics::DamageRedirectTarget::TargetObject
+                            | crate::characteristics::DamageRedirectTarget::SecondTargetObject => {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            crate::characteristics::DamageRedirectTarget::TargetAny => {
+                                fam = merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                            }
+                            _ => {}
+                        }
+                        fam
                     }
                     TemporaryRuleKind::PreventNextDamage {
                         amount,
@@ -10656,7 +10950,15 @@ impl ExecutableBody {
                         {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        None
+                        match recipient {
+                            crate::characteristics::StaticDamageRecipient::TargetObject => {
+                                Some(OperandFamily::Permanent)
+                            }
+                            crate::characteristics::StaticDamageRecipient::TargetAny => {
+                                Some(OperandFamily::DamageRecipient)
+                            }
+                            _ => None,
+                        }
                     }
                     TemporaryRuleKind::PreventNextDamageExpr {
                         amount,
@@ -10683,11 +10985,22 @@ impl ExecutableBody {
                         {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        None
+                        let mut fam = amount.required_operand_family(self.target)?;
+                        match recipient {
+                            crate::characteristics::StaticDamageRecipient::TargetObject => {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            crate::characteristics::StaticDamageRecipient::TargetAny => {
+                                fam = merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                            }
+                            _ => {}
+                        }
+                        fam
                     }
                     TemporaryRuleKind::PreventNextTimeDamage {
                         source,
                         source_chosen_color,
+                        source_is_target,
                         recipient,
                         ..
                     } => {
@@ -10712,7 +11025,21 @@ impl ExecutableBody {
                         {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        None
+                        let mut fam = if *source_is_target {
+                            Some(OperandFamily::Permanent)
+                        } else {
+                            None
+                        };
+                        match recipient {
+                            crate::characteristics::StaticDamageRecipient::TargetObject => {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            crate::characteristics::StaticDamageRecipient::TargetAny => {
+                                fam = merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                            }
+                            _ => {}
+                        }
+                        fam
                     }
                     TemporaryRuleKind::ExileSpellOnResolve { filter, players } => {
                         if let Some(f) = filter {
@@ -10811,15 +11138,22 @@ impl ExecutableBody {
                 Instruction::CreateTokenCopy {
                     source,
                     count,
-                    add_subtype,
+                    add_subtypes,
+                    recipients,
                     ..
                 } => {
-                    if let Some(sub) = add_subtype
-                        && vocabulary.label(*sub).is_none()
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
+                    for sub in add_subtypes {
+                        if vocabulary.label(*sub).is_none() {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
                     }
                     count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    let rec_fam = match recipients {
+                        crate::token::TokenRecipients::Player(p) => {
+                            p.validate(context, self.target, facts.definitely_exiled_target)?
+                        }
+                        _ => None,
+                    };
                     let src_fam = match source {
                         MoveSubjectRef::TargetObject => match self.target {
                             BodyTarget::SingleCreature
@@ -10857,8 +11191,64 @@ impl ExecutableBody {
                         | MoveSubjectRef::RememberedFirst
                         | MoveSubjectRef::RememberedSecond => None,
                     };
-                    merge_family(src_fam, count.required_operand_family(self.target)?)?
+                    let fam = merge_family(src_fam, rec_fam)?;
+                    merge_family(fam, count.required_operand_family(self.target)?)?
                 }
+                Instruction::BindResolutionX(expr) => {
+                    expr.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    facts.defined_resolution_x = true;
+                    expr.required_operand_family(self.target)?
+                }
+                Instruction::PutResolvingSpellInLibrary(placement) => {
+                    if !matches!(context, BodyContext::Unbound) {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    if let LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
+                        chooser.validate(context, self.target, facts.definitely_exiled_target)?
+                    } else {
+                        None
+                    }
+                }
+                Instruction::PutSubjectIntoLibraryFromTop { subject, offset } => {
+                    offset.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    let subj_fam = match subject {
+                        MoveSubjectRef::TargetObject => match self.target {
+                            BodyTarget::SingleCreature
+                            | BodyTarget::SinglePermanent
+                            | BodyTarget::SinglePlaneswalker
+                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            BodyTarget::SingleOwnGraveyardCard
+                            | BodyTarget::AnyGraveyardCard
+                            | BodyTarget::AnyGraveyardCreature
+                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                            | BodyTarget::FilteredOwnGraveyardCard(_)
+                            | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                                Some(OperandFamily::GraveyardCard)
+                            }
+                            BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
+                            _ => return Err(DefinitionError::OperandFamily),
+                        },
+                        MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
+                            if !context.has_source() {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        MoveSubjectRef::TriggeringObject => {
+                            if !matches!(context, BodyContext::TriggerBound { .. }) {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        MoveSubjectRef::RevealedCard
+                        | MoveSubjectRef::CreatedTokens
+                        | MoveSubjectRef::LastMoved
+                        | MoveSubjectRef::RememberedFirst
+                        | MoveSubjectRef::RememberedSecond => None,
+                    };
+                    merge_family(subj_fam, offset.required_operand_family(self.target)?)?
+                }
+                Instruction::SetDayNight(_) => None,
                 Instruction::CreateAuraTokenAttached {
                     definition, host, ..
                 } => {
@@ -12160,17 +12550,16 @@ impl ExecutableBody {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 Instruction::ReturnSourceGraveyardToBattlefield { .. }
-                    if self.target == BodyTarget::None
-                        && matches!(
-                            context,
-                            BodyContext::TriggerBound {
-                                condition: TriggerSpec {
-                                    zone: TriggerZone::Graveyard,
-                                    ..
-                                },
+                    if matches!(
+                        context,
+                        BodyContext::TriggerBound {
+                            condition: TriggerSpec {
+                                zone: TriggerZone::Graveyard,
                                 ..
-                            }
-                        ) =>
+                            },
+                            ..
+                        }
+                    ) =>
                 {
                     None
                 }
@@ -12183,7 +12572,7 @@ impl ExecutableBody {
                             | BodyContext::RevealedCreature
                             | BodyContext::ExiledCreatureCost
                             | BodyContext::SacrificedCreature
-                    ) && self.target == BodyTarget::None =>
+                    ) =>
                 {
                     None
                 }
@@ -12249,25 +12638,24 @@ impl ExecutableBody {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 Instruction::ReturnSourceGraveyardToHand
-                    if self.target == BodyTarget::None
-                        && (matches!(
-                            context,
-                            BodyContext::TriggerBound {
-                                condition: TriggerSpec {
-                                    zone: TriggerZone::Graveyard,
-                                    ..
-                                },
+                    if matches!(
+                        context,
+                        BodyContext::TriggerBound {
+                            condition: TriggerSpec {
+                                zone: TriggerZone::Graveyard,
                                 ..
-                            }
-                        ) || matches!(
-                            context,
-                            BodyContext::Unbound
-                                | BodyContext::Activated { .. }
-                                | BodyContext::SacrificedPermanent
-                                | BodyContext::RevealedCreature
-                                | BodyContext::ExiledCreatureCost
-                                | BodyContext::SacrificedCreature
-                        )) =>
+                            },
+                            ..
+                        }
+                    ) || matches!(
+                        context,
+                        BodyContext::Unbound
+                            | BodyContext::Activated { .. }
+                            | BodyContext::SacrificedPermanent
+                            | BodyContext::RevealedCreature
+                            | BodyContext::ExiledCreatureCost
+                            | BodyContext::SacrificedCreature
+                    ) =>
                 {
                     None
                 }
@@ -12357,6 +12745,14 @@ impl ExecutableBody {
                             if index != 0
                                 || *minimum == 0
                                 || !matches!(context, BodyContext::TriggerBound { condition, grouping: TriggerGrouping::EachOccurrence } if condition.intervening_if == expected)
+                            {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                        }
+                        InterveningCondition::Monarch { .. } => {
+                            let expected = cond.expected_trigger_condition();
+                            if index != 0
+                                || !matches!(context, BodyContext::TriggerBound { condition, .. } if condition.intervening_if == expected)
                             {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -13667,6 +14063,10 @@ impl ExecutableBody {
                     | Instruction::DestroySubject { .. }
                     | Instruction::GrantCardPlayPermission { .. }
                     | Instruction::CreateTokenCopy { .. }
+                    | Instruction::BindResolutionX(_)
+                    | Instruction::PutResolvingSpellInLibrary(_)
+                    | Instruction::PutSubjectIntoLibraryFromTop { .. }
+                    | Instruction::SetDayNight(_)
                     | Instruction::CreateAuraTokenAttached { .. }
                     | Instruction::ExploreSubject(_)
                     | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -13940,6 +14340,8 @@ pub struct PermanentDefinition {
 pub struct SpellModes {
     pub minimum: u8,
     pub maximum: u8,
+    /// Optional world condition that raises the mode maximum (e.g. "If you control a commander, you may choose both").
+    pub conditional_maximum: Option<(Box<ResolutionCondition>, u8)>,
     pub allow_repeat: bool,
     pub distinct_targets: bool,
     pub uniqueness: ModalUniqueness,
@@ -14602,12 +15004,25 @@ planeswalker_types!(
     Yanling,
     Zariel,
 );
+/// Conditional self-flash permission printed on a spell or permanent card (CR 601.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfFlashPermission {
+    /// May be cast as though it had flash while `condition` is satisfied.
+    Condition(Box<ResolutionCondition>),
+    /// May be cast as though it had flash if the caster pays this additional mana cost (CR 601.2f).
+    PayExtraMana(ManaCost),
+}
+
 /// Authored partial definition. Only validated definitions enter EffectWindow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub splice: Option<SpliceAbility>,
     /// Whether this spell has a printed ability preventing it from being countered.
     pub cannot_be_countered: bool,
+    /// Whether this spell has a printed ability preventing it from being copied (CR 707.10).
+    pub cannot_be_copied: bool,
+    /// Optional self-flash permission (world condition or additional mana cost to cast at instant timing).
+    pub conditional_flash: Option<SelfFlashPermission>,
     /// Number of {X} symbols in the printed mana cost, each sharing the announced value.
     pub x_mana_symbols: u8,
     /// Hybrid and Phyrexian symbols in printed order. Their first colors are in the base price.
@@ -14906,6 +15321,8 @@ impl Program {
     ) -> Self {
         Self {
             cannot_be_countered: false,
+            cannot_be_copied: false,
+            conditional_flash: None,
             card_types,
             creature_subtypes,
             land_subtypes,
@@ -16269,6 +16686,15 @@ impl Program {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
+                    if let Some((cond, cond_max)) = &modes.conditional_maximum {
+                        cond.validate_world(vocabulary)?;
+                        if *cond_max < modes.minimum
+                            || (!modes.allow_repeat
+                                && usize::from(*cond_max) > modes.additional.len() + 1)
+                        {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                    }
                     if let Some(prefix) = &modes.prefix {
                         if prefix.target != BodyTarget::None {
                             return Err(DefinitionError::InvalidInstruction);
@@ -16395,6 +16821,16 @@ impl Program {
                 .any(|id| !self.activated.iter().any(|ability| ability.id == *id))
         {
             return Err(DefinitionError::InvalidInstruction);
+        }
+        if let Some(flash) = &self.conditional_flash {
+            match flash {
+                SelfFlashPermission::Condition(cond) => cond.validate_world(vocabulary)?,
+                SelfFlashPermission::PayExtraMana(cost) => {
+                    if !cost.valid() {
+                        return Err(DefinitionError::CastingCost);
+                    }
+                }
+            }
         }
         if self
             .face_up_abilities
@@ -16953,9 +17389,7 @@ impl Program {
             } else if ability.source_cost
                 == SourceCost::HandDiscardSelf(HandDiscardKeyword::Channel)
             {
-                if ability.body.permanent_target_bounds().is_some()
-                    || ability.body.ordered_any_target_bounds().is_some()
-                {
+                if ability.body.ordered_any_target_bounds().is_some() {
                     return Err(DefinitionError::InvalidInstruction);
                 }
             } else if let Some((kind, _)) = ability.source_cost.power_cost() {
@@ -17303,6 +17737,10 @@ impl Program {
                                 | Instruction::DestroySubject { .. }
                                 | Instruction::GrantCardPlayPermission { .. }
                                 | Instruction::CreateTokenCopy { .. }
+                                | Instruction::BindResolutionX(_)
+                                | Instruction::PutResolvingSpellInLibrary(_)
+                                | Instruction::PutSubjectIntoLibraryFromTop { .. }
+                                | Instruction::SetDayNight(_)
                                 | Instruction::CreateAuraTokenAttached { .. }
                                 | Instruction::ExploreSubject(_)
                                 | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -17470,7 +17908,6 @@ impl TriggeredAbility {
                 InterveningCondition::OwnCommander
                     | InterveningCondition::GreatestArtifact
                     | InterveningCondition::OpponentMoreLands
-                    | InterveningCondition::Monarch { .. }
             );
             let has_require = self.body.instructions.first()
                 == Some(&Instruction::RequireCondition(cond))

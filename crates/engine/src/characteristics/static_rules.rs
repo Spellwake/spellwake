@@ -169,6 +169,10 @@ pub enum StaticDamageRecipient {
     Players,
     SelfObject,
     AttachedHost,
+    /// Single targeted permanent captured when this temporary rule was created.
+    TargetObject,
+    /// Single targeted permanent or player captured when this temporary rule was created.
+    TargetAny,
     MatchingPermanent(crate::program::ObjectFilter),
 }
 
@@ -207,6 +211,10 @@ pub enum DamageRedirectTarget {
     AttachedHost,
     Controller,
     TargetObject,
+    /// Single targeted permanent or player captured when this temporary rule was created.
+    TargetAny,
+    /// Second targeted permanent or player in a multi-target spell or ability.
+    SecondTargetObject,
     DamageSourceController,
 }
 
@@ -428,6 +436,10 @@ pub enum StaticRestriction {
     ControllerOneSpellPerTurn,
     /// Opponents of source controller can't cast spells during combat (Marisi).
     OpponentsCantCastDuringCombat,
+    /// Source controller's life total can't change (Platinum Emperion, Teferi's Protection, Flare of Fortitude).
+    ControllerLifeTotalCantChange,
+    /// Players matching this relation can't search libraries (Stranglehold, Ashiok, Shadow of Doubt).
+    PlayersCantSearchLibraries(crate::program::PlayerRelation),
 }
 
 /// Static battlefield replacement, doubling, mana retention, or structural modifier.
@@ -797,6 +809,8 @@ impl StaticContinuousAbility {
                         | StaticRestriction::CantBeTargetedBy { .. }
                         | StaticRestriction::ControllerOneSpellPerTurn
                         | StaticRestriction::OpponentsCantCastDuringCombat
+                        | StaticRestriction::ControllerLifeTotalCantChange
+                        | StaticRestriction::PlayersCantSearchLibraries(_)
                         | StaticRestriction::RestrictOpponentsDuringOwnTurn
                         | StaticRestriction::RestrictGraveyardAndLibrary
                         | StaticRestriction::ControllerHasHexproof

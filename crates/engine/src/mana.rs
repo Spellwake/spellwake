@@ -332,6 +332,8 @@ pub struct CastManaSummary {
     pub cleaved: bool,
     pub evidence_collected: bool,
     pub paid_alternative: bool,
+    /// Whether an optional additional cost (kicker, bargain, buyback, entwine, etc.) was paid when casting.
+    pub additional_cost_paid: bool,
     pub squad_count: u8,
 }
 impl Default for CastManaSummary {
@@ -352,6 +354,7 @@ impl Default for CastManaSummary {
             cleaved: false,
             evidence_collected: false,
             paid_alternative: false,
+            additional_cost_paid: false,
             squad_count: 0,
         }
     }

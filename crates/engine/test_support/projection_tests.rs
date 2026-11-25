@@ -146,6 +146,8 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
     let first = vocabulary.resolve_label("Elf").unwrap();
     let second = vocabulary.resolve_label("Cat").unwrap();
     let program = Program {
+        cannot_be_copied: false,
+        conditional_flash: None,
         cast_timing: None,
         activation_modes: Default::default(),
         cast_reductions: vec![],

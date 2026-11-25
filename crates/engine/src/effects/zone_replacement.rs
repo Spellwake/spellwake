@@ -35,6 +35,8 @@ pub enum CreatedZoneEffect {
     FinalityCounter,
     /// Duration-scoped temporary rule replacing any battlefield departure with exile.
     TemporaryLeaveExile(u64),
+    /// Duration-scoped generalized zone replacement ability installed by a resolving effect.
+    TemporaryZoneReplacement(u64),
 }
 /// Actual source incarnation plus its copiable definition-local identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1525,6 +1527,34 @@ impl EffectWindow {
                 {
                     return Err(ZoneReplacementError::InconsistentBatch.into());
                 }
+            }
+        }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryZoneReplacement(ability) =
+                &active.rule
+            {
+                let before = active
+                    .source_object
+                    .and_then(|id| self.window.cards().get(id).cloned())
+                    .unwrap_or_else(|| GameObject::synthetic_emblem(active.controller));
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ability.id,
+                    unearth: false,
+                    madness: false,
+                    created: Some(CreatedZoneEffect::TemporaryZoneReplacement(active.id)),
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before,
+                        definition: (**ability).clone(),
+                    },
+                );
             }
         }
         Ok(ZoneReplacementSources { evaluated, sources })

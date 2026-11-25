@@ -156,6 +156,7 @@ pub(super) fn lower_ability(
                     SpellModes {
                         minimum: min,
                         maximum: max,
+                        conditional_maximum: None,
                         allow_repeat,
                         distinct_targets: false,
                         uniqueness,
@@ -430,6 +431,7 @@ pub(super) fn lower_ability(
                     SpellModes {
                         minimum: min,
                         maximum: max,
+                        conditional_maximum: None,
                         allow_repeat,
                         distinct_targets: false,
                         uniqueness,
@@ -837,6 +839,20 @@ pub(super) fn try_lower_mana_ability(
         // ManaOutputModifier::Sacrifice with PayMana, SideEffect, or SpendEffect; fall back to ActivatedAbility.
         return None;
     }
+    if let Some(ref se) = side_effect {
+        // Engine mana_activation applies GainLife only on Fixed yields and DamageController
+        // only on ChooseColor yields; fall back to ActivatedAbility otherwise so the side
+        // effect is never dropped at runtime.
+        let side_effect_supported = match se {
+            ManaSideEffect::GainLife(_) => matches!(output.base(), ManaOutput::Fixed(_)),
+            ManaSideEffect::DamageController(_) => {
+                matches!(output.base(), ManaOutput::ChooseColor { .. })
+            }
+        };
+        if !side_effect_supported {
+            return None;
+        }
+    }
     if let Some(ref mc) = pay_mana
         && !mc.total().is_positive()
         && !matches!(
@@ -860,35 +876,27 @@ pub(super) fn try_lower_mana_ability(
     if let Some(mc) = pay_mana {
         output = output.paid(mc);
     }
-    if sac_self {
-        if !matches!(
-            output,
-            ManaOutput::Fixed(_)
-                | ManaOutput::ChooseColor { .. }
-                | ManaOutput::Modified {
+    let valid_sacrifice_inner = |out: &ManaOutput| -> bool {
+        matches!(out, ManaOutput::Fixed(_) | ManaOutput::ChooseColor { .. })
+            || matches!(
+                out,
+                ManaOutput::Modified {
                     modifier: ManaOutputModifier::Restrict(
                         spellwake_engine::mana::ManaOutputRestriction::Fixed(_)
                     ),
-                    ..
-                }
-        ) {
+                    output: inner,
+                } if matches!(inner.as_ref(), ManaOutput::Fixed(_) | ManaOutput::ChooseColor { .. })
+            )
+    };
+    if sac_self {
+        if !valid_sacrifice_inner(&output) {
             return None;
         }
         output = output.with_modifier(ManaOutputModifier::Sacrifice(ManaSacrificeCost::Source {
             tap: has_tap,
         }));
     } else if sac_creature && !has_tap {
-        if !matches!(
-            output,
-            ManaOutput::Fixed(_)
-                | ManaOutput::ChooseColor { .. }
-                | ManaOutput::Modified {
-                    modifier: ManaOutputModifier::Restrict(
-                        spellwake_engine::mana::ManaOutputRestriction::Fixed(_)
-                    ),
-                    ..
-                }
-        ) {
+        if !valid_sacrifice_inner(&output) {
             return None;
         }
         output = output.with_modifier(ManaOutputModifier::Sacrifice(
@@ -1361,9 +1369,13 @@ pub(super) fn lower_extra_cost_atom(
         },
         CostAtomAst::PayHalfLife => Ok(ExtraActivationCost::PayHalfLife),
         CostAtomAst::PayEnergy(n) if *n > 0 => Ok(ExtraActivationCost::PayEnergy(*n)),
-        CostAtomAst::PayEnergyExpr(expr) => Ok(ExtraActivationCost::PayEnergyExpr(
-            lower_value_expr(expr, vocabulary)?,
-        )),
+        CostAtomAst::PayEnergyExpr(expr) => {
+            let lowered = lower_value_expr(expr, vocabulary)?;
+            if !lowered.is_chosen_x() && !lowered.is_world_evaluable() {
+                return Err("oracle:unsupported-activation-cost");
+            }
+            Ok(ExtraActivationCost::PayEnergyExpr(lowered))
+        }
         CostAtomAst::Mill(expr) => match expr.as_ref() {
             ValueExprAst::Const(n) if *n > 0 => Ok(ExtraActivationCost::Mill(nz_u8(*n)?)),
             _ => Err("oracle:unsupported-activation-cost"),
@@ -1631,6 +1643,15 @@ pub(super) fn lower_activation_cost_composite(
                 extra.push(lower_extra_cost_atom(other, vocabulary)?);
             }
         }
+    }
+    if zone == Some("hand") && !extra.iter().any(ExtraActivationCost::is_from_hand) {
+        return Err("oracle:unsupported-hand-activation");
+    }
+    if zone == Some("graveyard")
+        && x_symbols > 0
+        && !extra.iter().any(ExtraActivationCost::is_from_graveyard)
+    {
+        return Err("oracle:unsupported-graveyard-x-activation");
     }
     let source_cost = if x_symbols > 0 {
         SourceCost::GenericX {
