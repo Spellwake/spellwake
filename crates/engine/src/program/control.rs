@@ -102,21 +102,52 @@ pub(super) struct FlowFacts {
     pub possibly: BTreeSet<CreatureTypeSlot>,
     pub donor_moved: bool,
     pub definitely_exiled_target: bool,
+    pub maybe_exiled_target: bool,
     pub remembered_permanent: bool,
     pub definitely_discarded: bool,
+    pub maybe_discarded: bool,
     pub definitely_destroyed: bool,
+    pub maybe_destroyed: bool,
     pub checked_destruction_target: bool,
+    pub maybe_checked_destruction_target: bool,
     pub moved_library_cards: bool,
+    pub maybe_moved_library_cards: bool,
     pub definitely_milled: bool,
     pub definitely_milled_top: bool,
     pub definitely_exiled_milled: bool,
     pub definitely_checked_top: bool,
+    pub maybe_checked_top: bool,
     pub definitely_sacrificed: bool,
+    pub maybe_sacrificed: bool,
     pub definitely_selected_graveyard_exile: bool,
     pub returned_graveyard_target: bool,
     pub defined_resolution_x: bool,
 }
 impl FlowFacts {
+    /// Promote any `maybe_*` facts produced by a prior optional action onto `definitely_*`
+    /// when control enters the fallthrough branch of `BranchIfFalse(LastActionSucceeded >= 1)`.
+    pub fn promote_maybe_to_definite(&mut self) {
+        self.definitely_exiled_target |= self.maybe_exiled_target;
+        self.definitely_discarded |= self.maybe_discarded;
+        self.definitely_destroyed |= self.maybe_destroyed;
+        self.checked_destruction_target |= self.maybe_checked_destruction_target;
+        self.moved_library_cards |= self.maybe_moved_library_cards;
+        self.definitely_checked_top |= self.maybe_checked_top;
+        self.definitely_sacrificed |= self.maybe_sacrificed;
+    }
+
+    /// Snapshot current `definitely_*` facts into `maybe_*` so an optional branch keeps
+    /// them available for guarded follow-ups (`If you do, ...`).
+    pub fn record_maybe_from_definite(&mut self) {
+        self.maybe_exiled_target |= self.definitely_exiled_target;
+        self.maybe_discarded |= self.definitely_discarded;
+        self.maybe_destroyed |= self.definitely_destroyed;
+        self.maybe_checked_destruction_target |= self.checked_destruction_target;
+        self.maybe_moved_library_cards |= self.moved_library_cards;
+        self.maybe_checked_top |= self.definitely_checked_top;
+        self.maybe_sacrificed |= self.definitely_sacrificed;
+    }
+
     pub fn merge_into(&self, destination: &mut Option<Self>) {
         if let Some(previous) = destination {
             previous
@@ -125,15 +156,22 @@ impl FlowFacts {
             previous.possibly.extend(self.possibly.iter().copied());
             previous.donor_moved |= self.donor_moved;
             previous.definitely_exiled_target &= self.definitely_exiled_target;
+            previous.maybe_exiled_target |= self.maybe_exiled_target;
             previous.remembered_permanent &= self.remembered_permanent;
             previous.definitely_discarded &= self.definitely_discarded;
+            previous.maybe_discarded |= self.maybe_discarded;
             previous.definitely_destroyed &= self.definitely_destroyed;
+            previous.maybe_destroyed |= self.maybe_destroyed;
             previous.checked_destruction_target &= self.checked_destruction_target;
+            previous.maybe_checked_destruction_target |= self.maybe_checked_destruction_target;
             previous.moved_library_cards &= self.moved_library_cards;
+            previous.maybe_moved_library_cards |= self.maybe_moved_library_cards;
             previous.definitely_milled &= self.definitely_milled;
             previous.definitely_milled_top &= self.definitely_milled_top;
             previous.definitely_checked_top &= self.definitely_checked_top;
+            previous.maybe_checked_top |= self.maybe_checked_top;
             previous.definitely_sacrificed &= self.definitely_sacrificed;
+            previous.maybe_sacrificed |= self.maybe_sacrificed;
             previous.definitely_selected_graveyard_exile &=
                 self.definitely_selected_graveyard_exile;
             previous.definitely_exiled_milled &= self.definitely_exiled_milled;

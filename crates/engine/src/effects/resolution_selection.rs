@@ -938,7 +938,7 @@ impl ResolutionGraveyardOrderFrame {
     }
 }
 impl ResolutionSelectionWork {
-    fn frame(&self, revision: u64) -> Option<EffectDecision> {
+    fn frame(&self, revision: u64, up_to_tap_select: bool) -> Option<EffectDecision> {
         match &self.stage {
             ResolutionSelectionStage::Choosing {
                 requirements,
@@ -960,6 +960,11 @@ impl ResolutionSelectionWork {
                         required: requirement.required,
                         custom_minimum: match &self.operation {
                             ResolutionSelectionOperation::SelectZoneCards { min, .. } => Some(*min),
+                            ResolutionSelectionOperation::TapOrUntapControlled { .. }
+                                if up_to_tap_select =>
+                            {
+                                Some(0)
+                            }
                             _ => None,
                         },
                     })
@@ -1188,10 +1193,22 @@ impl EffectWindow {
             ) => None,
         }
     }
+    fn is_up_to_tap_select(&self, work: &ResolutionSelectionWork) -> bool {
+        matches!(
+            self.payloads
+                .get(&work.cursor.entry)
+                .and_then(StackPayload::instructions)
+                .and_then(|ops| ops.get(work.cursor.instruction)),
+            Some(Instruction::UntapOrTapSelect { up_to: true, .. })
+        )
+    }
+
     /// Derive only the positive current request from the sole owned stage.
     pub(super) fn selection_frame(&self) -> Option<EffectDecision> {
         match self.pending_work.as_ref() {
-            Some(PendingWork::ResolutionSelection(work)) => work.frame(self.revision),
+            Some(PendingWork::ResolutionSelection(work)) => {
+                work.frame(self.revision, self.is_up_to_tap_select(work))
+            }
             None
             | Some(
                 PendingWork::LibraryTop(_)
@@ -1969,14 +1986,24 @@ impl EffectWindow {
                     Instruction::MoveGroup { destination, .. } => *destination,
                     _ => PublicZoneDestination::Graveyard,
                 };
+                let resolved_group = if let Some(resolving_entry) = self.window.resolving() {
+                    self.resolve_whole_group_filter(
+                        resolving_entry,
+                        None,
+                        group.as_ref(),
+                        self.resolution_cursor(),
+                    )?
+                } else {
+                    **group
+                };
                 all = ValueExpr::Literal(RulesInteger::from_usize(
                     self.window.cards().iter().count(),
                 ));
                 (
-                    group.affected_players(),
+                    resolved_group.affected_players(),
                     &all,
                     ResolutionSelectionOperation::WholeGroup {
-                        group: **group,
+                        group: resolved_group,
                         destination,
                     },
                 )
@@ -2619,6 +2646,20 @@ impl EffectWindow {
                     filter: filter.clone(),
                 },
             ),
+            Instruction::UntapOrTapSelect {
+                chooser,
+                filter,
+                count,
+                up_to: _,
+                tap,
+            } => (
+                AffectedPlayers::One(*chooser),
+                count,
+                ResolutionSelectionOperation::TapOrUntapControlled {
+                    tap: *tap,
+                    filter: filter.clone(),
+                },
+            ),
             Instruction::Blight { player, amount } => {
                 let entry = self
                     .window
@@ -2744,6 +2785,10 @@ impl EffectWindow {
             | Instruction::CreateTemporaryRule { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -2803,6 +2848,7 @@ impl EffectWindow {
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::ReturnCardsExiledWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
@@ -2993,6 +3039,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
@@ -3067,6 +3114,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -3101,12 +3149,34 @@ impl EffectWindow {
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DrawController { .. }
-            | Instruction::CreateArmyIfAbsent { .. } => return Ok(false),
+            | Instruction::CreateArmyIfAbsent { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
         };
         let entry = self
             .window
             .resolving()
             .ok_or(EffectError::WrongResolutionFrame)?;
+        let untap_or_tap_select = match instruction {
+            Instruction::UntapOrTapSelect { filter, .. } => Some(**filter),
+            _ => None,
+        };
+        let ability_source = match entry.kind() {
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                Some(source.id())
+            }
+            StackKind::CardSpell(id) => Some(*id),
+            _ => None,
+        };
         let amount = self.resolve_value_expr(entry.controller(), amount)?;
         if amount < 0.into() {
             return Err(EffectError::InconsistentSelectionWork);
@@ -3140,22 +3210,52 @@ impl EffectWindow {
             }
             let protected = operation.is_sacrifice()
                 && self.opposing_sacrifice_prohibited(&evaluated, player, entry.controller())?;
-            let domain: Vec<_> = self
-                .window
-                .cards()
-                .iter()
-                .filter(|_| !protected)
-                .filter(|object| {
-                    selection_eligible(&operation, player, object, &evaluated, &excluded, || {
-                        if matches!(operation, ResolutionSelectionOperation::RevealedHand { .. }) {
-                            self.copiable_program(object.id()).map(Program::mana_value)
-                        } else {
-                            self.permanent_mana_value(object.id())
-                        }
+            let domain: Vec<_> = if let Some(select_filter) = untap_or_tap_select {
+                self.window
+                    .cards()
+                    .iter()
+                    .filter(|object| {
+                        object.zone() == ObjectZone::Battlefield
+                            && evaluated.get(object.id()).is_some_and(|view| {
+                                self.matches_object_filter(
+                                    select_filter,
+                                    view,
+                                    entry.controller(),
+                                    ability_source,
+                                    &excluded,
+                                    &evaluated,
+                                )
+                            })
                     })
-                })
-                .map(GameObject::id)
-                .collect();
+                    .map(GameObject::id)
+                    .collect()
+            } else {
+                self.window
+                    .cards()
+                    .iter()
+                    .filter(|_| !protected)
+                    .filter(|object| {
+                        selection_eligible(
+                            &operation,
+                            player,
+                            object,
+                            &evaluated,
+                            &excluded,
+                            || {
+                                if matches!(
+                                    operation,
+                                    ResolutionSelectionOperation::RevealedHand { .. }
+                                ) {
+                                    self.copiable_program(object.id()).map(Program::mana_value)
+                                } else {
+                                    self.permanent_mana_value(object.id())
+                                }
+                            },
+                        )
+                    })
+                    .map(GameObject::id)
+                    .collect()
+            };
             let bound = RulesInteger::from_usize(domain.len());
             let mut required = std::cmp::min(&amount, &bound)
                 .to_usize()
@@ -3210,16 +3310,77 @@ impl EffectWindow {
         destination: crate::program::SubjectDestination,
         append: &mut RulesJournal,
     ) -> Result<usize, EffectError> {
+        Ok(self
+            .move_objects_to_subject_destination_ids(
+                entry,
+                instruction,
+                actor,
+                objects,
+                destination,
+                append,
+            )?
+            .len())
+    }
+
+    fn resolve_whole_group_filter(
+        &self,
+        entry: &StackEntry,
+        instruction: Option<usize>,
+        group: &ObjectFilter,
+        cursor: Option<&ResolutionCursor>,
+    ) -> Result<ObjectFilter, EffectError> {
+        let mut resolved_group = *group;
+        if resolved_group.uses_target_permanent()
+            && let Ok(t) = self.instruction_target_at(entry, instruction)
+            && let TargetRef::Object(tid) = t.choice().target
+        {
+            let current_eval = self.evaluated_characteristics()?;
+            let target_power = current_eval
+                .get(tid)
+                .and_then(|o| o.power_toughness.as_ref())
+                .map(|pt| pt.derived.power.clone())
+                .or_else(|| {
+                    cursor
+                        .and_then(|c| c.results.target_lki.get(&tid))
+                        .and_then(|lki| lki.power.clone())
+                });
+            if let Some(pw) = target_power {
+                let pw_i64 = String::from(pw).parse::<i64>().unwrap_or(0);
+                resolved_group = resolved_group.bind_target_power(pw_i64);
+            }
+        }
+        Ok(resolved_group)
+    }
+
+    /// Move resolved `objects` to `destination` and return the post-move `ObjectId`s
+    /// (CR 400.7) so subsequent `LastMoved` instructions resolve the new incarnations.
+    pub(super) fn move_objects_to_subject_destination_ids(
+        &mut self,
+        entry: &StackEntry,
+        instruction: usize,
+        actor: SeatId,
+        objects: &[ObjectId],
+        destination: crate::program::SubjectDestination,
+        append: &mut RulesJournal,
+    ) -> Result<Vec<ObjectId>, EffectError> {
         use crate::program::{DelayedReturnTiming, LibraryPlacement, SubjectDestination};
         let mut live: Vec<ObjectId> = objects
             .iter()
             .copied()
             .filter(|id| self.window.cards().get(*id).is_some())
             .collect();
-        live.sort();
-        live.dedup();
+        if matches!(
+            destination,
+            SubjectDestination::Library(LibraryPlacement::BottomRandom)
+        ) {
+            let mut seen = BTreeSet::new();
+            live.retain(|id| seen.insert(*id));
+        } else {
+            live.sort();
+            live.dedup();
+        }
         if live.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let source_id = match entry.kind() {
             StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
@@ -3268,7 +3429,9 @@ impl EffectWindow {
                 SubjectDestination::Library(placement) => {
                     let dest = match placement {
                         LibraryPlacement::Top => ObjectDestination::LibraryTop,
-                        LibraryPlacement::Bottom => ObjectDestination::LibraryBottom,
+                        LibraryPlacement::Bottom | LibraryPlacement::BottomRandom => {
+                            ObjectDestination::LibraryBottom
+                        }
                         LibraryPlacement::FromTop(offset) => {
                             ObjectDestination::LibraryFromTop(offset)
                         }
@@ -3299,30 +3462,79 @@ impl EffectWindow {
                 *dest = ObjectDestination::Exile;
             }
         }
+        let mut replacement_batch = None;
+        if matches!(destination, SubjectDestination::Battlefield { .. }) {
+            let mut entering_controllers = BTreeMap::new();
+            let mut intents = Vec::new();
+            for &(obj_id, dest) in &moves {
+                if let ObjectDestination::Battlefield { controller } = dest {
+                    entering_controllers.insert(obj_id, controller);
+                    intents.push(zone_replacement::ZoneMoveIntent {
+                        before: obj_id,
+                        reason,
+                    });
+                }
+            }
+            if !intents.is_empty() {
+                let mut batch = self.begin_zone_replacements_with_entry(
+                    zone_replacement::AuthorizedZoneBatch {
+                        cause: EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction,
+                        },
+                        action: crate::program::ZoneActionKind::EffectEnterBattlefield,
+                        intents,
+                    },
+                    Some(&entering_controllers),
+                )?;
+                if batch.progress(self.revision)?.is_none() {
+                    for (obj_id, dest) in &mut moves {
+                        if let Ok(replaced) = batch.destination(*obj_id) {
+                            match replaced {
+                                PublicZoneDestination::Battlefield
+                                | PublicZoneDestination::Command => {}
+                                PublicZoneDestination::Exile => *dest = ObjectDestination::Exile,
+                                PublicZoneDestination::Graveyard => {
+                                    *dest = ObjectDestination::Graveyard;
+                                }
+                                PublicZoneDestination::Hand => *dest = ObjectDestination::Hand,
+                                PublicZoneDestination::Library => {
+                                    *dest = ObjectDestination::LibraryTop;
+                                }
+                            }
+                        }
+                    }
+                    replacement_batch = Some(batch);
+                }
+            }
+        }
         let before = self.rules_snapshot(None)?;
-        let (window, movements) = self.window.record_linked_return_moves(&moves)?;
+        let (window, mut movements) = self.window.record_linked_return_moves(&moves)?;
         self.window = window;
-        let moved_count = movements.len();
         let new_ids: Vec<ObjectId> = movements.iter().map(|m| m.after.id()).collect();
         if let SubjectDestination::Battlefield {
             tapped,
+            attacking,
             transformed,
             with_counter,
             attach_to_self,
             ..
         } = destination
         {
-            for m in &movements {
+            for m in &mut movements {
                 if m.after.zone() != ObjectZone::Battlefield {
                     continue;
                 }
                 let new_id = m.after.id();
                 self.characteristics.register_battlefield_entry(new_id)?;
-                if tapped {
-                    let _ = self.window.enter_tapped(new_id);
+                if tapped && let Ok(updated) = self.window.enter_tapped(new_id) {
+                    m.after = updated;
                 }
-                if transformed {
-                    let _ = self.window.transform(new_id);
+                if transformed
+                    && self.window.transform(new_id).is_ok()
+                    && let Some(updated) = self.window.cards().get(new_id).cloned()
+                {
+                    m.after = updated;
                 }
                 if let Some((ck, cnt)) = with_counter
                     && cnt > 0
@@ -3369,6 +3581,21 @@ impl EffectWindow {
                         .characteristics
                         .attach(new_id, TargetRef::Object(src), false);
                 }
+                if attacking
+                    && self.combat.is_some()
+                    && self
+                        .window
+                        .cards()
+                        .get(new_id)
+                        .and_then(GameObject::controller)
+                        == Some(self.window.active_player())
+                    && let Ok(current_eval) = self.evaluated_characteristics()
+                    && let Ok(defenders) =
+                        self.attack_destinations(self.window.active_player(), &current_eval)
+                    && let Some((&target, &seat)) = defenders.first_key_value()
+                {
+                    let _ = self.put_attacking_at(new_id, seat, target);
+                }
             }
         }
         self.emit_from(
@@ -3386,6 +3613,17 @@ impl EffectWindow {
                     .collect()
             },
         )?;
+        if let Some(batch) = replacement_batch.as_ref() {
+            self.apply_zone_replacement_extras_from_movements(
+                Some(batch),
+                &movements,
+                EventCause::Instruction {
+                    entry: entry.id(),
+                    instruction,
+                },
+                append,
+            )?;
+        }
         if let SubjectDestination::Exile {
             delayed_return: Some(timing),
         } = destination
@@ -3399,7 +3637,7 @@ impl EffectWindow {
                             entry: entry.id(),
                             instruction,
                         },
-                        new_ids,
+                        new_ids.clone(),
                         append,
                     )?;
                 }
@@ -3425,14 +3663,17 @@ impl EffectWindow {
                             false,
                             Box::new(ExecutableBody::new(
                                 BodyTarget::None,
-                                vec![Instruction::ReturnDelayedExile(new_ids)],
+                                vec![Instruction::ReturnDelayedExile(new_ids.clone())],
                             )),
                         );
                     }
                 }
                 DelayedReturnTiming::UntilSourceLeaves => {
                     if let Some(src) = source_id {
-                        self.linked_exiles.entry(src).or_default().extend(new_ids);
+                        self.linked_exiles
+                            .entry(src)
+                            .or_default()
+                            .extend(new_ids.iter().copied());
                     }
                 }
                 DelayedReturnTiming::LinkedGroup(group) => {
@@ -3440,12 +3681,12 @@ impl EffectWindow {
                         self.independent_exile_links
                             .entry((src, group))
                             .or_default()
-                            .extend(new_ids);
+                            .extend(new_ids.iter().copied());
                     }
                 }
             }
         }
-        Ok(moved_count)
+        Ok(new_ids)
     }
     /// Advance only this instruction's owned stages. No player choice changes cards.
     ///
@@ -3556,8 +3797,9 @@ impl EffectWindow {
                                 accepted,
                             },
                         };
+                        let up_to_tap = self.is_up_to_tap_select(&work);
                         let frame = work
-                            .frame(self.revision)
+                            .frame(self.revision, up_to_tap)
                             .ok_or(EffectError::InconsistentSelectionWork)?;
                         self.pending_work = Some(PendingWork::ResolutionSelection(Box::new(work)));
                         return Ok(Some(frame));
@@ -3712,6 +3954,7 @@ impl EffectWindow {
                                 amount,
                                 append,
                             )?;
+                            cursor.results.last_amassed_army = Some(*object);
                         }
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
@@ -3966,10 +4209,10 @@ impl EffectWindow {
                             .resolving()
                             .cloned()
                             .ok_or(EffectError::WrongResolutionFrame)?;
-                        let moved = if selection.objects.is_empty() {
-                            0
+                        let moved_ids = if selection.objects.is_empty() {
+                            Vec::new()
                         } else {
-                            self.move_objects_to_subject_destination(
+                            self.move_objects_to_subject_destination_ids(
                                 &entry,
                                 cursor.instruction,
                                 selection.player,
@@ -3978,8 +4221,10 @@ impl EffectWindow {
                                 append,
                             )?
                         };
-                        cursor.results.last_action_succeeded = moved > 0;
-                        cursor.results.last_action_count = Some(RulesInteger::from_usize(moved));
+                        cursor.results.last_action_succeeded = !moved_ids.is_empty();
+                        cursor.results.last_action_count =
+                            Some(RulesInteger::from_usize(moved_ids.len()));
+                        cursor.results.last_moved_objects = moved_ids;
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
                         return Ok(None);
@@ -4102,8 +4347,9 @@ impl EffectWindow {
                                 orders,
                             },
                         };
+                        let up_to_tap = self.is_up_to_tap_select(&work);
                         let frame = work
-                            .frame(self.revision)
+                            .frame(self.revision, up_to_tap)
                             .ok_or(EffectError::InconsistentSelectionWork)?;
                         self.pending_work = Some(PendingWork::ResolutionSelection(Box::new(work)));
                         return Ok(Some(frame));
@@ -4334,6 +4580,13 @@ impl EffectWindow {
                 if objects.len() > requirement.required {
                     return Err(EffectError::InvalidSelectionCount);
                 }
+                let up_to_tap_select = matches!(
+                    self.payloads
+                        .get(&work.cursor.entry)
+                        .and_then(StackPayload::instructions)
+                        .and_then(|ops| ops.get(work.cursor.instruction)),
+                    Some(Instruction::UntapOrTapSelect { up_to: true, .. })
+                );
                 match &work.operation {
                     ResolutionSelectionOperation::CollectEvidence { minimum } => {
                         let chosen_mv = objects.iter().fold(RulesInteger::from(0), |acc, id| {
@@ -4348,6 +4601,8 @@ impl EffectWindow {
                             return Err(EffectError::InvalidSelectionCount);
                         }
                     }
+                    ResolutionSelectionOperation::TapOrUntapControlled { .. }
+                        if up_to_tap_select => {}
                     ResolutionSelectionOperation::PayLifeToSaveCreatures { .. }
                     | ResolutionSelectionOperation::OtherControlledCreature {
                         or_exile_source: true,
@@ -5024,14 +5279,35 @@ impl EffectWindow {
                 },
                 Instruction::DestroyGroup(expected)
                 | Instruction::DestroyGroupWithoutRegeneration(expected),
-            ) if group == expected.as_ref() => group.affected_players(),
+            ) if self
+                .resolve_whole_group_filter(
+                    entry,
+                    Some(cursor.instruction),
+                    expected.as_ref(),
+                    Some(cursor),
+                )
+                .is_ok_and(|bound| *group == bound) =>
+            {
+                group.affected_players()
+            }
             (
                 ResolutionSelectionOperation::WholeGroup { group, destination },
                 Instruction::MoveGroup {
                     group: expected,
                     destination: requested,
                 },
-            ) if group == expected.as_ref() && destination == requested => group.affected_players(),
+            ) if destination == requested
+                && self
+                    .resolve_whole_group_filter(
+                        entry,
+                        Some(cursor.instruction),
+                        expected.as_ref(),
+                        Some(cursor),
+                    )
+                    .is_ok_and(|bound| *group == bound) =>
+            {
+                group.affected_players()
+            }
             (
                 ResolutionSelectionOperation::Sacrifice { filter },
                 Instruction::SacrificeDelayedObjects(objects),
@@ -5393,6 +5669,22 @@ impl EffectWindow {
             return Err(EffectError::InconsistentSelectionWork);
         }
         self.window = window;
+        let newly_entered_battlefield: Vec<ObjectId> = ordered
+            .iter()
+            .filter(|(movement, _)| {
+                movement.after.zone() == ObjectZone::Battlefield
+                    && movement.before.zone() != ObjectZone::Battlefield
+            })
+            .map(|(movement, _)| movement.after.id())
+            .collect();
+        if !newly_entered_battlefield.is_empty() {
+            self.characteristics
+                .register_battlefield_entries(&newly_entered_battlefield)?;
+        }
+        cursor.results.last_moved_objects = ordered
+            .iter()
+            .flat_map(|(movement, _)| movement.arrivals())
+            .collect();
         if matches!(
             operation,
             ResolutionSelectionOperation::DestroySingle { .. }
@@ -5682,6 +5974,16 @@ impl EffectWindow {
                 Ok(regenerated)
             },
         )?;
+        let committed_movements: Vec<_> = ordered.iter().map(|(m, _)| m.clone()).collect();
+        self.apply_zone_replacement_extras_from_movements(
+            batch.replacements.as_deref(),
+            &committed_movements,
+            EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            },
+            append,
+        )?;
         if let Some(amount) = exile_source_life
             && !ordered.is_empty()
         {
@@ -5927,6 +6229,13 @@ fn selection_eligible(
                 }
                 crate::program::SourceZoneFilter::Graveyard => {
                     object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
+                }
+                crate::program::SourceZoneFilter::HandOrGraveyard => {
+                    object.card_id().is_some()
+                        && matches!(
+                            object.zone(),
+                            ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player
+                        )
                 }
                 crate::program::SourceZoneFilter::Battlefield => {
                     object.zone() == ObjectZone::Battlefield

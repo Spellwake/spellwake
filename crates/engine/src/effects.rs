@@ -58,6 +58,7 @@ mod progress_rules;
 mod rule_resume;
 pub use commanders::CommanderRecord;
 mod draw_replacement;
+pub(crate) mod event_replacement;
 mod face_down;
 mod library_access;
 mod library_search;
@@ -1293,6 +1294,8 @@ pub(crate) struct ActiveTemporaryRule {
     pub(crate) duration: crate::characteristics::ResolvedDuration,
     pub(crate) resolved_players: BTreeSet<SeatId>,
     pub(crate) resolved_objects: BTreeSet<ObjectId>,
+    pub(crate) target: Option<TargetRef>,
+    pub(crate) second_target: Option<TargetRef>,
     pub(crate) consumed: bool,
 }
 
@@ -1389,6 +1392,7 @@ pub struct EffectWindow {
     chosen_modal_modes_ever: BTreeMap<(ObjectId, crate::program::TriggeredAbilityId), BTreeSet<u8>>,
     temporary_rules: Vec<ActiveTemporaryRule>,
     next_temp_rule_id: u64,
+    uncounterable_stack_entries: BTreeSet<StackEntryId>,
     source_cast_uses: BTreeSet<(ObjectId, crate::characteristics::StaticAbilityId)>,
     source_cast_pending:
         BTreeMap<StackEntryId, Vec<(ObjectId, crate::characteristics::StaticAbilityId)>>,
@@ -1444,6 +1448,9 @@ pub struct EffectWindow {
     typed_exile_cohorts: BTreeMap<StackEntryId, TypedExileCohort>,
     typed_exile_pending: BTreeMap<StackEntryId, (StackEntryId, CardType)>,
     draw_replacement: Option<Box<draw_replacement::DrawReplacement>>,
+    pending_life_replacement: Option<Box<event_replacement::PendingLifeReplacement>>,
+    active_event_replacements:
+        BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
     adventured: BTreeSet<(ObjectId, SeatId)>,
     card_play_permissions: BTreeSet<CardPlayPermission>,
     temporary_any_color_exile_cast: BTreeSet<(ObjectId, SeatId)>,
@@ -1820,6 +1827,8 @@ struct InstructionPayload {
     rebound_over_buyback: Option<bool>,
     exile_on_resolve: bool,
     return_to_hand_on_resolve: bool,
+    library_on_resolve: Option<crate::program::LibraryPlacement>,
+    cannot_be_countered_by_temp: bool,
     copiable_traits: Option<CopiableSpellTraits>,
     body: ExecutableBody,
     bindings: ExecutionBindings,
@@ -1905,6 +1914,8 @@ impl StackPayload {
             rebound_over_buyback: None,
             exile_on_resolve: false,
             return_to_hand_on_resolve: false,
+            library_on_resolve: None,
+            cannot_be_countered_by_temp: false,
             cascade: None,
             copy_run: None,
             pending_copy_targets: Vec::new(),
@@ -1971,12 +1982,13 @@ struct DiscoverState {
     bottom_order: Option<Vec<ObjectId>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolutionResults {
     target_lki: BTreeMap<ObjectId, TargetLki>,
     sampled_graveyard_cards: Option<BTreeSet<ObjectId>>,
     revealed_top_types: BTreeSet<CardType>,
     revealed_top_card: Option<ObjectId>,
+    last_amassed_army: Option<ObjectId>,
     countered_spell_controller: Option<(StackEntryId, SeatId)>,
     counter_target_types: BTreeSet<CardType>,
     shuffled_source_owner: Option<SeatId>,
@@ -2018,6 +2030,67 @@ struct ResolutionResults {
     clash_state: Option<ClashState>,
     discover_state: Option<DiscoverState>,
     manifest_dread_candidates: Vec<ObjectId>,
+    /// Current loop participant bound by `Instruction::ForEachPlayer` / `OfferAnyPlayer`.
+    loop_player: Option<SeatId>,
+    /// Total damage prevented during this resolution (CR 615.6, e.g. "for each 1 damage prevented this way").
+    damage_prevented_this_resolution: RulesInteger,
+    /// Whether any damage was dealt during this resolution (e.g. "if damage is dealt this way").
+    dealt_damage_this_resolution: bool,
+}
+impl Default for ResolutionResults {
+    fn default() -> Self {
+        Self {
+            target_lki: BTreeMap::new(),
+            sampled_graveyard_cards: None,
+            revealed_top_types: BTreeSet::new(),
+            revealed_top_card: None,
+            last_amassed_army: None,
+            countered_spell_controller: None,
+            counter_target_types: BTreeSet::new(),
+            shuffled_source_owner: None,
+            destroyed_target_controller: None,
+            destroyed_cards_to_graveyard: Vec::new(),
+            destruction_target_toughness: None,
+            destruction_target_controller: None,
+            power_damage_cohort: None,
+            destruction_target_subtypes: BTreeSet::new(),
+            last_sacrifice: false,
+            last_action_succeeded: false,
+            last_action_count: None,
+            discarded_types: BTreeSet::new(),
+            moved_library_types: BTreeSet::new(),
+            milled_mana_values: Vec::new(),
+            selected_graveyard_exile_creatures: 0,
+            last_sacrificed_creature: None,
+            returned_target_permanent: None,
+            last_die_roll: None,
+            last_die_rolls: Vec::new(),
+            die_roll_ready: false,
+            last_coin_flips_won: None,
+            last_coin_flip_won: None,
+            coin_flip_ready: false,
+            chosen_card_type: None,
+            chosen_basic_land_type: None,
+            chosen_card_name: None,
+            last_moved_controllers: Vec::new(),
+            last_moved_objects: Vec::new(),
+            chosen_number: None,
+            chosen_option_index: None,
+            vote_counts: Vec::new(),
+            winning_vote_option: None,
+            pending_voters: std::collections::VecDeque::new(),
+            voters_initialized: false,
+            pending_option_players: std::collections::VecDeque::new(),
+            option_players_initialized: false,
+            last_nonland_discarded: 0,
+            clash_state: None,
+            discover_state: None,
+            manifest_dread_candidates: Vec::new(),
+            loop_player: None,
+            damage_prevented_this_resolution: 0.into(),
+            dealt_damage_this_resolution: false,
+        }
+    }
 }
 /// Points into the owned payload. Tokens never own another mutable program counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2374,6 +2447,9 @@ impl EffectWindow {
         {
             characteristics.creature_damage_pairs = Some(BTreeSet::new());
         }
+        if programs.values().any(entry_counters::needs_damage_dealt_by) {
+            characteristics.track_damage_dealt_by = true;
+        }
         characteristics.commander_chosen_colors = commander_chosen_colors;
         if programs.values().any(upkeep::needs_echo_history) {
             characteristics.upkeep_cuts = Some(BTreeMap::new());
@@ -2475,6 +2551,7 @@ impl EffectWindow {
             chosen_modal_modes_ever: BTreeMap::new(),
             temporary_rules: Vec::new(),
             next_temp_rule_id: 1,
+            uncounterable_stack_entries: BTreeSet::new(),
             source_cast_uses: BTreeSet::new(),
             source_cast_pending: BTreeMap::new(),
             cast_history: programs
@@ -2546,7 +2623,9 @@ impl EffectWindow {
             free_exiled_cards:BTreeSet::new(),
             free_exiled_noncreature_spells:BTreeSet::new(),
             typed_exile_cohorts:BTreeMap::new(),typed_exile_pending:BTreeMap::new(),
-            draw_replacement:None,
+            draw_replacement: None,
+            pending_life_replacement: None,
+            active_event_replacements: BTreeSet::new(),
             adventured:BTreeSet::new(),
             card_play_permissions: BTreeSet::new(),
             temporary_any_color_exile_cast:BTreeSet::new(),
@@ -2885,7 +2964,14 @@ impl EffectWindow {
         let Some(traits) = self.stack_copiable_traits(id) else {
             return Ok(false);
         };
-        if traits.cannot_be_countered || entry.protected_by_spent_mana() {
+        if traits.cannot_be_countered
+            || entry.protected_by_spent_mana()
+            || matches!(
+                self.payloads.get(&id),
+                Some(StackPayload::Instructions(p)) if p.cannot_be_countered_by_temp
+            )
+            || self.uncounterable_stack_entries.contains(&id)
+        {
             return Ok(true);
         }
         let evaluated = self.evaluated_characteristics()?;
@@ -2906,10 +2992,14 @@ impl EffectWindow {
             let crate::program::TemporaryRuleKind::CantBeCountered {
                 filter,
                 controller_only,
+                next_only,
             } = &active.rule
             else {
                 return false;
             };
+            if active.consumed || *next_only {
+                return false;
+            }
             if *controller_only && entry.controller() != active.controller {
                 return false;
             }
@@ -2933,11 +3023,10 @@ impl EffectWindow {
             return Ok(true);
         }
         Ok(evaluated.objects.values().any(|source| {
-            if source.zone != ObjectZone::Battlefield
-                || source.controller != Some(entry.controller())
-            {
+            if source.zone != ObjectZone::Battlefield {
                 return false;
             }
+            let same_controller = source.controller == Some(entry.controller());
             source
                 .printed_text
                 .continuous
@@ -2959,10 +3048,51 @@ impl EffectWindow {
                                     matching,
                                 ),
                             ..
-                        } => !matching.is_disjoint(&types),
+                        } if same_controller => !matching.is_disjoint(&types),
                         crate::characteristics::StaticContinuousAbility::CastPermission {
                             permission:
                                 crate::characteristics::CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(
+                                    filter,
+                                ),
+                            ..
+                        } if same_controller => match entry.kind() {
+                            StackKind::CardSpell(obj) => {
+                                evaluated.get(*obj).is_some_and(|view| {
+                                    let aura_or_equip = view.has_type(CardType::Enchantment)
+                                        && self
+                                            .copiable_program(*obj)
+                                            .and_then(Program::permanent)
+                                            .is_some_and(|p| {
+                                                matches!(
+                                                    p.attachment,
+                                                    Some(crate::attachment::AttachmentKind::Aura(_))
+                                                )
+                                            })
+                                        || view.has_type(CardType::Artifact)
+                                            && self
+                                                .copiable_program(*obj)
+                                                .and_then(Program::permanent)
+                                                .is_some_and(|p| {
+                                                    matches!(
+                                                        p.attachment,
+                                                        Some(
+                                                            crate::attachment::AttachmentKind::Equipment
+                                                        )
+                                                    )
+                                                });
+                                    filter.matches_characteristics(
+                                        view,
+                                        aura_or_equip,
+                                        source.entry_creature_type,
+                                    )
+                                })
+                            }
+                            StackKind::SpellCopy { .. } => filter.matches_card_types(&types),
+                            _ => false,
+                        },
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            permission:
+                                crate::characteristics::CastPermissionRule::AllSpellsCannotBeCounteredFiltered(
                                     filter,
                                 ),
                             ..
@@ -3008,7 +3138,7 @@ impl EffectWindow {
                                     ..
                                 },
                             ..
-                        } => cast_value
+                        } if same_controller => cast_value
                             .as_ref()
                             .is_some_and(|value| value >= &i64::from(minimum.get()).into()),
                         _ => false,
@@ -3178,6 +3308,8 @@ impl EffectWindow {
                     rebound_over_buyback: None,
                     exile_on_resolve: false,
                     return_to_hand_on_resolve: false,
+                    library_on_resolve: None,
+                    cannot_be_countered_by_temp: false,
                     cascade: None,
                     copy_run: None,
                     pending_copy_targets: Vec::new(),
@@ -3417,11 +3549,39 @@ impl EffectWindow {
     }
     /// The player entitled to inspect this exact face-down exile incarnation, if any.
     pub fn face_down_exile_viewer(&self, object: ObjectId) -> Option<SeatId> {
-        self.face_down_exile.get(&object).copied().filter(|_| {
-            self.window
-                .cards()
-                .get(object)
-                .is_some_and(|card| card.zone() == ObjectZone::Exile)
+        if !self
+            .window
+            .cards()
+            .get(object)
+            .is_some_and(|card| card.zone() == ObjectZone::Exile)
+        {
+            return None;
+        }
+        if let Some(&viewer) = self.face_down_exile.get(&object) {
+            return Some(viewer);
+        }
+        self.evaluated_characteristics().ok().and_then(|evaluated| {
+            evaluated.objects.values().find_map(|source| {
+                let linked = self
+                    .linked_exiles
+                    .get(&source.object)
+                    .is_some_and(|ids| ids.contains(&object))
+                    || source.imprinted_cards.contains(&object);
+                (source.zone == ObjectZone::Battlefield
+                    && linked
+                    && source.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::CastPermission {
+                                permission:
+                                    crate::characteristics::CastPermissionRule::LookAtSourceExiledCards,
+                                ..
+                            }
+                        )
+                    }))
+                    .then_some(source.controller)
+                    .flatten()
+            })
         })
     }
 
@@ -3523,6 +3683,10 @@ impl EffectWindow {
                     }
                     crate::program::SourceZoneFilter::Graveyard => {
                         card.zone() == ObjectZone::Graveyard(player)
+                    }
+                    crate::program::SourceZoneFilter::HandOrGraveyard => {
+                        card.zone() == ObjectZone::Hand(player)
+                            || card.zone() == ObjectZone::Graveyard(player)
                     }
                     crate::program::SourceZoneFilter::OpponentGraveyard => {
                         matches!(card.zone(), ObjectZone::Graveyard(owner) if owner != player)
@@ -3882,7 +4046,7 @@ impl EffectWindow {
         &self,
         participants: &[SeatId],
     ) -> Result<EvaluatedCharacteristics, EffectError> {
-        Ok(evaluate(CharacteristicWorld {
+        let mut evaluated = evaluate(CharacteristicWorld {
             active_player: self.window.active_player(),
             participants,
             life: Some(&self.life),
@@ -3894,7 +4058,24 @@ impl EffectWindow {
             state: &self.characteristics,
             vocabulary: &self.creature_vocabulary,
             name_rules: &self.name_rules,
-        })?)
+        })?;
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::PlayerGrantKeyword { keywords, .. } =
+                &active.rule
+            {
+                for &player in &active.resolved_players {
+                    evaluated
+                        .player_granted_keywords
+                        .entry(player)
+                        .or_default()
+                        .extend(keywords.iter().copied());
+                }
+            }
+        }
+        Ok(evaluated)
     }
     pub fn current_characteristics(
         &self,
@@ -4258,6 +4439,7 @@ impl EffectWindow {
         if current.is_creature()
             && card.has_continuous_control_since_turn_start() != Some(true)
             && !current.has_keyword(KeywordAbility::Haste)
+            && !current.activate_as_though_haste
         {
             return Err(EffectError::CreatureTapRestricted);
         }
@@ -5339,17 +5521,94 @@ impl EffectWindow {
     pub(crate) fn land_play_allowance(&self, actor: SeatId) -> Result<RulesInteger, EffectError> {
         use crate::characteristics::{CastPermissionRule, StaticContinuousAbility};
         let current = self.evaluated_characteristics()?;
-        let extra = current.objects.values().filter_map(|permanent| {
-            if permanent.zone != ObjectZone::Battlefield || permanent.controller != Some(actor) {
-                return None;
+        let cant_play_land = current.objects.values().any(|permanent| {
+            if permanent.zone != ObjectZone::Battlefield {
+                return false;
             }
-            match &permanent.printed_text.continuous {
-                Some(StaticContinuousAbility::CastPermission {
-                    id,
-                    permission: CastPermissionRule::AdditionalLandPlays(count),
-                }) if permanent.abilities.continuous == Some(*id) => Some(count.get()),
-                _ => None,
+            let Some(ctrl) = permanent.controller else {
+                return false;
+            };
+            permanent.active_battlefield_rules().any(|rule| {
+                let StaticContinuousAbility::Restriction {
+                    rule: crate::characteristics::StaticRestriction::CantPlayLands(rel),
+                    ..
+                } = rule
+                else {
+                    return false;
+                };
+                match rel {
+                    crate::program::PlayerRelation::Controller => actor == ctrl,
+                    crate::program::PlayerRelation::Opponent => self
+                        .combat_rules
+                        .opponents(self.window.participants(), ctrl)
+                        .is_ok_and(|opps| opps.contains(&actor)),
+                    crate::program::PlayerRelation::AnyParticipant => true,
+                }
+            })
+        }) || self.temporary_rules.iter().any(|active| {
+            if active.consumed {
+                return false;
             }
+            if matches!(
+                active.rule,
+                crate::program::TemporaryRuleKind::CantPlayLands { .. }
+            ) {
+                return active.resolved_players.contains(&actor);
+            }
+            let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule else {
+                return false;
+            };
+            let StaticContinuousAbility::Restriction {
+                rule: crate::characteristics::StaticRestriction::CantPlayLands(rel),
+                ..
+            } = ab.as_ref()
+            else {
+                return false;
+            };
+            match rel {
+                crate::program::PlayerRelation::Controller => actor == active.controller,
+                crate::program::PlayerRelation::Opponent => self
+                    .combat_rules
+                    .opponents(self.window.participants(), active.controller)
+                    .is_ok_and(|opps| opps.contains(&actor)),
+                crate::program::PlayerRelation::AnyParticipant => true,
+            }
+        });
+        if cant_play_land {
+            return Ok(0.into());
+        }
+        let extra = current.objects.values().flat_map(|permanent| {
+            let is_battlefield = permanent.zone == ObjectZone::Battlefield;
+            let is_actor = permanent.controller == Some(actor);
+            permanent
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&permanent.printed_text.additional_battlefield_abilities)
+                .filter_map(move |ability| {
+                    if !is_battlefield {
+                        return None;
+                    }
+                    let active = permanent.abilities.continuous == Some(ability.id())
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id());
+                    if !active {
+                        return None;
+                    }
+                    match ability {
+                        StaticContinuousAbility::CastPermission {
+                            permission: CastPermissionRule::AdditionalLandPlays(count),
+                            ..
+                        } if is_actor => Some(count.get()),
+                        StaticContinuousAbility::CastPermission {
+                            permission: CastPermissionRule::AllPlayersAdditionalLandPlays(count),
+                            ..
+                        } => Some(count.get()),
+                        _ => None,
+                    }
+                })
         });
         let temp_extra: u32 = self
             .temporary_rules
@@ -5367,6 +5626,234 @@ impl EffectWindow {
             n.plus(&i64::from(increment).into())
         });
         Ok(base.plus(&i64::from(temp_extra).into()))
+    }
+
+    /// True if active static or temporary restrictions prevent `player` from losing the game
+    /// (or, when `nonpositive_life_only` is true, specifically from losing due to 0 or less life).
+    pub(super) fn player_cannot_lose(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+        nonpositive_life_only: bool,
+    ) -> Result<bool, EffectError> {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        if !self.window.participants().contains(&player) {
+            return Ok(false);
+        }
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), player)?;
+        let rule_prevents = |ctrl: SeatId, ability: &StaticContinuousAbility| -> bool {
+            let StaticContinuousAbility::Restriction { rule, .. } = ability else {
+                return false;
+            };
+            match rule {
+                StaticRestriction::ControllerCantLoseOpponentsCantWin => ctrl == player,
+                StaticRestriction::ControllerCantLoseForZeroLife => {
+                    nonpositive_life_only && ctrl == player
+                }
+                StaticRestriction::ControllerCantWinOpponentsCantLose => opponents.contains(&ctrl),
+                _ => false,
+            }
+        };
+        if evaluated.objects.values().any(|perm| {
+            perm.zone == ObjectZone::Battlefield
+                && perm.controller.is_some_and(|ctrl| {
+                    perm.active_battlefield_rules()
+                        .any(|ab| rule_prevents(ctrl, ab))
+                })
+        }) {
+            return Ok(true);
+        }
+        Ok(self.temporary_rules.iter().any(|active| {
+            !active.consumed
+                && matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if rule_prevents(active.controller, ab)
+                )
+        }))
+    }
+
+    /// True if active static or temporary restrictions prevent `player` from winning the game.
+    pub(super) fn player_cannot_win(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+    ) -> Result<bool, EffectError> {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        if !self.window.participants().contains(&player) {
+            return Ok(false);
+        }
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), player)?;
+        let rule_prevents = |ctrl: SeatId, ability: &StaticContinuousAbility| -> bool {
+            let StaticContinuousAbility::Restriction { rule, .. } = ability else {
+                return false;
+            };
+            match rule {
+                StaticRestriction::ControllerCantLoseOpponentsCantWin => opponents.contains(&ctrl),
+                StaticRestriction::ControllerCantWinOpponentsCantLose => ctrl == player,
+                _ => false,
+            }
+        };
+        if evaluated.objects.values().any(|perm| {
+            perm.zone == ObjectZone::Battlefield
+                && perm.controller.is_some_and(|ctrl| {
+                    perm.active_battlefield_rules()
+                        .any(|ab| rule_prevents(ctrl, ab))
+                })
+        }) {
+            return Ok(true);
+        }
+        Ok(self.temporary_rules.iter().any(|active| {
+            !active.consumed
+                && matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if rule_prevents(active.controller, ab)
+                )
+        }))
+    }
+
+    /// True if active static or temporary `PreventCounters` rules forbid placing `kind` counters on `object`.
+    pub(super) fn permanent_counter_prevented(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        object: ObjectId,
+        kind: CounterKind,
+    ) -> bool {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        for source in evaluated
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ab in source.active_battlefield_rules() {
+                if let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            selector: Some(sel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab
+                    && counter_kind.is_none_or(|k| k == kind)
+                    && crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        evaluated,
+                        source.object,
+                        source_ctrl,
+                        sel,
+                        object,
+                        &self.name_rules,
+                    )
+                {
+                    return true;
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                && let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            selector: Some(sel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab.as_ref()
+                && counter_kind.is_none_or(|k| k == kind)
+                && crate::characteristics::selector_matches_permanent(
+                    self.window.cards(),
+                    evaluated,
+                    active.source_object.unwrap_or(ObjectId::SENTINEL),
+                    active.controller,
+                    sel,
+                    object,
+                    &self.name_rules,
+                )
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// True if active static or temporary `PreventCounters` rules forbid `player` from getting `kind` counters.
+    pub(super) fn player_counter_prevented(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+        kind: CounterKind,
+    ) -> Result<bool, EffectError> {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        let matches_player =
+            |rel: crate::program::PlayerRelation, ctrl: SeatId| -> Result<bool, EffectError> {
+                Ok(match rel {
+                    crate::program::PlayerRelation::Controller => player == ctrl,
+                    crate::program::PlayerRelation::Opponent => self
+                        .combat_rules
+                        .opponents(self.window.participants(), ctrl)?
+                        .contains(&player),
+                    crate::program::PlayerRelation::AnyParticipant => true,
+                })
+            };
+        for source in evaluated
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ab in source.active_battlefield_rules() {
+                if let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            players: Some(rel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab
+                    && counter_kind.is_none_or(|k| k == kind)
+                    && matches_player(*rel, source_ctrl)?
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                && let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            players: Some(rel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab.as_ref()
+                && counter_kind.is_none_or(|k| k == kind)
+                && matches_player(*rel, active.controller)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Resolve authored continuous-effect / temporary-rule durations against the current
@@ -5405,6 +5892,7 @@ impl EffectWindow {
                     .get(source)
                     .filter(|card| {
                         card.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(source).is_none()
                             && card.controller() == Some(controller)
                     })
                     .and_then(GameObject::control_epoch)
@@ -5412,6 +5900,65 @@ impl EffectWindow {
                     return Ok(None);
                 };
                 Some(ResolvedDuration::WhileSourceControlled {
+                    source,
+                    controller,
+                    epoch,
+                })
+            }
+            ResolvedDuration::WhileAbilitySourceOnBattlefield => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                if !self.window.cards().get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && self.window.cards().phased_out_under(source).is_none()
+                }) {
+                    return Ok(None);
+                }
+                Some(ResolvedDuration::WhileSourceOnBattlefield { source })
+            }
+            ResolvedDuration::WhileAbilitySourceTapped => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                if !self.window.cards().get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && self.window.cards().phased_out_under(source).is_none()
+                        && card.tapped() == Some(true)
+                }) {
+                    return Ok(None);
+                }
+                Some(ResolvedDuration::WhileSourceTapped { source })
+            }
+            ResolvedDuration::WhileControllingTappedAbilitySource => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                let controller = entry.controller();
+                let Some(epoch) = self
+                    .window
+                    .cards()
+                    .get(source)
+                    .filter(|card| {
+                        card.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(source).is_none()
+                            && card.controller() == Some(controller)
+                            && card.tapped() == Some(true)
+                    })
+                    .and_then(GameObject::control_epoch)
+                else {
+                    return Ok(None);
+                };
+                Some(ResolvedDuration::WhileSourceControlledAndTapped {
                     source,
                     controller,
                     epoch,
@@ -5586,7 +6133,7 @@ impl EffectWindow {
                 }
                 next.entry_choices.insert(record.after.id(), choice);
             }
-            if let Some(choice @ crate::land::EntryChoice::OptionIndex(_)) = choice {
+            if let Some(choice @ crate::land::EntryChoice::OptionIndex(idx)) = choice {
                 if !next
                     .copiable_program(record.after.id())
                     .and_then(Program::permanent)
@@ -5596,8 +6143,11 @@ impl EffectWindow {
                     return Err(EffectError::InconsistentProgram);
                 }
                 next.entry_choices.insert(record.after.id(), choice);
+                next.characteristics
+                    .entry_option_choices
+                    .insert(record.after.id(), idx);
             }
-            if let Some(choice @ crate::land::EntryChoice::Opponent(_)) = choice {
+            if let Some(choice @ crate::land::EntryChoice::Opponent(seat)) = choice {
                 if !matches!(
                     next.copiable_program(record.after.id())
                         .and_then(Program::permanent)
@@ -5612,6 +6162,9 @@ impl EffectWindow {
                     return Err(EffectError::InconsistentProgram);
                 }
                 next.entry_choices.insert(record.after.id(), choice);
+                next.characteristics
+                    .entry_player_choices
+                    .insert(record.after.id(), seat);
             }
             next.characteristics
                 .register_battlefield_entry(record.after.id())?;
@@ -5759,6 +6312,7 @@ impl EffectWindow {
             | EntryTap::ChooseBasicLandType
             | EntryTap::ChooseOddOrEven
             | EntryTap::ChooseKhansOrDragons
+            | EntryTap::ChooseOptions(_)
             | EntryTap::Unleash
             | EntryTap::Riot
             | EntryTap::Tribute(_)
@@ -6731,6 +7285,9 @@ impl EffectWindow {
             {
                 self.entry_choices
                     .insert(new, crate::land::EntryChoice::Opponent(controller));
+                self.characteristics
+                    .entry_player_choices
+                    .insert(new, controller);
             } else {
                 self.window.set_entering_controller(new, controller)?;
             }
@@ -6753,6 +7310,11 @@ impl EffectWindow {
                 | crate::land::EntryChoice::CardName(_)
                 | crate::land::EntryChoice::PayLife(_)
                 | crate::land::EntryChoice::OptionIndex(_)) => {
+                    if let crate::land::EntryChoice::OptionIndex(idx) = reveal {
+                        self.characteristics.entry_option_choices.insert(new, idx);
+                    } else if let crate::land::EntryChoice::Opponent(seat) = reveal {
+                        self.characteristics.entry_player_choices.insert(new, seat);
+                    }
                     self.entry_choices.insert(new, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {
@@ -7293,6 +7855,14 @@ impl EffectWindow {
             && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.exile_on_resolve);
         let self_return_to_hand = resolved
             && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.return_to_hand_on_resolve);
+        let self_library = if resolved {
+            match self.payloads.get(&entry.id()) {
+                Some(StackPayload::Instructions(payload)) => payload.library_on_resolve,
+                _ => None,
+            }
+        } else {
+            None
+        };
         let temp_exile_spell = self.temporary_rules.iter().any(|active| {
             let crate::program::TemporaryRuleKind::ExileSpellOnResolve { filter, .. } =
                 &active.rule
@@ -7325,6 +7895,18 @@ impl EffectWindow {
         });
         let destination = if self_exile || temp_exile_spell {
             ObjectDestination::Exile
+        } else if let Some(placement) = self_library {
+            match placement {
+                crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
+                crate::program::LibraryPlacement::Bottom
+                | crate::program::LibraryPlacement::BottomRandom
+                | crate::program::LibraryPlacement::ChoiceTopOrBottom { .. } => {
+                    ObjectDestination::LibraryBottom
+                }
+                crate::program::LibraryPlacement::FromTop(offset) => {
+                    ObjectDestination::LibraryFromTop(offset)
+                }
+            }
         } else if self_return_to_hand || (resolved && entry.bought_back() && !rebound_selected) {
             ObjectDestination::Hand
         } else {
@@ -7611,6 +8193,10 @@ impl EffectWindow {
             ControllerFilter::RelatedPlayer => false,
             ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent => self
                 .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                .is_ok_and(|seat| p.controller == Some(seat)),
+            ControllerFilter::ActivePlayer => p.controller == Some(self.window.active_player()),
+            ControllerFilter::DefendingPlayer => self
+                .resolving_player(crate::program::ResolvingPlayer::DefendingPlayer)
                 .is_ok_and(|seat| p.controller == Some(seat)),
             ControllerFilter::Player(seat) => p.controller == Some(seat),
         };
@@ -7928,6 +8514,22 @@ impl EffectWindow {
                     .and_then(|t| t.causes.members().first())
                     .and_then(|c| c.subject_object_id())
                     .and_then(|tid| self.permanent_mana_value(tid)),
+                A::TargetPower => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.instruction_target(e).ok())
+                    .and_then(|t| match t.choice().target {
+                        TargetRef::Object(tid) => evaluated
+                            .get(tid)
+                            .and_then(|o| o.power_toughness.as_ref())
+                            .map(|pt| pt.derived.power.clone())
+                            .or_else(|| {
+                                self.resolution_cursor()
+                                    .and_then(|c| c.results.target_lki.get(&tid))
+                                    .and_then(|lki| lki.power.clone())
+                            }),
+                        _ => None,
+                    }),
             }
         };
         if let PowerFilter::CompareAnchor { op, anchor } = clause.power
@@ -8042,33 +8644,106 @@ impl EffectWindow {
         controller: SeatId,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
-        if let TargetRef::Player(player) = target
-            && self
-                .combat_rules
-                .opponents(self.window.participants(), controller)
-                .is_ok_and(|opponents| opponents.contains(&player))
-            && evaluated.controlled_rules(player, |rule| {
+        if let TargetRef::Player(player) = target {
+            let has_shroud = evaluated.controlled_rules(player, |rule| {
                 matches!(
                     rule,
                     crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule: crate::characteristics::StaticRestriction::ControllerHasHexproof,
+                        rule: crate::characteristics::StaticRestriction::ControllerHasShroud,
                         ..
                     }
                 )
             }) > 0
-        {
-            return false;
+                || self.temporary_rules.iter().any(|active| {
+                    !active.consumed
+                        && active.controller == player
+                        && matches!(
+                            &active.rule,
+                            crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                                if matches!(
+                                    ab.as_ref(),
+                                    crate::characteristics::StaticContinuousAbility::Restriction {
+                                        rule: crate::characteristics::StaticRestriction::ControllerHasShroud,
+                                        ..
+                                    }
+                                )
+                        )
+                })
+                || evaluated
+                    .player_granted_keywords
+                    .get(&player)
+                    .is_some_and(|kws| kws.contains(&KeywordAbility::Shroud));
+            if has_shroud {
+                return false;
+            }
+            if self
+                .combat_rules
+                .opponents(self.window.participants(), controller)
+                .is_ok_and(|opponents| opponents.contains(&player))
+                && (evaluated.controlled_rules(player, |rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule: crate::characteristics::StaticRestriction::ControllerHasHexproof,
+                            ..
+                        }
+                    )
+                }) > 0
+                    || evaluated
+                        .player_granted_keywords
+                        .get(&player)
+                        .is_some_and(|kws| kws.contains(&KeywordAbility::Hexproof))
+                    || self.temporary_rules.iter().any(|active| {
+                        !active.consumed
+                            && active.controller == player
+                            && matches!(
+                                &active.rule,
+                                crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                                    if matches!(
+                                        ab.as_ref(),
+                                        crate::characteristics::StaticContinuousAbility::Restriction {
+                                            rule: crate::characteristics::StaticRestriction::ControllerHasHexproof,
+                                            ..
+                                        }
+                                    )
+                            )
+                    }))
+            {
+                return false;
+            }
         }
         if let TargetRef::Object(id) = target
             && let Some(permanent) = evaluated.get(id)
             && permanent.zone == ObjectZone::Battlefield
             && (permanent.has_keyword(KeywordAbility::Shroud)
                 || (permanent.has_keyword(KeywordAbility::Hexproof)
+                    && !permanent.hexproof_ignored_by.contains(&controller)
                     && permanent
                         .controller
                         .is_some_and(|owner| owner != controller)))
         {
             // Every other player is an opponent in the admitted free-for-all policy.
+            return false;
+        }
+        if let TargetRef::Object(id) = target
+            && self
+                .window
+                .cards()
+                .get(id)
+                .is_some_and(|object| matches!(object.zone(), ObjectZone::Graveyard(_)))
+            && evaluated.objects.values().any(|permanent| {
+                permanent.zone == ObjectZone::Battlefield
+                    && permanent.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::PreventGraveyardTargeting,
+                                ..
+                            }
+                        )
+                    })
+            })
+        {
             return false;
         }
         match kind {
@@ -8353,11 +9028,15 @@ impl EffectWindow {
                                 crate::program::ControllerFilter::Player(seat) => {
                                     entry.controller() == seat
                                 }
+                                crate::program::ControllerFilter::ActivePlayer => {
+                                    entry.controller() == self.window.active_player()
+                                }
                                 crate::program::ControllerFilter::OwnerYou
                                 | crate::program::ControllerFilter::OwnerOpponent
                                 | crate::program::ControllerFilter::RelatedPlayer
                                 | crate::program::ControllerFilter::TargetPlayer
-                                | crate::program::ControllerFilter::TargetOpponent => false,
+                                | crate::program::ControllerFilter::TargetOpponent
+                                | crate::program::ControllerFilter::DefendingPlayer => false,
                             },
                             crate::program::ObjectFilter::Either(_, _) => true,
                         };
@@ -8485,7 +9164,9 @@ impl EffectWindow {
                 TargetRef::Player(player) => self.window.participants().contains(&player),
                 TargetRef::Object(_) | TargetRef::Stack(_) => false,
             },
-            Instruction::CounterSpell | Instruction::CounterSpellToExile => {
+            Instruction::CounterSpell
+            | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. } => {
                 matches!(target,TargetRef::Stack(id) if self.window.entries().iter().any(|entry|entry.id()==id))
             }
             Instruction::ChooseNewTargets
@@ -8652,6 +9333,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -8799,6 +9484,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
@@ -8950,6 +9636,7 @@ impl EffectWindow {
             | Instruction::PutNamedCounterOnSource { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -9003,7 +9690,19 @@ impl EffectWindow {
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ExchangeLifeWithSourceToughness => false,
+            | Instruction::ExchangeLifeWithSourceToughness
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => false,
         })
     }
 
@@ -9061,6 +9760,9 @@ impl EffectWindow {
         if !self.characteristics.named_counters.is_empty() {
             linked_counter_sources.extend(referenced.iter().copied());
             for card in self.window.cards().physical_objects() {
+                if card.zone() == ObjectZone::Exile {
+                    linked_counter_sources.insert(card.id());
+                }
                 let Some(Program {
                     continuous:
                         Some(crate::characteristics::StaticContinuousAbility::CharacteristicDefining {

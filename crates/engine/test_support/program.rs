@@ -2146,12 +2146,13 @@ impl<T, RawMember> SubtypeOperationWire<T, RawMember> {
 enum LandOperand {
     Literal { types: Vec<String> },
     SourceCurrentLandSubtypes {},
+    SourceEntryBasicLandType {},
 }
 impl LandOperand {
     fn literal(self) -> Result<BTreeSet<LandType>, String> {
         match self {
             Self::Literal { types } => land_types(types),
-            Self::SourceCurrentLandSubtypes {} => {
+            Self::SourceCurrentLandSubtypes {} | Self::SourceEntryBasicLandType {} => {
                 Err("live land operand in a resolved effect".into())
             }
         }
@@ -2162,6 +2163,7 @@ impl LandOperand {
             Self::SourceCurrentLandSubtypes {} => {
                 StaticLandSubtypeOperand::SourceCurrentLandSubtypes
             }
+            Self::SourceEntryBasicLandType {} => StaticLandSubtypeOperand::SourceEntryBasicLandType,
         })
     }
 }
@@ -2409,6 +2411,8 @@ fn ability_change(
             .into_iter()
             .map(CombatKeywordWire::native)
             .collect(),
+        suppressed_activations: None,
+        doesnt_untap: false,
     })
 }
 #[derive(Deserialize)]
@@ -2571,6 +2575,9 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
         BlockingRestriction::BlockerPowerAtLeastSource => {
             json!({"tag":"BlockerPowerAtLeastSource"})
         }
+        BlockingRestriction::MustBlockAllAttackers => {
+            json!({"tag":"MustBlockAllAttackers"})
+        }
         BlockingRestriction::AdditionalBlock => json!({"tag":"AdditionalBlock"}),
         BlockingRestriction::RequiresSoulbondPartner => json!({"tag":"RequiresSoulbondPartner"}),
         BlockingRestriction::CannotBeBlocked => json!({"tag":"CannotBeBlocked"}),
@@ -2669,6 +2676,8 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
         BlockingRestriction::CannotBeBlockedByMoreThan(n) => {
             json!({"tag":"CannotBeBlockedByMoreThan","max":n})
         }
+        BlockingRestriction::AssignNoCombatDamage => json!({"tag":"AssignNoCombatDamage"}),
+        BlockingRestriction::CannotBeRegenerated => json!({"tag":"CannotBeRegenerated"}),
     };
     json!({"tag":"BlockingRestriction", "restriction":restriction})
 }
@@ -7600,6 +7609,9 @@ fn additional_costs(values: &[spellwake_engine::program::AdditionalCastCost]) ->
                 AdditionalCastCost::Entwine(c) => json!({"tag":"Entwine","cost":cost(c)}),
                 AdditionalCastCost::KickerX(c) => json!({"tag":"KickerX","cost":cost(c)}),
                 AdditionalCastCost::Kicker(c) => json!({"tag":"Kicker","cost":cost(c)}),
+                AdditionalCastCost::KickerExtra { mana, extra } => {
+                    json!({"tag":"KickerExtra","cost":cost(mana),"extra":format!("{extra:?}")})
+                }
                 AdditionalCastCost::Replicate(c) => json!({"tag":"Replicate","cost":cost(c)}),
                 AdditionalCastCost::Multikicker(c) => json!({"tag":"Multikicker","cost":cost(c)}),
                 AdditionalCastCost::Buyback(c) => json!({"tag":"Buyback","cost":cost(c)}),
@@ -7888,6 +7900,7 @@ pub fn decode_for_owner(
                     Ok::<_, String>(spellwake_engine::program::SpellModes {
                         minimum: spec.minimum,
                         maximum: spec.maximum,
+                        conditional_maximum: None,
                         allow_repeat: spec.allow_repeat,
                         distinct_targets: false,
                         uniqueness: spellwake_engine::program::ModalUniqueness::None,
@@ -8150,6 +8163,10 @@ pub fn decode_for_owner(
         .map(|ability| ability.native(vocabulary))
         .collect::<Result<Vec<_>, String>>()?;
     let program = Program {
+        cannot_be_copied: false,
+        conditional_flash: None,
+        activation_cost_reductions: BTreeMap::new(),
+        zone_replacement_extras: BTreeMap::new(),
         cast_timing: None,
         activation_modes: Default::default(),
         entry_copy: raw.entry_copy.map(|rule| match rule.as_str() {
@@ -8580,6 +8597,9 @@ fn static_land_operand(value: &StaticLandSubtypeOperand) -> Value {
         StaticLandSubtypeOperand::SourceCurrentLandSubtypes => {
             json!({"tag":"SourceCurrentLandSubtypes"})
         }
+        StaticLandSubtypeOperand::SourceEntryBasicLandType => {
+            json!({"tag":"SourceEntryBasicLandType"})
+        }
     }
 }
 fn static_operand(value: &StaticSubtypeOperand) -> Value {
@@ -8694,6 +8714,21 @@ pub fn parts_spec(value: &ResolvedPartsSpec) -> Value {
                 ResolvedPartSpec::GrantMana(output) => {
                     json!({"tag":"GrantMana","output":format!("{output:?}")})
                 }
+                ResolvedPartSpec::ChosenColor { add } => {
+                    json!({"tag":"ChosenColor","add":add})
+                }
+                ResolvedPartSpec::ChosenBasicLandType { add } => {
+                    json!({"tag":"ChosenBasicLandType","add":add})
+                }
+                ResolvedPartSpec::ProtectionFromEachOpponent => {
+                    json!({"tag":"ProtectionFromEachOpponent"})
+                }
+                ResolvedPartSpec::CannotBeTargetedByColors(colors) => {
+                    json!({"tag":"CannotBeTargetedByColors","colors":format!("{colors:?}")})
+                }
+                ResolvedPartSpec::MustBlockSubject(subject) => {
+                    json!({"tag":"MustBlockSubject","subject":format!("{subject:?}")})
+                }
             })
             .collect::<Vec<_>>()
     )
@@ -8754,6 +8789,9 @@ pub fn resolved_parts(value: &ResolvedParts) -> Value {
                 ResolvedPart::GrantMana(output) => {
                     json!({"tag":"GrantMana","output":format!("{output:?}")})
                 }
+                ResolvedPart::CannotBeTargetedByColors(colors) => {
+                    json!({"tag":"CannotBeTargetedByColors","colors":format!("{colors:?}")})
+                }
             })
             .collect::<Vec<_>>()
     )
@@ -8779,6 +8817,26 @@ pub fn duration(value: ResolvedDuration) -> Value {
             epoch,
         } => {
             json!({"tag":"WhileSourceControlled","source":format!("{source:?}"),"controller":controller.0,"epoch":format!("{epoch:?}")})
+        }
+        ResolvedDuration::WhileAbilitySourceOnBattlefield => {
+            json!("WhileAbilitySourceOnBattlefield")
+        }
+        ResolvedDuration::WhileSourceOnBattlefield { source } => {
+            json!({"tag":"WhileSourceOnBattlefield","source":format!("{source:?}")})
+        }
+        ResolvedDuration::WhileAbilitySourceTapped => json!("WhileAbilitySourceTapped"),
+        ResolvedDuration::WhileSourceTapped { source } => {
+            json!({"tag":"WhileSourceTapped","source":format!("{source:?}")})
+        }
+        ResolvedDuration::WhileControllingTappedAbilitySource => {
+            json!("WhileControllingTappedAbilitySource")
+        }
+        ResolvedDuration::WhileSourceControlledAndTapped {
+            source,
+            controller,
+            epoch,
+        } => {
+            json!({"tag":"WhileSourceControlledAndTapped","source":format!("{source:?}"),"controller":controller.0,"epoch":format!("{epoch:?}")})
         }
         ResolvedDuration::ThroughNextTurn {
             player,
@@ -9059,6 +9117,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 CastPermissionRule::SeeLibraryTop { public } => {
                     json!({"tag":"SeeLibraryTop","id":id.0,"public":public})
                 }
+                CastPermissionRule::AllPlayersRevealLibraryTop => {
+                    json!({"tag":"AllPlayersRevealLibraryTop","id":id.0})
+                }
+                CastPermissionRule::RevealHands { opponents_only } => {
+                    json!({"tag":"RevealHands","id":id.0,"opponents_only":opponents_only})
+                }
                 CastPermissionRule::PlayLibraryTop(matching) => {
                     json!({"tag":"PlayLibraryTop","id":id.0,"matching":format!("{matching:?}")})
                 }
@@ -9080,6 +9144,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 CastPermissionRule::AdditionalLandPlays(count) => {
                     json!({"tag":"AdditionalLandPlays","id":id.0,"count":count})
                 }
+                CastPermissionRule::AllPlayersAdditionalLandPlays(count) => {
+                    json!({"tag":"AllPlayersAdditionalLandPlays","id":id.0,"count":count})
+                }
                 CastPermissionRule::ControllerSpellsCannotBeCountered(types) => {
                     json!({"tag":"ControllerSpellsCannotBeCountered","id":id.0,"types":types.iter().map(|kind|format!("{kind:?}")).collect::<Vec<_>>()})
                 }
@@ -9094,6 +9161,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(filter) => {
                     json!({"tag":"ControllerSpellsCannotBeCounteredFiltered","id":id.0,"filter":format!("{filter:?}")})
+                }
+                CastPermissionRule::AllSpellsCannotBeCounteredFiltered(filter) => {
+                    json!({"tag":"AllSpellsCannotBeCounteredFiltered","id":id.0,"filter":format!("{filter:?}")})
+                }
+                CastPermissionRule::LookAtSourceExiledCards => {
+                    json!({"tag":"LookAtSourceExiledCards","id":id.0})
                 }
                 CastPermissionRule::GraveyardMatching {
                     lands_allowed,
@@ -9112,6 +9185,35 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                     any_color,
                 } => {
                     json!({"tag":"ExileMatching","id":id.0,"filter":format!("{filter:?}"),"linked_to_source":linked_to_source,"free":free,"any_color":any_color})
+                }
+                CastPermissionRule::GrantSpellKeyword { matching, keyword } => {
+                    json!({"tag":"GrantSpellKeyword","id":id.0,"matching":format!("{matching:?}"),"keyword":format!("{keyword:?}")})
+                }
+                CastPermissionRule::PlayLibraryTopFiltered {
+                    lands_allowed,
+                    filter,
+                    once_each_turn,
+                    own_turn_only,
+                } => {
+                    json!({"tag":"PlayLibraryTopFiltered","id":id.0,"lands_allowed":lands_allowed,"filter":format!("{filter:?}"),"once_each_turn":once_each_turn,"own_turn_only":own_turn_only})
+                }
+                CastPermissionRule::GraveyardMatchingOwnTurn {
+                    lands_allowed,
+                    filter,
+                    once_each_turn,
+                } => {
+                    json!({"tag":"GraveyardMatchingOwnTurn","id":id.0,"lands_allowed":lands_allowed,"filter":format!("{filter:?}"),"once_each_turn":once_each_turn})
+                }
+                CastPermissionRule::ExileMatchingExt {
+                    filter,
+                    linked_to_source,
+                    free,
+                    any_color,
+                    lands_allowed,
+                    once_each_turn,
+                    own_turn_only,
+                } => {
+                    json!({"tag":"ExileMatchingExt","id":id.0,"filter":format!("{filter:?}"),"linked_to_source":linked_to_source,"free":free,"any_color":any_color,"lands_allowed":lands_allowed,"once_each_turn":once_each_turn,"own_turn_only":own_turn_only})
                 }
             };
         }
@@ -9186,6 +9288,23 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 } => {
                     json!({"tag":"IncreaseSpellCost","id":id.0,"any_player":any_player,"opponents_only":opponents_only,"matching":format!("{matching:?}"),"amount":amount})
                 }
+                SpellCostModifier::FirstSpellRule {
+                    filter,
+                    own_turn_only,
+                    free,
+                    pay_life_mv,
+                    discount,
+                } => {
+                    json!({"tag":"FirstSpellRule","id":id.0,"filter":format!("{filter:?}"),"own_turn_only":own_turn_only,"free":free,"pay_life_mv":pay_life_mv,"discount":discount})
+                }
+                SpellCostModifier::AlternativeForMatching {
+                    filter,
+                    mana,
+                    once_each_turn,
+                    own_turn_only,
+                } => {
+                    json!({"tag":"AlternativeForMatching","id":id.0,"filter":format!("{filter:?}"),"mana":cost(mana),"once_each_turn":once_each_turn,"own_turn_only":own_turn_only})
+                }
             };
         }
         StaticContinuousAbility::DamageRule { id, rule } => {
@@ -9259,6 +9378,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticDamageRule::DamageCannotBePrevented => {
                     json!({"tag":"DamageCannotBePrevented","id":id.0})
                 }
+                StaticDamageRule::PreventIncomingRemovePlusOneIfCounter => {
+                    json!({"tag":"PreventIncomingRemovePlusOneIfCounter","id":id.0})
+                }
                 StaticDamageRule::RedirectDamage {
                     source,
                     from,
@@ -9266,6 +9388,16 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                     combat_only,
                 } => {
                     json!({"tag":"RedirectDamage","id":id.0,"source":format!("{source:?}"),"from":format!("{from:?}"),"to":format!("{to:?}"),"combat_only":combat_only})
+                }
+                StaticDamageRule::ConditionalModifyDamage {
+                    condition,
+                    source,
+                    source_controller,
+                    recipient,
+                    kind,
+                    op,
+                } => {
+                    json!({"tag":"ConditionalModifyDamage","id":id.0,"condition":format!("{condition:?}"),"source":format!("{source:?}"),"source_controller":format!("{source_controller:?}"),"recipient":format!("{recipient:?}"),"kind":format!("{kind:?}"),"op":format!("{op:?}")})
                 }
             };
         }
@@ -9304,6 +9436,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticDrawRule::NoMaximumHandSize => json!({"tag":"NoMaximumHandSize","id":id.0}),
                 StaticDrawRule::AllPlayersNoMaximumHandSize => {
                     json!({"tag":"AllPlayersNoMaximumHandSize","id":id.0})
+                }
+                StaticDrawRule::MaxHandSize(limit) => {
+                    json!({"tag":"MaxHandSize","id":id.0,"limit":limit})
                 }
             };
         }
@@ -9346,6 +9481,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticRestriction::OpponentsCannotGainLife => {
                     json!({"tag":"OpponentsCannotGainLife","id":id.0})
+                }
+                StaticRestriction::ControllerLifeTotalCantChange => {
+                    json!({"tag":"ControllerLifeTotalCantChange","id":id.0})
+                }
+                StaticRestriction::PlayersCantSearchLibraries(rel) => {
+                    json!({"tag":"PlayersCantSearchLibraries","id":id.0,"players":format!("{rel:?}")})
                 }
                 StaticRestriction::RestrictOpponentsDuringOwnTurn => {
                     json!({"tag":"RestrictOpponentsDuringOwnTurn","id":id.0})
@@ -9391,6 +9532,62 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticRestriction::FlashSacrificeAtCleanup => {
                     json!({"tag":"FlashSacrificeAtCleanup","id":id.0})
+                }
+                StaticRestriction::ControllerHasShroud => {
+                    json!({"tag":"ControllerHasShroud","id":id.0})
+                }
+                StaticRestriction::ControllerCantLoseOpponentsCantWin => {
+                    json!({"tag":"ControllerCantLoseOpponentsCantWin","id":id.0})
+                }
+                StaticRestriction::ControllerCantLoseForZeroLife => {
+                    json!({"tag":"ControllerCantLoseForZeroLife","id":id.0})
+                }
+                StaticRestriction::ControllerCantWinOpponentsCantLose => {
+                    json!({"tag":"ControllerCantWinOpponentsCantLose","id":id.0})
+                }
+                StaticRestriction::CantPlayLands(rel) => {
+                    json!({"tag":"CantPlayLands","id":id.0,"players":format!("{rel:?}")})
+                }
+                StaticRestriction::PreventCounters {
+                    selector,
+                    players,
+                    counter_kind,
+                } => {
+                    json!({"tag":"PreventCounters","id":id.0,"selector":format!("{selector:?}"),"players":format!("{players:?}"),"counter_kind":format!("{counter_kind:?}")})
+                }
+                StaticRestriction::IgnoreOpponentsHexproof(selector) => {
+                    json!({"tag":"IgnoreOpponentsHexproof","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::ActivateAbilitiesAsThoughHaste(selector) => {
+                    json!({"tag":"ActivateAbilitiesAsThoughHaste","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::PreventMatchingNonManaActivations(selector) => {
+                    json!({"tag":"PreventMatchingNonManaActivations","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::PreventGraveyardTargeting => {
+                    json!({"tag":"PreventGraveyardTargeting","id":id.0})
+                }
+                StaticRestriction::CannotBeSacrificed(selector) => {
+                    json!({"tag":"CannotBeSacrificed","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::CannotBeUntapped(selector) => {
+                    json!({"tag":"CannotBeUntapped","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::CantBeTargetedBy {
+                    selector,
+                    auras_only,
+                    colors,
+                } => {
+                    json!({"tag":"CantBeTargetedBy","id":id.0,"selector":format!("{selector:?}"),"auras_only":auras_only,"colors":format!("{colors:?}")})
+                }
+                StaticRestriction::ControllerOneSpellPerTurn => {
+                    json!({"tag":"ControllerOneSpellPerTurn","id":id.0})
+                }
+                StaticRestriction::OpponentsCantCastDuringCombat => {
+                    json!({"tag":"OpponentsCantCastDuringCombat","id":id.0})
+                }
+                StaticRestriction::SkipStep { player, step } => {
+                    json!({"tag":"SkipStep","id":id.0,"player":format!("{player:?}"),"step":format!("{step:?}")})
                 }
             };
         }
@@ -9493,6 +9690,58 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticModifierRule::Ascend => json!({"tag":"Ascend","id":id.0}),
                 StaticModifierRule::AdditionalBlockWhileMonarch => {
                     json!({"tag":"AdditionalBlockWhileMonarch","id":id.0})
+                }
+                StaticModifierRule::OthersEnterWithCountersExpr {
+                    selector,
+                    kind,
+                    amount,
+                } => {
+                    json!({"tag":"OthersEnterWithCountersExpr","id":id.0,"selector":format!("{selector:?}"),"kind":format!("{kind:?}"),"amount":format!("{amount:?}")})
+                }
+                StaticModifierRule::BonusTokenOnCreate {
+                    controller,
+                    token,
+                    count,
+                    per_created,
+                } => {
+                    json!({"tag":"BonusTokenOnCreate","id":id.0,"controller":format!("{controller:?}"),"token":format!("{token:?}"),"count":count,"per_created":per_created})
+                }
+                StaticModifierRule::ConvertUnspentMana(kind) => {
+                    json!({"tag":"ConvertUnspentMana","id":id.0,"mana":format!("{kind:?}")})
+                }
+                StaticModifierRule::ModifyTokensFiltered {
+                    filter,
+                    controller,
+                    add,
+                    multiply,
+                } => {
+                    json!({"tag":"ModifyTokensFiltered","id":id.0,"filter":format!("{filter:?}"),"controller":format!("{controller:?}"),"add":add,"multiply":multiply})
+                }
+                StaticModifierRule::BonusTokenFiltered {
+                    filter,
+                    controller,
+                    token,
+                    count,
+                    per_created,
+                } => {
+                    json!({"tag":"BonusTokenFiltered","id":id.0,"filter":format!("{filter:?}"),"controller":format!("{controller:?}"),"token":format!("{token:?}"),"count":count,"per_created":per_created})
+                }
+                StaticModifierRule::StealCreatedTokens {
+                    affected,
+                    token_filter,
+                } => {
+                    json!({"tag":"StealCreatedTokens","id":id.0,"affected":format!("{affected:?}"),"token_filter":format!("{token_filter:?}")})
+                }
+                StaticModifierRule::CrewAndSaddlePowerBonus {
+                    selector,
+                    crews,
+                    saddles,
+                    bonus,
+                } => {
+                    json!({"tag":"CrewAndSaddlePowerBonus","id":id.0,"selector":format!("{selector:?}"),"crews":crews,"saddles":saddles,"bonus":bonus})
+                }
+                StaticModifierRule::ModifyMaxHandSize { player, delta } => {
+                    json!({"tag":"ModifyMaxHandSize","id":id.0,"player":format!("{player:?}"),"delta":delta})
                 }
             };
         }
@@ -10569,6 +10818,11 @@ pub fn body(value: &ExecutableBody) -> Value {
                         "tag":"AnyOfNames",
                         "names": names.iter().map(|n| n.as_str()).collect::<Vec<_>>()
                     }),
+                    SearchCardMatcher::SameNameAs { reference, extra } => json!({
+                        "tag":"SameNameAs",
+                        "reference": format!("{reference:?}"),
+                        "extra": extra.as_deref().map(|f| permanent_group_wire(*f))
+                    }),
                     SearchCardMatcher::Filtered(obj_filter) => json!({
                         "tag":"Filtered",
                         "filter": permanent_group_wire(**obj_filter)
@@ -10583,8 +10837,9 @@ pub fn body(value: &ExecutableBody) -> Value {
                         json!({"tag":"EqualToSourceCounters","kind":format!("{kind:?}")})
                     }
                 });
-                let count = match filter.count {
+                let count = match &filter.count {
                     SearchCount::UpTo(n) => json!({"tag":"UpTo","count":n}),
+                    SearchCount::UpToExpr(expr) => json!({"tag":"UpToExpr","expr":instruction_amount(expr)}),
                     SearchCount::Exact(n) => json!({"tag":"Exact","count":n.get()}),
                     SearchCount::UpToPlayersWithMoreLands => {
                         json!({"tag":"UpToPlayersWithMoreLands"})
@@ -11161,8 +11416,20 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::GrantCardPlayPermission { player, subject, duration, cast_only, free, any_color } => {
                 json!({"op":"GrantCardPlayPermission","player":format!("{player:?}"),"subject":format!("{subject:?}"),"duration":format!("{duration:?}"),"cast_only":cast_only,"free":free,"any_color":any_color})
             }
-            Instruction::CreateTokenCopy { source, count, tapped, attacking, sacrifice_at_end_step, exile_at_end_step, grant_haste, nonlegendary, override_pt, override_colors, add_subtype, strip_mana_cost } => {
-                json!({"op":"CreateTokenCopy","source":format!("{source:?}"),"count":instruction_amount(count),"tapped":tapped,"attacking":attacking,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"grant_haste":grant_haste,"nonlegendary":nonlegendary,"override_pt":override_pt,"override_colors":format!("{override_colors:?}"),"add_subtype":format!("{add_subtype:?}"),"strip_mana_cost":strip_mana_cost})
+            Instruction::CreateTokenCopy { source, count, tapped, attacking, sacrifice_at_end_step, exile_at_end_step, grant_keywords, nonlegendary, override_pt, override_colors, add_subtypes, add_card_types, strip_mana_cost, recipients } => {
+                json!({"op":"CreateTokenCopy","source":format!("{source:?}"),"count":instruction_amount(count),"tapped":tapped,"attacking":attacking,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"grant_keywords":format!("{grant_keywords:?}"),"nonlegendary":nonlegendary,"override_pt":override_pt,"override_colors":format!("{override_colors:?}"),"add_subtypes":format!("{add_subtypes:?}"),"add_card_types":format!("{add_card_types:?}"),"strip_mana_cost":strip_mana_cost,"recipients":format!("{recipients:?}")})
+            }
+            Instruction::BindResolutionX(expr) => {
+                json!({"op":"BindResolutionX","expr":instruction_amount(expr)})
+            }
+            Instruction::PutResolvingSpellInLibrary(placement) => {
+                json!({"op":"PutResolvingSpellInLibrary","placement":format!("{placement:?}")})
+            }
+            Instruction::PutSubjectIntoLibraryFromTop { subject, offset } => {
+                json!({"op":"PutSubjectIntoLibraryFromTop","subject":format!("{subject:?}"),"offset":instruction_amount(offset)})
+            }
+            Instruction::SetDayNight(clock) => {
+                json!({"op":"SetDayNight","clock":format!("{clock:?}")})
             }
             Instruction::CreateAuraTokenAttached { definition, host, up_to_one } => {
                 json!({"op":"CreateAuraTokenAttached","definition":format!("{definition:?}"),"host":format!("{host:?}"),"up_to_one":up_to_one})
@@ -11254,6 +11521,21 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::Ripple(n) => json!({"op":"Ripple","count":n}),
             Instruction::Demonstrate => json!({"op":"Demonstrate"}),
             Instruction::Enlist => json!({"op":"Enlist"}),
+            Instruction::CounterSpellToLibrary { top } => json!({"op":"CounterSpellToLibrary","top":top}),
+            Instruction::CounterTriggeringStackObject => json!({"op":"CounterTriggeringStackObject"}),
+            Instruction::SetSubjectTapped { subject, tapped } => json!({"op":"SetSubjectTapped","subject":format!("{subject:?}"),"tapped":tapped}),
+            Instruction::ForEachPlayer { players, body: inner } => json!({"op":"ForEachPlayer","players":format!("{players:?}"),"body":body(inner)}),
+            Instruction::OfferAnyPlayer { players, cost_body, paid_body, declined_body } => json!({"op":"OfferAnyPlayer","players":format!("{players:?}"),"cost_body":body(cost_body),"paid_body":body(paid_body),"declined_body":declined_body.as_ref().map(body)}),
+            Instruction::DealDamageToAnnouncedTargets { amount, min_targets, max_targets } => json!({"op":"DealDamageToAnnouncedTargets","amount":instruction_amount(amount),"min_targets":min_targets,"max_targets":max_targets}),
+            Instruction::GrantChosenProtection { recipients, duration: dur } => json!({"op":"GrantChosenProtection","recipients":format!("{recipients:?}"),"duration":duration(*dur)}),
+            Instruction::RemoveCountersFromSubject { subject, kind, amount } => json!({"op":"RemoveCountersFromSubject","subject":format!("{subject:?}"),"kind":format!("{kind:?}"),"amount":amount.as_ref().map(instruction_amount)}),
+            Instruction::MoveGroupToLibrary { group, placement } => json!({"op":"MoveGroupToLibrary","group":format!("{group:?}"),"placement":format!("{placement:?}")}),
+            Instruction::ExileLibraryTopLinked { player, amount, group, face_down } => json!({"op":"ExileLibraryTopLinked","player":format!("{player:?}"),"amount":instruction_amount(amount),"group":format!("{group:?}"),"face_down":face_down}),
+            Instruction::UntapOrTapSelect { chooser, filter, count, up_to, tap } => json!({"op":"UntapOrTapSelect","chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"up_to":up_to,"tap":tap}),
+            Instruction::MoveGraveyardGroupOwned { players, filter, destination } => json!({"op":"MoveGraveyardGroupOwned","players":format!("{players:?}"),"filter":format!("{filter:?}"),"destination":format!("{destination:?}")}),
+            Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
+            Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}")}),
+            Instruction::CreateTokenCopyExt { source, count, recipients, enters_tapped, enters_attacking, haste, sacrifice_at_end_step, exile_at_end_step, nonlegendary, extra_types, extra_subtypes, extra_keywords, override_pt, extra_colors } => json!({"op":"CreateTokenCopyExt","source":format!("{source:?}"),"count":instruction_amount(count),"recipients":format!("{recipients:?}"),"enters_tapped":enters_tapped,"enters_attacking":enters_attacking,"haste":haste,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"nonlegendary":nonlegendary,"extra_types":format!("{extra_types:?}"),"extra_subtypes":format!("{extra_subtypes:?}"),"extra_keywords":format!("{extra_keywords:?}"),"override_pt":format!("{override_pt:?}"),"extra_colors":format!("{extra_colors:?}")}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});
@@ -12810,6 +13092,7 @@ fn activated(abilities: &[ActivatedAbility]) -> Value {
             SourceCost::PayLife { amount: LifeCostAmount::Fixed(n), sacrifice: Some(_), .. } => row["source_cost"] = json!(format!("PayLifeSacrificeOtherCreature({n})")),
             SourceCost::PayLife { amount: LifeCostAmount::Fixed(n), tap_source: true, .. } => row["source_cost"] = json!(format!("TapPayLife({n})")),
             SourceCost::PayLife { amount: LifeCostAmount::Fixed(n), .. } => row["source_cost"] = json!(format!("PayLife({n})")),
+            SourceCost::PayLife { amount: LifeCostAmount::ChosenX, .. } => row["source_cost"] = json!("PayLife(X)"),
             SourceCost::GenericX { symbols, tap_source: true } => row["source_cost"] = json!(format!("TapWithGenericX({symbols})")),
             SourceCost::GenericX { .. } => row["source_cost"] = json!("PayGenericX"),
             SourceCost::Counter { kind: CounterKind::Page, delta: CounterCostDelta::Add(_), .. } => row["source_cost"] = json!("TapPutPage"),
@@ -13249,6 +13532,13 @@ pub fn printed_text(value: &PrintedText) -> Value {
             ConditionalCastCost::Offering { mana, subtype } => {
                 json!({"tag":"Offering","cost":cost(mana),"subtype":format!("{subtype:?}")})
             }
+            ConditionalCastCost::Alternative {
+                condition,
+                mana,
+                extra,
+            } => {
+                json!({"tag":"Alternative","condition":format!("{condition:?}"),"cost":cost(mana),"extra":format!("{extra:?}")})
+            }
         };
     }
     if let Some(action) = &value.exile_action {
@@ -13330,7 +13620,7 @@ pub fn printed_text(value: &PrintedText) -> Value {
     if value.graveyard_creature_exile_cost != 0 {
         result["graveyard_creature_exile_cost"] = json!(value.graveyard_creature_exile_cost);
     }
-    if let Some(permission) = value.graveyard_self_cast {
+    if let Some(permission) = &value.graveyard_self_cast {
         result["graveyard_self_cast"] = json!(format!("{permission:?}"));
     }
     if !value.zone_replacements.is_empty() {
@@ -13602,6 +13892,13 @@ pub fn view(value: &Program) -> Value {
             ConditionalCastCost::Offering { mana, subtype } => {
                 json!({"tag":"Offering","cost":cost(mana),"subtype":format!("{subtype:?}")})
             }
+            ConditionalCastCost::Alternative {
+                condition,
+                mana,
+                extra,
+            } => {
+                json!({"tag":"Alternative","condition":format!("{condition:?}"),"cost":cost(mana),"extra":format!("{extra:?}")})
+            }
         };
     }
     if let Some(action) = &value.exile_action {
@@ -13686,7 +13983,7 @@ pub fn view(value: &Program) -> Value {
     if value.graveyard_creature_exile_cost != 0 {
         result["graveyard_creature_exile_cost"] = json!(value.graveyard_creature_exile_cost);
     }
-    if let Some(permission) = value.graveyard_self_cast {
+    if let Some(permission) = &value.graveyard_self_cast {
         result["graveyard_self_cast"] = json!(format!("{permission:?}"));
     }
     if !value.zone_replacements.is_empty() {
@@ -13796,8 +14093,14 @@ mod tests {
                 | ResolvingPlayer::TargetOwner
                 | ResolvingPlayer::ActivePlayer
                 | ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::AttachedHostController
+                | ResolvingPlayer::TriggerSubjectController
+                | ResolvingPlayer::TriggerSubjectOwner
+                | ResolvingPlayer::SourceChosenPlayer
                 | ResolvingPlayer::DefendingPlayer
-                | ResolvingPlayer::ChosenPlayer => {
+                | ResolvingPlayer::ChosenPlayer
+                | ResolvingPlayer::LoopPlayer
+                | ResolvingPlayer::RandomOpponent => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -13819,8 +14122,14 @@ mod tests {
                 | ResolvingPlayer::TargetOwner
                 | ResolvingPlayer::ActivePlayer
                 | ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::AttachedHostController
+                | ResolvingPlayer::TriggerSubjectController
+                | ResolvingPlayer::TriggerSubjectOwner
+                | ResolvingPlayer::SourceChosenPlayer
                 | ResolvingPlayer::DefendingPlayer
-                | ResolvingPlayer::ChosenPlayer => {
+                | ResolvingPlayer::ChosenPlayer
+                | ResolvingPlayer::LoopPlayer
+                | ResolvingPlayer::RandomOpponent => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -14106,8 +14415,14 @@ mod tests {
                         | ResolvingPlayer::TargetOwner
                         | ResolvingPlayer::ActivePlayer
                         | ResolvingPlayer::EnchantedPlayer
+                        | ResolvingPlayer::AttachedHostController
+                        | ResolvingPlayer::TriggerSubjectController
+                        | ResolvingPlayer::TriggerSubjectOwner
+                        | ResolvingPlayer::SourceChosenPlayer
                         | ResolvingPlayer::DefendingPlayer
-                        | ResolvingPlayer::ChosenPlayer,
+                        | ResolvingPlayer::ChosenPlayer
+                        | ResolvingPlayer::LoopPlayer
+                        | ResolvingPlayer::RandomOpponent,
                     ) => unreachable!("role is not in this fixed fixture"),
                 };
                 let mut instructions = vec![];

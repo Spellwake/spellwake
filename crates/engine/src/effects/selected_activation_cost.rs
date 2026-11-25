@@ -244,6 +244,16 @@ impl EffectWindow {
             };
             payload.exiled_activation_copy = Some(Box::new(donor));
         }
+        let exiled_cost_power =
+            if work.action == ZoneActionKind::ExileCost && work.objects.len() == 1 {
+                self.evaluated_characteristics()?
+                    .get(work.objects[0])
+                    .and_then(|value| value.power_toughness.as_ref())
+                    .map(|stats| stats.derived.power.clone())
+                    .unwrap_or_else(|| 0.into())
+            } else {
+                0.into()
+            };
         let before = self.rules_snapshot(None)?;
         let (window, movements) = if moves.is_empty()
             && matches!(
@@ -270,6 +280,15 @@ impl EffectWindow {
                 .pay_selected_activation_costs(entry, actor, work.action, &moves)?
         };
         self.window = window;
+        if work.action == ZoneActionKind::ExileCost
+            && work.objects.len() == 1
+            && let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry)
+        {
+            let exiled_id = movements
+                .first()
+                .map_or(work.objects[0], |movement| movement.after.id());
+            payload.exiled_cost_creature = Some((exiled_id, exiled_cost_power));
+        }
         if let SelectedActivationOwner::Permanent(activation) = &mut work.owner
             && let Some(movement) = movements
                 .iter()

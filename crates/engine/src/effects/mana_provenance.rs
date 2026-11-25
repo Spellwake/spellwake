@@ -59,36 +59,157 @@ impl ManaProvenance {
 
 impl EffectWindow {
     pub(super) fn expire_step_mana(&mut self, retained: &BTreeSet<(SeatId, ManaType)>) {
-        let mut retained_units = BTreeMap::new();
+        let converted = self
+            .evaluated_characteristics()
+            .map(|evaluated| self.converted_unspent_mana_types(&evaluated))
+            .unwrap_or_default();
+        self.expire_step_mana_with_conversion(retained, &converted);
+    }
+
+    pub(super) fn expire_step_mana_with_conversion(
+        &mut self,
+        retained: &BTreeSet<(SeatId, ManaType)>,
+        converted: &BTreeMap<SeatId, ManaType>,
+    ) {
+        let mut retained_units: BTreeMap<(SeatId, ManaType), RulesInteger> = BTreeMap::new();
         self.floating_mana.lots.retain(|_, lot| {
             let key = (lot.metadata.player, lot.metadata.mana_type);
             if retained.contains(&key) {
                 return true;
             }
-            if !matches!(
+            if matches!(
                 lot.metadata.effect,
                 ManaSpendEffect::RetainUntilCleanup | ManaSpendEffect::RetainUntilEndOfCombat
             ) {
-                return false;
-            }
-            let total = retained_units
-                .entry(key)
-                .or_insert_with(|| RulesInteger::from(0));
-            *total = total.plus(&lot.metadata.remaining);
-            true
-        });
-        self.mana.retain(|key, amount| {
-            if retained.contains(key) {
+                let total = retained_units
+                    .entry(key)
+                    .or_insert_with(|| RulesInteger::from(0));
+                *total = total.plus(&lot.metadata.remaining);
                 return true;
             }
-            if let Some(count) = retained_units.get(key) {
+            if let Some(&target) = converted.get(&lot.metadata.player) {
+                lot.metadata.mana_type = target;
+                return true;
+            }
+            false
+        });
+        let mut converted_additions: BTreeMap<(SeatId, ManaType), RulesInteger> = BTreeMap::new();
+        let mut converted_keys: BTreeMap<(SeatId, ManaType), ManaType> = BTreeMap::new();
+        self.mana.retain(|&key, amount| {
+            if retained.contains(&key) {
+                return true;
+            }
+            let (player, kind) = key;
+            let keep_lots = retained_units.get(&key);
+            if let Some(&target) = converted.get(&player) {
+                if kind == target {
+                    return amount.is_positive();
+                }
+                if let Some(count) = keep_lots {
+                    let excess = amount.minus(count);
+                    if excess.is_positive() {
+                        let entry = converted_additions
+                            .entry((player, target))
+                            .or_insert_with(|| RulesInteger::from(0));
+                        *entry = entry.plus(&excess);
+                        converted_keys.insert(key, target);
+                    }
+                    *amount = count.clone();
+                    return amount.is_positive();
+                }
+                if amount.is_positive() {
+                    let entry = converted_additions
+                        .entry((player, target))
+                        .or_insert_with(|| RulesInteger::from(0));
+                    *entry = entry.plus(amount);
+                    converted_keys.insert(key, target);
+                }
+                return false;
+            }
+            if let Some(count) = keep_lots {
                 *amount = count.clone();
                 return true;
             }
             false
         });
-        self.restricted_mana
-            .retain(|(player, kind, _), _| retained.contains(&(*player, *kind)));
+        for (key, added) in converted_additions {
+            if added.is_positive() {
+                let entry = self
+                    .mana
+                    .entry(key)
+                    .or_insert_with(|| RulesInteger::from(0));
+                *entry = entry.plus(&added);
+            }
+        }
+        if converted.is_empty() {
+            self.restricted_mana
+                .retain(|(player, kind, _), _| retained.contains(&(*player, *kind)));
+        } else {
+            let old_restricted = std::mem::take(&mut self.restricted_mana);
+            for ((player, kind, restriction), amount) in old_restricted {
+                if !amount.is_positive() {
+                    continue;
+                }
+                if retained.contains(&(player, kind)) {
+                    let entry = self
+                        .restricted_mana
+                        .entry((player, kind, restriction))
+                        .or_insert_with(|| RulesInteger::from(0));
+                    *entry = entry.plus(&amount);
+                } else if let Some(&target) = converted.get(&player) {
+                    let entry = self
+                        .restricted_mana
+                        .entry((player, target, restriction))
+                        .or_insert_with(|| RulesInteger::from(0));
+                    *entry = entry.plus(&amount);
+                }
+            }
+        }
+        if !converted_keys.is_empty() {
+            let old_traits = std::mem::take(&mut self.floating_mana.source_traits);
+            for (key, counts) in old_traits {
+                if let Some(&target) = converted_keys.get(&key) {
+                    let kept_cap = self
+                        .mana
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| RulesInteger::from(0));
+                    let keep_snow = counts.snow.clone().min(kept_cap.clone());
+                    let keep_treasure = counts.treasure.clone().min(kept_cap.clone());
+                    let keep_creature = counts.creature.clone().min(kept_cap);
+                    if keep_snow.is_positive()
+                        || keep_treasure.is_positive()
+                        || keep_creature.is_positive()
+                    {
+                        let kept_entry = self.floating_mana.source_traits.entry(key).or_default();
+                        kept_entry.snow = kept_entry.snow.plus(&keep_snow);
+                        kept_entry.treasure = kept_entry.treasure.plus(&keep_treasure);
+                        kept_entry.creature = kept_entry.creature.plus(&keep_creature);
+                    }
+                    let move_snow = counts.snow.minus(&keep_snow);
+                    let move_treasure = counts.treasure.minus(&keep_treasure);
+                    let move_creature = counts.creature.minus(&keep_creature);
+                    if move_snow.is_positive()
+                        || move_treasure.is_positive()
+                        || move_creature.is_positive()
+                    {
+                        let dest_entry = self
+                            .floating_mana
+                            .source_traits
+                            .entry((key.0, target))
+                            .or_default();
+                        dest_entry.snow = dest_entry.snow.plus(&move_snow);
+                        dest_entry.treasure = dest_entry.treasure.plus(&move_treasure);
+                        dest_entry.creature = dest_entry.creature.plus(&move_creature);
+                    }
+                } else {
+                    let entry = self.floating_mana.source_traits.entry(key).or_default();
+                    entry.snow = entry.snow.plus(&counts.snow);
+                    entry.treasure = entry.treasure.plus(&counts.treasure);
+                    entry.creature = entry.creature.plus(&counts.creature);
+                }
+            }
+        }
         self.floating_mana.source_traits.retain(|key, counts| {
             let Some(remaining) = self.mana.get(key) else {
                 return false;

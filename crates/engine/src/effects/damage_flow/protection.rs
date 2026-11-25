@@ -65,6 +65,83 @@ impl EffectWindow {
                             .or_default()
                             .push(attempt.id);
                     }
+                    for active in &self.temporary_rules {
+                        if active.consumed || !active.resolved_players.contains(&player) {
+                            continue;
+                        }
+                        let crate::program::TemporaryRuleKind::PlayerGrantKeyword {
+                            keywords, ..
+                        } = &active.rule
+                        else {
+                            continue;
+                        };
+                        for kw in keywords {
+                            let matched_effect = match kw {
+                                KeywordAbility::ProtectionFromWhite
+                                    if colors.contains(&Color::White) =>
+                                {
+                                    Some(DamageEffectId::Protection(Color::White))
+                                }
+                                KeywordAbility::ProtectionFromBlue
+                                    if colors.contains(&Color::Blue) =>
+                                {
+                                    Some(DamageEffectId::Protection(Color::Blue))
+                                }
+                                KeywordAbility::ProtectionFromBlack
+                                    if colors.contains(&Color::Black) =>
+                                {
+                                    Some(DamageEffectId::Protection(Color::Black))
+                                }
+                                KeywordAbility::ProtectionFromRed
+                                    if colors.contains(&Color::Red) =>
+                                {
+                                    Some(DamageEffectId::Protection(Color::Red))
+                                }
+                                KeywordAbility::ProtectionFromGreen
+                                    if colors.contains(&Color::Green) =>
+                                {
+                                    Some(DamageEffectId::Protection(Color::Green))
+                                }
+                                KeywordAbility::ProtectionFromMulticolored if colors.len() >= 2 => {
+                                    Some(DamageEffectId::ProtectionMulticolored)
+                                }
+                                KeywordAbility::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Everything,
+                                ) => Some(DamageEffectId::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Everything,
+                                )),
+                                KeywordAbility::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Colorless,
+                                ) if colors.is_empty() => Some(DamageEffectId::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Colorless,
+                                )),
+                                KeywordAbility::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Monocolored,
+                                ) if colors.len() == 1 => Some(DamageEffectId::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Monocolored,
+                                )),
+                                KeywordAbility::ProtectionFrom(
+                                    crate::characteristics::ProtectionFromQuality::Player(seat),
+                                ) if attempt.source.controller() == *seat => {
+                                    Some(DamageEffectId::ProtectionFrom(
+                                        crate::characteristics::ProtectionFromQuality::Player(
+                                            *seat,
+                                        ),
+                                    ))
+                                }
+                                _ => None,
+                            };
+                            if let Some(effect) = matched_effect {
+                                applications
+                                    .entry(DamageApplication {
+                                        effect,
+                                        scope: DamageScope::Recipient(attempt.target),
+                                    })
+                                    .or_default()
+                                    .push(attempt.id);
+                            }
+                        }
+                    }
                     continue;
                 }
             };
