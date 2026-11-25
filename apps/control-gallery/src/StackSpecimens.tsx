@@ -71,7 +71,8 @@ export default function StackSpecimen({ view }: { view: View }) {
     kind: "ability",
     id: "warden",
     name: "Soul Warden",
-    art: <img src={wardenArt} alt="" draggable={false} />,
+    artUrl: wardenArt,
+    frameAccent: "W",
     effect: "Gain 1 life.",
     typeLabel: "Triggered ability",
     controller: "Sam",
@@ -81,7 +82,8 @@ export default function StackSpecimen({ view }: { view: View }) {
     ...trigger,
     id: "primordial",
     name: "Diluvian Primordial",
-    art: <img src={primordialArt} alt="" draggable={false} />,
+    artUrl: primordialArt,
+    frameAccent: "U",
     effect:
       "When this creature enters, for each opponent, you may cast up to one target instant or sorcery card from that player’s graveyard without paying its mana cost. If a spell cast this way would be put into a graveyard, exile it instead.",
   };
