@@ -305,6 +305,23 @@ export function seatViewSizes(stage: { width: number; height: number }): {
   const cardWidth = Math.max(54, Math.min(share, stage.height * 0.17, 132));
   return { cardWidth, handWidth: cardWidth * 1.42 };
 }
+/** The seat view's board leans away from the viewer by this angle, seen from this far. */
+export const TILT_DEGREES = 16;
+export const TILT_DISTANCE = 1500;
+/** The gap flat things keep above a docked panel; `clearBottom` includes it. */
+export const DOCK_MARGIN = 10;
+/**
+ * How far above the lower edge a line must be drawn on the flat board to
+ * appear `shown` pixels above it once the board leans. The lean pulls a row
+ * toward the lower edge by more the higher it sits.
+ */
+export function beforeTilt(shown: number): number {
+  const angle = (TILT_DEGREES * Math.PI) / 180;
+  return (
+    (shown * TILT_DISTANCE) /
+    (Math.cos(angle) * TILT_DISTANCE - shown * Math.sin(angle))
+  );
+}
 /** How much of the fanned hand shows above the stage's lower edge. */
 export const handShownHeight = (stage: {
   width: number;
@@ -379,8 +396,14 @@ export function layoutTable(
   const { cardWidth, handWidth } = seatViewSizes(stage);
   const cardHeight = cardWidth * CARD_RATIO;
   const focused = seatBoard(snapshot, view.seatId);
+  const shown = handShownHeight(stage);
   const nearY =
-    h - Math.max(handShownHeight(stage), clearBottom) - cardHeight * 0.62;
+    clearBottom > shown
+      ? // Above a docked panel, the row's lower edge is aimed at the panel's
+        // own edge as it appears once the board leans, so a taller panel
+        // (one holding a question) never ends up over the lands.
+        h - beforeTilt(clearBottom - DOCK_MARGIN + 1) - cardHeight / 2
+      : h - shown - cardHeight * 0.62;
   const farY = nearY - cardHeight * 1.16;
   const placements = placeBoard(
     focused,
