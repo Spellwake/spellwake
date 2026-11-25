@@ -43,6 +43,26 @@ pub struct AgendaSpec {
     pub named_slots: u8,
 }
 
+/// Keyword casting or additional-cost family targeted by [`SpellCostModifier::KeywordCastCost`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastKeywordCostKind {
+    Dash,
+    Blitz,
+    Warp,
+    Flashback,
+    Buyback,
+    Bestow,
+    Evoke,
+    Mutate,
+    Escape,
+    Foretell,
+    Madness,
+    Kicker,
+    Spectacle,
+    Prowl,
+    Surge,
+}
+
 /// Static spell cost modifier or alternative-cost rule.
 // Keep SpellFilter inline for value semantics on static rule definitions without extra boxing churn.
 #[allow(clippy::large_enum_variant)]
@@ -98,6 +118,13 @@ pub enum SpellCostModifier {
         mana: crate::mana::ManaCost,
         once_each_turn: bool,
         own_turn_only: bool,
+    },
+    /// Modify the generic mana cost of spells cast using `keyword`.
+    KeywordCastCost {
+        keyword: CastKeywordCostKind,
+        controller: crate::program::PlayerRelation,
+        delta: u8,
+        less: bool,
     },
 }
 
@@ -650,8 +677,38 @@ pub enum StaticModifierRule {
         player: crate::program::PlayerRelation,
         delta: i8,
     },
+    /// Modify generic activation costs of matching activated abilities.
+    ActivatedAbilityCost {
+        scope: ActivatedCostScope,
+        controller: crate::program::PlayerRelation,
+        delta: u8,
+        less: bool,
+        scale: Option<Box<crate::program::ValueExpr>>,
+        minimum_total_mana: u8,
+    },
     Ascend,
     AdditionalBlockWhileMonarch,
+}
+
+/// Scope of activated abilities affected by [`StaticModifierRule::ActivatedAbilityCost`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivatedCostScope {
+    /// Any activated ability.
+    Any,
+    /// Activated abilities of permanents matching `ObjectFilter`.
+    PermanentFilter(Box<crate::program::ObjectFilter>),
+    /// Equip abilities (CR 702.6).
+    Equip,
+    /// Boast abilities (CR 702.142).
+    Boast,
+    /// Cycling abilities (CR 702.29).
+    Cycling,
+    /// Ninjutsu abilities (CR 702.49).
+    Ninjutsu,
+    /// Unearth abilities (CR 702.84).
+    Unearth,
+    /// Encore abilities (CR 702.141).
+    Encore,
 }
 
 /// Event predicate matched by a generalized trigger multiplier (CR 603.2d).
@@ -991,6 +1048,7 @@ impl StaticContinuousAbility {
                         | StaticModifierRule::StealCreatedTokens { .. }
                         | StaticModifierRule::CrewAndSaddlePowerBonus { .. }
                         | StaticModifierRule::ModifyMaxHandSize { .. }
+                        | StaticModifierRule::ActivatedAbilityCost { .. }
                         | StaticModifierRule::BecomesDayIfNeither
                         | StaticModifierRule::ExtraEntryLoyalty
                         | StaticModifierRule::AdditionalCreatureDeathTrigger
@@ -1132,6 +1190,14 @@ impl StaticContinuousAbility {
                 StaticModifierRule::ConditionalModifyLifeGain { condition, .. } => {
                     condition.rewrite_creature_type(change.from, change.to);
                 }
+                StaticModifierRule::ActivatedAbilityCost { scope, scale, .. } => {
+                    if let ActivatedCostScope::PermanentFilter(filter) = scope {
+                        filter.rewrite_creature_type(change.from, change.to);
+                    }
+                    if let Some(expr) = scale {
+                        expr.rewrite_creature_type(change.from, change.to);
+                    }
+                }
                 StaticModifierRule::AdditionalTrigger(mult) => {
                     mult.event.rewrite_creature_type(change.from, change.to);
                     if let Some(sel) = &mut mult.triggering_source {
@@ -1184,6 +1250,12 @@ impl StaticContinuousAbility {
                 SpellCostModifier::SubtypeDiscountFromCommandOrBattlefield { subtype, .. }
                 | SpellCostModifier::FreeSubtypeCreatureSpells(subtype) => {
                     return validate_subtypes(&BTreeSet::from([*subtype]), vocabulary);
+                }
+                SpellCostModifier::KeywordCastCost { delta, .. } => {
+                    if *delta == 0 {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
+                    }
+                    return Ok(());
                 }
                 SpellCostModifier::IncreaseExceptType { .. }
                 | SpellCostModifier::ChosenTypeOneLessOfEachColor
@@ -1505,6 +1577,25 @@ impl StaticContinuousAbility {
                     StaticModifierRule::ModifyMaxHandSize { delta: 0, .. } => {
                         return Err(CharacteristicDefinitionError::EmptyParts);
                     }
+                    StaticModifierRule::ActivatedAbilityCost {
+                        scope,
+                        delta,
+                        scale,
+                        ..
+                    } => {
+                        if *delta == 0 {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        if let ActivatedCostScope::PermanentFilter(filter) = scope {
+                            filter
+                                .validate_vocabulary(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                        if let Some(expr) = scale {
+                            expr.validate_world_condition(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                    }
                     StaticModifierRule::ModifyLifeGain {
                         add,
                         multiply,
@@ -1799,6 +1890,7 @@ impl StaticContinuousAbility {
                 | StaticPart::SetPTToOwnManaValue
                 | StaticPart::GrantProtectionChosenColor
                 | StaticPart::GrantProtectionChosenPlayer
+                | StaticPart::ModifyPTPerOwnColor { .. }
                 | StaticPart::SwitchPT => {}
             }
         }

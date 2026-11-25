@@ -529,7 +529,17 @@ impl EffectWindow {
             | Instruction::TapTargetWhileControllingSource
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
+            | Instruction::DiscardUpToExt { .. }
+            | Instruction::Earthbend { .. }
+            | Instruction::ReturnEarthbentCard
+            | Instruction::RegenerateSubject { .. }
             | Instruction::AddMana(_)
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
+            | Instruction::AttachChoosingPermanent { .. }
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy

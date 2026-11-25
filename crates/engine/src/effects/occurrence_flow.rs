@@ -678,6 +678,12 @@ impl EffectWindow {
                 .as_ref()
                 .map(|source| &source.names)
                 .or_else(|| before.evaluated.get(source).map(|land| &land.current_names));
+            let mut immediate_triggered_mana: Vec<(
+                ObjectId,
+                crate::mana::ManaAbilityId,
+                SeatId,
+                BTreeMap<ManaType, RulesInteger>,
+            )> = Vec::new();
             for object in current
                 .objects
                 .values()
@@ -690,7 +696,7 @@ impl EffectWindow {
                     if !object.abilities.mana.contains(&mana.id) {
                         continue;
                     }
-                    let crate::mana::ManaOutput::Triggered(rule) = mana.output else {
+                    let crate::mana::ManaOutput::Triggered(rule) = &mana.output else {
                         continue;
                     };
                     let allow_any_controller = matches!(
@@ -699,8 +705,68 @@ impl EffectWindow {
                             | crate::mana::TriggeredManaRule::LandTappedChosenColor {
                                 controller_only: false
                             }
+                            | crate::mana::TriggeredManaRule::EnchantedLandTapped { .. }
                     );
                     if !allow_any_controller && mana_controller != controller {
+                        continue;
+                    }
+                    if let crate::mana::TriggeredManaRule::EnchantedLandTapped { extra } = rule {
+                        let attached_to_source = object.attached_to
+                            == Some(crate::targets::TargetRef::Object(source))
+                            || before.evaluated.get(object.object).is_some_and(|prev| {
+                                prev.attached_to == Some(crate::targets::TargetRef::Object(source))
+                            });
+                        if !was_land || !attached_to_source {
+                            continue;
+                        }
+                        if self.retained_mana.as_ref().is_some_and(|records| {
+                            !records.iter().any(|record| {
+                                record.source == object.object
+                                    && record.ability
+                                        == crate::mana::ManaAbilityRef::Printed(mana.id)
+                            })
+                        }) {
+                            continue;
+                        }
+                        match extra {
+                            crate::mana::EnchantedLandManaBonus::Fixed(pool) => {
+                                immediate_triggered_mana.push((
+                                    object.object,
+                                    mana.id,
+                                    mana_controller,
+                                    pool.clone(),
+                                ));
+                            }
+                            crate::mana::EnchantedLandManaBonus::ChosenColor => {
+                                let Some(chosen) =
+                                    self.entry_color_choices.get(&object.object).copied()
+                                else {
+                                    continue;
+                                };
+                                immediate_triggered_mana.push((
+                                    object.object,
+                                    mana.id,
+                                    mana_controller,
+                                    BTreeMap::from([(chosen, 1.into())]),
+                                ));
+                            }
+                            crate::mana::EnchantedLandManaBonus::AnyColor { count }
+                            | crate::mana::EnchantedLandManaBonus::AnyCombination { count } => {
+                                let colors: BTreeSet<ManaType> = ManaType::ALL
+                                    .into_iter()
+                                    .filter(|kind| *kind != ManaType::Colourless)
+                                    .collect();
+                                for _ in 0..*count {
+                                    self.triggered_mana_queue.push((
+                                        object.object,
+                                        mana.id,
+                                        mana_controller,
+                                        controller,
+                                        colors.clone(),
+                                    ));
+                                }
+                            }
+                        }
                         continue;
                     }
                     let colors = match rule {
@@ -770,6 +836,18 @@ impl EffectWindow {
                         colors,
                     ));
                 }
+            }
+            for (trig_source, trig_id, trig_controller, pool) in immediate_triggered_mana {
+                self.credit_mana_at_cut(
+                    trig_source,
+                    crate::mana::ManaAbilityRef::Printed(trig_id),
+                    (trig_controller, controller),
+                    pool,
+                    None,
+                    true,
+                    None,
+                    append,
+                )?;
             }
         }
         Ok(production)
@@ -2426,6 +2504,16 @@ impl EffectWindow {
             }
             match value {
                 RulesOccurrence::ZoneChange(change) => {
+                    if matches!(change.after.object.zone(), ObjectZone::Graveyard(_)) {
+                        self.characteristics
+                            .put_into_gy_this_turn
+                            .insert(change.after.object.id());
+                        if matches!(change.before.object.zone(), ObjectZone::Library(_)) {
+                            self.characteristics
+                                .put_into_gy_from_library_this_turn
+                                .insert(change.after.object.id());
+                        }
+                    }
                     if change.before.object.zone() == ObjectZone::Battlefield
                         && matches!(change.after.object.zone(), ObjectZone::Graveyard(_))
                     {

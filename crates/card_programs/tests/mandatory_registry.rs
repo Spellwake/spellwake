@@ -218,6 +218,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
         additional_cast_costs: vec![],
         activation_restrictions: Default::default(),
         activation_cost_reductions: Default::default(),
+        activation_target_cost_reductions: Default::default(),
         activation_hybrid_symbols: Default::default(),
         extra_activation_costs: Default::default(),
         extra_cast_costs: Vec::new(),

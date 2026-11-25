@@ -323,6 +323,21 @@ impl EffectWindow {
                 Some(SearchManaValue::EqualToSourceCounters(_)) => self
                     .copiable_program(id)
                     .is_some_and(|program| Some(program.mana_value()) == counter_mana_value),
+                Some(SearchManaValue::ExactManaCostOneOf(costs)) => {
+                    self.copiable_program(id).is_some_and(|program| {
+                        program.x_mana_symbols == 0
+                            && program.hybrid_symbols.is_empty()
+                            && !program.extra_cast_costs.iter().any(|cost| {
+                                matches!(
+                                    cost,
+                                    crate::activated::ExtraActivationCost::PaySnowMana(_)
+                                )
+                            })
+                            && program
+                                .printed_mana_cost()
+                                .is_some_and(|mc| costs.contains(mc))
+                    })
+                }
             };
             if base_match && mv_match {
                 eligible.push(id);

@@ -194,7 +194,8 @@ impl EntryCopyPool {
         let candidates = match zone {
             crate::program::EntryCopyZone::Battlefield => &self.all_battlefield,
             crate::program::EntryCopyZone::OwnGraveyard
-            | crate::program::EntryCopyZone::AnyGraveyard => &self.all_graveyard,
+            | crate::program::EntryCopyZone::AnyGraveyard
+            | crate::program::EntryCopyZone::OpponentGraveyard => &self.all_graveyard,
         };
         let excluded = BTreeSet::new();
         let matches_clause = |clause: crate::program::ObjectClause,
@@ -237,6 +238,11 @@ impl EntryCopyPool {
                 };
                 if zone == crate::program::EntryCopyZone::OwnGraveyard
                     && snap.zone != ObjectZone::Graveyard(controller)
+                {
+                    return false;
+                }
+                if zone == crate::program::EntryCopyZone::OpponentGraveyard
+                    && !matches!(snap.zone, ObjectZone::Graveyard(owner) if owner != controller)
                 {
                     return false;
                 }
@@ -417,6 +423,11 @@ impl EntryCopyPool {
             {
                 def.names = original_names.clone();
             }
+            if spec.enters_tapped
+                && let crate::program::ProgramKind::Permanent(permanent) = &mut def.kind
+            {
+                permanent.entry_tap = Some(crate::land::EntryTap::Always);
+            }
             for extra_act in &spec.extra_activated {
                 let mut ability = extra_act.clone();
                 let next = def
@@ -428,6 +439,18 @@ impl EntryCopyPool {
                     .ok_or(EffectError::InconsistentProgram)?;
                 ability.id = crate::activated::ActivatedAbilityId(next);
                 def.activated.push(ability);
+            }
+            for extra_mana in &spec.extra_mana {
+                let mut mana_ability = extra_mana.clone();
+                let next = def
+                    .mana
+                    .iter()
+                    .try_fold(0_u64, |candidate, m| {
+                        m.id.0.checked_add(1).map(|n| n.max(candidate))
+                    })
+                    .ok_or(EffectError::InconsistentProgram)?;
+                mana_ability.id = crate::mana::ManaAbilityId(next);
+                def.mana.push(mana_ability);
             }
             for extra_trig in &spec.extra_triggered {
                 let mut trigger = extra_trig.clone();

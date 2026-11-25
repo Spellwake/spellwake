@@ -238,6 +238,15 @@ impl EffectWindow {
             );
         }
         if objects.is_empty() {
+            if matches!(
+                self.current_instruction()?,
+                Instruction::ExileTopPlay { .. }
+            ) && let Some(cursor) = self.resolution_cursor_mut()
+            {
+                cursor.results.last_moved_objects.clear();
+                cursor.results.last_action_succeeded = false;
+                cursor.results.last_action_count = Some(0.into());
+            }
             return Ok(false);
         }
         let batch = self.impulse_batch(&cursor, &objects)?;
@@ -308,6 +317,15 @@ impl EffectWindow {
         objects: Vec<ObjectId>,
     ) -> Result<bool, EffectError> {
         if objects.is_empty() {
+            if matches!(
+                self.current_instruction()?,
+                Instruction::ExileTopPlay { .. }
+            ) && let Some(cursor) = self.resolution_cursor_mut()
+            {
+                cursor.results.last_moved_objects.clear();
+                cursor.results.last_action_succeeded = false;
+                cursor.results.last_action_count = Some(0.into());
+            }
             return Ok(false);
         }
         let cursor = self
@@ -721,6 +739,20 @@ impl EffectWindow {
                 .iter()
                 .find(|movement| movement.after.zone() == ObjectZone::Exile)
                 .map(|movement| movement.after.id());
+        }
+        if matches!(
+            self.payloads
+                .get(&work.cursor.entry)
+                .and_then(StackPayload::instructions)
+                .and_then(|ops| ops.get(work.cursor.instruction)),
+            Some(Instruction::ExileTopPlay { .. })
+        ) {
+            work.cursor.results.last_moved_objects = movements
+                .iter()
+                .map(|movement| movement.after.id())
+                .collect();
+            work.cursor.results.last_action_succeeded = !movements.is_empty();
+            work.cursor.results.last_action_count = Some(RulesInteger::from_usize(movements.len()));
         }
         if !movements.is_empty() {
             self.emit_from(

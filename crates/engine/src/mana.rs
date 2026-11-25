@@ -544,8 +544,35 @@ pub struct ManaAbility {
     pub id: ManaAbilityId,
     pub output: ManaOutput,
 }
+/// Bonus mana added when an enchanted land is tapped for mana (CR 605.1b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnchantedLandManaBonus {
+    /// Add a fixed mana bundle (same representation as [`ManaOutput::Fixed`]).
+    Fixed(BTreeMap<ManaType, RulesInteger>),
+    /// Add one mana of the source Aura's entry-chosen color.
+    ChosenColor,
+    /// Add `count` mana of any one color.
+    AnyColor { count: u8 },
+    /// Add `count` mana in any combination of colors.
+    AnyCombination { count: u8 },
+}
+
+impl EnchantedLandManaBonus {
+    /// Whether this bonus has valid authored parameters.
+    #[must_use]
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::Fixed(produced) => {
+                !produced.is_empty() && produced.values().all(RulesInteger::is_positive)
+            }
+            Self::ChosenColor => true,
+            Self::AnyColor { count } | Self::AnyCombination { count } => *count > 0,
+        }
+    }
+}
+
 /// Triggered mana ability condition (resolves immediately without using the stack, CR 605.1b).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggeredManaRule {
     /// Whenever controller taps a land for mana while monarch, add one chosen color.
     LandTappedWhileMonarch,
@@ -557,6 +584,23 @@ pub enum TriggeredManaRule {
     PermanentTappedForColorless,
     /// Whenever a land (or a land controller controls when `controller_only` is true) is tapped for mana, add one mana of the source's chosen color.
     LandTappedChosenColor { controller_only: bool },
+    /// Whenever the enchanted land is tapped for mana, its controller adds `extra`.
+    EnchantedLandTapped { extra: EnchantedLandManaBonus },
+}
+
+impl TriggeredManaRule {
+    /// Whether this triggered mana rule has valid authored parameters.
+    #[must_use]
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::LandTappedWhileMonarch
+            | Self::LandTappedSameType
+            | Self::ImprintedLandTappedSameType
+            | Self::PermanentTappedForColorless
+            | Self::LandTappedChosenColor { .. } => true,
+            Self::EnchantedLandTapped { extra } => extra.valid(),
+        }
+    }
 }
 
 /// Sacrifice cost paid alongside activating a mana ability.
@@ -875,7 +919,8 @@ impl ManaOutput {
                     && !colors.is_empty()
                     && !colors.contains(&ManaType::Colourless)
             }
-            Self::Triggered(_) | Self::TwoColors { .. } | Self::CounterBased(_) => true,
+            Self::Triggered(rule) => rule.valid(),
+            Self::TwoColors { .. } | Self::CounterBased(_) => true,
             Self::Counted { permanents, .. } => permanents.validate(vocabulary).is_ok(),
             Self::SpecialColor(yield_kind) => match yield_kind {
                 SpecialColorYield::CommanderColorIdentity

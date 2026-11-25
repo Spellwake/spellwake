@@ -858,7 +858,17 @@ native!(ExecutableBody, self, {
         | Instruction::ExileSubjectUntilSourceLeaves { .. }
         | Instruction::ReturnCardsExiledWithLinkExt { .. }
         | Instruction::DrawGame
-        | Instruction::TurnFaceUpSubject { .. } => Ok(()),
+        | Instruction::TurnFaceUpSubject { .. }
+        | Instruction::DiscardUpToExt { .. }
+        | Instruction::Earthbend { .. }
+        | Instruction::ReturnEarthbentCard
+        | Instruction::RegenerateSubject { .. }
+        | Instruction::AddManaForPlayer { .. }
+        | Instruction::SkipNextTurns { .. }
+        | Instruction::SelectExtremeLifePlayer { .. }
+        | Instruction::AttachFixedTargets
+        | Instruction::AttachPermanentToPlayer { .. }
+        | Instruction::AttachChoosingPermanent { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {
@@ -2152,7 +2162,8 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::DoorUnlocked { .. }
         | RulesOccurrence::DieRolled { .. }
         | RulesOccurrence::VotesCast { .. }
-        | RulesOccurrence::BecameMonstrous { .. } => Ok(()),
+        | RulesOccurrence::BecameMonstrous { .. }
+        | RulesOccurrence::PermanentFought { .. } => Ok(()),
     }
 });
 

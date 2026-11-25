@@ -182,6 +182,7 @@ fn rewrite_battlefield_static_parts(change: CreatureTypeTextChange, parts: &mut 
             | StaticPart::GrantProtectionChosenColor
             | StaticPart::GrantProtectionChosenPlayer
             | StaticPart::SetPTToOwnManaValue
+            | StaticPart::ModifyPTPerOwnColor { .. }
             | StaticPart::SwitchPT => {}
         }
     }
@@ -295,7 +296,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     word(change, kind);
                 }
             }
-            Instruction::AddMana(yield_kind) => {
+            Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
                 let inner = match yield_kind {
                     crate::program::EffectManaYield::RetainedUntilCleanup(inner) => inner.as_mut(),
                     other => other,
@@ -433,7 +434,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RequireCombatAction { subject, .. }
             | Instruction::DestroySubject { subject, .. }
             | Instruction::ExileSubjectUntilSourceLeaves { subject }
-            | Instruction::TurnFaceUpSubject { subject } => {
+            | Instruction::TurnFaceUpSubject { subject }
+            | Instruction::RegenerateSubject { subject } => {
                 subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::CreateTemporaryRule { rule, .. } => match rule.as_mut() {
@@ -580,8 +582,26 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::Demonstrate
             | Instruction::Enlist => {}
             Instruction::Monstrosity { amount }
-            | Instruction::CopyStackObject { count: amount, .. } => {
+            | Instruction::CopyStackObject { count: amount, .. }
+            | Instruction::Earthbend { amount } => {
                 amount.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::DiscardUpToExt {
+                max_count, filter, ..
+            } => {
+                rewrite_amount(max_count);
+                if let Some(filter) = filter {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+            }
+            Instruction::AttachChoosingPermanent {
+                attachment, host, ..
+            } => {
+                for slot in [attachment, host] {
+                    if let crate::program::AttachSlot::ChooseMatching { filter, .. } = slot {
+                        filter.rewrite_creature_type(change.from, change.to);
+                    }
+                }
             }
             Instruction::ExileGroupFromZone { filter, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
@@ -1111,6 +1131,12 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
             | Instruction::AddMana(_)
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::ReturnEarthbentCard
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
@@ -1297,6 +1323,7 @@ pub(crate) fn rewrite_program(
     program.cast_reductions = text.cast_reductions;
     program.extra_activation_costs = text.extra_activation_costs;
     program.activation_cost_reductions = text.activation_cost_reductions;
+    program.activation_target_cost_reductions = text.activation_target_cost_reductions;
     program.extra_cast_costs = text.extra_cast_costs;
     program.zone_replacements = text.zone_replacements;
     program.zone_replacement_extras = text.zone_replacement_extras;
@@ -1320,6 +1347,9 @@ pub(crate) fn rewrite_program(
         for ability in &mut spec.extra_static {
             rewrite_static_ability(change, ability);
         }
+        for mana in &mut spec.extra_mana {
+            rewrite_mana_output(change, &mut mana.output);
+        }
     }
     if let crate::program::ProgramKind::Spell(value) = &mut program.kind {
         body(change, &mut value.body);
@@ -1330,6 +1360,32 @@ fn trigger(change: CreatureTypeTextChange, ability: &mut crate::program::Trigger
         .condition
         .rewrite_creature_type(change.from, change.to);
     body(change, &mut ability.body);
+}
+fn rewrite_mana_output(change: CreatureTypeTextChange, output: &mut ManaOutput) {
+    match output {
+        ManaOutput::Counted { permanents, .. } => selector(change, permanents),
+        ManaOutput::Modified { modifier, output } => {
+            match modifier {
+                crate::mana::ManaOutputModifier::Sacrifice(
+                    crate::mana::ManaSacrificeCost::ControlledSubtype(subtype),
+                ) => word(change, subtype),
+                crate::mana::ManaOutputModifier::RequirePermanents {
+                    selector: quality, ..
+                } => {
+                    selector(change, quality);
+                }
+                _ => {}
+            }
+            rewrite_mana_output(change, output);
+        }
+        ManaOutput::Fixed(_)
+        | ManaOutput::ChooseColor { .. }
+        | ManaOutput::Triggered(_)
+        | ManaOutput::TwoColors { .. }
+        | ManaOutput::CounterBased(_)
+        | ManaOutput::SpecialColor(_)
+        | ManaOutput::Dynamic(_) => {}
+    }
 }
 fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
     if let Some(
@@ -1409,33 +1465,6 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
     {
         ability.rewrite_creature_type_in_rule(change);
     }
-    fn rewrite_mana_output(change: CreatureTypeTextChange, output: &mut ManaOutput) {
-        match output {
-            ManaOutput::Counted { permanents, .. } => selector(change, permanents),
-            ManaOutput::Modified { modifier, output } => {
-                match modifier {
-                    crate::mana::ManaOutputModifier::Sacrifice(
-                        crate::mana::ManaSacrificeCost::ControlledSubtype(subtype),
-                    ) => word(change, subtype),
-                    crate::mana::ManaOutputModifier::RequirePermanents {
-                        selector: quality,
-                        ..
-                    } => {
-                        selector(change, quality);
-                    }
-                    _ => {}
-                }
-                rewrite_mana_output(change, output);
-            }
-            ManaOutput::Fixed(_)
-            | ManaOutput::ChooseColor { .. }
-            | ManaOutput::Triggered(_)
-            | ManaOutput::TwoColors { .. }
-            | ManaOutput::CounterBased(_)
-            | ManaOutput::SpecialColor(_)
-            | ManaOutput::Dynamic(_) => {}
-        }
-    }
     for ability in &mut text.mana {
         rewrite_mana_output(change, &mut ability.output);
     }
@@ -1494,6 +1523,9 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
     }
     for expr in text.activation_cost_reductions.values_mut() {
         expr.rewrite_creature_type(change.from, change.to);
+    }
+    for (filter, _) in text.activation_target_cost_reductions.values_mut() {
+        filter.rewrite_creature_type(change.from, change.to);
     }
     for cost in &mut text.extra_cast_costs {
         cost.rewrite_creature_type(change.from, change.to);
