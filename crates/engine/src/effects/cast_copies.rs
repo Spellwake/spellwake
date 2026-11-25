@@ -400,7 +400,8 @@ impl EffectWindow {
                 if !legal
                     || Self::protected_target(
                         target,
-                        &super::protection::ProtectionSource::from(&source.traits),
+                        &super::protection::ProtectionSource::from(&source.traits)
+                            .with_controller(actor),
                         &evaluated,
                     )
                 {
@@ -782,7 +783,8 @@ impl EffectWindow {
                 if !legal
                     || Self::protected_target(
                         target,
-                        &super::protection::ProtectionSource::from(&source.traits),
+                        &super::protection::ProtectionSource::from(&source.traits)
+                            .with_controller(entry.controller()),
                         &evaluated,
                     )
                     || source

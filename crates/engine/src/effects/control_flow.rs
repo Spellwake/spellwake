@@ -207,6 +207,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -214,6 +218,18 @@ impl EffectWindow {
             | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
             | Instruction::MillEachPlayer(_)
@@ -336,6 +352,7 @@ impl EffectWindow {
             | Instruction::PutNamedCounterOnSource { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -571,6 +588,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
@@ -622,6 +640,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget

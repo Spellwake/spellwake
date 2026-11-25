@@ -10,6 +10,13 @@ use crate::{
     stack_window::DrawBatchProgress,
 };
 
+type EmitFromBuild<'a> = dyn FnMut(
+        &RulesView<'_>,
+        &RulesView<'_>,
+        &[ControllerChange],
+    ) -> Result<Vec<RulesOccurrence>, EffectError>
+    + 'a;
+
 /// Short-lived relevant state before an operation; never an accepted history/outbox.
 pub(super) struct RulesSnapshot {
     window: StackWindow,
@@ -839,6 +846,12 @@ impl EffectWindow {
         // Its preceding after-result remains exact for the next unchanged before-cut.
         let context = self.rules_snapshot(None)?;
         let mut amount = amount;
+        if amount.is_positive()
+            && matches!(origin, DrawOrigin::Turn { .. })
+            && self.should_skip_step(player, crate::turn::Step::Draw)?
+        {
+            amount = 0.into();
+        }
         if amount.is_positive() && !matches!(origin, DrawOrigin::Opening) {
             let opponents = self
                 .combat_rules
@@ -874,6 +887,8 @@ impl EffectWindow {
             let mut factors: Vec<u8> = Vec::new();
             let mut skip_first_any = false;
             let mut skip_draw = false;
+            let mut body_replacements: Vec<super::event_replacement::EventBodyReplacement> =
+                Vec::new();
             let opponents = self
                 .combat_rules
                 .opponents(self.window.participants(), player)?;
@@ -926,10 +941,10 @@ impl EffectWindow {
                             }
                         }
                         crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            id,
                             event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
                             condition,
                             action,
-                            ..
                         } => {
                             let applies = match rel {
                                 crate::program::AffectedPlayers::One(
@@ -991,8 +1006,24 @@ impl EffectWindow {
                                     skip_draw = true;
                                 }
                                 crate::characteristics::StaticReplacementAction::ReplaceWithBody {
-                                    ..
-                                } => {}
+                                    optional,
+                                    body,
+                                } => {
+                                    let key = (Some(perm.object), *id);
+                                    if !optional && !self.active_event_replacements.contains(&key) {
+                                        skip_draw = true;
+                                        body_replacements.push(
+                                            super::event_replacement::EventBodyReplacement {
+                                                source: Some(perm.object),
+                                                ability: *id,
+                                                controller: perm_ctrl,
+                                                affected_player: player,
+                                                optional: false,
+                                                body: (**body).clone(),
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -1005,6 +1036,7 @@ impl EffectWindow {
                 }
                 if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
                     && let crate::characteristics::StaticContinuousAbility::EventReplacement {
+                        id,
                         event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
                         action,
                         ..
@@ -1043,10 +1075,36 @@ impl EffectWindow {
                             skip_draw = true;
                         }
                         crate::characteristics::StaticReplacementAction::ReplaceWithBody {
-                            ..
-                        } => {}
+                            optional,
+                            body,
+                        } => {
+                            let key = (active.source_object, *id);
+                            if !optional && !self.active_event_replacements.contains(&key) {
+                                skip_draw = true;
+                                body_replacements.push(
+                                    super::event_replacement::EventBodyReplacement {
+                                        source: active.source_object,
+                                        ability: *id,
+                                        controller: active.controller,
+                                        affected_player: player,
+                                        optional: false,
+                                        body: (**body).clone(),
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
+            }
+            if !body_replacements.is_empty() {
+                let draws = amount.to_usize().unwrap_or(1);
+                let cause = EventCause::Draw { player, origin };
+                if let Some(rep) = body_replacements.into_iter().next() {
+                    for _ in 0..draws {
+                        self.execute_inline_replacement_body(&rep, cause.clone(), append)?;
+                    }
+                }
+                return Ok(DrawJournal::default());
             }
             if skip_draw {
                 amount = 0.into();
@@ -1186,7 +1244,9 @@ impl EffectWindow {
                     {
                         // The first impossible draw is replaced. Later draws never occur.
                         journal.events.pop();
-                        self.won_by_effect = Some((player, source));
+                        if !self.player_cannot_win(&before_evaluated, player)? {
+                            self.won_by_effect = Some((player, source));
+                        }
                     } else if matches!(journal.events.last(), Some(DrawEvent::EmptyLibrary { .. }))
                         && let Some((source, kind, count)) = before_evaluated
                             .objects
@@ -1641,6 +1701,29 @@ impl EffectWindow {
             &[ControllerChange],
         ) -> Result<Vec<RulesOccurrence>, EffectError>,
     ) -> Result<(), EffectError> {
+        let mut build = Some(build);
+        self.emit_from_inner(
+            cause,
+            before,
+            turn,
+            append,
+            &mut |before, current, controllers| {
+                let Some(build) = build.take() else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                build(before, current, controllers)
+            },
+        )
+    }
+
+    fn emit_from_inner(
+        &mut self,
+        cause: EventCause,
+        before: &RulesSnapshot,
+        turn: Option<&TurnScheduler>,
+        append: &mut RulesJournal,
+        build: &mut EmitFromBuild<'_>,
+    ) -> Result<(), EffectError> {
         // If a revealed cost card leaves hand, its characteristics immediately before
         // that move supply the resolving spell’s last known information.
         for payload in self.payloads.values_mut() {
@@ -1905,6 +1988,16 @@ impl EffectWindow {
                     .entry(cast.controller())
                     .or_default();
                 *count = (*count + 1).min(2);
+                if let Some(stack_entry) = self
+                    .window
+                    .entries()
+                    .iter()
+                    .find(|e| e.id() == cast.entry())
+                {
+                    self.characteristics
+                        .cast_summaries
+                        .insert(cast.spell().object.id(), stack_entry.cast_summary().clone());
+                }
             }
         }
         for event in &values {
@@ -2266,6 +2359,9 @@ impl EffectWindow {
             .filter_map(RulesOccurrence::departing_permanent)
             .map(|previous| previous.object.id())
             .collect::<Vec<_>>();
+        let mut batch_creature_damage: BTreeMap<ObjectId, RulesInteger> = BTreeMap::new();
+        let mut batch_pw_damage: BTreeMap<ObjectId, RulesInteger> = BTreeMap::new();
+        let mut batch_battle_damage: BTreeMap<ObjectId, RulesInteger> = BTreeMap::new();
         for value in &values {
             if let Some(permanent) = value.departing_permanent()
                 && let Some(defenders) = self.departed_attack_defenders.as_mut()
@@ -2317,6 +2413,48 @@ impl EffectWindow {
                             self.characteristics
                                 .entered_from_graveyard
                                 .insert(change.after.object.id());
+                        }
+                        let origin_zone = match change.before.object.zone() {
+                            ObjectZone::Hand(_) => Some(crate::program::SourceZoneFilter::Hand),
+                            ObjectZone::Graveyard(owner) => {
+                                Some(if Some(owner) == change.after.object.controller() {
+                                    crate::program::SourceZoneFilter::Graveyard
+                                } else {
+                                    crate::program::SourceZoneFilter::OpponentGraveyard
+                                })
+                            }
+                            ObjectZone::Exile => Some(
+                                if Some(change.before.object.owner())
+                                    == change.after.object.controller()
+                                {
+                                    crate::program::SourceZoneFilter::Exile
+                                } else {
+                                    crate::program::SourceZoneFilter::OpponentExile
+                                },
+                            ),
+                            ObjectZone::Library(_) => {
+                                Some(crate::program::SourceZoneFilter::YourLibrary)
+                            }
+                            _ => None,
+                        };
+                        if let Some(zone_filter) = origin_zone {
+                            self.characteristics
+                                .entered_from_zone
+                                .insert(change.after.object.id(), zone_filter);
+                        }
+                        if change.before.object.zone() == ObjectZone::Stack
+                            && let Some((caster, from_hand)) = change.before.cast_origin
+                        {
+                            if change.after.object.controller() == Some(caster) {
+                                self.characteristics
+                                    .cast_by_controller_objects
+                                    .insert(change.after.object.id());
+                            }
+                            if from_hand {
+                                self.characteristics
+                                    .cast_from_hand_objects
+                                    .insert(change.after.object.id());
+                            }
                         }
                         if let Some(ctrl) = change.after.object.controller() {
                             let entered = self
@@ -2408,6 +2546,11 @@ impl EffectWindow {
                                 .entry(player)
                                 .or_insert(0);
                             *count = count.saturating_add(1);
+                            self.characteristics
+                                .sacrificed_this_turn
+                                .entry(player)
+                                .or_default()
+                                .push(appearance_to_zone_move_record(change, &change.before));
                         }
                         crate::occurrence::ZoneReason::SacrificeCost => {
                             if let Some(ctrl) = change.before.object.controller() {
@@ -2417,20 +2560,79 @@ impl EffectWindow {
                                     .entry(ctrl)
                                     .or_insert(0);
                                 *count = count.saturating_add(1);
+                                self.characteristics
+                                    .sacrificed_this_turn
+                                    .entry(ctrl)
+                                    .or_default()
+                                    .push(appearance_to_zone_move_record(change, &change.before));
+                            }
+                        }
+                        crate::occurrence::ZoneReason::StateBased(reasons)
+                            if reasons.contains(
+                                crate::occurrence::StateBasedMoveReason::CompletedSaga,
+                            ) =>
+                        {
+                            if let Some(ctrl) = change.before.object.controller() {
+                                self.characteristics
+                                    .sacrificed_this_turn
+                                    .entry(ctrl)
+                                    .or_default()
+                                    .push(appearance_to_zone_move_record(change, &change.before));
                             }
                         }
                         _ => {}
                     }
-                    if let ObjectZone::Graveyard(owner) = change.after.object.zone()
-                        && change.before.object.zone() != ObjectZone::Graveyard(owner)
+                    if change.after.object.zone() == ObjectZone::Exile
+                        && change.before.object.zone() != ObjectZone::Exile
                         && change.after.object.card_id().is_some()
                     {
-                        let count = self
+                        self.characteristics.cards_exiled_this_turn = self
                             .characteristics
-                            .cards_entered_graveyard_this_turn
-                            .entry(owner)
-                            .or_insert(0);
-                        *count = count.saturating_add(1);
+                            .cards_exiled_this_turn
+                            .saturating_add(1);
+                    }
+                    for extra in &change.additional_arrivals {
+                        if extra.object.zone() == ObjectZone::Exile
+                            && extra.object.card_id().is_some()
+                        {
+                            self.characteristics.cards_exiled_this_turn = self
+                                .characteristics
+                                .cards_exiled_this_turn
+                                .saturating_add(1);
+                        }
+                    }
+                    if let ObjectZone::Graveyard(owner) = change.after.object.zone()
+                        && change.before.object.zone() != ObjectZone::Graveyard(owner)
+                    {
+                        if change.after.object.card_id().is_some() {
+                            let count = self
+                                .characteristics
+                                .cards_entered_graveyard_this_turn
+                                .entry(owner)
+                                .or_insert(0);
+                            *count = count.saturating_add(1);
+                        }
+                        let from_battlefield =
+                            change.before.object.zone() == ObjectZone::Battlefield;
+                        if from_battlefield || change.after.object.card_id().is_some() {
+                            let app = if from_battlefield {
+                                &change.before
+                            } else {
+                                &change.after
+                            };
+                            self.characteristics
+                                .cards_put_into_graveyard_this_turn
+                                .push(appearance_to_zone_move_record(change, app));
+                        }
+                    }
+                    for extra in &change.additional_arrivals {
+                        if matches!(extra.object.zone(), ObjectZone::Graveyard(_))
+                            && extra.object.card_id().is_some()
+                        {
+                            self.characteristics
+                                .cards_put_into_graveyard_this_turn
+                                .push(appearance_to_zone_move_record(change, extra));
+                        }
                     }
                     if let ObjectZone::Graveyard(owner) = change.after.object.zone()
                         && change.before.object.card_id().is_some()
@@ -2480,10 +2682,44 @@ impl EffectWindow {
                         .cast_spell_types_this_turn
                         .entry(ctrl)
                         .or_default();
+                    let mut type_mask = crate::program::CardTypeMask::EMPTY;
                     for &kind in &cast.spell().types {
+                        type_mask = type_mask.with(kind);
                         let entry = by_type.entry(kind).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
+                    let mut color_mask = crate::program::ColorMask::EMPTY;
+                    for &color in &cast.spell().colors {
+                        color_mask = color_mask.with(color);
+                    }
+                    let mut supertype_mask = crate::program::SupertypeMask::EMPTY;
+                    for &sup in &cast.spell().current_supertypes {
+                        supertype_mask = supertype_mask
+                            .union(crate::program::SupertypeMask::from_supertype(sup));
+                    }
+                    let from_hand = cast
+                        .spell()
+                        .cast_origin
+                        .is_some_and(|(_, from_hand)| from_hand);
+                    let summary = self
+                        .characteristics
+                        .cast_summaries
+                        .get(&cast.spell().object.id());
+                    let from_graveyard = summary.is_some_and(|s| s.cast_from_graveyard);
+                    let from_exile = summary.is_some_and(|s| s.cast_from_exile);
+                    self.characteristics
+                        .cast_spells_this_turn
+                        .entry(ctrl)
+                        .or_default()
+                        .push(crate::characteristics::CastSpellTurnRecord {
+                            types: type_mask,
+                            colors: color_mask,
+                            supertypes: supertype_mask,
+                            subtypes: cast.spell().creature_subtypes.clone(),
+                            from_hand,
+                            from_graveyard,
+                            from_exile,
+                        });
                     if !cast.spell().is_creature() {
                         let noncreature = self
                             .characteristics
@@ -2492,11 +2728,7 @@ impl EffectWindow {
                             .or_insert(0);
                         *noncreature = noncreature.saturating_add(1);
                     }
-                    if cast
-                        .spell()
-                        .cast_origin
-                        .is_some_and(|(_, from_hand)| from_hand)
-                    {
+                    if from_hand {
                         let from_hand_count = self
                             .characteristics
                             .spells_cast_from_hand_this_turn
@@ -2519,6 +2751,21 @@ impl EffectWindow {
                             cast.spell().object.id(),
                             cast.spell().kicker_choices.clone(),
                         );
+                    }
+                }
+                RulesOccurrence::ActivatedAbility { entry, source, .. } => {
+                    if matches!(source.zone(), ObjectZone::Graveyard(_)) {
+                        let actor = self
+                            .window
+                            .entries()
+                            .iter()
+                            .chain(self.window.resolving())
+                            .find(|item| item.id() == *entry)
+                            .map(crate::stack_window::StackEntry::controller)
+                            .unwrap_or_else(|| source.owner());
+                        self.characteristics
+                            .activated_graveyard_ability_this_turn
+                            .insert(actor);
                     }
                 }
                 RulesOccurrence::AttackersDeclared { selected, .. } => {
@@ -2733,6 +2980,39 @@ impl EffectWindow {
                 RulesOccurrence::DamageDealt { damage, kind, .. }
                     if damage.amount.is_positive() =>
                 {
+                    if self.characteristics.track_damage_dealt_by
+                        && let crate::damage::DamageSourceId::Object(dealer) = damage.source.id()
+                    {
+                        let dealt = self
+                            .characteristics
+                            .damage_dealt_this_turn_by
+                            .entry(dealer)
+                            .or_insert_with(|| 0.into());
+                        *dealt = dealt.plus(&damage.amount);
+                        if let crate::damage::DamageRecipient::Player(player) = damage.target {
+                            let dealer_ctrl = before
+                                .evaluated
+                                .get(dealer)
+                                .and_then(|o| o.controller)
+                                .or_else(|| {
+                                    self.departed_damage_sources
+                                        .get(&dealer)
+                                        .and_then(|s| s.object.controller())
+                                });
+                            if dealer_ctrl.is_some_and(|ctrl| ctrl != player) {
+                                self.characteristics
+                                    .damage_dealt_to_opponents_this_turn
+                                    .entry(dealer)
+                                    .or_default()
+                                    .insert(player);
+                            }
+                            if *kind == crate::damage::DamageKind::Combat {
+                                self.characteristics
+                                    .combat_damage_dealt_to_player_this_turn
+                                    .insert(dealer);
+                            }
+                        }
+                    }
                     match damage.target {
                         crate::damage::DamageRecipient::Player(player) => {
                             self.characteristics
@@ -2751,6 +3031,35 @@ impl EffectWindow {
                                 .entry(id)
                                 .or_insert_with(|| 0.into());
                             *total = total.plus(&damage.amount);
+                            let batch_total =
+                                batch_creature_damage.entry(id).or_insert_with(|| 0.into());
+                            *batch_total = batch_total.plus(&damage.amount);
+                            let before_marks =
+                                before.marks.get(&id).cloned().unwrap_or_else(|| 0.into());
+                            let total_marked = before_marks.plus(batch_total);
+                            let deathtouch =
+                                match damage.source.id() {
+                                    crate::damage::DamageSourceId::Object(dealer) => {
+                                        before.evaluated.get(dealer).is_some_and(|s| {
+                                            s.has_keyword(KeywordAbility::Deathtouch)
+                                        }) || self.departed_damage_sources.get(&dealer).is_some_and(
+                                            |s| s.keywords.contains(&KeywordAbility::Deathtouch),
+                                        )
+                                    }
+                                    _ => false,
+                                };
+                            let is_excess = (deathtouch
+                                && (damage.amount > 1.into() || before_marks.is_positive()))
+                                || before
+                                    .evaluated
+                                    .get(id)
+                                    .and_then(|o| o.power_toughness.as_ref())
+                                    .is_some_and(|pt| total_marked > pt.derived.toughness);
+                            if is_excess {
+                                self.characteristics
+                                    .excess_damage_received_this_turn
+                                    .insert(id);
+                            }
                             if let Some(pairs) = &mut self.characteristics.creature_damage_pairs
                                 && let crate::damage::DamageSourceId::Object(dealer) =
                                     damage.source.id()
@@ -2758,14 +3067,48 @@ impl EffectWindow {
                                 pairs.insert((dealer, id));
                             }
                         }
-                        crate::damage::DamageRecipient::Planeswalker(id)
-                        | crate::damage::DamageRecipient::Battle(id) => {
+                        crate::damage::DamageRecipient::Planeswalker(id) => {
                             let total = self
                                 .characteristics
                                 .object_damage_taken_this_turn
                                 .entry(id)
                                 .or_insert_with(|| 0.into());
                             *total = total.plus(&damage.amount);
+                            let batch_total = batch_pw_damage.entry(id).or_insert_with(|| 0.into());
+                            *batch_total = batch_total.plus(&damage.amount);
+                            let before_loyalty = before
+                                .characteristics
+                                .loyalty
+                                .get(&id)
+                                .cloned()
+                                .unwrap_or_else(|| 0.into());
+                            if *batch_total > before_loyalty {
+                                self.characteristics
+                                    .excess_damage_received_this_turn
+                                    .insert(id);
+                            }
+                        }
+                        crate::damage::DamageRecipient::Battle(id) => {
+                            let total = self
+                                .characteristics
+                                .object_damage_taken_this_turn
+                                .entry(id)
+                                .or_insert_with(|| 0.into());
+                            *total = total.plus(&damage.amount);
+                            let batch_total =
+                                batch_battle_damage.entry(id).or_insert_with(|| 0.into());
+                            *batch_total = batch_total.plus(&damage.amount);
+                            let before_defense = before
+                                .characteristics
+                                .defense
+                                .get(&id)
+                                .cloned()
+                                .unwrap_or_else(|| 0.into());
+                            if *batch_total > before_defense {
+                                self.characteristics
+                                    .excess_damage_received_this_turn
+                                    .insert(id);
+                            }
                         }
                     }
                 }
@@ -2904,6 +3247,15 @@ impl EffectWindow {
         )?;
         let (state, _, mut records) = updated.into_parts();
         *self.triggers = state;
+        for &departed in &departing_link_sources {
+            self.characteristics.entered_from_zone.remove(&departed);
+            self.characteristics
+                .cast_by_controller_objects
+                .remove(&departed);
+            self.characteristics
+                .cast_from_hand_objects
+                .remove(&departed);
+        }
         self.record_aura_graveyard_returns(&records);
         if self.triggers.watches_ability_copies() {
             let activations = records
@@ -3997,6 +4349,34 @@ impl EffectWindow {
         Ok(())
     }
 }
+fn appearance_to_zone_move_record(
+    change: &ZoneOccurrence,
+    appearance: &SupportedAppearance,
+) -> crate::characteristics::ZoneMoveTurnRecord {
+    let mut types = crate::program::CardTypeMask::EMPTY;
+    for &kind in &appearance.types {
+        types = types.with(kind);
+    }
+    let mut colors = crate::program::ColorMask::EMPTY;
+    for &color in &appearance.colors {
+        colors = colors.with(color);
+    }
+    let mut supertypes = crate::program::SupertypeMask::EMPTY;
+    for &sup in &appearance.current_supertypes {
+        supertypes = supertypes.union(crate::program::SupertypeMask::from_supertype(sup));
+    }
+    crate::characteristics::ZoneMoveTurnRecord {
+        owner: appearance.object.owner(),
+        previous_controller: change.before.object.controller(),
+        from_battlefield: change.before.object.zone() == ObjectZone::Battlefield,
+        types,
+        colors,
+        supertypes,
+        subtypes: appearance.creature_subtypes.clone(),
+        artifact_subtypes: appearance.artifact_subtypes.clone(),
+    }
+}
+
 /// Scratch computation shared by trusted initial setup and actual control cuts.
 pub(super) fn desired_controllers(
     cards: &GameObjects,

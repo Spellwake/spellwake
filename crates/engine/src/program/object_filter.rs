@@ -329,6 +329,8 @@ pub enum SubtypeFilter {
     Artifact(ArtifactSubtype),
     /// Object has this enchantment subtype (for example Saga, Curse).
     Enchantment(EnchantmentSubtype),
+    /// Object has this planeswalker subtype (for example Jace, Chandra, Vraska).
+    Planeswalker(super::PlaneswalkerSubtype),
     /// Object has this spell subtype (for example Arcane, Lesson, Adventure, Trap, Omen).
     Spell(super::SpellSubtype),
     /// Object is an Aura enchantment.
@@ -358,6 +360,7 @@ impl SubtypeFilter {
             | Self::NotLand(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
+            | Self::Planeswalker(_)
             | Self::Spell(_)
             | Self::Aura => {}
         }
@@ -391,6 +394,7 @@ impl SubtypeFilter {
             | Self::NotLand(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
+            | Self::Planeswalker(_)
             | Self::Aura
             | Self::Spell(_) => Ok(()),
         }
@@ -418,6 +422,10 @@ pub enum ControllerFilter {
     TargetPlayer,
     /// Controlled by the targeted opponent of the resolving spell or ability.
     TargetOpponent,
+    /// Controlled by the current active player.
+    ActivePlayer,
+    /// Controlled by the defending player in combat (or opponent of active player if none).
+    DefendingPlayer,
     /// Controlled by this exact player.
     Player(SeatId),
 }
@@ -438,6 +446,8 @@ pub enum DynamicStatAnchor {
     ControllerSubtypeCount(CreatureTypeId),
     TriggerSubjectPower,
     TriggerSubjectManaValue,
+    /// Power of the resolving spell or ability's targeted object (CR 608.2h).
+    TargetPower,
 }
 
 impl DynamicStatAnchor {
@@ -933,6 +943,12 @@ impl ObjectClause {
     }
 
     #[must_use]
+    pub const fn with_planeswalker_subtype(mut self, kind: super::PlaneswalkerSubtype) -> Self {
+        self.subtypes = SubtypeFilter::Planeswalker(kind);
+        self
+    }
+
+    #[must_use]
     pub const fn aura(mut self) -> Self {
         self.subtypes = SubtypeFilter::Aura;
         self
@@ -1026,6 +1042,17 @@ impl ObjectClause {
     #[must_use]
     pub const fn guarantees_creature(self) -> bool {
         self.any_types.0 == CardTypeMask::CREATURE.0
+            || matches!(
+                self.combat,
+                CombatFilter::Attacking
+                    | CombatFilter::Blocking
+                    | CombatFilter::AttackingOrBlocking
+                    | CombatFilter::Blocked
+                    | CombatFilter::Unblocked
+                    | CombatFilter::BlockingSource
+                    | CombatFilter::BlockedBySource
+                    | CombatFilter::BlockingOrBlockedBySource
+            )
     }
 
     /// Bind unbound trigger/ability source exclusions to `source`.
@@ -1109,6 +1136,7 @@ impl ObjectClause {
             SubtypeFilter::NotLand(kind) => !p.current_land_subtypes.contains(&kind),
             SubtypeFilter::Artifact(kind) => p.current_artifact_subtypes.contains(&kind),
             SubtypeFilter::Enchantment(kind) => p.current_enchantment_subtypes.contains(&kind),
+            SubtypeFilter::Planeswalker(kind) => p.current_planeswalker_subtypes.contains(&kind),
             SubtypeFilter::Spell(kind) => p.current_spell_subtypes.contains(&kind),
             SubtypeFilter::Aura => {
                 matches!(
@@ -1579,6 +1607,17 @@ impl ObjectFilter {
             Self::Either(a, b) => Self::Either(
                 a.with_enchantment_subtype(kind),
                 b.with_enchantment_subtype(kind),
+            ),
+        }
+    }
+
+    #[must_use]
+    pub const fn with_planeswalker_subtype(self, kind: super::PlaneswalkerSubtype) -> Self {
+        match self {
+            Self::Clause(a) => Self::Clause(a.with_planeswalker_subtype(kind)),
+            Self::Either(a, b) => Self::Either(
+                a.with_planeswalker_subtype(kind),
+                b.with_planeswalker_subtype(kind),
             ),
         }
     }
@@ -2062,6 +2101,159 @@ impl ObjectFilter {
         }
     }
 
+    /// True if any clause dynamically compares power, toughness, or mana value against the resolving target permanent.
+    #[must_use]
+    pub const fn uses_target_permanent(self) -> bool {
+        const fn clause_uses(c: ObjectClause) -> bool {
+            matches!(
+                c.power,
+                PowerFilter::CompareAnchor {
+                    anchor: DynamicStatAnchor::TargetPower,
+                    ..
+                }
+            ) || matches!(
+                c.toughness,
+                ToughnessFilter::CompareAnchor {
+                    anchor: DynamicStatAnchor::TargetPower,
+                    ..
+                }
+            ) || matches!(
+                c.mana_value,
+                ManaValueFilter::CompareAnchor {
+                    anchor: DynamicStatAnchor::TargetPower,
+                    ..
+                }
+            )
+        }
+        match self {
+            Self::Clause(a) => clause_uses(a),
+            Self::Either(a, b) => clause_uses(a) || clause_uses(b),
+        }
+    }
+
+    /// Resolve `DynamicStatAnchor::TargetPower` clauses into concrete static bounds for group selection.
+    #[must_use]
+    pub fn bind_target_power(self, target_power: i64) -> Self {
+        let bind_power = |pf: PowerFilter| -> PowerFilter {
+            let PowerFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            } = pf
+            else {
+                return pf;
+            };
+            match op {
+                super::Comparison::Equal => {
+                    PowerFilter::Equal(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::Less => {
+                    let max = target_power.saturating_sub(1);
+                    if max < 0 {
+                        PowerFilter::Equal(i16::MIN)
+                    } else {
+                        PowerFilter::AtMost(u16::try_from(max).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::LessOrEqual => {
+                    if target_power < 0 {
+                        PowerFilter::Equal(i16::MIN)
+                    } else {
+                        PowerFilter::AtMost(u16::try_from(target_power).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::Greater => PowerFilter::AtLeast(
+                    i16::try_from(target_power.saturating_add(1)).unwrap_or(i16::MAX),
+                ),
+                super::Comparison::GreaterOrEqual => {
+                    PowerFilter::AtLeast(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::NotEqual => pf,
+            }
+        };
+        let bind_toughness = |tf: ToughnessFilter| -> ToughnessFilter {
+            let ToughnessFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            } = tf
+            else {
+                return tf;
+            };
+            match op {
+                super::Comparison::Equal => {
+                    ToughnessFilter::Equal(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::Less => {
+                    let max = target_power.saturating_sub(1);
+                    if max < 0 {
+                        ToughnessFilter::Equal(i16::MIN)
+                    } else {
+                        ToughnessFilter::AtMost(u16::try_from(max).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::LessOrEqual => {
+                    if target_power < 0 {
+                        ToughnessFilter::Equal(i16::MIN)
+                    } else {
+                        ToughnessFilter::AtMost(u16::try_from(target_power).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::Greater => ToughnessFilter::AtLeast(
+                    i16::try_from(target_power.saturating_add(1)).unwrap_or(i16::MAX),
+                ),
+                super::Comparison::GreaterOrEqual => {
+                    ToughnessFilter::AtLeast(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::NotEqual => tf,
+            }
+        };
+        let bind_mv = |mf: ManaValueFilter| -> ManaValueFilter {
+            let ManaValueFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            } = mf
+            else {
+                return mf;
+            };
+            match op {
+                super::Comparison::Equal => {
+                    ManaValueFilter::Equal(u32::try_from(target_power.max(0)).unwrap_or(u32::MAX))
+                }
+                super::Comparison::Less => {
+                    let max = target_power.saturating_sub(1);
+                    if max < 0 {
+                        ManaValueFilter::AtLeast(u32::MAX)
+                    } else {
+                        ManaValueFilter::AtMost(u32::try_from(max).unwrap_or(u32::MAX))
+                    }
+                }
+                super::Comparison::LessOrEqual => {
+                    if target_power < 0 {
+                        ManaValueFilter::AtLeast(u32::MAX)
+                    } else {
+                        ManaValueFilter::AtMost(u32::try_from(target_power).unwrap_or(u32::MAX))
+                    }
+                }
+                super::Comparison::Greater => ManaValueFilter::AtLeast(
+                    u32::try_from(target_power.saturating_add(1).max(0)).unwrap_or(u32::MAX),
+                ),
+                super::Comparison::GreaterOrEqual => {
+                    ManaValueFilter::AtLeast(u32::try_from(target_power.max(0)).unwrap_or(u32::MAX))
+                }
+                super::Comparison::NotEqual => mf,
+            }
+        };
+        let bind_clause = |mut c: ObjectClause| -> ObjectClause {
+            c.power = bind_power(c.power);
+            c.toughness = bind_toughness(c.toughness);
+            c.mana_value = bind_mv(c.mana_value);
+            c
+        };
+        match self {
+            Self::Clause(a) => Self::Clause(bind_clause(a)),
+            Self::Either(a, b) => Self::Either(bind_clause(a), bind_clause(b)),
+        }
+    }
+
     /// Bind `ControllerFilter::TargetPlayer` / `TargetOpponent` to a concrete player seat.
     #[must_use]
     pub const fn bind_target_player(self, seat: SeatId) -> Self {
@@ -2331,6 +2523,7 @@ impl ObjectFilter {
                 SubtypeFilter::NotLand(kind) => !spell.land_subtypes.contains(&kind),
                 SubtypeFilter::Artifact(kind) => spell.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => spell.enchantment_subtypes.contains(&kind),
+                SubtypeFilter::Planeswalker(kind) => spell.planeswalker_subtypes.contains(&kind),
                 SubtypeFilter::Spell(kind) => spell.spell_subtypes.contains(&kind),
                 SubtypeFilter::Aura => {
                     spell.types.contains(&CardType::Enchantment)
@@ -2390,7 +2583,9 @@ impl ObjectFilter {
                 ControllerFilter::OwnerOpponent => object.object.owner() != controller,
                 ControllerFilter::RelatedPlayer
                 | ControllerFilter::TargetPlayer
-                | ControllerFilter::TargetOpponent => false,
+                | ControllerFilter::TargetOpponent
+                | ControllerFilter::ActivePlayer
+                | ControllerFilter::DefendingPlayer => false,
                 ControllerFilter::Player(seat) => object.object.controller() == Some(seat),
             };
             if !controller_ok {
@@ -2471,6 +2666,7 @@ impl ObjectFilter {
                 SubtypeFilter::NotLand(kind) => !object.land_subtypes.contains(&kind),
                 SubtypeFilter::Artifact(kind) => object.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => object.enchantment_subtypes.contains(&kind),
+                SubtypeFilter::Planeswalker(kind) => object.planeswalker_subtypes.contains(&kind),
                 SubtypeFilter::Spell(kind) => object.spell_subtypes.contains(&kind),
                 SubtypeFilter::Aura => false,
                 SubtypeFilter::ExceptChosenSlot(_)

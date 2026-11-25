@@ -309,6 +309,13 @@ impl EffectWindow {
                     return Ok(());
                 }
                 let before = self.rules_snapshot(None)?;
+                if self.player_counter_prevented(
+                    &before.view().evaluated,
+                    player,
+                    CounterKind::Poison,
+                )? {
+                    return Ok(());
+                }
                 let value = self.apply_poison(
                     player,
                     vec![crate::occurrence::PoisonContribution {

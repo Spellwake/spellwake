@@ -48,6 +48,7 @@ pub(super) fn compile(
     spell.modes = Some(SpellModes {
         minimum,
         maximum,
+        conditional_maximum: None,
         allow_repeat,
         distinct_targets: false,
         uniqueness: spellwake_engine::program::ModalUniqueness::None,

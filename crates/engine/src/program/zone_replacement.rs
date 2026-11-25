@@ -129,8 +129,24 @@ pub enum ZoneReplacementSubject {
         filter: Box<super::ObjectFilter>,
         owner_relation: Option<super::PlayerRelation>,
     },
+    /// Objects matching `filter` entering the battlefield without having been cast (Containment Priest, Hallowed Moonlight).
+    MatchingNotCast {
+        filter: Box<super::ObjectFilter>,
+        owner_relation: Option<super::PlayerRelation>,
+    },
+    /// The source card itself when an opponent's spell or ability causes its owner to discard it (Loxodon Smiter).
+    SourceSelfDiscardByOpponent,
     /// Creatures dealt damage by the replacement source earlier this turn (CR 614.6).
     DamagedBySourceThisTurn,
+}
+
+/// Optional side effects applied immediately after a zone replacement commits (counters or inline followup body).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneReplacementExtra {
+    /// Counters placed on the replaced object in its new destination (e.g. Exile with void/time counters).
+    pub exile_counters: Option<(crate::effects::CounterKind, u8)>,
+    /// Non-targeted inline followup body executed immediately after the replacement commit (e.g. Kalitas Zombie token).
+    pub followup_body: Option<Box<super::ExecutableBody>>,
 }
 /// Optionality always belongs to the affected object controller or owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +174,110 @@ pub struct ZoneReplacementAbility {
     /// Mandatory or affected-player optional application.
     pub choice: ZoneReplacementChoice,
 }
+pub(super) fn validate_ability(
+    ability: &ZoneReplacementAbility,
+    is_permanent: bool,
+    vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+) -> Result<(), DefinitionError> {
+    if let ZoneReplacementSubject::Matching { filter, .. }
+    | ZoneReplacementSubject::MatchingNotCast { filter, .. } = &ability.subject
+    {
+        filter.validate_vocabulary(vocabulary)?;
+    }
+    if !is_permanent
+        && !(matches!(
+            ability.subject,
+            ZoneReplacementSubject::SourceSelf
+                | ZoneReplacementSubject::SourceSelfDiscardByOpponent
+        ) && ability.destination == PublicZoneDestination::Graveyard
+            && matches!(
+                ability.replace_with,
+                PublicZoneDestination::Exile
+                    | PublicZoneDestination::Library
+                    | PublicZoneDestination::Hand
+            ))
+    {
+        return Err(DefinitionError::UnsupportedZoneReplacementScope);
+    }
+    if ability.actions == ZoneActionPredicate::Any
+        && ability.destination == PublicZoneDestination::Graveyard
+        && matches!(
+            ability.replace_with,
+            PublicZoneDestination::Exile
+                | PublicZoneDestination::Library
+                | PublicZoneDestination::Hand
+        )
+        && ability.choice == ZoneReplacementChoice::Mandatory
+    {
+        return Ok(());
+    }
+    let ZoneActionPredicate::OneOf(actions) = &ability.actions else {
+        return Err(DefinitionError::UnsupportedZoneReplacementScope);
+    };
+    if actions.is_empty() || ability.destination == ability.replace_with {
+        return Err(DefinitionError::InvalidZoneReplacementDefinition);
+    }
+    let discard_to_bf = ability.replace_with == PublicZoneDestination::Battlefield
+        && matches!(
+            ability.subject,
+            ZoneReplacementSubject::SourceSelf
+                | ZoneReplacementSubject::SourceSelfDiscardByOpponent
+        )
+        && ability.destination == PublicZoneDestination::Graveyard
+        && actions == &BTreeSet::from([ZoneActionKind::EffectDiscard]);
+    if ability.destination == PublicZoneDestination::Command
+        || ability.replace_with == PublicZoneDestination::Command
+        || (ability.replace_with == PublicZoneDestination::Library
+            && !(ability.destination == PublicZoneDestination::Graveyard
+                && ability.choice == ZoneReplacementChoice::Mandatory))
+        || (ability.destination == PublicZoneDestination::Library
+            && !actions.iter().all(|action| {
+                matches!(
+                    action,
+                    ZoneActionKind::EffectShuffleGraveyard | ZoneActionKind::EffectPutIntoLibrary
+                )
+            }))
+        || (ability.replace_with == PublicZoneDestination::Battlefield && !discard_to_bf)
+        || (ability.destination == PublicZoneDestination::Battlefield
+            && actions != &BTreeSet::from([ZoneActionKind::EffectEnterBattlefield]))
+    {
+        return Err(DefinitionError::UnsupportedZoneReplacementScope);
+    }
+    if ability.destination == PublicZoneDestination::Hand
+        && actions != &BTreeSet::from([ZoneActionKind::EffectReturnSelected])
+        && actions != &BTreeSet::from([ZoneActionKind::EffectLookToHand])
+    {
+        return Err(DefinitionError::UnsupportedZoneReplacementScope);
+    }
+    if actions.iter().any(|action| {
+        !matches!(
+            action,
+            ZoneActionKind::EffectExile
+                | ZoneActionKind::EffectDestroy
+                | ZoneActionKind::EffectSacrifice
+                | ZoneActionKind::EffectReturnSelected
+                | ZoneActionKind::EffectLookToHand
+                | ZoneActionKind::EffectDiscard
+                | ZoneActionKind::EffectPutIntoLibrary
+                | ZoneActionKind::EffectShuffleGraveyard
+                | ZoneActionKind::EffectRevealedToGraveyard
+                | ZoneActionKind::EffectSearchToGraveyard
+                | ZoneActionKind::EffectMill
+                | ZoneActionKind::MillCost
+                | ZoneActionKind::EffectSurveil
+                | ZoneActionKind::EffectEnterBattlefield
+                | ZoneActionKind::SacrificeCost
+                | ZoneActionKind::ExileCost
+                | ZoneActionKind::DiscardCost
+                | ZoneActionKind::CleanupDiscard
+                | ZoneActionKind::StateBased
+        )
+    }) {
+        return Err(DefinitionError::UnsupportedZoneReplacementScope);
+    }
+    Ok(())
+}
+
 pub(super) fn validate(
     program: &super::Program,
     vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
@@ -171,98 +291,7 @@ pub(super) fn validate(
         if !ids.insert(ability.id) {
             return Err(DefinitionError::DuplicateAbility);
         }
-        if let ZoneReplacementSubject::Matching { filter, .. } = &ability.subject {
-            filter.validate_vocabulary(vocabulary)?;
-        }
-        if !is_permanent
-            && !(ability.subject == ZoneReplacementSubject::SourceSelf
-                && ability.destination == PublicZoneDestination::Graveyard
-                && matches!(
-                    ability.replace_with,
-                    PublicZoneDestination::Exile | PublicZoneDestination::Library
-                ))
-        {
-            return Err(DefinitionError::UnsupportedZoneReplacementScope);
-        }
-        if ability.actions == ZoneActionPredicate::Any
-            && ability.destination == PublicZoneDestination::Graveyard
-            && matches!(
-                ability.replace_with,
-                PublicZoneDestination::Exile | PublicZoneDestination::Library
-            )
-            && ability.choice == ZoneReplacementChoice::Mandatory
-        {
-            continue;
-        }
-        let ZoneActionPredicate::OneOf(actions) = &ability.actions else {
-            return Err(DefinitionError::UnsupportedZoneReplacementScope);
-        };
-        if actions.is_empty() || ability.destination == ability.replace_with {
-            return Err(DefinitionError::InvalidZoneReplacementDefinition);
-        }
-        if ability.destination == PublicZoneDestination::Command
-            || ability.replace_with == PublicZoneDestination::Command
-            || (ability.replace_with == PublicZoneDestination::Library
-                && !(ability.destination == PublicZoneDestination::Graveyard
-                    && ability.choice == ZoneReplacementChoice::Mandatory))
-            || (ability.destination == PublicZoneDestination::Library
-                && !actions.iter().all(|action| {
-                    matches!(
-                        action,
-                        ZoneActionKind::EffectShuffleGraveyard
-                            | ZoneActionKind::EffectPutIntoLibrary
-                    )
-                }))
-            || ability.replace_with == PublicZoneDestination::Battlefield
-            || (ability.destination == PublicZoneDestination::Battlefield
-                && actions != &BTreeSet::from([ZoneActionKind::EffectEnterBattlefield]))
-        {
-            return Err(DefinitionError::UnsupportedZoneReplacementScope);
-        }
-        if (ability.destination == PublicZoneDestination::Hand
-            || ability.replace_with == PublicZoneDestination::Hand)
-            && actions != &BTreeSet::from([ZoneActionKind::EffectReturnSelected])
-            && actions != &BTreeSet::from([ZoneActionKind::EffectEnterBattlefield])
-            && actions != &BTreeSet::from([ZoneActionKind::EffectLookToHand])
-            && actions != &BTreeSet::from([ZoneActionKind::SacrificeCost])
-            && actions != &BTreeSet::from([ZoneActionKind::ExileCost])
-            && actions != &BTreeSet::from([ZoneActionKind::EffectRevealedToGraveyard])
-            && actions != &BTreeSet::from([ZoneActionKind::EffectSearchToGraveyard])
-            && !actions.iter().all(|action| {
-                matches!(
-                    action,
-                    ZoneActionKind::EffectShuffleGraveyard | ZoneActionKind::EffectPutIntoLibrary
-                )
-            })
-        {
-            return Err(DefinitionError::UnsupportedZoneReplacementScope);
-        }
-        if actions.iter().any(|action| {
-            !matches!(
-                action,
-                ZoneActionKind::EffectExile
-                    | ZoneActionKind::EffectDestroy
-                    | ZoneActionKind::EffectSacrifice
-                    | ZoneActionKind::EffectReturnSelected
-                    | ZoneActionKind::EffectLookToHand
-                    | ZoneActionKind::EffectDiscard
-                    | ZoneActionKind::EffectPutIntoLibrary
-                    | ZoneActionKind::EffectShuffleGraveyard
-                    | ZoneActionKind::EffectRevealedToGraveyard
-                    | ZoneActionKind::EffectSearchToGraveyard
-                    | ZoneActionKind::EffectMill
-                    | ZoneActionKind::MillCost
-                    | ZoneActionKind::EffectSurveil
-                    | ZoneActionKind::EffectEnterBattlefield
-                    | ZoneActionKind::SacrificeCost
-                    | ZoneActionKind::ExileCost
-                    | ZoneActionKind::DiscardCost
-                    | ZoneActionKind::CleanupDiscard
-                    | ZoneActionKind::StateBased
-            )
-        }) {
-            return Err(DefinitionError::UnsupportedZoneReplacementScope);
-        }
+        validate_ability(ability, is_permanent, vocabulary)?;
     }
     Ok(())
 }

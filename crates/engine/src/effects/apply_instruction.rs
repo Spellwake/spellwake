@@ -212,6 +212,7 @@ impl EffectWindow {
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::AttachOnEntry { .. }
             | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -287,6 +288,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -301,6 +306,18 @@ impl EffectWindow {
             | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -444,6 +461,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
@@ -598,7 +616,9 @@ impl EffectWindow {
                 journal.created.push(created.clone());
                 InstructionCut::Ready(RulesOccurrence::DamageEffectCreated(created))
             }
-            Instruction::CounterSpell | Instruction::CounterSpellToExile => {
+            Instruction::CounterSpell
+            | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. } => {
                 let TargetRef::Stack(countered) = target else {
                     return Err(EffectError::InconsistentProgram);
                 };
@@ -710,14 +730,22 @@ impl EffectWindow {
                         },
                     }
                 });
+                let dest =
+                    if instruction == Instruction::CounterSpellToExile || temp_exile_countered {
+                        ObjectDestination::Exile
+                    } else if let Instruction::CounterSpellToLibrary { top } = instruction {
+                        if top {
+                            ObjectDestination::LibraryTop
+                        } else {
+                            ObjectDestination::LibraryBottom
+                        }
+                    } else {
+                        ObjectDestination::Graveyard
+                    };
                 let (window, exit) = self.window.record_targeted_resolution_move_with_exit(
                     self.window.revision(),
                     choice.id,
-                    if instruction == Instruction::CounterSpellToExile || temp_exile_countered {
-                        ObjectDestination::Exile
-                    } else {
-                        ObjectDestination::Graveyard
-                    },
+                    dest,
                 )?;
                 self.window = window;
                 self.resolution_cursor_mut()
@@ -865,15 +893,8 @@ impl EffectWindow {
                     .get(target)
                     .ok_or(EffectError::InconsistentProgram)?
                     .owner();
-                let materialized = parts.materialize_with_eval(
-                    &locals,
-                    entry.controller(),
-                    owner,
-                    |expr| {
-                        self.resolve_value_expr(entry.controller(), expr)
-                            .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
-                    },
-                )?;
+                let materialized =
+                    self.materialize_resolved_parts(&entry, &parts, &locals, owner, None)?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
@@ -953,16 +974,8 @@ impl EffectWindow {
                     | StackKind::TriggeredAbility { source } => Some(source.id()),
                     _ => None,
                 };
-                let parts = parts.materialize_with_source_and_eval(
-                    &locals,
-                    entry.controller(),
-                    owner,
-                    source_object,
-                    |expr| {
-                        self.resolve_value_expr(entry.controller(), expr)
-                            .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
-                    },
-                )?;
+                let parts =
+                    self.materialize_resolved_parts(&entry, &parts, &locals, owner, source_object)?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
@@ -1083,6 +1096,9 @@ impl EffectWindow {
                     };
                     let counters =
                         self.adjusted_pt_counters(&before.view().evaluated, object, raw, None)?;
+                    if !counters.valid_placement() {
+                        return Ok(());
+                    }
                     let previous = self.characteristics.counters(object);
                     self.characteristics.place_counters(object, &counters)?;
                     InstructionCut::Counters {
@@ -1093,11 +1109,20 @@ impl EffectWindow {
                     }
                 } else {
                     let old = self.counters_of_kind(object, kind);
-                    let added = permanent_counters::effect_counter_multiplier(
+                    let multiplied = permanent_counters::effect_counter_multiplier(
                         &before.view().evaluated,
                         object,
                     )
                     .times(&resolved);
+                    let added = self.apply_static_counter_modifiers(
+                        &before.view().evaluated,
+                        object,
+                        kind,
+                        multiplied,
+                    );
+                    if !added.is_positive() {
+                        return Ok(());
+                    }
                     let after = old.plus(&added);
                     self.characteristics
                         .named_permanent_counters_mut(kind)
@@ -1133,6 +1158,9 @@ impl EffectWindow {
                 };
                 let counters =
                     self.adjusted_pt_counters(&before.view().evaluated, target, counters, None)?;
+                if !counters.valid_placement() {
+                    return Ok(());
+                }
                 let previous = self.characteristics.counters(target);
                 self.characteristics.place_counters(target, &counters)?;
                 InstructionCut::Counters {
@@ -1303,6 +1331,16 @@ impl EffectWindow {
                     destination,
                 )?;
                 self.window = window;
+                if let crate::stack_window::StackExit::Object(movement) = &exit {
+                    let cursor = self
+                        .resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let arrivals: Vec<_> = movement.arrivals().collect();
+                    cursor.results.last_action_succeeded = !arrivals.is_empty();
+                    cursor.results.last_action_count =
+                        Some(RulesInteger::from_usize(arrivals.len()));
+                    cursor.results.last_moved_objects = arrivals;
+                }
                 if matches!(
                     instruction,
                     Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration
@@ -1447,5 +1485,50 @@ impl EffectWindow {
             },
         )?;
         Ok(())
+    }
+
+    pub(super) fn materialize_resolved_parts(
+        &self,
+        entry: &crate::stack_window::StackEntry,
+        parts: &crate::characteristics::ResolvedPartsSpec,
+        locals: &BTreeMap<crate::program::CreatureTypeSlot, CreatureTypeId>,
+        target_owner: SeatId,
+        source_object: Option<ObjectId>,
+    ) -> Result<crate::characteristics::ResolvedParts, EffectError> {
+        let cursor = self.resolution_cursor();
+        let chosen_color = cursor
+            .and_then(|c| c.chosen_effect_color)
+            .and_then(crate::characteristics::Color::from_mana);
+        let chosen_basic_land_type = cursor
+            .and_then(|c| c.results.chosen_basic_land_type)
+            .and_then(crate::land::LandType::basic);
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), entry.controller())?;
+        let subject_object = parts.0.iter().find_map(|spec| {
+            if let crate::characteristics::ResolvedPartSpec::MustBlockSubject(subj) = spec {
+                self.resolve_pass_c_move_subject(entry, *subj)
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            }
+        });
+        Ok(parts.materialize_full(
+            locals,
+            entry.controller(),
+            target_owner,
+            source_object,
+            chosen_color,
+            chosen_basic_land_type,
+            &opponents,
+            subject_object,
+            |expr| {
+                self.resolve_value_expr(entry.controller(), expr)
+                    .map_err(|_| {
+                        crate::characteristics::CharacteristicInvariantError::NoEligibleComponent
+                    })
+            },
+        )?)
     }
 }

@@ -78,6 +78,31 @@ pub struct DungeonProgress {
 }
 
 /// Nested canonical state under EffectWindow, never a final-stat cache.
+/// Compact per-spell turn history record for filtered `CastSpellThisTurn` queries (e.g. Veil of Summer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CastSpellTurnRecord {
+    pub(crate) types: crate::program::CardTypeMask,
+    pub(crate) colors: crate::program::ColorMask,
+    pub(crate) supertypes: crate::program::SupertypeMask,
+    pub(crate) subtypes: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+    pub(crate) from_hand: bool,
+    pub(crate) from_graveyard: bool,
+    pub(crate) from_exile: bool,
+}
+
+/// Compact per-event turn history record for filtered graveyard-arrival and sacrifice queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ZoneMoveTurnRecord {
+    pub(crate) owner: SeatId,
+    pub(crate) previous_controller: Option<SeatId>,
+    pub(crate) from_battlefield: bool,
+    pub(crate) types: crate::program::CardTypeMask,
+    pub(crate) colors: crate::program::ColorMask,
+    pub(crate) supertypes: crate::program::SupertypeMask,
+    pub(crate) subtypes: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+    pub(crate) artifact_subtypes: BTreeSet<crate::program::ArtifactSubtype>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CharacteristicState {
     /// Physical commander designations used by rules that inspect the evaluated battlefield.
@@ -165,6 +190,34 @@ pub(crate) struct CharacteristicState {
     pub(crate) players_dealt_damage_this_turn: BTreeSet<SeatId>,
     pub(crate) players_dealt_noncombat_damage_this_turn: BTreeSet<SeatId>,
     pub(crate) object_damage_taken_this_turn: BTreeMap<ObjectId, RulesInteger>,
+    /// Filtered spell-cast history per seat this turn (cleared at turn start).
+    pub(crate) cast_spells_this_turn: BTreeMap<SeatId, Vec<CastSpellTurnRecord>>,
+    /// Players who activated an ability of a card in a graveyard this turn.
+    pub(crate) activated_graveyard_ability_this_turn: BTreeSet<SeatId>,
+    /// Life lost by each seat during the previous turn (rotated on turn start).
+    pub(crate) life_lost_last_turn: BTreeMap<SeatId, RulesInteger>,
+    /// Total cards put into exile this turn.
+    pub(crate) cards_exiled_this_turn: u32,
+    /// Filtered graveyard-arrival records this turn.
+    pub(crate) cards_put_into_graveyard_this_turn: Vec<ZoneMoveTurnRecord>,
+    /// Filtered sacrifice records per player this turn.
+    pub(crate) sacrificed_this_turn: BTreeMap<SeatId, Vec<ZoneMoveTurnRecord>>,
+    /// Whether any definition in this game queries per-source damage-dealt turn provenance.
+    pub(crate) track_damage_dealt_by: bool,
+    /// Total damage dealt by each source object this turn.
+    pub(crate) damage_dealt_this_turn_by: BTreeMap<ObjectId, RulesInteger>,
+    /// Opponents dealt damage by each source object this turn.
+    pub(crate) damage_dealt_to_opponents_this_turn: BTreeMap<ObjectId, BTreeSet<SeatId>>,
+    /// Source objects that dealt combat damage to a player this turn.
+    pub(crate) combat_damage_dealt_to_player_this_turn: BTreeSet<ObjectId>,
+    /// Permanent objects that received excess damage this turn.
+    pub(crate) excess_damage_received_this_turn: BTreeSet<ObjectId>,
+    /// Origin zone each battlefield permanent entered from.
+    pub(crate) entered_from_zone: BTreeMap<ObjectId, crate::program::SourceZoneFilter>,
+    /// Battlefield permanents cast by their current controller.
+    pub(crate) cast_by_controller_objects: BTreeSet<ObjectId>,
+    /// Battlefield permanents cast from hand.
+    pub(crate) cast_from_hand_objects: BTreeSet<ObjectId>,
     /// Actual damage pairs retained until cleanup when a definition uses that history.
     pub(crate) creature_damage_pairs: Option<BTreeSet<(ObjectId, ObjectId)>>,
     pub(crate) vow_counters: BTreeMap<ObjectId, RulesInteger>,
@@ -179,6 +232,8 @@ pub(crate) struct CharacteristicState {
     pub(crate) ability_donors_in_exile: BTreeMap<ObjectId, Vec<ObjectId>>,
     pub(crate) chosen_entry_players: BTreeMap<ObjectId, [crate::priority::SeatId; 2]>,
     pub(crate) entry_color_choices: BTreeMap<ObjectId, Color>,
+    pub(crate) entry_option_choices: BTreeMap<ObjectId, u8>,
+    pub(crate) entry_player_choices: BTreeMap<ObjectId, SeatId>,
     pub(crate) indestructible_counters: BTreeMap<ObjectId, RulesInteger>,
     indestructible_grants: BTreeMap<ObjectId, ContinuousEffectId>,
     keyword_counter_grants: BTreeMap<(ObjectId, crate::effects::CounterKind), ContinuousEffectId>,
@@ -306,6 +361,20 @@ impl Default for CharacteristicState {
             activated_sources_this_turn: BTreeMap::new(),
             ability_resolutions_by_source_this_turn: BTreeMap::new(),
             players_dealt_damage_this_turn: BTreeSet::new(),
+            cast_spells_this_turn: BTreeMap::new(),
+            activated_graveyard_ability_this_turn: BTreeSet::new(),
+            life_lost_last_turn: BTreeMap::new(),
+            cards_exiled_this_turn: 0,
+            cards_put_into_graveyard_this_turn: Vec::new(),
+            sacrificed_this_turn: BTreeMap::new(),
+            track_damage_dealt_by: false,
+            damage_dealt_this_turn_by: BTreeMap::new(),
+            damage_dealt_to_opponents_this_turn: BTreeMap::new(),
+            combat_damage_dealt_to_player_this_turn: BTreeSet::new(),
+            excess_damage_received_this_turn: BTreeSet::new(),
+            entered_from_zone: BTreeMap::new(),
+            cast_by_controller_objects: BTreeSet::new(),
+            cast_from_hand_objects: BTreeSet::new(),
             players_dealt_noncombat_damage_this_turn: BTreeSet::new(),
             object_damage_taken_this_turn: BTreeMap::new(),
             creature_damage_pairs: None,
@@ -320,6 +389,8 @@ impl Default for CharacteristicState {
             ability_donors_in_exile: BTreeMap::new(),
             chosen_entry_players: BTreeMap::new(),
             entry_color_choices: BTreeMap::new(),
+            entry_option_choices: BTreeMap::new(),
+            entry_player_choices: BTreeMap::new(),
             indestructible_counters: BTreeMap::new(),
             indestructible_grants: BTreeMap::new(),
             keyword_counter_grants: BTreeMap::new(),
@@ -957,7 +1028,7 @@ impl CharacteristicState {
         expired
     }
 
-    /// Remove effects whose exact source left, phased out, or changed controller.
+    /// Remove effects whose exact source left, phased out, untapped, or changed controller.
     pub(crate) fn expire_source_control(
         &mut self,
         cards: &GameObjects,
@@ -965,21 +1036,51 @@ impl CharacteristicState {
     ) -> Vec<ContinuousEffectId> {
         let mut expired = Vec::new();
         let still_ok = |duration: ResolvedDuration| -> bool {
-            let ResolvedDuration::WhileSourceControlled {
-                source,
-                controller,
-                epoch,
-            } = duration
-            else {
-                return true;
-            };
-            cards.get(source).is_some_and(|card| {
-                card.zone() == crate::object_identity::ObjectZone::Battlefield
-                    && card.control_epoch() == Some(epoch)
-            }) && evaluated.get(source).is_some_and(|object| {
-                object.controller == Some(controller)
-                    && object.zone == crate::object_identity::ObjectZone::Battlefield
-            })
+            match duration {
+                ResolvedDuration::WhileSourceControlled {
+                    source,
+                    controller,
+                    epoch,
+                } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                            && card.control_epoch() == Some(epoch)
+                    }) && evaluated.get(source).is_some_and(|object| {
+                        object.controller == Some(controller)
+                            && object.zone == crate::object_identity::ObjectZone::Battlefield
+                    })
+                }
+                ResolvedDuration::WhileSourceOnBattlefield { source } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                    })
+                }
+                ResolvedDuration::WhileSourceTapped { source } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                            && card.tapped() == Some(true)
+                    })
+                }
+                ResolvedDuration::WhileSourceControlledAndTapped {
+                    source,
+                    controller,
+                    epoch,
+                } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                            && card.control_epoch() == Some(epoch)
+                            && card.tapped() == Some(true)
+                    }) && evaluated.get(source).is_some_and(|object| {
+                        object.controller == Some(controller)
+                            && object.zone == crate::object_identity::ObjectZone::Battlefield
+                    })
+                }
+                _ => true,
+            }
         };
         self.resolved.retain(|id, effect| {
             let keep = still_ok(effect.duration);
@@ -1069,6 +1170,10 @@ impl CharacteristicState {
         self.chosen_entry_players
             .retain(|source, _| live.contains(source));
         self.entry_color_choices
+            .retain(|source, _| live.contains(source));
+        self.entry_option_choices
+            .retain(|source, _| live.contains(source));
+        self.entry_player_choices
             .retain(|source, _| live.contains(source));
         self.indestructible_counters
             .retain(|object, _| live.contains(object));

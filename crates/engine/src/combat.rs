@@ -773,6 +773,12 @@ impl CombatState {
     pub(crate) fn begin_blockers(&mut self) {
         self.blockers_started = true;
     }
+    /// Mark an attacking creature as blocked without adding a blocking creature (CR 509.1h).
+    pub(crate) fn mark_attacker_blocked(&mut self, attacker: ObjectId) {
+        if let Some(entry) = self.attackers.get_mut(&attacker) {
+            entry.block_status = BlockStatus::Blocked;
+        }
+    }
     pub fn attackers(&self) -> impl Iterator<Item = &AttackingCreature> {
         self.attackers.values()
     }

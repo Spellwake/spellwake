@@ -1835,6 +1835,7 @@ fn rain_of_thorns(cost: ManaCost) -> Program {
         definition.modes = Some(SpellModes {
             minimum: 1,
             maximum: 3,
+            conditional_maximum: None,
             allow_repeat: false,
             distinct_targets: false,
             uniqueness: spellwake_engine::program::ModalUniqueness::None,
