@@ -1,4 +1,18 @@
 {
+  "oracle-parser": {
+    "schemaVersion": 1,
+    "label": "health-oracle-parser",
+    "message": "pass \u00b7 19",
+    "color": "green",
+    "isError": false
+  },
+  "oracle-parser-live": {
+    "schemaVersion": 1,
+    "label": "health-oracle-parser-live",
+    "message": "n/a \u00b7 offline",
+    "color": "lightgrey",
+    "isError": false
+  },
   "patreon": {
     "schemaVersion": 1,
     "label": "health-patreon",
@@ -30,7 +44,7 @@
   "ai": {
     "schemaVersion": 1,
     "label": "health-ai",
-    "message": "pass \u00b7 35",
+    "message": "pass \u00b7 51",
     "color": "green",
     "isError": false
   },
