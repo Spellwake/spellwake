@@ -375,6 +375,17 @@ pub(crate) fn compile_current_card_for_refresh(
     vocabulary: &CreatureTypeVocabulary,
     nonland_names: &mut Option<std::sync::Arc<spellwake_engine::land::NonlandCardNames>>,
 ) -> Result<(), String> {
+    compile_current_card_program(card, inventory, vocabulary, nonland_names).map(|_| ())
+}
+
+/// Compile and return the validated engine [`Program`] for one card under `Profile::Current`.
+#[inline(never)]
+pub(crate) fn compile_current_card_program(
+    card: &InventoryCard,
+    inventory: &Inventory,
+    vocabulary: &CreatureTypeVocabulary,
+    nonland_names: &mut Option<std::sync::Arc<spellwake_engine::land::NonlandCardNames>>,
+) -> Result<Box<Program>, String> {
     let mut program = Box::new(
         compile_card_for_profile(
             card,
@@ -402,7 +413,7 @@ pub(crate) fn compile_current_card_for_refresh(
     program
         .validate(vocabulary)
         .map_err(|err| format!("validation:{err:?}"))?;
-    Ok(())
+    Ok(program)
 }
 
 #[inline(never)]

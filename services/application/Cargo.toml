@@ -26,6 +26,7 @@ spellwake-contracts = { path = "../../crates/contracts" }
 spellwake-engine = { path = "../../crates/engine" }
 spellwake-card-programs = { path = "../../crates/card_programs" }
 spellwake-content = { path = "../../crates/content" }
+spellwake-oracle-compiler = { path = "../../crates/oracle_compiler" }
 temporalio-client = { version = "=1.1.1", default-features = false, features = ["tls-ring", "vendored-protox"] }
 temporalio-common = { version = "=1.1.1", default-features = false, features = ["vendored-protox"] }
 temporalio-macros = "=1.1.1"

@@ -2,6 +2,11 @@
 import { z } from "zod";
 import { amountSchema, identifierSchema } from "./primitives.ts";
 import {
+  ENCHANTMENT_SUBTYPES,
+  PLANESWALKER_SUBTYPES,
+  SPELL_SUBTYPES,
+} from "./custom-cards.ts";
+import {
   playerBasisSchema,
   playerHandleSchema,
   playerDisplayTextSchema,
@@ -243,6 +248,7 @@ export const playerObjectIdentitySchema = z.discriminatedUnion("kind", [
     kind: z.literal("known"),
     definitionId: identifierSchema.nullable(),
     printingId: identifierSchema.nullable(),
+    customCardRevisionId: identifierSchema.optional(),
     characteristics: playerCharacteristicsSchema,
     currentNames: z
       .array(playerEnglishLabelSchema)
@@ -277,10 +283,10 @@ export const playerPublicPropertiesSchema = z.strictObject({
     .array(playerLandTypeSchema)
     .max(17)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
-  spellTypes: z.array(z.enum(["Arcane","Adventure","Lesson","Trap","Omen"])).max(5).refine(xs=>new Set(xs).size===xs.length).optional(),
-  enchantmentTypes: z.array(z.literal("Saga")).max(1).optional(),
-  planeswalkerTypes: z.array(z.enum(["Ajani", "Calix", "Chandra", "Daretti", "Elspeth", "Freyalise", "Gideon", "Guff", "Jace", "Nahiri", "Narset", "Nixilis", "Teferi", "Teyo", "Ugin", "Vronos"]))
-    .max(16).refine((xs) => uniquePlayerValues(xs, (x) => x)).optional(),
+  spellTypes: z.array(z.enum(SPELL_SUBTYPES)).max(SPELL_SUBTYPES.length).refine(xs=>new Set(xs).size===xs.length).optional(),
+  enchantmentTypes: z.array(z.enum(ENCHANTMENT_SUBTYPES)).max(ENCHANTMENT_SUBTYPES.length).refine((xs) => uniquePlayerValues(xs, (x) => x)).optional(),
+  planeswalkerTypes: z.array(z.enum(PLANESWALKER_SUBTYPES))
+    .max(PLANESWALKER_SUBTYPES.length).refine((xs) => uniquePlayerValues(xs, (x) => x)).optional(),
   creatureTypes: z
     .array(playerEnglishLabelSchema)
     .max(PLAYER_ITEMS)
@@ -371,10 +377,21 @@ export const playerZoneSchema = z.discriminatedUnion("visibility", [
     orderKnown: z.boolean(),
   }),
 ]);
+export const playerManaLotSchema = z.strictObject({
+  id: z.number().int().nonnegative(),
+  color: playerManaColorSchema,
+  effect: z.enum([
+    "commander-entry-counters",
+    "shared-commander-type-scry",
+    "retain-until-cleanup",
+    "retain-until-end-of-combat",
+  ]),
+  amount: rulesCountSchema,
+});
 export const playerSeatViewSchema = z.strictObject({
   phasedOut: z.array(z.strictObject({names:z.array(playerDisplayTextSchema(256).refine(name=>name.length>0)).max(PLAYER_ITEMS),
     faceDown:z.boolean(),tapped:z.boolean(),phaseInSeatId:identifierSchema,loyalty:rulesCountSchema.nullable()}).refine(p=>!p.faceDown || p.names.length===0)).max(PLAYER_ITEMS).optional(),
-  emblems: z.array(z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("prevent-all-but-one") }), z.strictObject({ kind: z.literal("loyalty-any-turn") }), z.strictObject({ kind: z.literal("return-fallen-artifacts") }), z.strictObject({ kind: z.literal("sacrifice-creature-gain-life-draw") }), z.strictObject({
+  emblems: z.array(z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("prevent-all-but-one") }), z.strictObject({ kind: z.literal("loyalty-any-turn") }), z.strictObject({ kind: z.literal("return-fallen-artifacts") }), z.strictObject({ kind: z.literal("unlimited-hand-with-graveyard-return") }), z.strictObject({ kind: z.literal("sacrifice-creature-gain-life-draw") }), z.strictObject({
     kind: z.literal("upkeep-damage"),
     amount: rulesIntegerSchema.refine((value) => BigInt(value) > 0n),
   }), z.strictObject({
@@ -386,6 +403,9 @@ export const playerSeatViewSchema = z.strictObject({
     power: rulesIntegerSchema,
     toughness: rulesIntegerSchema,
     keywords: z.array(playerKeywordSchema).max(playerKeywordSchema.options.length).refine((xs) => uniquePlayerValues(xs, (x) => x)),
+  }), z.strictObject({
+    kind: z.literal("authored"),
+    label: playerDisplayTextSchema(1024).refine((v) => v.length > 0),
   })])).max(PLAYER_ITEMS).optional(),
   monarch: z.boolean().optional(),
   cityBlessing: z.boolean().optional(),
@@ -403,6 +423,7 @@ export const playerSeatViewSchema = z.strictObject({
     .max(6)
     .refine((xs) => uniquePlayerValues(xs, (x) => x.color)),
   restrictedMana: z.array(playerRestrictedManaSpendSchema).max(PLAYER_ITEMS).optional(),
+  manaLots: z.array(playerManaLotSchema).max(PLAYER_ITEMS).optional(),
   handCount: rulesCountSchema,
   libraryCount: rulesCountSchema,
   eliminated: z.boolean(),

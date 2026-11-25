@@ -65,7 +65,12 @@ export function ChooseDeckDialog({
         else if (outcome) notice.say(outcome.message);
       });
   };
-  const row = (id: string, name: string, thumb: ReactElement): ReactElement => (
+  const row = (
+    id: string,
+    name: string,
+    thumb: ReactElement,
+    subtitle = formatName,
+  ): ReactElement => (
     <button
       key={id}
       type="button"
@@ -78,7 +83,7 @@ export function ChooseDeckDialog({
       <span className={s.optionDivider} />
       <span className={s.optionText}>
         {name}
-        <span className={s.optionSub}>{formatName}</span>
+        <span className={s.optionSub}>{subtitle}</span>
       </span>
       {pending === id ? (
         <CircleCheck className={s.radio} aria-hidden="true" />
@@ -163,6 +168,11 @@ export function ChooseDeckDialog({
               )}
             {shown.map((deck) => {
               const url = thumbFor(deck);
+              const tags = [
+                formatName,
+                ...(deck.lentByHost ? ["Lent by host"] : []),
+                ...(deck.hasCustomCards ? ["Custom cards"] : []),
+              ];
               return row(
                 deck.id,
                 deck.name,
@@ -171,6 +181,7 @@ export function ChooseDeckDialog({
                 ) : (
                   <span className={s.randomThumb} aria-hidden="true" />
                 ),
+                tags.join(" · "),
               );
             })}
           </>

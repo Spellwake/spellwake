@@ -111,10 +111,15 @@ pub(super) fn open_qualified(
     ];
     let mut shuffle_steps = 0usize;
     let mut largest = 0u64;
+    let allow_custom =
+        meta.allow_custom_cards && meta.mode == crate::decks::PlayMode::Open && !meta.competitive;
     for seat in &meta.seats {
-        let (deck_size, _) = runtime
-            .programs
-            .inspect_selected_match_deck(format, &seat.entries)?;
+        let (deck_size, _) = runtime.programs.inspect_selected_match_deck_with_custom(
+            format,
+            &seat.entries,
+            &seat.custom_entries,
+            allow_custom,
+        )?;
         largest = largest.max(u64::from(deck_size));
         shuffle_steps += deck_size.saturating_sub(1) as usize;
     }

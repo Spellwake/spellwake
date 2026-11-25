@@ -23,7 +23,6 @@ export const page = style({
   flexDirection: "column",
   padding: "30px 3.3% 0",
   selectors: {
-    "&[data-mode=open]": { paddingInline: "12%" },
     [phone]: { padding: "22px 22px 0" },
   },
 });

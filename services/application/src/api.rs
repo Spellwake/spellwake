@@ -33,6 +33,7 @@ mod catalogue_routes;
 mod chat_notification_routes;
 mod command_routes;
 mod commander_admission_routes;
+mod custom_card_routes;
 mod deck_routes;
 mod deletion_routes;
 mod economy_routes;
@@ -91,6 +92,8 @@ pub struct ApiConfig {
     native_views: Option<Arc<crate::native_game::NativeGameRuntime>>,
     native_host_owner: Option<crate::native_game::NativeHostOwner>,
     reconcile_secret: Option<String>,
+    custom_compiler: Arc<crate::custom_cards::CustomCardCompilerPool>,
+    codex_vision: Option<Arc<crate::ai_runtime::CodexVisionClient>>,
 }
 impl ApiConfig {
     pub fn new(
@@ -146,6 +149,11 @@ impl ApiConfig {
             native_views: None,
             native_host_owner: None,
             reconcile_secret: None,
+            custom_compiler: Arc::new(
+                crate::custom_cards::CustomCardCompilerPool::from_env()
+                    .map_err(|_| ActorError::Configuration)?,
+            ),
+            codex_vision: None,
         })
     }
 
@@ -250,6 +258,14 @@ impl ApiConfig {
                 crate::native_game::NativeHostOwner::new(&value)
                     .map_err(|_| ActorError::Configuration)?,
             );
+        }
+        if let Some(vision_cfg) = crate::ai_runtime::CodexVisionConfig::from_env()
+            .map_err(|_| ActorError::Configuration)?
+        {
+            config.codex_vision = Some(Arc::new(
+                crate::ai_runtime::CodexVisionClient::new(vision_cfg)
+                    .map_err(|_| ActorError::Configuration)?,
+            ));
         }
         Ok(config)
     }
@@ -485,7 +501,8 @@ fn router_with_state(state: ApiState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(state.config.origins.clone())
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .max_age(Duration::from_secs(600));
     Router::new()
         .route(
             "/health",
@@ -862,6 +879,59 @@ fn router_with_state(state: ApiState) -> Router {
             post(room_control_routes::set_tier_disposition),
         )
         .route(
+            "/v1/ai-slots/{slot}/deck",
+            post(room_control_routes::set_deck),
+        )
+        .route(
+            "/v1/ai-slots/{slot}/deck/disposition",
+            post(room_control_routes::set_deck_disposition),
+        )
+        // Open Play Custom Card Studio, binary art delivery, Vision OCR & Quick Test
+        .route(
+            "/v1/custom-cards",
+            get(custom_card_routes::list).post(custom_card_routes::create),
+        )
+        .route(
+            "/v1/custom-cards/compile",
+            post(custom_card_routes::compile),
+        )
+        .route(
+            "/v1/custom-cards/standardize",
+            post(custom_card_routes::standardize),
+        )
+        .route(
+            "/v1/custom-cards/import-vision",
+            post(custom_card_routes::import_vision),
+        )
+        .route(
+            "/v1/custom-cards/{card}",
+            patch(custom_card_routes::patch).delete(custom_card_routes::delete),
+        )
+        .route(
+            "/v1/custom-cards/{card}/revisions",
+            post(custom_card_routes::save_revision),
+        )
+        .route(
+            "/v1/custom-cards/revisions/{revision}/art/{face}",
+            get(custom_card_routes::owner_art),
+        )
+        .route(
+            "/v1/rooms/{room}/lent-decks/{deck}/face-art/{revision}",
+            get(custom_card_routes::lent_deck_face_art),
+        )
+        .route(
+            "/v1/games/{game}/custom-cards/{revision}",
+            get(custom_card_routes::match_revealed_card),
+        )
+        .route(
+            "/v1/games/{game}/custom-cards/{revision}/art/{face}",
+            get(custom_card_routes::match_revealed_art),
+        )
+        .route(
+            "/v1/open-play/quick-test",
+            post(custom_card_routes::quick_test),
+        )
+        .route(
             "/v1/billing/portal",
             post(ui_surface_routes::billing_portal),
         )
@@ -992,7 +1062,9 @@ fn router_with_state(state: ApiState) -> Router {
                             "request completed"
                         );
                     }
-                    if is_private {
+                    if is_private
+                        && !(status == 200 && custom_card_routes::is_immutable_art_path(&path))
+                    {
                         command_routes::private(response)
                     } else {
                         response

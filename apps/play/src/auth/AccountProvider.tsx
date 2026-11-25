@@ -14,6 +14,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import type { AccountSession } from "@spellwake/application-contracts";
+import { clearCustomArtCache } from "../data/custom-art-cache";
 import {
   defaultApplicationServices,
   type ApplicationServices,
@@ -71,6 +72,7 @@ function AccountSessionProvider({
       // repopulate an owner cache after a sign-out or session change.
       void queries.cancelQueries();
       queries.clear();
+      clearCustomArtCache();
       setCredential({
         initialized: true,
         bearer,

@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 
-// The reviewed 109-table schema plus the daily AI quota and reservation tables.
-const APPLICATION_TABLE_COUNT: i64 = 111;
+// The reviewed 111-table schema plus the 5 custom-card tables.
+const APPLICATION_TABLE_COUNT: i64 = 116;
 
 #[path = "database/game_scope.rs"]
 mod game_scope;

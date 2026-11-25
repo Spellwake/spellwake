@@ -21,8 +21,31 @@ import {
   roomConfigurationAckSchema,
   roomConfigurationDispositionSchema,
   roomDetailSchema,
+  setAiDeckDispositionSchema,
+  setAiDeckRequestSchema,
   setAiTierDispositionSchema,
   setAiTierRequestSchema,
+  customCardArchiveRequestSchema,
+  customCardCompileInputSchema,
+  customCardCompileResultSchema,
+  customCardFaceRulesSchema,
+  customCardMutationAckSchema,
+  customCardPageSchema,
+  customCardRevisionViewSchema,
+  quickTestAckSchema,
+  quickTestCommandSchema,
+  saveCustomCardRequestSchema,
+  savedCustomCardResponseSchema,
+  standardizeResultSchema,
+  visionImportRequestSchema,
+  visionImportResultSchema,
+  type CustomCardArchiveRequest,
+  type CustomCardCompileInput,
+  type CustomCardFaceRules,
+  type QuickTestCommand,
+  type SaveCustomCardRequest,
+  type SetAiDeckRequest,
+  type VisionImportRequest,
   profileConfigurationPageSchema,
   tableProfilePageSchema,
   unreadyDispositionSchema,
@@ -262,6 +285,7 @@ export class ApplicationApi {
     input?: unknown,
     signal?: AbortSignal,
     methodOverride?: "GET" | "POST" | "PATCH" | "DELETE",
+    timeoutMs = 15000,
   ): Promise<ApiResponse<T>> {
     if (
       bearer !== null &&
@@ -280,8 +304,8 @@ export class ApplicationApi {
         },
         ...(input === undefined ? {} : { body: JSON.stringify(input) }),
         signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
-          : AbortSignal.timeout(15000),
+          ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+          : AbortSignal.timeout(timeoutMs),
         credentials: "omit",
         redirect: "error",
         cache: "no-store",
@@ -868,6 +892,43 @@ export class ApplicationApi {
           parsed.data,
         )
       : Promise.resolve<ApiResponse<z.infer<typeof setAiTierDispositionSchema>>>({
+          status: "fail",
+          data: { request: "invalid" },
+        });
+  }
+  /** Assigns a specific deck (or null for Random Deck) to an AI seat. */
+  setAiSlotDeck(
+    bearer: string,
+    slotId: string,
+    input: SetAiDeckRequest,
+  ) {
+    const parsed = setAiDeckRequestSchema.safeParse(input);
+    return parsed.success && identifierSchema.safeParse(slotId).success
+      ? this.request(
+          `/v1/ai-slots/${encodeURIComponent(slotId)}/deck`,
+          bearer,
+          roomConfigurationAckSchema,
+          parsed.data,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof roomConfigurationAckSchema>>>({
+          status: "fail",
+          data: { request: "invalid" },
+        });
+  }
+  setAiSlotDeckDisposition(
+    bearer: string,
+    slotId: string,
+    input: SetAiDeckRequest,
+  ) {
+    const parsed = setAiDeckRequestSchema.safeParse(input);
+    return parsed.success && identifierSchema.safeParse(slotId).success
+      ? this.request(
+          `/v1/ai-slots/${encodeURIComponent(slotId)}/deck/disposition`,
+          bearer,
+          setAiDeckDispositionSchema,
+          parsed.data,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof setAiDeckDispositionSchema>>>({
           status: "fail",
           data: { request: "invalid" },
         });
@@ -2777,6 +2838,8 @@ export class ApplicationApi {
       aiDifficulty?: "casual" | "standard" | "competitive";
       planechaseEnabled?: boolean;
       rangeOfInfluence?: number;
+      allowCustomCards?: boolean;
+      shareHostDecks?: boolean;
     },
     signal?: AbortSignal,
   ) {
@@ -2974,6 +3037,251 @@ export class ApplicationApi {
       input,
       signal,
     );
+  }
+
+  /** Compile custom card rules against the authoritative Rust oracle compiler and engine lowering. */
+  compileCustomCard(
+    bearer: string,
+    input: CustomCardCompileInput,
+    signal?: AbortSignal,
+  ) {
+    const parsed = customCardCompileInputSchema.safeParse(input);
+    return parsed.success
+      ? this.request(
+          "/v1/custom-cards/compile",
+          bearer,
+          customCardCompileResultSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof customCardCompileResultSchema>>
+        >({
+          status: "fail",
+          data: { card: "invalid" },
+        });
+  }
+
+  /** Deterministically standardize custom card Oracle phrasing into modern Foundations syntax. */
+  standardizeCustomCard(
+    bearer: string,
+    faces: CustomCardFaceRules[],
+    signal?: AbortSignal,
+  ) {
+    const parsed = z.array(customCardFaceRulesSchema).min(1).max(2).safeParse(faces);
+    return parsed.success
+      ? this.request(
+          "/v1/custom-cards/standardize",
+          bearer,
+          standardizeResultSchema,
+          { faces: parsed.data },
+          signal,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof standardizeResultSchema>>>({
+          status: "fail",
+          data: { faces: "invalid" },
+        });
+  }
+
+  /** Codex Vision OCR fallback for external PNG/WebP/JPEG card images without Spellwake iTXt metadata. */
+  importCustomCardVision(
+    bearer: string,
+    input: VisionImportRequest,
+    signal?: AbortSignal,
+  ) {
+    const parsed = visionImportRequestSchema.safeParse(input);
+    return parsed.success
+      ? this.request(
+          "/v1/custom-cards/import-vision",
+          bearer,
+          visionImportResultSchema,
+          parsed.data,
+          signal,
+          "POST",
+          60000,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof visionImportResultSchema>>>({
+          status: "fail",
+          data: { image: "invalid" },
+        });
+  }
+
+  /** List the signed-in account's Open Play Custom Card Vault. */
+  listCustomCards(
+    bearer: string,
+    options: {
+      after?: string | null;
+      limit?: number;
+      includeArchived?: boolean;
+      search?: string;
+    } = {},
+    signal?: AbortSignal,
+  ) {
+    const params = new URLSearchParams();
+    params.set("limit", String(options.limit ?? 50));
+    if (options.after) params.set("after", options.after);
+    if (options.includeArchived) params.set("includeArchived", "true");
+    if (options.search && options.search.trim().length > 0) {
+      params.set("search", options.search.trim());
+    }
+    return this.request(
+      `/v1/custom-cards?${params}`,
+      bearer,
+      customCardPageSchema,
+      undefined,
+      signal,
+    );
+  }
+
+  /** Create a new custom card (revision 1) in the account's vault. */
+  createCustomCard(
+    bearer: string,
+    input: SaveCustomCardRequest,
+    signal?: AbortSignal,
+  ) {
+    const parsed = saveCustomCardRequestSchema.safeParse(input);
+    return parsed.success
+      ? this.request(
+          "/v1/custom-cards",
+          bearer,
+          savedCustomCardResponseSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof savedCustomCardResponseSchema>>
+        >({
+          status: "fail",
+          data: { card: "invalid" },
+        });
+  }
+
+  /** Save a new immutable revision of an existing custom card. */
+  saveCustomCardRevision(
+    bearer: string,
+    cardId: string,
+    input: SaveCustomCardRequest,
+    signal?: AbortSignal,
+  ) {
+    const parsed = saveCustomCardRequestSchema.safeParse(input);
+    return parsed.success && identifierSchema.safeParse(cardId).success
+      ? this.request(
+          `/v1/custom-cards/${encodeURIComponent(cardId)}/revisions`,
+          bearer,
+          savedCustomCardResponseSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof savedCustomCardResponseSchema>>
+        >({
+          status: "fail",
+          data: { card: "invalid" },
+        });
+  }
+
+  /** Archive or restore a custom card in the owner's vault. */
+  archiveCustomCard(
+    bearer: string,
+    cardId: string,
+    input: CustomCardArchiveRequest,
+    signal?: AbortSignal,
+  ) {
+    const parsed = customCardArchiveRequestSchema.safeParse(input);
+    return parsed.success && identifierSchema.safeParse(cardId).success
+      ? this.request(
+          `/v1/custom-cards/${encodeURIComponent(cardId)}`,
+          bearer,
+          customCardMutationAckSchema,
+          parsed.data,
+          signal,
+          "PATCH",
+        )
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof customCardMutationAckSchema>>
+        >({
+          status: "fail",
+          data: { card: "invalid" },
+        });
+  }
+
+  /** Delete an unreferenced custom card (or archive it automatically if referenced by decks/matches). */
+  deleteCustomCard(
+    bearer: string,
+    cardId: string,
+    requestId?: string,
+    signal?: AbortSignal,
+  ) {
+    if (
+      !identifierSchema.safeParse(cardId).success ||
+      (requestId !== undefined && !identifierSchema.safeParse(requestId).success)
+    ) {
+      return Promise.resolve<
+        ApiResponse<z.infer<typeof customCardMutationAckSchema>>
+      >({
+        status: "fail",
+        data: { card: "invalid" },
+      });
+    }
+    const qs = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    return this.request(
+      `/v1/custom-cards/${encodeURIComponent(cardId)}${qs}`,
+      bearer,
+      customCardMutationAckSchema,
+      undefined,
+      signal,
+      "DELETE",
+    );
+  }
+
+  /** Read metadata for a custom card revealed to the caller's seat inside an Open Play match. */
+  readRevealedMatchCustomCard(
+    bearer: string,
+    gameId: string,
+    revisionId: string,
+    contextId: string,
+    signal?: AbortSignal,
+  ) {
+    if (
+      !identifierSchema.safeParse(gameId).success ||
+      !identifierSchema.safeParse(revisionId).success ||
+      !identifierSchema.safeParse(contextId).success
+    ) {
+      return Promise.resolve<
+        ApiResponse<z.infer<typeof customCardRevisionViewSchema>>
+      >({
+        status: "fail",
+        data: { card: "invalid" },
+      });
+    }
+    return this.request(
+      `/v1/games/${encodeURIComponent(gameId)}/custom-cards/${encodeURIComponent(revisionId)}?contextId=${encodeURIComponent(contextId)}`,
+      bearer,
+      customCardRevisionViewSchema,
+      undefined,
+      signal,
+    );
+  }
+
+  /** Patron-only 1v1 60-card Open Play Quick Test vs. Normal Bot. */
+  quickTestCustomCard(
+    bearer: string,
+    input: QuickTestCommand,
+    signal?: AbortSignal,
+  ) {
+    const parsed = quickTestCommandSchema.safeParse(input);
+    return parsed.success
+      ? this.request(
+          "/v1/open-play/quick-test",
+          bearer,
+          quickTestAckSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof quickTestAckSchema>>>({
+          status: "fail",
+          data: { request: "invalid" },
+        });
   }
 }
 

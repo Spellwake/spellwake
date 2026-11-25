@@ -459,6 +459,7 @@ pub fn compact_prompt_with_knowledge(
     }
 
     let mut cards: BTreeMap<String, Value> = BTreeMap::new();
+    let mut card_identities: BTreeMap<String, String> = BTreeMap::new();
     let mut hand = Vec::new();
     let mut your_board = Vec::new();
     let mut opp_board = Vec::new();
@@ -504,9 +505,44 @@ pub fn compact_prompt_with_knowledge(
                 && let Some(ch) = ident.get("characteristics").and_then(Value::as_object)
                 && let Some(n) = ch.get("name").and_then(Value::as_str)
             {
-                name = n.to_owned();
-                cards.entry(name.clone()).or_insert_with(|| {
+                let custom_rev = ident
+                    .get("customCardRevisionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let def_id = ident
+                    .get("definitionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let identity_key = if !custom_rev.is_empty() {
+                    format!("custom:{custom_rev}")
+                } else if !def_id.is_empty() {
+                    format!("def:{def_id}")
+                } else {
+                    String::new()
+                };
+                let mut dict_key = n.to_owned();
+                if let Some(existing_id) = card_identities.get(&dict_key)
+                    && !identity_key.is_empty()
+                    && existing_id != &identity_key
+                {
+                    let short_tag = if !custom_rev.is_empty() {
+                        &custom_rev[..custom_rev.len().min(8)]
+                    } else {
+                        &def_id[..def_id.len().min(8)]
+                    };
+                    dict_key = format!("{n} [{short_tag}]");
+                }
+                if !identity_key.is_empty() {
+                    card_identities
+                        .entry(dict_key.clone())
+                        .or_insert(identity_key);
+                }
+                name = dict_key.clone();
+                cards.entry(dict_key).or_insert_with(|| {
                     let mut def = Map::new();
+                    if !custom_rev.is_empty() {
+                        def.insert("custom".into(), Value::Bool(true));
+                    }
                     if let Some(mc) = ch.get("manaCost").and_then(Value::as_str)
                         && !mc.is_empty()
                     {
@@ -525,6 +561,32 @@ pub fn compact_prompt_with_knowledge(
                         ch.get("printedToughness").and_then(Value::as_str),
                     ) {
                         def.insert("pt".into(), Value::String(format!("{p}/{t}")));
+                    }
+                    if let Some(loyalty) = ch.get("printedLoyalty").and_then(Value::as_str)
+                        && !loyalty.is_empty()
+                    {
+                        def.insert("loyalty".into(), Value::String(loyalty.to_owned()));
+                    }
+                    if let Some(defense) = ch.get("printedDefense").and_then(Value::as_str)
+                        && !defense.is_empty()
+                    {
+                        def.insert("defense".into(), Value::String(defense.to_owned()));
+                    }
+                    if let Some(tf) = obj.get("transformFace").and_then(Value::as_object)
+                        && let Some(opp) = tf.get("opposite").and_then(Value::as_object)
+                        && let Some(opp_name) = opp.get("name").and_then(Value::as_str)
+                    {
+                        let mut back = Map::new();
+                        back.insert("name".into(), Value::String(opp_name.to_owned()));
+                        if let Some(tl) = opp.get("typeLine").and_then(Value::as_str) {
+                            back.insert("type".into(), Value::String(tl.to_owned()));
+                        }
+                        if let Some(rt) = opp.get("rulesText").and_then(Value::as_str)
+                            && !rt.is_empty()
+                        {
+                            back.insert("text".into(), Value::String(rt.to_owned()));
+                        }
+                        def.insert("otherFace".into(), Value::Object(back));
                     }
                     Value::Object(def)
                 });

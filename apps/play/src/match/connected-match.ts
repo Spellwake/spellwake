@@ -4,12 +4,18 @@ import { useAtomValue } from "jotai";
 import {
   identifierSchema,
   matchDetailSchema,
+  type CustomCardRevisionView,
   type PlayerCursor,
   type PlayerSnapshot,
   type RoomGameHandoff,
 } from "@spellwake/application-contracts";
+import { renderCardFrameToPngBytes } from "@spellwake/ui";
 import { useAccount } from "../auth/AccountProvider";
 import { ownerBearer } from "../data/account";
+import {
+  acquireCustomArtUrl,
+  releaseCustomArtUrl,
+} from "../data/custom-art-cache";
 import { scryfallImage } from "../data/scryfall-images";
 import type { CastOffer } from "./cast-draft";
 import {
@@ -549,6 +555,192 @@ export function useConnectedMatch(
     combine: (results) => new Map(results.flatMap((r) => r.data ?? [])),
   });
 
+  // Resolve revealed Open Play custom cards into rendered 300-DPI PNG blob URLs for 2D & 3D meshes.
+  const customRevisionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const obj of snapshot?.visibleObjects ?? []) {
+      if (obj.identity.kind === "known" && obj.identity.customCardRevisionId) {
+        ids.add(obj.identity.customCardRevisionId);
+      }
+    }
+    return [...ids].sort();
+  }, [snapshot?.visibleObjects]);
+
+  const [customFaceByRevisionId, setCustomFaceByRevisionId] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const customFaceBlobsRef = useRef<Map<string, string>>(new Map());
+  const customFaceLoadingRef = useRef<Set<string>>(new Set());
+  const customSessionKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    const nextSessionKey = target ? `${target.gameId}:${target.contextId}` : "";
+    customSessionKeyRef.current = nextSessionKey;
+    setCustomFaceByRevisionId(new Map());
+    return () => {
+      customSessionKeyRef.current = "";
+      for (const blobUrl of customFaceBlobsRef.current.values()) {
+        URL.revokeObjectURL(blobUrl);
+      }
+      customFaceBlobsRef.current.clear();
+      customFaceLoadingRef.current.clear();
+    };
+  }, [target?.gameId, target?.contextId]);
+
+  useEffect(() => {
+    if (!owner || !services || !target || customRevisionIds.length === 0) return;
+    const sessionKey = `${target.gameId}:${target.contextId}`;
+    const missing = customRevisionIds.filter(
+      (revId) =>
+        !customFaceBlobsRef.current.has(revId) &&
+        !customFaceLoadingRef.current.has(revId),
+    );
+    if (missing.length === 0) return;
+    for (const revId of missing) {
+      customFaceLoadingRef.current.add(revId);
+      void (async () => {
+        let frontArtPath: string | null = null;
+        let backArtPath: string | null = null;
+        try {
+          const token = await ownerBearer(services, owner);
+          const metaRes = await services.api.readRevealedMatchCustomCard(
+            token,
+            target.gameId,
+            revId,
+            target.contextId,
+          );
+          if (
+            customSessionKeyRef.current !== sessionKey ||
+            metaRes.status !== "success"
+          ) {
+            return;
+          }
+          const rev: CustomCardRevisionView = metaRes.data;
+          const frontFace = rev.faces[0];
+          if (!frontFace) return;
+          const backFace = rev.faces[1] ?? null;
+          const frontArtMeta = rev.art.find((a) => a.faceIndex === 0);
+          const backArtMeta = rev.art.find((a) => a.faceIndex === 1);
+          let resolvedFrontArtUrl: string | null = null;
+          if (frontArtMeta?.hasArt) {
+            frontArtPath = `/v1/games/${encodeURIComponent(target.gameId)}/custom-cards/${encodeURIComponent(revId)}/art/0?contextId=${encodeURIComponent(target.contextId)}`;
+            resolvedFrontArtUrl = await acquireCustomArtUrl(
+              services.api.origin,
+              frontArtPath,
+              token,
+            );
+          }
+          let resolvedBackArtUrl: string | null = null;
+          if (backFace && backArtMeta?.hasArt) {
+            backArtPath = `/v1/games/${encodeURIComponent(target.gameId)}/custom-cards/${encodeURIComponent(revId)}/art/1?contextId=${encodeURIComponent(target.contextId)}`;
+            resolvedBackArtUrl = await acquireCustomArtUrl(
+              services.api.origin,
+              backArtPath,
+              token,
+            );
+          }
+
+          const buildFaceInput = (
+            face: NonNullable<typeof frontFace>,
+            faceIndex: 0 | 1,
+            artMeta: typeof frontArtMeta,
+            artUrl: string | null,
+          ) => ({
+            name: face.name,
+            manaCost: face.manaCost,
+            typeLine: face.typeLine,
+            oracleText: face.oracleText,
+            flavorText: rev.flavorTexts[faceIndex] ?? null,
+            power: face.power,
+            toughness: face.toughness,
+            loyalty: face.loyalty,
+            defense: face.defense,
+            colorIndicator: face.colorIndicator ?? null,
+            artist: artMeta?.artist ?? null,
+            artUrl,
+            cropX: artMeta?.cropX ?? 0,
+            cropY: artMeta?.cropY ?? 0,
+            zoom: artMeta?.zoom ?? 1,
+          });
+
+          const frontFaceInput = buildFaceInput(
+            frontFace,
+            0,
+            frontArtMeta,
+            resolvedFrontArtUrl,
+          );
+          const backFaceInput = backFace
+            ? buildFaceInput(backFace, 1, backArtMeta, resolvedBackArtUrl)
+            : null;
+          const isSingleCardTwoFace =
+            rev.layout === "split" || rev.layout === "adventure";
+
+          const pngBytes = await renderCardFrameToPngBytes(
+            {
+              kind: "card_face",
+              layout: rev.layout,
+              rarity: rev.rarity,
+              frameAccent: rev.visualFrameAccents[0] ?? "auto",
+              faceIndex: 0,
+              collectorNote: rev.collectorNote,
+              face: frontFaceInput,
+              secondaryFace: isSingleCardTwoFace ? backFaceInput : null,
+            },
+            { width: 531, height: 741 },
+          );
+          if (customSessionKeyRef.current !== sessionKey) return;
+          const frontCopy = new Uint8Array(pngBytes.byteLength);
+          frontCopy.set(pngBytes);
+          const frontBlobUrl = URL.createObjectURL(
+            new Blob([frontCopy], { type: "image/png" }),
+          );
+          customFaceBlobsRef.current.set(revId, frontBlobUrl);
+
+          if (
+            backFaceInput &&
+            (rev.layout === "transform" || rev.layout === "modal_dfc")
+          ) {
+            const backPngBytes = await renderCardFrameToPngBytes(
+              {
+                kind: "card_face",
+                layout: rev.layout,
+                rarity: rev.rarity,
+                frameAccent:
+                  rev.visualFrameAccents[1] ??
+                  rev.visualFrameAccents[0] ??
+                  "auto",
+                faceIndex: 1,
+                collectorNote: rev.collectorNote,
+                face: backFaceInput,
+                secondaryFace: frontFaceInput,
+              },
+              { width: 531, height: 741 },
+            );
+            if (customSessionKeyRef.current !== sessionKey) return;
+            const backCopy = new Uint8Array(backPngBytes.byteLength);
+            backCopy.set(backPngBytes);
+            const backBlobUrl = URL.createObjectURL(
+              new Blob([backCopy], { type: "image/png" }),
+            );
+            customFaceBlobsRef.current.set(`${revId}:1`, backBlobUrl);
+          }
+
+          setCustomFaceByRevisionId(new Map(customFaceBlobsRef.current));
+        } catch {
+          // Fallback to programmatic card text mesh in live-match-scene.
+        } finally {
+          customFaceLoadingRef.current.delete(revId);
+          if (frontArtPath && services) {
+            releaseCustomArtUrl(services.api.origin, frontArtPath);
+          }
+          if (backArtPath && services) {
+            releaseCustomArtUrl(services.api.origin, backArtPath);
+          }
+        }
+      })();
+    }
+  }, [owner, services, target, customRevisionIds]);
+
   // Match chat polling when matchId is available.
   const chatQuery = useQuery({
     queryKey: ["match-chat", owner?.accountId, target?.matchId],
@@ -782,6 +974,7 @@ export function useConnectedMatch(
     snapshot,
     seatNames,
     artByPrintingId: artQueries,
+    ...(customFaceByRevisionId.size > 0 ? { customFaceByRevisionId } : {}),
     ...(castOffers !== undefined ? { castOffers } : {}),
     connectionState,
     result,

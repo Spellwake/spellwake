@@ -596,7 +596,8 @@
         "dice_id",
         "playmat_id",
         "pet_id",
-        "face_definition_id"
+        "face_definition_id",
+        "face_custom_card_revision_id"
       ],
       "service_role": [
         "id",
@@ -613,7 +614,8 @@
         "dice_id",
         "playmat_id",
         "pet_id",
-        "face_definition_id"
+        "face_definition_id",
+        "face_custom_card_revision_id"
       ],
       "supabase_auth_admin": []
     }
@@ -1187,7 +1189,9 @@
         "queue_claim_receipt_id",
         "ai_difficulty",
         "planechase_enabled",
-        "range_of_influence"
+        "range_of_influence",
+        "allow_custom_cards",
+        "share_host_decks"
       ],
       "service_role": [
         "id",
@@ -1206,7 +1210,9 @@
         "queue_claim_receipt_id",
         "ai_difficulty",
         "planechase_enabled",
-        "range_of_influence"
+        "range_of_influence",
+        "allow_custom_cards",
+        "share_host_decks"
       ],
       "supabase_auth_admin": []
     }
@@ -1339,7 +1345,10 @@
         "availability_revision",
         "incident_receipt_id",
         "restoration_receipt_id",
-        "terminal_receipt_id"
+        "terminal_receipt_id",
+        "allow_custom_cards",
+        "share_host_decks",
+        "host_id"
       ],
       "supabase_auth_admin": []
     }
@@ -2527,6 +2536,85 @@
   },
   {
     "relation": "ai_usage_reservation",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "custom_card",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "current_revision_id",
+        "archived_at",
+        "created_at",
+        "updated_at"
+      ],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "custom_card_revision",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "custom_card_id",
+        "revision_number",
+        "rules_sha256",
+        "name",
+        "layout",
+        "rarity",
+        "faces_rules_json",
+        "visual_frame_accents_json",
+        "flavor_texts_json",
+        "collector_note",
+        "stage1_parsed",
+        "stage2_playable",
+        "compiler_revision",
+        "created_at"
+      ],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "custom_card_revision_art",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "deck_custom_entry",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "revision_id",
+        "custom_card_revision_id",
+        "section",
+        "quantity"
+      ],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "match_revealed_custom_card",
     "kind": "table",
     "reads": {
       "anon": [],

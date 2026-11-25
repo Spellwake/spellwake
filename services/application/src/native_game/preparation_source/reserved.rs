@@ -24,6 +24,8 @@ pub struct NativeReservedSeat {
     pub selection_reply_ref: Option<SourceProof>,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub entries: Vec<PreparationEntry>,
+    #[serde(default, deserialize_with = "crate::provider_json::objects")]
+    pub custom_entries: Vec<PreparationCustomEntry>,
 }
 /// Exact reservation metadata. Historical creator/selection checks remain in SQL.
 #[derive(Deserialize)]
@@ -52,13 +54,23 @@ pub struct NativeReservedGameMetadata {
     pub release: PreparationRelease,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub seats: Vec<NativeReservedSeat>,
+    #[serde(default)]
+    pub allow_custom_cards: bool,
+    #[serde(default)]
+    pub share_host_decks: bool,
 }
 impl NativeReservedGameMetadata {
     fn valid(&self, game: Uuid) -> bool {
-        self.version == "native-admission-source-v1"
-            && self.game_id == game
+        let allow_custom =
+            self.allow_custom_cards && self.mode == PlayMode::Open && !self.competitive;
+        matches!(
+            self.version.as_str(),
+            "native-admission-source-v1" | "native-admission-source-v2"
+        ) && self.game_id == game
             && self.profile.valid()
             && (self.mode != PlayMode::Open || !self.competitive)
+            && (!(self.allow_custom_cards || self.share_host_decks)
+                || (self.mode == PlayMode::Open && !self.competitive))
             && (2..=6).contains(&self.seats.len())
             && roster_size(self.seats.len()).is_some_and(|count| {
                 count >= self.profile.minimum_seats && count <= self.profile.seat_capacity
@@ -78,7 +90,8 @@ impl NativeReservedGameMetadata {
             && self.seats.iter().all(|seat| {
                 seat.seat_index < self.profile.seat_capacity
                     && valid_controller(seat.controller_kind, seat.account_id, seat.sponsor_id)
-                    && valid_entries(&seat.entries)
+                    && (seat.custom_entries.is_empty() || allow_custom)
+                    && valid_all_entries(&seat.entries, &seat.custom_entries)
                     && if self.game_index.is_zero() {
                         seat.selected_revision_id == seat.original_revision_id
                             && seat.selection_decision_id.is_none()
