@@ -5639,6 +5639,23 @@ pub fn parse_atomic_effect(
                 },
             )]);
         }
+        if trimmed.starts_with("target ")
+            && let Ok(subj) = parse_subject_or_target(trimmed, vocab)
+            && matches!(
+                &subj,
+                SubjectRefAst::TargetObject { filter, .. }
+                    if filter.predicates.iter().any(|p| matches!(
+                        p,
+                        crate::ast::FilterPredicateAst::PhasedOutBySource { .. }
+                    ))
+            )
+        {
+            return Ok(vec![InstructionAst::ChooseFromGroup {
+                count: Box::new(ValueExprAst::Const(1)),
+                random: false,
+                group: Box::new(subj),
+            }]);
+        }
         if matches!(
             trimmed,
             "a color"
@@ -7434,8 +7451,20 @@ pub fn parse_atomic_effect(
     }
     // "choose <N> <flt>" (Clarion Ultimatum: "Choose five permanents you control")
     if let Some(after) = low.strip_prefix("choose ") {
-        let (_, flt_raw) = peel_leading_count(after, vocab);
-        if parse_object_filter(flt_raw, vocab).is_ok() {
+        let (cnt, flt_raw) = peel_leading_count(after, vocab);
+        if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
+            if flt.predicates.iter().any(|p| {
+                matches!(
+                    p,
+                    crate::ast::FilterPredicateAst::ManaCostPayableBySpentMana { .. }
+                )
+            }) {
+                return Ok(vec![InstructionAst::ChooseFromGroup {
+                    count: Box::new(cnt),
+                    random: false,
+                    group: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                }]);
+            }
             return Ok(vec![InstructionAst::InteractiveChoice(
                 InteractiveChoiceKind::ChooseFromGroup {
                     chooser: PlayerRefAst::You,
@@ -10740,16 +10769,35 @@ fn try_parse_pass_c_primitives(
     }
     if let Some(after) = low.strip_prefix("choose ")
         && !after.contains('\u{2014}')
-        && (parse_object_filter(after, vocab).is_ok()
-            || parse_subject_or_target(after, vocab).is_ok()
-            || after.starts_with("a number between "))
     {
-        return Some(vec![InstructionAst::InteractiveChoice(
-            InteractiveChoiceKind::ChooseFromGroup {
-                chooser: PlayerRefAst::You,
-                description: after.to_string(),
-            },
-        )]);
+        if let Ok(flt) = parse_object_filter(after, vocab) {
+            if flt.predicates.iter().any(|p| {
+                matches!(
+                    p,
+                    crate::ast::FilterPredicateAst::ManaCostPayableBySpentMana { .. }
+                )
+            }) {
+                return Some(vec![InstructionAst::ChooseFromGroup {
+                    count: Box::new(ValueExprAst::Const(1)),
+                    random: false,
+                    group: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                }]);
+            }
+            return Some(vec![InstructionAst::InteractiveChoice(
+                InteractiveChoiceKind::ChooseFromGroup {
+                    chooser: PlayerRefAst::You,
+                    description: after.to_string(),
+                },
+            )]);
+        }
+        if parse_subject_or_target(after, vocab).is_ok() || after.starts_with("a number between ") {
+            return Some(vec![InstructionAst::InteractiveChoice(
+                InteractiveChoiceKind::ChooseFromGroup {
+                    chooser: PlayerRefAst::You,
+                    description: after.to_string(),
+                },
+            )]);
+        }
     }
     if low == "it becomes night" || low == "it becomes day" {
         return Some(vec![InstructionAst::CombatRuleMod {
@@ -10891,6 +10939,7 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
         .map_or(body, |(before, _)| before.trim());
     let free = body.contains("without paying its mana cost")
         || body.contains("without paying their mana costs");
+    let face_down_2_2 = body.contains(" face down as a 2/2 creature spell");
     let clean = body
         .replace(" without paying its mana cost", "")
         .replace(" without paying their mana costs", "")
@@ -10984,6 +11033,15 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
             | "card they exiled this way"
             | "the cards they exiled this way"
     ) {
+        if face_down_2_2 {
+            return Some(InstructionAst::CastFaceDown {
+                player,
+                subject: Box::new(SubjectRefAst::Anaphora(obj_trim.to_string())),
+                power: 2,
+                toughness: 2,
+                without_paying_mana_cost: free,
+            });
+        }
         return Some(InstructionAst::GrantCastPermission {
             player,
             cast_only,
@@ -11004,6 +11062,15 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
         .or_else(|| obj_trim.strip_suffix(" from among the copies"))
         .unwrap_or(obj_trim);
     if let Ok(subj) = parse_subject_or_target(flt_candidate, vocab) {
+        if face_down_2_2 {
+            return Some(InstructionAst::CastFaceDown {
+                player,
+                subject: Box::new(subj),
+                power: 2,
+                toughness: 2,
+                without_paying_mana_cost: free,
+            });
+        }
         return Some(InstructionAst::GrantCastPermission {
             player,
             cast_only,
@@ -13360,6 +13427,8 @@ fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<Instruction
     let flt = if let Some((type_part, name_raw)) = flt_raw.split_once(" named ")
         && !type_part.trim_end().ends_with(" not")
         && type_part.trim() != "not"
+        && !type_part.trim_end().ends_with(" for cards")
+        && !type_part.trim_end().ends_with(" drafted cards")
     {
         let n = name_raw.trim();
         if n.is_empty()
@@ -22458,7 +22527,7 @@ fn parse_wave_e5_effects(
         }
     }
 
-    // Run compositional Wave E7, E8, and E9 parsers (zero StructuredRule or literal exact tables).
+    // Run compositional Wave E7, E8, E9, and E10 parsers (zero StructuredRule or literal exact tables).
     if let Some(body) = crate::wave_e7::parse_wave_e7_effects(s, low, s_nodur, dur, vocab) {
         return Some(body);
     }
@@ -22466,6 +22535,9 @@ fn parse_wave_e5_effects(
         return Some(body);
     }
     if let Some(body) = crate::wave_e9::parse_wave_e9_effects(s, low, s_nodur, dur, vocab) {
+        return Some(body);
+    }
+    if let Some(body) = crate::wave_e10::parse_wave_e10_effects(s, low, s_nodur, dur, vocab) {
         return Some(body);
     }
 

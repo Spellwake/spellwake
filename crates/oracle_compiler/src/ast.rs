@@ -402,7 +402,91 @@ pub enum FilterPredicateAst {
     },
     /// Matches permanents controlled by the player who is currently the monarch (`Azure Fleet Admiral`).
     ControlledByMonarch,
+    /// Matches permanents assigned to a typed battlefield or combat partition (`Space Beleren`, `Raging River`).
+    InObjectPartition {
+        kind: ObjectPartitionKind,
+        membership: PartitionMembershipAst,
+    },
+    /// Matches permanents phased out (or not phased out) by the source permanent (`Ferris Wheel`).
+    PhasedOutBySource {
+        #[serde(default)]
+        negated: bool,
+    },
+    /// Matches objects satisfying an entry recorded in the match-level `DraftLedger` (`Paliano Vanguard`, `Regicide`, `Smuggler Captain`, `Aether Searcher`).
+    MatchesDraftLedger {
+        kind: DraftLedgerQueryKind,
+        source_card_name: Box<SubjectRefAst>,
+    },
+    /// Matches permanents or cards whose Oracle name was originally printed in a specific expansion (`Golgothian Sylex`, `Apocalypse Chime`, `City in a Bottle`).
+    FirstPrintedInExpansion(String),
+    /// Matches cards whose mana cost could be paid by some or all of the mana spent on the activating/casting cost (`Illusionary Mask`).
+    ManaCostPayableBySpentMana {
+        x_mana_only: bool,
+        subset_allowed: bool,
+    },
+    /// Matches creatures permitted to block additional creatures (`Camouflage`).
+    CanBlockAdditionalCreatures,
     StateQualification(String),
+}
+
+/// Typed battlefield or combat partition domain (`Space Beleren`, `Raging River`, `Camouflage`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObjectPartitionKind {
+    /// Permanent three-sector battlefield partition (`Space sculptor`: Alpha, Beta, Gamma).
+    Sector,
+    /// Named labeled piles created for a combat or turn duration (`Raging River`).
+    LabeledPiles(Vec<String>),
+    /// Dynamic combat blocker piles equal in count to defended attacking creatures (`Camouflage`).
+    CombatBlockerPiles,
+}
+
+/// Reference to a member subset of an active `ObjectPartitionKind`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PartitionMembershipAst {
+    /// Partition chosen by the effect's controller (`in the sector of your choice`).
+    ChosenByController,
+    /// Partition whose label matches the tag assigned to a referenced subject (`in a pile with the chosen label`).
+    MatchingSubjectTag(Box<SubjectRefAst>),
+    /// Same partition as the other creature in combat (`in the same sector`).
+    SameAsOtherCombatant,
+}
+
+/// Typed query key against the immutable match-level `DraftLedger` (`cns`/`cn2` draft-matters cards).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DraftLedgerQueryKind {
+    /// Card names noted during draft for cards with the referenced name (`Smuggler Captain`, `Aether Searcher`).
+    NotedName,
+    /// Creature types noted during draft for cards with the referenced name (`Paliano Vanguard`).
+    NotedCreatureType,
+    /// Colors chosen during draft for cards with the referenced name (`Regicide`, `Paliano, the High City`).
+    NotedColor,
+}
+
+/// Visibility of an individual pile created by a pile-splitting instruction (`The Celestial Toymaker`, `Atris`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PileVisibilityAst {
+    /// Cards in this pile are placed face up.
+    FaceUp,
+    /// Cards in this pile are placed face down.
+    FaceDown,
+}
+
+/// Perspective for pairwise hypothetical block-legality validation and blocker reassignment (`General Jarkeld`, `Sorrow's Path`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CombatSwapPerspective {
+    /// Two blocked attacking creatures swap the blockers blocking exactly one of them (`General Jarkeld`).
+    BlockedAttackers,
+    /// Two blocking creatures swap the attacking creatures each was blocking (`Sorrow's Path`).
+    BlockingCreatures,
+}
+
+/// Game-action context in which a die roll occurs (`Ferris Wheel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DieRollContextAst {
+    /// Any die roll performed by the specified player.
+    Any,
+    /// Rolling to visit Attractions (`Ferris Wheel`).
+    VisitAttractions,
 }
 
 /// Orthogonal 13-dimension object filter AST.
@@ -1132,6 +1216,12 @@ pub enum GameMarker {
         attacker: PlayerRefAst,
         defender: PlayerRefAst,
     },
+    /// The chosen card was cast as a spell during the current resolution (`Word of Command`).
+    ChosenCardCastAsSpell,
+    /// Player revealed the extreme (fewest or most) secret integer count during the current resolution (`Goblin Game`).
+    PlayerRevealedExtremeSecretNumber {
+        lowest: bool,
+    },
 }
 
 /// Condition AST used by intervening-if triggers, resolution branches, and conditional statics.
@@ -1304,6 +1394,11 @@ pub enum ConditionAst {
     AnyOfGroupMatches {
         group: Box<SubjectRefAst>,
         predicate: String,
+    },
+    /// Hypothetical combat block-legality validation between two paired combat subjects (`General Jarkeld`, `Sorrow's Path`).
+    CanLegallySwapBlockAssignments {
+        subjects: Box<SubjectRefAst>,
+        perspective: CombatSwapPerspective,
     },
     /// Opt-in tabletop honor-system yes/no check (e.g. attire, physical feat, social prompt).
     ManualTabletopCheck {
@@ -1674,6 +1769,8 @@ pub enum TriggerEventAst {
         player: PlayerRefAst,
         exact_result: Option<u16>,
     },
+    /// Triggered when the controller claims the prize of this Attraction (`Pick-a-Beeble`).
+    PrizeClaimedSelf,
     FlipCoin {
         player: PlayerRefAst,
         won: Option<bool>,
@@ -2937,6 +3034,120 @@ pub enum InstructionAst {
         max_blockers: Option<u8>,
         duration: DurationAst,
     },
+    /// Divide matching permanents into lifetime-scoped labeled or dynamic piles (`Raging River`, `Camouflage`).
+    PartitionObjects {
+        chooser: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        kind: ObjectPartitionKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pile_count_expr: Option<Box<ValueExprAst>>,
+        #[serde(default)]
+        any_number: bool,
+        #[serde(default)]
+        replaces_declare_blockers: bool,
+        duration: DurationAst,
+    },
+    /// Allow matching permanents to belong to additional piles in the active partition (`Camouflage`).
+    AllowExtraPartitionMembership {
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Assign a lifetime-scoped partition label to each matching subject (`Raging River`).
+    AssignPartitionTag {
+        chooser: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        labels: Vec<String>,
+        duration: DurationAst,
+    },
+    /// Assign each active partition pile to a target subject (`Camouflage`).
+    AssignPilesToSubjects {
+        targets: Box<SubjectRefAst>,
+        distinct: bool,
+        random: bool,
+    },
+    /// Force each creature in a partition pile that can legally block the pile's assigned target to block it (`Camouflage`).
+    BlockAssignedPartitionTarget,
+    /// Phase out a permanent until a player rolls a die satisfying a threshold in a specific context (`Ferris Wheel`).
+    PhaseOutUntilDieRoll {
+        subject: Box<SubjectRefAst>,
+        roller: PlayerRefAst,
+        context: DieRollContextAst,
+        op: CompareOp,
+        threshold: u16,
+    },
+    /// A player guesses whether a typed boolean `ConditionAst` is true (`The Seventh Doctor`).
+    GuessCondition {
+        guesser: PlayerRefAst,
+        condition: Box<ConditionAst>,
+    },
+    /// Exile a subject group into ordered piles with explicit per-pile face-up/face-down visibility (`The Celestial Toymaker`).
+    ExileIntoVisibilityPiles {
+        chooser: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        piles: Vec<PileVisibilityAst>,
+    },
+    /// Reassign blockers between two paired combat subjects (`General Jarkeld`, `Sorrow's Path`).
+    SwapBlockerAssignments {
+        perspective: CombatSwapPerspective,
+        #[serde(default)]
+        remove_from_combat_first: bool,
+        #[serde(default)]
+        exclusive_blockers_only: bool,
+    },
+    /// Players secretly choose an integer >= `min_value` and reveal simultaneously (`Goblin Game`).
+    SecretNumberReveal {
+        players: PlayerRefAst,
+        min_value: i32,
+        #[serde(default)]
+        reveal_simultaneously: bool,
+    },
+    /// Matching player(s) lose a rounded fraction of their life total (`Goblin Game`).
+    LoseFractionLife {
+        subject: Box<SubjectRefAst>,
+        numerator: u8,
+        denom: u8,
+        rounding: Rounding,
+    },
+    /// Claim the prize of the source Attraction, firing its `Prize` ability (`Pick-a-Beeble`).
+    ClaimPrize,
+    /// Place a sticker of `kind` on `target` with an optional maximum ticket cost and free placement flag (`Pin Collection`).
+    PutStickerWithCost {
+        kind: String,
+        target: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_ticket_cost: Option<Box<ValueExprAst>>,
+        #[serde(default)]
+        without_paying_ticket_cost: bool,
+    },
+    /// Control another player during the current spell's resolution or while the chosen spell resolves (`Word of Command`).
+    ControlPlayerDuringResolution {
+        controller: PlayerRefAst,
+        controlled: PlayerRefAst,
+        #[serde(default)]
+        during_chosen_spell: bool,
+    },
+    /// Force a player to play or cast a referenced card if able (`Word of Command`).
+    ForcePlayCard {
+        player: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        if_able: bool,
+    },
+    /// Restrict which mana abilities a player may activate and how that mana may be spent during a forced play (`Word of Command`).
+    RestrictManaAbilitiesDuringAction {
+        player: PlayerRefAst,
+        allowed_source_filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        spend_only_for_action_or_chained_mana: bool,
+    },
+    /// Cast a referenced card face down as a fixed P/T creature spell (`Illusionary Mask`).
+    CastFaceDown {
+        player: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        power: u8,
+        toughness: u8,
+        #[serde(default)]
+        without_paying_mana_cost: bool,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -3304,6 +3515,11 @@ pub enum StaticAbilityAst {
         allowed_filters: Vec<ObjectFilterAst>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         condition: Option<Box<ConditionAst>>,
+    },
+    /// Blocking constraint scoped to an active battlefield/combat partition (`Space Beleren`).
+    BlockingPartitionConstraint {
+        partition: ObjectPartitionKind,
+        same_partition_only: bool,
     },
     /// Opt-in tabletop honor-system continuous rule (e.g. attire / social condition).
     ManualTabletopStatic {

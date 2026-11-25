@@ -10,6 +10,7 @@ pub mod filter;
 pub mod keywords;
 pub mod preprocess;
 pub mod vocab;
+pub mod wave_e10;
 pub mod wave_e6;
 pub mod wave_e7;
 pub mod wave_e8;
@@ -926,6 +927,8 @@ pub fn compile_face_with_options(
             let is_spell_static = low_b.starts_with("as an additional cost")
                 || low_b.starts_with("a deck can have any number of cards named ")
                 || low_b.starts_with("flashback ")
+                || low_b.starts_with("reveal ~ as you draft it")
+                || low_b.starts_with("draft ~ face up")
                 || (!body_for_parse.contains(". ")
                     && (low_b.contains(" costs ") || low_b.contains(" cost "))
                     && (low_b.contains("less to cast") || low_b.contains("more to cast")))
@@ -947,6 +950,41 @@ pub fn compile_face_with_options(
                 modal_target = ModalTarget::Spell;
             }
             out.spell_effects.extend(ins);
+            out.failures.extend(fails);
+            continue;
+        }
+
+        // Attraction Visit and Prize paragraphs ALWAYS compile as triggered abilities (never permanent statics).
+        if is_attraction
+            && ability_word
+                .as_deref()
+                .is_some_and(|w| w.eq_ignore_ascii_case("visit") || w.eq_ignore_ascii_case("prize"))
+        {
+            let is_prize = ability_word
+                .as_deref()
+                .is_some_and(|w| w.eq_ignore_ascii_case("prize"));
+            let (mut ins, fails) = parse_effect_body(body_for_parse, vocab);
+            if fails.is_empty() && !ins.is_empty() {
+                if find_last_modal_modes_mut(&mut ins).is_some() {
+                    modal_target = ModalTarget::LastAbility;
+                }
+                out.abilities.push(AbilityAst::Triggered {
+                    ability_word: Some(if is_prize { "Prize" } else { "Visit" }.to_string()),
+                    trigger: ast::TriggerSpecAst {
+                        events: vec![if is_prize {
+                            TriggerEventAst::PrizeClaimedSelf
+                        } else {
+                            TriggerEventAst::RollDie {
+                                player: ast::PlayerRefAst::You,
+                                exact_result: None,
+                            }
+                        }],
+                        intervening_if: None,
+                    },
+                    body: ins,
+                });
+                continue;
+            }
             out.failures.extend(fails);
             continue;
         }
@@ -1176,19 +1214,28 @@ pub fn compile_face_with_options(
                     continue;
                 }
 
-                // Attraction Visit effect paragraph (non-spell permanent with Visit die-roll effect)
+                // Attraction Visit and Prize effect paragraphs (non-spell permanent with Visit/Prize abilities)
                 if is_attraction {
+                    let is_prize = ability_word
+                        .as_deref()
+                        .is_some_and(|w| w.eq_ignore_ascii_case("prize"));
                     let (mut ins, fails) = parse_effect_body(body_for_parse, vocab);
                     if fails.is_empty() && !ins.is_empty() {
                         if find_last_modal_modes_mut(&mut ins).is_some() {
                             modal_target = ModalTarget::LastAbility;
                         }
                         out.abilities.push(AbilityAst::Triggered {
-                            ability_word: Some("Visit".to_string()),
+                            ability_word: Some(
+                                if is_prize { "Prize" } else { "Visit" }.to_string(),
+                            ),
                             trigger: ast::TriggerSpecAst {
-                                events: vec![TriggerEventAst::RollDie {
-                                    player: ast::PlayerRefAst::You,
-                                    exact_result: None,
+                                events: vec![if is_prize {
+                                    TriggerEventAst::PrizeClaimedSelf
+                                } else {
+                                    TriggerEventAst::RollDie {
+                                        player: ast::PlayerRefAst::You,
+                                        exact_result: None,
+                                    }
                                 }],
                                 intervening_if: None,
                             },
@@ -1196,10 +1243,9 @@ pub fn compile_face_with_options(
                         });
                         continue;
                     }
-                    if ability_word
-                        .as_deref()
-                        .is_some_and(|w| w.eq_ignore_ascii_case("visit"))
-                        && !fails.is_empty()
+                    if ability_word.as_deref().is_some_and(|w| {
+                        w.eq_ignore_ascii_case("visit") || w.eq_ignore_ascii_case("prize")
+                    }) && !fails.is_empty()
                     {
                         out.failures.extend(fails);
                         continue;
@@ -3717,6 +3763,346 @@ mod tests {
             assert!(!json.contains("\"StructuredRule\""), "{name}: {json}");
             assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
             assert!(json.contains(expected), "{name} missing {expected}: {json}");
+        }
+    }
+
+    #[test]
+    fn pass_e10_hundred_percent_atomic_coverage() {
+        let members: Vec<String> = [
+            "Human",
+            "Soldier",
+            "Centaur",
+            "Performer",
+            "Pirate",
+            "Rogue",
+            "Artificer",
+            "Time",
+            "Lord",
+            "Doctor",
+            "Goblin",
+            "Wizard",
+            "Dragon",
+            "Elf",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e10",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. All 18 final corpus cards + fixed sibling cards (Apocalypse Chime, City in a Bottle)
+        let final_cards: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "Space Beleren",
+                "Legendary Planeswalker \u{2014} Jace",
+                "Space sculptor (Space Beleren divides the battlefield into alpha, beta, and gamma sectors. If a creature isn't assigned to a sector, its controller assigns it to one. Opponents assign first.)\n+1: Creatures in each sector can be blocked this turn only by creatures in the same sector.\n\u{2212}1: Put a +1/+1 counter on each creature in the sector of your choice.\n\u{2212}5: Destroy all creatures in the sector of your choice.",
+                &[
+                    "\"BlockingPartitionConstraint\"",
+                    "\"InObjectPartition\"",
+                    "\"Sector\"",
+                ],
+            ),
+            (
+                "Raging River",
+                "Enchantment",
+                "Whenever one or more creatures you control attack, each defending player divides all creatures without flying they control into a \"left\" pile and a \"right\" pile. Then, for each attacking creature you control, choose \"left\" or \"right.\" That creature can't be blocked this combat except by creatures with flying and creatures in a pile with the chosen label.",
+                &[
+                    "\"PartitionObjects\"",
+                    "\"LabeledPiles\"",
+                    "\"CantBeBlockedExceptByAny\"",
+                    "\"InObjectPartition\"",
+                ],
+            ),
+            (
+                "Camouflage",
+                "Instant",
+                "Cast this spell only during your declare attackers step.\nThis turn, instead of declaring blockers, each defending player chooses any number of creatures they control and divides them into a number of piles equal to the number of attacking creatures for whom that player is the defending player. Creatures those players control that can block additional creatures may likewise be put into additional piles. Assign each pile to a different one of those attacking creatures at random. Each creature in a pile that can block the creature that pile is assigned to does so. (Piles can be empty.)",
+                &[
+                    "\"CombatBlockerPiles\"",
+                    "\"AllowExtraPartitionMembership\"",
+                    "\"AssignPilesToSubjects\"",
+                    "\"BlockAssignedPartitionTarget\"",
+                ],
+            ),
+            (
+                "Ferris Wheel",
+                "Artifact \u{2014} Attraction",
+                "Visit \u{2014} Choose target creature that hasn't been phased out with this Attraction. That creature phases out until you roll a 3 or less while rolling to visit your Attractions.",
+                &[
+                    "\"PhasedOutBySource\"",
+                    "\"PhaseOutUntilDieRoll\"",
+                    "\"VisitAttractions\"",
+                ],
+            ),
+            (
+                "Paliano Vanguard",
+                "Creature \u{2014} Human Soldier",
+                "Draft this card face up.\nAs you draft a creature card, you may reveal it, note its creature types, then turn this card face down.\nOther creatures you control of a type you noted for cards named Paliano Vanguard get +1/+1.",
+                &["\"MatchesDraftLedger\"", "\"NotedCreatureType\""],
+            ),
+            (
+                "Regicide",
+                "Instant",
+                "Reveal this card as you draft it. The player to your right chooses a color, you choose another color, then the player to your left chooses a third color.\nDestroy target creature that's one or more of the colors chosen as you drafted cards named Regicide.",
+                &[
+                    "\"DraftAction\"",
+                    "\"MatchesDraftLedger\"",
+                    "\"NotedColor\"",
+                ],
+            ),
+            (
+                "Smuggler Captain",
+                "Creature \u{2014} Human Pirate",
+                "Draft this card face up.\nAs you draft a card, you may reveal it, note its name, then turn this card face down.\nWhen this creature enters, you may search your library for a card with a name you noted for cards named Smuggler Captain, reveal it, put it into your hand, then shuffle.",
+                &["\"MatchesDraftLedger\"", "\"NotedName\""],
+            ),
+            (
+                "The Seventh Doctor",
+                "Legendary Creature \u{2014} Time Lord Doctor",
+                "Whenever The Seventh Doctor attacks, choose a card in your hand. Defending player guesses whether that card's mana value is greater than the number of artifacts you control. If they guessed wrong, you may cast it without paying its mana cost. If you don't cast a spell this way, investigate.",
+                &["\"GuessCondition\"", "\"Compare\"", "\"Gt\""],
+            ),
+            (
+                "The Celestial Toymaker",
+                "Legendary Creature \u{2014} Rogue Artificer",
+                "Whenever The Celestial Toymaker attacks, look at the top three cards of your library. Exile any number of them in a face-down pile and the rest in a face-up pile. Defending player chooses one of those piles. Put that pile into your hand.\nAt the beginning of each end step, each opponent loses 2 life for each spell or ability that caused one or more players to guess or to group cards or permanents into a pile this turn.",
+                &[
+                    "\"ExileIntoVisibilityPiles\"",
+                    "\"FaceDown\"",
+                    "\"FaceUp\"",
+                    "\"guess_or_pile_spell_or_ability\"",
+                ],
+            ),
+            (
+                "General Jarkeld",
+                "Legendary Creature \u{2014} Human Soldier",
+                "{T}: Choose two target blocked attacking creatures. If each of those creatures could be blocked by all creatures that the other is blocked by, each creature that's blocking exactly one of those attacking creatures stops blocking it and is blocking the other attacking creature. Activate only during the declare blockers step.",
+                &[
+                    "\"CanLegallySwapBlockAssignments\"",
+                    "\"BlockedAttackers\"",
+                    "\"SwapBlockerAssignments\"",
+                ],
+            ),
+            (
+                "Sorrow's Path",
+                "Land",
+                "{T}: Choose two target blocking creatures controlled by the same opponent. If each of those creatures could block all creatures that the other is blocking, remove both of them from combat. Each one then blocks all creatures the other was blocking.\nWhenever this land becomes tapped, it deals 2 damage to you and each creature you control.",
+                &[
+                    "\"CanLegallySwapBlockAssignments\"",
+                    "\"BlockingCreatures\"",
+                    "\"RemoveFromCombat\"",
+                    "\"SwapBlockerAssignments\"",
+                ],
+            ),
+            (
+                "Goblin Game",
+                "Sorcery",
+                "Each player hides at least one item, then all players reveal them simultaneously. Each player loses life equal to the number of items they revealed. The player who revealed the fewest items then loses half their life, rounded up. If two or more players are tied for fewest, each loses half their life, rounded up.",
+                &[
+                    "\"SecretNumberReveal\"",
+                    "\"LoseFractionLife\"",
+                    "\"PlayersTiedFor\"",
+                ],
+            ),
+            (
+                "Golgothian Sylex",
+                "Artifact",
+                "{1}, {T}: Each nontoken permanent with a name originally printed in the Antiquities expansion is sacrificed by its controller.",
+                &[
+                    "\"FirstPrintedInExpansion\":\"Antiquities\"",
+                    "\"Sacrifice\"",
+                ],
+            ),
+            (
+                "Apocalypse Chime",
+                "Artifact",
+                "{2}, {T}, Sacrifice this artifact: Destroy all nontoken permanents with a name originally printed in the Homelands expansion. They can't be regenerated.",
+                &["\"FirstPrintedInExpansion\":\"Homelands\""],
+            ),
+            (
+                "City in a Bottle",
+                "Artifact",
+                "Whenever one or more other nontoken permanents with a name originally printed in the Arabian Nights expansion are on the battlefield, their controllers sacrifice them.\nPlayers can't cast spells or play lands with a name originally printed in the Arabian Nights expansion.",
+                &["\"FirstPrintedInExpansion\":\"Arabian Nights\""],
+            ),
+            (
+                "Pick-a-Beeble",
+                "Artifact \u{2014} Attraction",
+                "Visit \u{2014} Roll a six-sided die. Put a number of luck counters on Pick-a-Beeble equal to the result and create a Treasure token. Then if there are six or more luck counters on Pick-a-Beeble, claim the prize!\nPrize \u{2014} Create two Treasure tokens, then sacrifice Pick-a-Beeble and open an Attraction.",
+                &[
+                    "\"ClaimPrize\"",
+                    "\"ability_word\":\"Prize\"",
+                    "\"PrizeClaimedSelf\"",
+                ],
+            ),
+            (
+                "Pin Collection",
+                "Artifact \u{2014} Equipment",
+                "When this Equipment enters, you may put an ability sticker with ticket cost X or less on it without paying that sticker's ticket cost.\nEquipped creature gets +1/+1 and has all abilities of ability stickers on this Equipment.\nEquip {2}",
+                &[
+                    "\"PutStickerWithCost\"",
+                    "\"without_paying_ticket_cost\":true",
+                    "\"HasStickerKind\":\"ability\"",
+                ],
+            ),
+            (
+                "Lineprancers",
+                "Creature \u{2014} Centaur Performer",
+                "When Lineprancers enters, you get {TK}{TK}, then you may put a power and toughness sticker on a creature you own.\n{3}{G}: Target creature you don't control blocks target creature you control with a power and toughness sticker on it other than Lineprancers this turn if able.",
+                &[
+                    "\"PutSticker\"",
+                    "\"must_block:target creature you control with a power and toughness sticker on it other than ~\"",
+                ],
+            ),
+            (
+                "Word of Command",
+                "Instant",
+                "Look at target opponent's hand and choose a card from it. You control that player until Word of Command finishes resolving. The player plays that card if able. While doing so, the player can activate mana abilities only if they're from lands that player controls and only if mana they produce is spent to activate other mana abilities of lands the player controls and/or to play that card. If the chosen card is cast as a spell, you control the player while that spell is resolving.",
+                &[
+                    "\"ControlPlayerDuringResolution\"",
+                    "\"ForcePlayCard\"",
+                    "\"RestrictManaAbilitiesDuringAction\"",
+                    "\"ChosenCardCastAsSpell\"",
+                ],
+            ),
+            (
+                "Illusionary Mask",
+                "Artifact",
+                "{X}: You may choose a creature card in your hand whose mana cost could be paid by some amount of, or all of, the mana you spent on {X}. If you do, you may cast that card face down as a 2/2 creature spell without paying its mana cost. If the creature that spell becomes as it resolves has not been turned face up and would assign or deal damage, be dealt damage, or become tapped, instead it's turned face up and assigns or deals damage, is dealt damage, or becomes tapped. Activate only as a sorcery.",
+                &[
+                    "\"ManaCostPayableBySpentMana\"",
+                    "\"CastFaceDown\"",
+                    "\"without_paying_mana_cost\":true",
+                ],
+            ),
+        ];
+
+        for (name, tl, ot, expected) in final_cards {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Pass E10 card {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(!json.contains("\"StructuredRule\""), "{name}: {json}");
+            assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
+            for tok in *expected {
+                assert!(json.contains(tok), "{name} missing {tok}: {json}");
+            }
+        }
+
+        // Direct typed filter verification for power and toughness sticker predicate
+        let pt_sticker_flt = crate::filter::parse_object_filter(
+            "creature you control with a power and toughness sticker on it other than ~",
+            &vocab,
+        )
+        .expect("power and toughness sticker filter");
+        assert!(pt_sticker_flt.predicates.iter().any(|p| matches!(
+            p,
+            crate::ast::FilterPredicateAst::HasStickerKind(k) if k == "power_and_toughness"
+        )));
+
+        // 2. Unseen hypothetical future cards proving every Pass E10 primitive generalizes
+        let unseen: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "Legends Relic",
+                "Artifact",
+                "{2}, {T}: Each nontoken permanent with a name originally printed in the Legends expansion is sacrificed by its controller.",
+                &["\"FirstPrintedInExpansion\":\"Legends\"", "\"Sacrifice\""],
+            ),
+            (
+                "Riddle of the Library",
+                "Sorcery",
+                "Choose a card in your hand. Target opponent guesses whether that card's power is greater than the number of lands you control.",
+                &["\"GuessCondition\"", "\"Power\""],
+            ),
+            (
+                "Shadow Split",
+                "Sorcery",
+                "Look at the top four cards of your library. Exile any number of them in a face-up pile and the rest in a face-down pile.",
+                &["\"ExileIntoVisibilityPiles\"", "\"FaceUp\"", "\"FaceDown\""],
+            ),
+            (
+                "Prize Booth",
+                "Artifact \u{2014} Attraction",
+                "Visit \u{2014} Put a charge counter on Prize Booth. Then if there are three or more charge counters on Prize Booth, claim the prize!\nPrize \u{2014} Draw two cards, then sacrifice Prize Booth.",
+                &["\"ClaimPrize\"", "\"PrizeClaimedSelf\""],
+            ),
+            (
+                "Ticket Booth Curator",
+                "Creature \u{2014} Human Performer",
+                "When Ticket Booth Curator enters, you may put a name sticker with ticket cost 2 or less on it without paying that sticker's ticket cost.",
+                &["\"PutStickerWithCost\"", "\"kind\":\"name\""],
+            ),
+            (
+                "Dimensional Rollercoaster",
+                "Artifact \u{2014} Attraction",
+                "Visit \u{2014} Target creature phases out until you roll a 2 or less while rolling to visit your Attractions.",
+                &["\"PhaseOutUntilDieRoll\"", "\"threshold\":2"],
+            ),
+            (
+                "North-South Divide",
+                "Enchantment",
+                "Whenever one or more creatures you control attack, each defending player divides all creatures without flying they control into a \"north\" pile and a \"south\" pile.",
+                &["\"PartitionObjects\"", "\"north\"", "\"south\""],
+            ),
+            (
+                "Draft-Marked Verdict",
+                "Instant",
+                "Reveal this card as you draft it. The player to your right chooses a color, you choose another color, then the player to your left chooses a third color.\nExile target creature that's one or more of the colors chosen as you drafted cards named Draft-Marked Verdict.",
+                &[
+                    "\"DraftAction\"",
+                    "\"MatchesDraftLedger\"",
+                    "\"NotedColor\"",
+                ],
+            ),
+            (
+                "Goblin Bidding War",
+                "Sorcery",
+                "Each player hides at least two items, then all players reveal them simultaneously. The player who revealed the most items then loses half their life, rounded down.",
+                &[
+                    "\"SecretNumberReveal\"",
+                    "\"min_value\":2",
+                    "\"lowest\":false",
+                    "\"Down\"",
+                ],
+            ),
+            (
+                "Phantom Cast",
+                "Instant",
+                "You may cast a creature card from your hand face down as a 2/2 creature spell without paying its mana cost.",
+                &["\"CastFaceDown\"", "\"power\":2", "\"toughness\":2"],
+            ),
+        ];
+
+        for (name, tl, ot, expected) in unseen {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Unseen Pass E10 card {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(!json.contains("\"StructuredRule\""), "{name}: {json}");
+            assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
+            for tok in *expected {
+                assert!(json.contains(tok), "{name} missing {tok}: {json}");
+            }
         }
     }
 }

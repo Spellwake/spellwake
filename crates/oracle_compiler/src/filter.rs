@@ -2,9 +2,10 @@
 //! `ConditionAst`, `ManaSpecAst`, and `TokenSpecAst`.
 
 use crate::ast::{
-    AggregateOp, CardTypeMask, ColorArity, ColorMask, CombatState, CompareOp, ConditionAst,
-    ControllerRelation, FilterPredicateAst, GameMarker, ManaSpecAst, NameFilterAst,
-    ObjectFilterAst, ObjectFilterFlags, PileRefAst, PlayerRefAst, PlayerStatKind,
+    AggregateOp, CardTypeMask, ColorArity, ColorMask, CombatState, CombatSwapPerspective,
+    CompareOp, ConditionAst, ControllerRelation, DraftLedgerQueryKind, FilterPredicateAst,
+    GameMarker, ManaSpecAst, NameFilterAst, ObjectFilterAst, ObjectFilterFlags,
+    ObjectPartitionKind, PartitionMembershipAst, PileRefAst, PlayerRefAst, PlayerStatKind,
     PriorActionRefKind, Rounding, StatBoundAst, StatKind, SubjectRefAst, SupertypeMask,
     TargetCountAst, TokenSpecAst, ValueExprAst, ZoneFilter,
 };
@@ -474,6 +475,28 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         .replace("time lords", "timelords")
         .replace("time lord", "timelord");
 
+    // Fast path for "<kind> stickers on <subj>" (Pin Collection Layer 6 ability inheritance).
+    if let Some((kind_raw, host_raw)) = s
+        .split_once(" stickers on ")
+        .or_else(|| s.split_once(" sticker on "))
+        && matches!(
+            kind_raw.trim(),
+            "ability" | "art" | "name" | "power and toughness" | "a" | "an"
+        )
+        && let Ok(host) = parse_subject_or_target(host_raw.trim(), vocab)
+    {
+        let norm_kind = match kind_raw.trim() {
+            "power and toughness" => "power_and_toughness",
+            "a" | "an" => "any",
+            other => other,
+        };
+        flt.predicates
+            .push(FilterPredicateAst::HasStickerKind(norm_kind.to_string()));
+        flt.predicates
+            .push(FilterPredicateAst::AttachedTo(Box::new(host)));
+        return Ok(flt);
+    }
+
     // Repeatedly peel trailing zone, controller/owner, relational, stat-bound, counter, and keyword suffixes.
     // Longest match MUST precede shorter suffix (e.g. "your opponents control" before "opponents control").
     loop {
@@ -495,6 +518,144 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         }
         if let Some(prefix) = s.strip_suffix(" the monarch controls") {
             flt.predicates.push(FilterPredicateAst::ControlledByMonarch);
+            s = prefix.trim().to_string();
+            continue;
+        }
+        // Pass E10 typed partition, phase-out, draft-ledger, first-printed-set, sticker, and mana-subset predicates
+        // (peeled BEFORE generic "of your choice", "named ~", and zone suffixes so nothing shadows them).
+        if let Some(prefix) = s.strip_suffix(" in the sector of your choice") {
+            flt.predicates.push(FilterPredicateAst::InObjectPartition {
+                kind: ObjectPartitionKind::Sector,
+                membership: PartitionMembershipAst::ChosenByController,
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s.strip_suffix(" in a pile with the chosen label") {
+            flt.predicates.push(FilterPredicateAst::InObjectPartition {
+                kind: ObjectPartitionKind::LabeledPiles(Vec::new()),
+                membership: PartitionMembershipAst::MatchingSubjectTag(Box::new(
+                    SubjectRefAst::Anaphora("that creature".to_string()),
+                )),
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s
+            .strip_suffix(" that hasn't been phased out with this attraction")
+            .or_else(|| s.strip_suffix(" that hasn't been phased out with ~"))
+        {
+            flt.predicates
+                .push(FilterPredicateAst::PhasedOutBySource { negated: true });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s
+            .strip_suffix(" of a type you noted for cards named ~")
+            .or_else(|| s.strip_suffix(" of a type noted as you drafted cards named ~"))
+        {
+            flt.predicates.push(FilterPredicateAst::MatchesDraftLedger {
+                kind: DraftLedgerQueryKind::NotedCreatureType,
+                source_card_name: Box::new(SubjectRefAst::SelfObject),
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s
+            .strip_suffix(" with a name you noted for cards named ~")
+            .or_else(|| s.strip_suffix(" with a name noted as you drafted cards named ~"))
+        {
+            flt.predicates.push(FilterPredicateAst::MatchesDraftLedger {
+                kind: DraftLedgerQueryKind::NotedName,
+                source_card_name: Box::new(SubjectRefAst::SelfObject),
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s
+            .strip_suffix(" that's one or more of the colors chosen as you drafted cards named ~")
+            .or_else(|| {
+                s.strip_suffix(
+                    " that are one or more of the colors chosen as you drafted cards named ~",
+                )
+            })
+            .or_else(|| s.strip_suffix(" of a color chosen as you drafted cards named ~"))
+        {
+            flt.predicates.push(FilterPredicateAst::MatchesDraftLedger {
+                kind: DraftLedgerQueryKind::NotedColor,
+                source_card_name: Box::new(SubjectRefAst::SelfObject),
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some((prefix, exp_tail)) = s.rsplit_once(" with a name originally printed in the ")
+            && let Some(exp_low) = exp_tail.strip_suffix(" expansion")
+            && !prefix.trim().is_empty()
+            && !exp_low.trim().is_empty()
+        {
+            let exp_name = exp_low
+                .split_whitespace()
+                .map(|w| {
+                    let mut chars = w.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            let mut word = first.to_uppercase().to_string();
+                            word.push_str(chars.as_str());
+                            word
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            flt.predicates
+                .push(FilterPredicateAst::FirstPrintedInExpansion(exp_name));
+            s = prefix.trim().to_string();
+            continue;
+        }
+        for (suf, kind) in [
+            (
+                " with a power and toughness sticker on it",
+                "power_and_toughness",
+            ),
+            (" with a power and toughness sticker", "power_and_toughness"),
+            (" with an ability sticker on it", "ability"),
+            (" with an ability sticker", "ability"),
+            (" with a name sticker on it", "name"),
+            (" with a name sticker", "name"),
+            (" with an art sticker on it", "art"),
+            (" with an art sticker", "art"),
+        ] {
+            if let Some(prefix) = s.strip_suffix(suf)
+                && !prefix.trim().is_empty()
+            {
+                flt.predicates
+                    .push(FilterPredicateAst::HasStickerKind(kind.to_string()));
+                s = prefix.trim().to_string();
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            continue;
+        }
+        if let Some(prefix) = s
+            .strip_suffix(
+                " whose mana cost could be paid by some amount of, or all of, the mana you spent on {x}",
+            )
+            .or_else(|| s.strip_suffix(" whose mana cost could be paid by some or all of the mana you spent on {x}"))
+        {
+            flt.predicates
+                .push(FilterPredicateAst::ManaCostPayableBySpentMana {
+                    x_mana_only: true,
+                    subset_allowed: true,
+                });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s.strip_suffix(" that can block additional creatures") {
+            flt.predicates
+                .push(FilterPredicateAst::CanBlockAdditionalCreatures);
             s = prefix.trim().to_string();
             continue;
         }
@@ -1524,6 +1685,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" that player owns", ControllerRelation::OwnerThatPlayer),
             (" that player casts", ControllerRelation::ThatPlayer),
             (" that player cast", ControllerRelation::ThatPlayer),
+            (" those players controlled", ControllerRelation::ThatPlayer),
+            (" those players control", ControllerRelation::ThatPlayer),
             (" your team controlled", ControllerRelation::YourTeam),
             (" your team controls", ControllerRelation::YourTeam),
             (" opponents controlled", ControllerRelation::Opponents),
@@ -3605,12 +3768,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             })
             .or_else(|| s.strip_suffix(" with {x} in their mana cost"))
             .or_else(|| s.strip_suffix(" that doesn't have cumulative upkeep"))
-            .or_else(|| {
-                s.strip_suffix(" with a name originally printed in the homelands expansion")
-            })
-            .or_else(|| {
-                s.strip_suffix(" with a name originally printed in the arabian nights expansion")
-            })
             .or_else(|| s.strip_suffix(" named eye of vecna and hand of vecna"))
             .or_else(|| s.strip_suffix(" that aren't on the battlefield"))
             .or_else(|| s.strip_suffix(" that isn't on the battlefield"))
@@ -4773,7 +4930,9 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "they"
         | "that player or that permanent's controller"
         | "that permanent's controller or that player" => Some(PlayerRefAst::ThatPlayer),
-        "defending player" | "the defending player" => Some(PlayerRefAst::DefendingPlayer),
+        "defending player" | "the defending player" | "each defending player" => {
+            Some(PlayerRefAst::DefendingPlayer)
+        }
         "active player" | "the active player" | "the attacking player" | "attacking player" => {
             Some(PlayerRefAst::ActivePlayer)
         }
@@ -4998,6 +5157,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
             && !prefix.ends_with("of the creature type")
             && !prefix.ends_with("of the color")
             && !prefix.ends_with("of the card type")
+            && !prefix.ends_with("in the sector")
         {
             return parse_subject_or_target(&raw[..raw.len() - choice_suf.len()], vocab);
         }
@@ -7365,6 +7525,17 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
             ));
         return Ok(ValueExprAst::Count(Box::new(flt)));
     }
+    if fe
+        == "spell or ability that caused one or more players to guess or to group cards or permanents into a pile this turn"
+        || (fe.starts_with("spell or ability that caused ")
+            && fe.contains(" to guess ")
+            && fe.ends_with(" this turn"))
+    {
+        return Ok(ValueExprAst::EventCountThisTurn {
+            event: "guess_or_pile_spell_or_ability".to_string(),
+            player: None,
+        });
+    }
 
     // Cluster 14: `<color> mana symbol in the mana costs of <subj>` (Sanity Grinding, etc.)
     if let Some((color_part, subj_raw)) = fe.split_once(" mana symbol in the mana costs of ")
@@ -9389,6 +9560,23 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             metric: metric.trim().to_string(),
             min_tied: 2,
         });
+    }
+    if low
+        == "each of those creatures could be blocked by all creatures that the other is blocked by"
+    {
+        return Ok(ConditionAst::CanLegallySwapBlockAssignments {
+            subjects: Box::new(SubjectRefAst::Anaphora("those creatures".to_string())),
+            perspective: CombatSwapPerspective::BlockedAttackers,
+        });
+    }
+    if low == "each of those creatures could block all creatures that the other is blocking" {
+        return Ok(ConditionAst::CanLegallySwapBlockAssignments {
+            subjects: Box::new(SubjectRefAst::Anaphora("those creatures".to_string())),
+            perspective: CombatSwapPerspective::BlockingCreatures,
+        });
+    }
+    if low == "the chosen card is cast as a spell" {
+        return Ok(ConditionAst::Marker(GameMarker::ChosenCardCastAsSpell));
     }
     if let Some(subj_raw) = low.strip_suffix(" is harnessed")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
