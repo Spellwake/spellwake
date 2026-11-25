@@ -193,27 +193,44 @@ pub fn compile_granted_ability(ability_text: &str, vocab: &Vocabulary) -> Option
         return None;
     }
     let normalized = normalize_nested_single_quotes(trimmed);
-    let face = compile_face_with_options(
-        FaceInput {
-            name: "",
-            type_line: "Creature",
-            oracle_text: &normalized,
-        },
-        vocab,
-        CompileOptions {
-            allow_tabletop_honor_system: false,
-        },
-    );
-    if face.failures.is_empty()
-        && (!face.keywords.is_empty()
-            || !face.abilities.is_empty()
-            || !face.statics.is_empty()
-            || !face.replacements.is_empty())
-    {
-        Some(Box::new(face))
+    let first_ch = normalized.chars().next();
+    let looks_loyalty = normalized.starts_with('[')
+        || matches!(first_ch, Some('+' | '-' | '0' | '\u{2212}')) && normalized.contains(':');
+    let candidate_types: &[&str] = if looks_loyalty {
+        &["Planeswalker", "Creature", "Artifact", "Land", "Instant"]
+    } else if normalized.to_ascii_lowercase().starts_with("equip") {
+        &[
+            "Artifact \u{2014} Equipment",
+            "Creature",
+            "Artifact",
+            "Land",
+            "Instant",
+        ]
     } else {
-        None
+        &["Creature", "Planeswalker", "Artifact", "Land", "Instant"]
+    };
+    for &type_line in candidate_types {
+        let face = compile_face_with_options(
+            FaceInput {
+                name: "",
+                type_line,
+                oracle_text: &normalized,
+            },
+            vocab,
+            CompileOptions {
+                allow_tabletop_honor_system: false,
+            },
+        );
+        if face.failures.is_empty()
+            && (!face.keywords.is_empty()
+                || !face.abilities.is_empty()
+                || !face.statics.is_empty()
+                || !face.replacements.is_empty())
+        {
+            return Some(Box::new(face));
+        }
     }
+    None
 }
 
 /// Compile a single card face's Oracle text using strict standard options.
@@ -4372,5 +4389,274 @@ mod tests {
                 assert!(!json.contains(bad), "{name} must NOT contain {bad}: {json}");
             }
         }
+    }
+
+    #[test]
+    fn pass_e12_lossless_ast_hardening_regressions() {
+        let members: Vec<String> = [
+            "Human", "Soldier", "Beast", "Zombie", "Dragon", "Elf", "Goblin", "Wizard", "Ape",
+            "Monkey", "Eldrazi",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e12",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+        type E12Case<'a> = (&'a str, &'a str, &'a str, &'a [&'a str], &'a [&'a str]);
+        let cases: &[E12Case<'_>] = &[
+            // 1. Chosen type vs chosen color split (flags bits 26 vs 27)
+            (
+                "Chosen Type Test",
+                "Enchantment",
+                "Creatures you control of the chosen type get +1/+1.",
+                &["\"flags\":67108864"],
+                &["\"flags\":16384"],
+            ),
+            (
+                "Chosen Color Test",
+                "Enchantment",
+                "Creatures you control of the chosen color get +1/+1.",
+                &["\"flags\":134217728"],
+                &["\"flags\":16384"],
+            ),
+            // 2. Zone suffixes: ItsOwnerGraveyard, exile owner, milled/library-this-turn
+            (
+                "Owner Exile Test",
+                "Sorcery",
+                "Return target creature card you own in exile to your hand.",
+                &["\"zone\":\"Exile\"", "\"owner\":\"You\""],
+                &[],
+            ),
+            (
+                "Its Owner GY Test",
+                "Sorcery",
+                "Exile target creature card in its owner's graveyard.",
+                &["\"zone\":\"ItsOwnerGraveyard\""],
+                &["\"zone\":\"AnyGraveyard\""],
+            ),
+            // 3. Didn't attack this turn -> DID_NOT_ATTACK_THIS_TURN (1 << 30 = 1073741824), not CombatState::NotAttacking
+            (
+                "Didnt Attack Test",
+                "Sorcery",
+                "Destroy target creature that didn't attack or enter this turn.",
+                &["1073741824", "\"DidNotEnterThisTurn\""],
+                &["\"NotAttacking\""],
+            ),
+            // 4. Sacrifice another -> EXCLUDE_SELF (bit 0)
+            (
+                "Sacrifice Another Cost Test",
+                "Creature \u{2014} Human",
+                "Sacrifice another creature: Draw a card.",
+                &["\"flags\":1"],
+                &["\"flags\":0"],
+            ),
+            // 5. Commander filter -> IS_COMMANDER (1 << 24 = 16777216), not LEGENDARY
+            (
+                "Commander Filter Test",
+                "Instant",
+                "Destroy target commander.",
+                &["\"flags\":16777216"],
+                &["\"required_supertypes\":1"],
+            ),
+            // 6. Keywords OR vs AND (KEYWORDS_MATCH_ANY = 1 << 31 = 2147483648)
+            (
+                "Keywords Or Test",
+                "Instant",
+                "Destroy target creature with flying or reach.",
+                &["2147483648"],
+                &[],
+            ),
+            // 7. Subtypes OR -> SubtypesMatchAny
+            (
+                "Subtypes Or Test",
+                "Instant",
+                "Destroy target Ape or Monkey.",
+                &["\"SubtypesMatchAny\""],
+                &[],
+            ),
+            // 8. Multi-way ManaSpecAst::Choice splits all 3 options cleanly
+            (
+                "Tri-Color Mana Test",
+                "Land",
+                "{T}: Add {W}, {U}, or {B}.",
+                &["\"Choice\":[\"{W}\",\"{U}\",\"{B}\"]"],
+                &[" or "],
+            ),
+            // 9. Token creation preserves attacking target
+            (
+                "Attacking Target Token Test",
+                "Enchantment",
+                "Whenever a creature attacks, create a 1/1 white Soldier creature token that's tapped and attacking defending player.",
+                &["\"CreateQualifiedToken\"", "\"DefendingPlayer\""],
+                &[],
+            ),
+            // 10. Conditions: controls 3 or fewer lands -> ThatPlayer; targets/attached/is -> typed variants
+            (
+                "Controls Three Or Fewer Lands Test",
+                "Instant",
+                "If that player controls three or fewer lands, draw a card.",
+                &[
+                    "\"ControlsCount\"",
+                    "\"player\":\"ThatPlayer\"",
+                    "\"value\":3",
+                ],
+                &["\"PlayerActionThisTurn\""],
+            ),
+            (
+                "Targets Subject Typed Test",
+                "Instant",
+                "If that spell targets a creature you control, draw a card.",
+                &["\"TargetsSubject\""],
+                &["\"targets:"],
+            ),
+            (
+                "Matches Filter Typed Test",
+                "Instant",
+                "If that permanent is a Zombie, draw a card.",
+                &["\"MatchesFilter\""],
+                &["\"is:"],
+            ),
+            // 11. CRITICAL: "A or B" emits Choice, not AND concatenation
+            (
+                "Or Choice Not And Test",
+                "Sorcery",
+                "You gain 3 life or draw a card.",
+                &["\"Choice\""],
+                &[],
+            ),
+            // 12. DelayedTrigger preserves YourNext scope
+            (
+                "Delayed Scope Test",
+                "Instant",
+                "At the beginning of your next end step, draw a card.",
+                &["\"DelayedTrigger\"", "\"scope\":\"YourNext\""],
+                &["\"scope\":\"Next\""],
+            ),
+            // 13. Enters tapped and with counters preserves tapped
+            (
+                "Tapped With Counters Test",
+                "Artifact",
+                "Tapped With Counters Test enters tapped and with three charge counters on it.",
+                &["\"EntersTappedAndWithCounters\""],
+                &["\"EntersWithCounters\""],
+            ),
+            // 14. Optional enters tapped preserves optionality
+            (
+                "Optional Tapped Test",
+                "Land",
+                "You may have Optional Tapped Test enter tapped.",
+                &["\"OptionalEntersTapped\""],
+                &["\"EntersTapped\""],
+            ),
+            // 15. As ~ transforms -> AsTransformsAction (not AsEntersAction)
+            (
+                "As Transforms Test",
+                "Creature \u{2014} Human",
+                "As As Transforms Test transforms into As Transforms Test, choose a creature type.",
+                &["\"AsTransformsAction\""],
+                &["\"AsEntersAction\""],
+            ),
+            // 16. Caged Sun -> LandTappedForManaColor (not TapStateChanged SelfObject)
+            (
+                "Caged Sun Trigger Test",
+                "Artifact",
+                "Whenever a land's ability causes you to add one or more mana of the chosen color, add an additional one mana of that color.",
+                &["\"LandTappedForManaColor\""],
+                &["\"TapStateChanged\""],
+            ),
+            // 17. Becomes blocked by two or more creatures -> BecomesBlockedByCount
+            (
+                "Blocked By Two Test",
+                "Creature \u{2014} Beast",
+                "Whenever Blocked By Two Test becomes blocked by two or more creatures, draw a card.",
+                &["\"BecomesBlockedByCount\"", "\"min_blockers\":2"],
+                &[],
+            ),
+            // 18. Enters from graveyard preserves from: graveyard
+            (
+                "Enters From GY Test",
+                "Enchantment",
+                "Whenever a creature enters from a graveyard, draw a card.",
+                &["\"from\":\"graveyard\""],
+                &["\"from\":null"],
+            ),
+            // 19. Wave E9: goaded for as long as they control it uses SubjectControlledBy
+            (
+                "Goaded Controlled Test",
+                "Instant",
+                "It's goaded for as long as they control it.",
+                &["\"SubjectControlledBy\""],
+                &["\"ControlsCount\""],
+            ),
+            // 20. Wave E9: Spawnsire cast any number preserves AnyNumber
+            (
+                "Any Number Outside Game Test",
+                "Sorcery",
+                "Cast any number of Eldrazi cards from among cards you own outside the game without paying their mana costs.",
+                &["\"AnyNumber\""],
+                &["\"count_limit\":null"],
+            ),
+            // 21. No Debug formatting in set_type / remove_snow / exchange_control
+            (
+                "No Debug Format Test",
+                "Instant",
+                "Target land becomes Forests until end of turn.",
+                &["\"SetBasicLandType\""],
+                &["set_type:"],
+            ),
+        ];
+
+        let mut errs = Vec::new();
+        for (name, tl, ot, must_have, must_not_have) in cases {
+            let compiled = compile(name, tl, ot);
+            if !compiled.strictly_compiled {
+                errs.push(format!(
+                    "Pass E12 card {name} failed: {:?}",
+                    compiled.faces[0].failures
+                ));
+                continue;
+            }
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            if json.contains("\"StructuredRule\"") {
+                errs.push(format!("{name} has StructuredRule: {json}"));
+            }
+            if json.contains("\"GameStateFlag\"") {
+                errs.push(format!("{name} has GameStateFlag: {json}"));
+            }
+            for tok in *must_have {
+                if !json.contains(tok) {
+                    errs.push(format!("{name} missing {tok}: {json}"));
+                }
+            }
+            for bad in *must_not_have {
+                if json.contains(bad) {
+                    errs.push(format!("{name} must NOT contain {bad}: {json}"));
+                }
+            }
+        }
+        assert!(errs.is_empty(), "Pass E12 failures:\n{}", errs.join("\n"));
+
+        // 22. compile_granted_ability compiles Planeswalker loyalty & Equipment abilities
+        let loyalty = compile_granted_ability("+1: Draw a card.", &vocab);
+        assert!(
+            loyalty.is_some(),
+            "Planeswalker loyalty granted ability failed"
+        );
+        let equip = compile_granted_ability("Equip {2}", &vocab);
+        assert!(equip.is_some(), "Equipment granted ability failed");
     }
 }

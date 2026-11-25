@@ -674,8 +674,12 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         } else {
             (rest, false, false)
         };
+        let exclude_self = core.starts_with("another ");
         let (cnt, flt_raw) = peel_leading_count(core, vocab);
-        let flt = parse_object_filter(flt_raw, vocab)?;
+        let mut flt = parse_object_filter(flt_raw, vocab)?;
+        if exclude_self {
+            flt.flags = flt.flags.union(ObjectFilterFlags::EXCLUDE_SELF);
+        }
         return Ok(CostAtomAst::Sacrifice {
             count: Box::new(cnt),
             filter: Box::new(flt),
@@ -1193,13 +1197,25 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         ))]);
     }
     // Mana-production triggers (Caged Sun, Gauntlet of Power) & Scry-bottom trigger (The Temporal Anchor)
-    if low == "whenever a land's ability causes you to add one or more mana of the chosen color"
-        || low == "whenever a basic land is tapped for mana of the chosen color"
-    {
-        return Ok(vec![TriggerEventAst::TapStateChanged {
-            subject: Box::new(SubjectRefAst::SelfObject),
-            tapped: true,
-            for_mana: true,
+    if low == "whenever a land's ability causes you to add one or more mana of the chosen color" {
+        return Ok(vec![TriggerEventAst::LandTappedForManaColor {
+            filter: Box::new(ObjectFilterAst {
+                any_types: CardTypeMask::LAND,
+                ..Default::default()
+            }),
+            mana_color_filter: "chosen_color".to_string(),
+            by_you: true,
+        }]);
+    }
+    if low == "whenever a basic land is tapped for mana of the chosen color" {
+        return Ok(vec![TriggerEventAst::LandTappedForManaColor {
+            filter: Box::new(ObjectFilterAst {
+                any_types: CardTypeMask::LAND,
+                required_supertypes: crate::ast::SupertypeMask::BASIC,
+                ..Default::default()
+            }),
+            mana_color_filter: "chosen_color".to_string(),
+            by_you: false,
         }]);
     }
     if low
@@ -1236,9 +1252,9 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         .and_then(|r| r.strip_suffix(" becomes blocked by two or more creatures"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::BecomesBlocked {
+        return Ok(vec![TriggerEventAst::BecomesBlockedByCount {
             subject: Box::new(subj),
-            blocker: None,
+            min_blockers: 2,
         }]);
     }
     if let Some(after_cause) = low
@@ -1323,10 +1339,13 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
     if low
         == "whenever you and/or at least one permanent you control becomes the target of a spell or ability"
     {
-        return Ok(vec![TriggerEventAst::BecomesTargeted {
-            subject: Box::new(SubjectRefAst::SelfObject),
-            by_opponent: false,
-            by_text: None,
+        return Ok(vec![TriggerEventAst::PlayerOrPermanentBecomesTargeted {
+            player: PlayerRefAst::You,
+            permanent_filter: Box::new(ObjectFilterAst {
+                any_permanent: true,
+                controller: Some(ControllerRelation::You),
+                ..Default::default()
+            }),
         }]);
     }
     if let Some(subj_raw) = low
@@ -1516,7 +1535,7 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         && let Ok(mut evs) = parse_trigger_events(rest, vocab)
     {
         if let Some(first) = evs.first().cloned() {
-            evs.insert(0, first);
+            evs.insert(0, with_trigger_subject_self(first));
         }
         return Ok(evs);
     }
@@ -2447,32 +2466,66 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         } else {
             (blow, None)
         };
-        let core_enter = core_enter
-            .strip_suffix(" from a graveyard")
-            .or_else(|| core_enter.strip_suffix(" from your graveyard"))
-            .or_else(|| core_enter.strip_suffix(" from exile"))
-            .or_else(|| core_enter.strip_suffix(" during the declare attackers step"))
-            .or_else(|| core_enter.strip_suffix(" during combat"))
-            .unwrap_or(core_enter);
-        if let Some(subj_raw) = core_enter
+        let (core_enter, from_zone, enter_timing) =
+            if let Some(p) = core_enter.strip_suffix(" from a graveyard") {
+                (p, Some("graveyard".to_string()), None)
+            } else if let Some(p) = core_enter.strip_suffix(" from your graveyard") {
+                (p, Some("your_graveyard".to_string()), None)
+            } else if let Some(p) = core_enter.strip_suffix(" from exile") {
+                (p, Some("exile".to_string()), None)
+            } else if let Some(p) = core_enter.strip_suffix(" during the declare attackers step") {
+                (p, None, Some("during_declare_attackers_step".to_string()))
+            } else if let Some(p) = core_enter.strip_suffix(" during combat") {
+                (p, None, Some("during_combat".to_string()))
+            } else {
+                (core_enter, None, None)
+            };
+        let (subj_opt, tapped_qual) = if let Some(p) = core_enter
             .strip_suffix(" enters the battlefield untapped")
-            .or_else(|| core_enter.strip_suffix(" enters the battlefield tapped"))
             .or_else(|| core_enter.strip_suffix(" enters untapped"))
-            .or_else(|| core_enter.strip_suffix(" enters tapped"))
-            .or_else(|| core_enter.strip_suffix(" enters the battlefield"))
-            .or_else(|| core_enter.strip_suffix(" enter the battlefield"))
-            .or_else(|| core_enter.strip_suffix(" enters"))
-            .or_else(|| core_enter.strip_suffix(" enter"))
         {
+            (Some(p), Some("untapped"))
+        } else if let Some(p) = core_enter
+            .strip_suffix(" enters the battlefield tapped")
+            .or_else(|| core_enter.strip_suffix(" enters tapped"))
+        {
+            (Some(p), Some("tapped"))
+        } else {
+            (
+                core_enter
+                    .strip_suffix(" enters the battlefield")
+                    .or_else(|| core_enter.strip_suffix(" enter the battlefield"))
+                    .or_else(|| core_enter.strip_suffix(" enters"))
+                    .or_else(|| core_enter.strip_suffix(" enter")),
+                None,
+            )
+        };
+        if let Some(subj_raw) = subj_opt {
             let (sraw, grouped) = peel_one_or_more(subj_raw);
             if let Ok(subj) = parse_subject_or_target(sraw, vocab) {
-                return Ok(vec![TriggerEventAst::ZoneChange {
-                    from: None,
+                let base_ev = TriggerEventAst::ZoneChange {
+                    from: from_zone,
                     to: Some("battlefield".to_string()),
                     subject: Box::new(subj),
                     grouped,
                     entering_controller: entering_ctrl,
-                }]);
+                };
+                let qual_timing = match (enter_timing, tapped_qual) {
+                    (Some(t), Some(tq)) => Some(format!("{t}:{tq}")),
+                    (Some(t), None) => Some(t),
+                    (None, Some(tq)) => Some(format!("enters_{tq}")),
+                    (None, None) => None,
+                };
+                let ev = if let Some(timing) = qual_timing {
+                    TriggerEventAst::QualifiedTrigger {
+                        inner: Box::new(base_ev),
+                        first_time_each_turn: false,
+                        timing: Some(timing),
+                    }
+                } else {
+                    base_ev
+                };
+                return Ok(vec![ev]);
             }
         }
     }
@@ -2802,59 +2855,83 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
                 include_copy: false,
             }]);
         }
-        let spell_clean = spell_raw
-            .strip_suffix(" using mana produced by ~")
-            .or_else(|| spell_raw.strip_suffix(" during an opponent's turn"))
-            .or_else(|| spell_raw.strip_suffix(" during your turn"))
-            .or_else(|| spell_raw.strip_suffix(" using teamwork"))
-            .unwrap_or(spell_raw);
+        let (spell_clean, cast_qual) =
+            if let Some(p) = spell_raw.strip_suffix(" using mana produced by ~") {
+                (p, Some("using_mana_produced_by_self".to_string()))
+            } else if let Some(p) = spell_raw.strip_suffix(" during an opponent's turn") {
+                (p, Some("during_opponents_turn".to_string()))
+            } else if let Some(p) = spell_raw.strip_suffix(" during your turn") {
+                (p, Some("during_your_turn".to_string()))
+            } else if let Some(p) = spell_raw.strip_suffix(" using teamwork") {
+                (p, Some("using_teamwork".to_string()))
+            } else {
+                (spell_raw, None)
+            };
+        let wrap_cast_qual = |ev: TriggerEventAst| -> TriggerEventAst {
+            if let Some(q) = cast_qual.clone() {
+                TriggerEventAst::QualifiedTrigger {
+                    inner: Box::new(ev),
+                    first_time_each_turn: false,
+                    timing: Some(q),
+                }
+            } else {
+                ev
+            }
+        };
         if let Some((flt_raw, kw_raw)) = spell_clean.split_once(" that has ")
             && vocab.is_evergreen_keyword(kw_raw.trim())
             && let Ok(mut flt) = parse_object_filter(flt_raw, vocab)
         {
             flt.required_keywords.push(kw_raw.trim().to_string());
-            return Ok(vec![TriggerEventAst::SpellCast {
+            return Ok(vec![wrap_cast_qual(TriggerEventAst::SpellCast {
                 caster,
                 spell: Some(Box::new(flt)),
                 self_spell: false,
                 targets: None,
                 nth_each_turn: None,
                 include_copy: false,
-            }]);
+            })]);
         }
         if let Some((flt_raw, colors_raw)) = spell_clean.split_once(" that's both ")
             && let Ok(flt) = parse_object_filter(&format!("{flt_raw} {colors_raw}"), vocab)
         {
-            return Ok(vec![TriggerEventAst::SpellCast {
+            return Ok(vec![wrap_cast_qual(TriggerEventAst::SpellCast {
                 caster,
                 spell: Some(Box::new(flt)),
                 self_spell: false,
                 targets: None,
                 nth_each_turn: None,
                 include_copy: false,
-            }]);
+            })]);
         }
         if spell_clean.contains(" in its mana cost")
             || spell_clean.contains("mana cost that contains")
         {
-            return Ok(vec![TriggerEventAst::SpellCast {
+            let base_ev = TriggerEventAst::SpellCast {
                 caster,
-                spell: None,
+                spell: Some(Box::new(ObjectFilterAst {
+                    any_spell: true,
+                    predicates: vec![crate::ast::FilterPredicateAst::HasManaSymbolInCost(
+                        spell_clean.to_string(),
+                    )],
+                    ..Default::default()
+                })),
                 self_spell: false,
                 targets: None,
                 nth_each_turn: None,
                 include_copy: false,
-            }]);
+            };
+            return Ok(vec![wrap_cast_qual(base_ev)]);
         }
         if let Ok(flt) = parse_object_filter(spell_clean, vocab) {
-            return Ok(vec![TriggerEventAst::SpellCast {
+            return Ok(vec![wrap_cast_qual(TriggerEventAst::SpellCast {
                 caster,
                 spell: Some(Box::new(flt)),
                 self_spell: false,
                 targets: None,
                 nth_each_turn: None,
                 include_copy: false,
-            }]);
+            })]);
         }
     }
 
@@ -3065,10 +3142,14 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
             by_you: true,
         }]);
     }
-    let blow_noexile = blow
-        .strip_suffix(" while it's exiled")
-        .or_else(|| blow.strip_suffix(" for the first time each turn"))
-        .unwrap_or(blow);
+    let (blow_noexile, cnt_first_time, cnt_timing) =
+        if let Some(p) = blow.strip_suffix(" while it's exiled") {
+            (p, false, Some("while_exiled".to_string()))
+        } else if let Some(p) = blow.strip_suffix(" for the first time each turn") {
+            (p, true, None)
+        } else {
+            (blow, false, None)
+        };
     if let Some((left, subj_raw)) = blow_noexile
         .split_once(" is put on ")
         .or_else(|| blow_noexile.split_once(" are put on "))
@@ -3088,12 +3169,22 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
             .trim_end_matches(" counters")
             .trim_end_matches(" counter")
             .trim();
-        return Ok(vec![TriggerEventAst::CountersChanged {
+        let base_ev = TriggerEventAst::CountersChanged {
             subject: Box::new(subj),
             counter_kind: kind.to_string(),
             added,
             by_you: false,
-        }]);
+        };
+        let ev = if cnt_first_time || cnt_timing.is_some() {
+            TriggerEventAst::QualifiedTrigger {
+                inner: Box::new(base_ev),
+                first_time_each_turn: cnt_first_time,
+                timing: cnt_timing,
+            }
+        } else {
+            base_ev
+        };
+        return Ok(vec![ev]);
     }
 
     // State trigger
@@ -5663,8 +5754,9 @@ pub fn parse_atomic_effect(
         if low.starts_with(pref)
             && let Ok(inner) = parse_atomic_effect(&s[pref.len()..], vocab)
         {
-            return Ok(vec![InstructionAst::ForEachPlayer {
+            return Ok(vec![InstructionAst::ForEachTargetPlayer {
                 player,
+                any_number: true,
                 body: inner,
             }]);
         }
@@ -6251,8 +6343,13 @@ pub fn parse_atomic_effect(
         && (cond_tail.contains(" counter") || cond_tail.contains(" life"))
         && let Ok(body) = parse_atomic_effect(&s[s.len() - body_raw.len()..], vocab)
     {
-        return Ok(vec![InstructionAst::ForEachPlayer {
+        let parsed_cond = parse_condition(&format!("that opponent has {cond_tail}"), vocab)
+            .ok()
+            .map(Box::new);
+        return Ok(vec![InstructionAst::ForEachMatchingPlayer {
             player: PlayerRefAst::EachOpponent,
+            condition_text: cond_tail.trim().to_string(),
+            condition: parsed_cond,
             body,
         }]);
     }
@@ -6378,16 +6475,48 @@ pub fn parse_atomic_effect(
             },
         }]);
     }
-    if low.starts_with("add one mana of any type ")
-        && (low.ends_with(" could produce") || low.ends_with(" produced"))
-    {
-        return Ok(vec![InstructionAst::AddMana {
-            player: PlayerRefAst::You,
-            mana: crate::ast::ManaSpecAst::AnyColor {
-                amount: Box::new(ValueExprAst::Const(1)),
-                single_color: true,
-            },
-        }]);
+    if let Some(after_type) = low.strip_prefix("add one mana of any type ") {
+        if let Some(src_raw) = after_type
+            .strip_suffix(" could produce")
+            .map(|r| r.strip_prefix("that ").unwrap_or(r).trim())
+        {
+            if let Ok(flt) = parse_object_filter(src_raw, vocab) {
+                return Ok(vec![InstructionAst::AddMana {
+                    player: PlayerRefAst::You,
+                    mana: crate::ast::ManaSpecAst::AnyObjectCouldProduce {
+                        filter: Box::new(flt),
+                        any_type: true,
+                    },
+                }]);
+            }
+            let source = parse_subject_or_target(src_raw, vocab)
+                .unwrap_or_else(|_| SubjectRefAst::Anaphora(src_raw.to_string()));
+            return Ok(vec![InstructionAst::AddQualifiedMana(Box::new(
+                crate::ast::QualifiedManaAst {
+                    player: PlayerRefAst::You,
+                    kind: "any_type_source_could_produce".to_string(),
+                    amount: Some(Box::new(ValueExprAst::Const(1))),
+                    source: Some(Box::new(source)),
+                    choices: Vec::new(),
+                },
+            ))]);
+        }
+        if let Some(src_raw) = after_type
+            .strip_suffix(" produced")
+            .map(|r| r.strip_prefix("that ").unwrap_or(r).trim())
+        {
+            let source = parse_subject_or_target(src_raw, vocab)
+                .unwrap_or_else(|_| SubjectRefAst::Anaphora(src_raw.to_string()));
+            return Ok(vec![InstructionAst::AddQualifiedMana(Box::new(
+                crate::ast::QualifiedManaAst {
+                    player: PlayerRefAst::You,
+                    kind: "any_type_source_produced".to_string(),
+                    amount: Some(Box::new(ValueExprAst::Const(1))),
+                    source: Some(Box::new(source)),
+                    choices: Vec::new(),
+                },
+            ))]);
+        }
     }
 
     // Leading "For as long as <cond>, <effect/static/trigger>" / "As long as <cond>, <effect/static/trigger>"
@@ -8199,6 +8328,7 @@ pub fn parse_atomic_effect(
                     dynamic_pt_text: rich.dynamic_pt_text,
                     chosen_color: rich.chosen_color,
                     chosen_type: rich.chosen_type,
+                    attacking_target: rich.attacking_target.map(Box::new),
                 }))
             }
         };
@@ -12077,6 +12207,7 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
         .or_else(|| low.strip_prefix("exiles "))
     {
         if !after.contains(" from ")
+            && !after.contains(" in ")
             && let Some(whose) = after
                 .strip_suffix(" graveyards")
                 .or_else(|| after.strip_suffix(" graveyard"))
@@ -16061,12 +16192,9 @@ pub fn parse_static_or_replacement(
     {
         let (cnt, kind) = peel_leading_count(cnt_kind, vocab);
         return Ok(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EntersWithCounters {
+            ReplacementEffectAst::EntersTappedAndWithCounters {
                 counter_kind: kind.to_string(),
                 count: Box::new(cnt),
-                per: None,
-                x_expr: None,
-                condition: None,
             },
         ));
     }
@@ -16074,7 +16202,9 @@ pub fn parse_static_or_replacement(
     if let Some(choice) = low.strip_prefix("as ~ enters, look at an opponent's hand, then choose ")
     {
         return Ok(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::AsEntersChoose {
+            ReplacementEffectAst::AsEntersLookAndChoose {
+                target_player: PlayerRefAst::AnyOpponent,
+                zone: ZoneFilter::OpponentHand,
                 choice: choice.trim().to_string(),
             },
         ));
@@ -18563,7 +18693,7 @@ pub fn parse_static_or_replacement(
         && let Ok(body) = parse_atomic_effect(after, vocab)
     {
         return Ok(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::AsEntersAction(body),
+            ReplacementEffectAst::AsTransformsAction(body),
         ));
     }
 
@@ -19167,7 +19297,9 @@ pub fn parse_static_or_replacement(
     if low.starts_with("as ~ is turned face up, ") {
         let body_orig = &s["as ~ is turned face up, ".len()..];
         if let Ok(ins) = parse_atomic_effect(body_orig, vocab) {
-            return Ok(StaticOrReplacement::Static(StaticAbilityAst::FollowUp(ins)));
+            return Ok(StaticOrReplacement::Replacement(
+                ReplacementEffectAst::AsTurnedFaceUpAction(ins),
+            ));
         }
     }
     if low.starts_with("you may cast ~ from your graveyard if ")
@@ -20611,10 +20743,29 @@ fn parse_wave17_effects(
         && let Some((dur_hdr, body_raw)) = s.split_once(", ")
         && !dur_hdr.is_empty()
         && !body_raw.is_empty()
-        && let Some(body) =
-            parse_effect_or_temp_clause(body_raw.trim(), &DurationAst::UntilYourNextTurn, vocab)
     {
-        return Some(body);
+        let hdr_low = dur_hdr.trim().to_ascii_lowercase();
+        let (parsed_dur, needs_scope) = match hdr_low.as_str() {
+            "until end of turn" => (DurationAst::UntilEndOfTurn, false),
+            "until end of combat" => (DurationAst::UntilEndOfCombat, false),
+            "until your next turn" => (DurationAst::UntilYourNextTurn, false),
+            "until the end of your next turn" => (DurationAst::UntilEndOfNextTurn, false),
+            "until the end of that player's next turn" => (
+                DurationAst::UntilEndOfPlayersNextTurn(PlayerRefAst::ThatPlayer),
+                false,
+            ),
+            "until ~ leaves the battlefield" => (DurationAst::UntilSourceLeaves, false),
+            _ => (DurationAst::UntilYourNextTurn, true),
+        };
+        if let Some(body) = parse_effect_or_temp_clause(body_raw.trim(), &parsed_dur, vocab) {
+            if needs_scope {
+                return Some(vec![InstructionAst::ScopedDurationText {
+                    duration_text: dur_hdr.trim().to_string(),
+                    body,
+                }]);
+            }
+            return Some(body);
+        }
     }
 
     // 2. General "<subj> doesn't/don't untap [during <step>]" (Telekinesis, Pollen Lullaby, Triton Tactics)
@@ -20780,14 +20931,20 @@ fn parse_wave17_effects(
     }
 
     // 10. General "<player> chooses <opt1> or <opt2>" / "you may choose new targets for <subj>" / "the new target must be <filter>" / "each copy targets a different one of <subj>"
-    if let Some((_who, after_ch)) = split_leading_player_verb(s, "choose", "chooses")
+    if let Some((who, after_ch)) = split_leading_player_verb(s, "choose", "chooses")
         && let Some((a, b)) = after_ch.split_once(" or ")
         && !a.trim().is_empty()
         && !b.trim().is_empty()
         && a.split_whitespace().count() <= 4
         && b.split_whitespace().count() <= 4
     {
-        return Some(vec![InstructionAst::ChooseOption(after_ch.to_string())]);
+        if who == PlayerRefAst::You {
+            return Some(vec![InstructionAst::ChooseOption(after_ch.to_string())]);
+        }
+        return Some(vec![InstructionAst::PlayerChooseOption {
+            chooser: who,
+            options: vec![a.trim().to_string(), b.trim().to_string()],
+        }]);
     }
     if low == "you may choose new targets for that copy"
         || low == "you may choose new targets for the copy"
@@ -21831,9 +21988,10 @@ fn parse_wave_e3_effects(
         if !matches!(cnt, ValueExprAst::Const(1))
             && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
         {
-            return Some(vec![InstructionAst::TapPermanent {
-                subject: Box::new(SubjectRefAst::All(Box::new(flt))),
-                any_number: false,
+            return Some(vec![InstructionAst::TapCount {
+                player: PlayerRefAst::You,
+                count: Box::new(cnt),
+                filter: Box::new(flt),
             }]);
         }
     }
@@ -21842,23 +22000,33 @@ fn parse_wave_e3_effects(
     if let Some(after_r) = low.strip_prefix("return ") {
         if let Some(rest_h) = after_r.strip_prefix("half ")
             && let Some((subj_raw, to_raw)) = rest_h.split_once(" to ")
-            && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         {
-            return Some(vec![InstructionAst::ReturnZone {
-                subject: Box::new(subj),
-                from_zone: None,
-                to: to_raw.trim().to_string(),
-                tapped: false,
-                transformed: false,
-                with_counter: None,
-                attached_to: None,
-                random: false,
-                except: None,
-                count: None,
-                up_to: false,
-                any_number: false,
-                actor: None,
-            }]);
+            let (subj_clean, rounding) =
+                if let Some(p) = subj_raw.trim().strip_suffix(", rounded up") {
+                    (p, Some(crate::ast::Rounding::Up))
+                } else if let Some(p) = subj_raw.trim().strip_suffix(", rounded down") {
+                    (p, Some(crate::ast::Rounding::Down))
+                } else if let Some(p) = to_raw.trim().strip_suffix(", rounded up") {
+                    let _ = p;
+                    (subj_raw.trim(), Some(crate::ast::Rounding::Up))
+                } else if let Some(p) = to_raw.trim().strip_suffix(", rounded down") {
+                    let _ = p;
+                    (subj_raw.trim(), Some(crate::ast::Rounding::Down))
+                } else {
+                    (subj_raw.trim(), None)
+                };
+            let to_clean = to_raw
+                .trim()
+                .strip_suffix(", rounded up")
+                .or_else(|| to_raw.trim().strip_suffix(", rounded down"))
+                .unwrap_or(to_raw.trim());
+            if let Ok(subj) = parse_subject_or_target(subj_clean, vocab) {
+                return Some(vec![InstructionAst::ReturnHalf {
+                    subject: Box::new(subj),
+                    to: to_clean.to_string(),
+                    rounding,
+                }]);
+            }
         }
         if let Some(after_to) = after_r.strip_prefix("to ") {
             for z in [
@@ -22228,17 +22396,19 @@ fn parse_wave_e4_effects(
             ))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AbilityRestriction {
-            restriction: format!("set_type:{subj:?}:{rhs}"),
-            condition: None,
+        return Some(vec![InstructionAst::SetBasicLandType {
+            subject: Box::new(subj),
+            land_type: rhs.to_string(),
+            duration: dur.clone(),
         }]);
     }
     if let Some(subj_raw) = nd_low.strip_suffix(" isn't snow")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AbilityRestriction {
-            restriction: format!("remove_snow:{subj:?}"),
-            condition: None,
+        return Some(vec![InstructionAst::RemoveSupertype {
+            subject: Box::new(subj),
+            supertype: "snow".to_string(),
+            duration: dur.clone(),
         }]);
     }
 
@@ -22321,9 +22491,8 @@ fn parse_wave_e4_effects(
     if let Some(after_ex) = low.strip_prefix("exchange control of ")
         && let Ok(subj) = parse_subject_or_target(after_ex.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AbilityRestriction {
-            restriction: format!("exchange_control:{subj:?}"),
-            condition: None,
+        return Some(vec![InstructionAst::ExchangeControlOf {
+            subject: Box::new(subj),
         }]);
     }
 
@@ -22459,40 +22628,63 @@ fn parse_wave_e4_effects(
         && !body_raw.trim().is_empty()
         && let Ok(body) = parse_atomic_effect(body_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::DelayedTrigger {
-            step: if hdr.to_ascii_lowercase().contains("upkeep") {
-                TurnStepAst::Upkeep
-            } else if hdr.to_ascii_lowercase().contains("combat") {
-                TurnStepAst::BeginningOfCombat
-            } else if hdr.to_ascii_lowercase().contains("main") {
-                TurnStepAst::MainPhase
-            } else {
-                TurnStepAst::EndStep
-            },
-            scope: DelayedStepScope::Next,
-            body,
-        }]);
+        let (step, scope) = parse_delayed_step_and_scope(&hdr.to_ascii_lowercase());
+        return Some(vec![InstructionAst::DelayedTrigger { step, scope, body }]);
     }
 
     // E4.11: Trailing "<eff> at the beginning of <step> [unless <cost>]" & "<eff> if <cond>" & "<eff> unless <cond>"
     if let Some((eff_raw, delay_raw)) = low.split_once(" at the beginning of ")
         && !eff_raw.trim().is_empty()
-        && let Ok(body) = parse_atomic_effect(s[..eff_raw.len()].trim(), vocab)
+        && let Ok(base_body) = parse_atomic_effect(s[..eff_raw.len()].trim(), vocab)
     {
-        let _ = delay_raw;
-        return Some(vec![InstructionAst::DelayedTrigger {
-            step: if delay_raw.contains("upkeep") {
-                TurnStepAst::Upkeep
-            } else if delay_raw.contains("draw") {
-                TurnStepAst::DrawStep
-            } else if delay_raw.contains("main") {
-                TurnStepAst::MainPhase
+        let (step_text, unless_raw) = match delay_raw.split_once(" unless ") {
+            Some((st, un)) => (st.trim(), Some(un.trim())),
+            None => (delay_raw.trim(), None),
+        };
+        let (step, scope) = parse_delayed_step_and_scope(step_text);
+        let body = if let Some(un) = unless_raw {
+            if let Ok(cond) = parse_condition(un, vocab) {
+                vec![InstructionAst::IfCondition {
+                    condition: Box::new(ConditionAst::Not(Box::new(cond))),
+                    then_body: base_body,
+                }]
             } else {
-                TurnStepAst::EndStep
-            },
-            scope: DelayedStepScope::Next,
-            body,
-        }]);
+                let (payer, cost_part) = if let Some((p_raw, c_raw)) =
+                    un.split_once(" pays ").or_else(|| un.split_once(" pay "))
+                {
+                    (
+                        parse_player_ref(p_raw.trim()).unwrap_or(PlayerRefAst::You),
+                        format!("pay {}", c_raw.trim()),
+                    )
+                } else {
+                    (PlayerRefAst::You, un.to_string())
+                };
+                if let Ok(cost_atoms) = parse_cost_list(&cost_part, vocab)
+                    && let Some(first_cost) = cost_atoms.into_iter().next()
+                {
+                    vec![InstructionAst::Unless {
+                        body: base_body,
+                        unless_player: Some(payer),
+                        unless_cost: Some(first_cost),
+                        unless_action: None,
+                        unless_condition: None,
+                    }]
+                } else {
+                    vec![InstructionAst::IfCondition {
+                        condition: Box::new(ConditionAst::Not(Box::new(
+                            ConditionAst::PlayerActionThisTurn {
+                                player: payer,
+                                action: un.to_string(),
+                            },
+                        ))),
+                        then_body: base_body,
+                    }]
+                }
+            }
+        } else {
+            base_body
+        };
+        return Some(vec![InstructionAst::DelayedTrigger { step, scope, body }]);
     }
     if !low.starts_with("if ")
         && let Some((eff_raw, cond_raw)) = low.rsplit_once(" if ")
@@ -22584,9 +22776,9 @@ fn parse_wave_e4_effects(
         }
     }
 
-    // E4.15: Universal 2-clause split on ", then ", ", and ", " and ", " or " when both sides parse cleanly!
+    // E4.15: Universal 2-clause split: sequential/conjunctive splits concatenate; " or " emits InstructionAst::Choice!
     if cur_depth <= 2 {
-        for sep in [", then ", ", and ", " and ", " or "] {
+        for sep in [", then ", ", and ", " and "] {
             if let Some((l, r)) = s.split_once(sep)
                 && !l.trim().is_empty()
                 && !r.trim().is_empty()
@@ -22596,6 +22788,14 @@ fn parse_wave_e4_effects(
                 left_ins.append(&mut right_ins);
                 return Some(left_ins);
             }
+        }
+        if let Some((l, r)) = s.split_once(" or ")
+            && !l.trim().is_empty()
+            && !r.trim().is_empty()
+            && let Ok(left_ins) = parse_atomic_effect(l.trim(), vocab)
+            && let Ok(right_ins) = parse_atomic_effect(r.trim(), vocab)
+        {
+            return Some(vec![InstructionAst::Choice(vec![left_ins, right_ins])]);
         }
     }
 
@@ -22900,7 +23100,7 @@ fn parse_wave17_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Static
     if low == "you may have ~ enter tapped" || low == "you may have ~ enter the battlefield tapped"
     {
         return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EntersTapped { unless: None },
+            ReplacementEffectAst::OptionalEntersTapped,
         ));
     }
 
@@ -23048,13 +23248,28 @@ fn parse_wave17_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Static
 
     // 8. General "The first time <event> each turn, <effect_or_rep>" (Edgar, Mirrormind Crown)
     if low.starts_with("the first time ")
-        && let Some((_hdr, body_raw)) = s.split_once(", ")
+        && let Some((hdr, body_raw)) = s.split_once(", ")
         && let Some(body) =
             parse_effect_or_temp_clause(body_raw.trim(), &DurationAst::UntilEndOfTurn, vocab)
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::FollowUp(
-            body,
-        )));
+        let ev_raw = hdr
+            .trim()
+            .strip_prefix("The first time ")
+            .or_else(|| hdr.trim().strip_prefix("the first time "))
+            .unwrap_or(hdr.trim())
+            .trim_end_matches(" each turn")
+            .trim();
+        let parsed_ev = parse_trigger_events(&format!("whenever {ev_raw}"), vocab)
+            .ok()
+            .and_then(|mut v| if v.len() == 1 { v.pop() } else { None })
+            .map(Box::new);
+        return Some(StaticOrReplacement::Static(
+            StaticAbilityAst::FirstTimeEachTurnAction {
+                event_text: hdr.trim().to_string(),
+                event: parsed_ev,
+                body,
+            },
+        ));
     }
 
     // 9. General "you may have <subj> assign its combat damage as though it weren't blocked" (Invasion of Ikoria, Cunning Giant)
@@ -23799,37 +24014,33 @@ fn parse_wave_e4_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Stati
         .or_else(|| low.split_once(" is an equipment with "))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
+        let orig_rest = s[s.len() - rest.len()..].trim();
+        let granted_abilities = crate::compile_granted_ability(orig_rest.trim_matches('"'), vocab);
         return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousLayerEffect {
+            StaticAbilityAst::BecomesEquipmentWith {
                 subject: Box::new(subj),
-                set_types: Some(format!("Equipment:{rest}")),
                 additive_types: low.contains("in addition to"),
-                base_pt: None,
-                set_colors: None,
-                grant_keywords: Vec::new(),
-                lose_keywords: Vec::new(),
-                lose_all_abilities: false,
-                condition: None,
+                granted_text: orig_rest.to_string(),
+                granted_abilities,
             },
         ));
     }
     // E4-S2: "<subj> loses/lose all land types and abilities and ..." (Lithoform Blight, Alpine Moon)
-    if let Some((subj_raw, _)) = low
+    if let Some((subj_raw, rest)) = low
         .split_once(" loses all land types and abilities and ")
         .or_else(|| low.split_once(" lose all land types and abilities, and "))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
+        let orig_rest = s[s.len() - rest.len()..].trim();
+        let granted_abilities = orig_rest
+            .split_once('"')
+            .and_then(|(_, q)| q.rsplit_once('"').map(|(inner, _)| inner))
+            .and_then(|inner| crate::compile_granted_ability(inner, vocab));
         return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousLayerEffect {
+            StaticAbilityAst::LoseLandTypesAndGain {
                 subject: Box::new(subj),
-                set_types: Some(s.to_string()),
-                additive_types: false,
-                base_pt: None,
-                set_colors: None,
-                grant_keywords: Vec::new(),
-                lose_keywords: Vec::new(),
-                lose_all_abilities: true,
-                condition: None,
+                granted_text: orig_rest.to_string(),
+                granted_abilities,
             },
         ));
     }
@@ -24008,4 +24219,146 @@ fn split_would_instead_clause(rest: &str) -> Option<(&str, &str)> {
         return Some((&rest[..split_at], after));
     }
     None
+}
+
+/// Pass E12: Replace the primary subject of a parsed trigger event with `SelfObject` (for `"~ or <other>"`).
+fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
+    match ev {
+        TriggerEventAst::ZoneChange {
+            from,
+            to,
+            grouped,
+            entering_controller,
+            ..
+        } => TriggerEventAst::ZoneChange {
+            from,
+            to,
+            subject: Box::new(SubjectRefAst::SelfObject),
+            grouped,
+            entering_controller,
+        },
+        TriggerEventAst::DamageDealt {
+            combat_only,
+            noncombat_only,
+            recipient,
+            grouped,
+            excess_only,
+            ..
+        } => TriggerEventAst::DamageDealt {
+            combat_only,
+            noncombat_only,
+            source: Some(Box::new(SubjectRefAst::SelfObject)),
+            recipient,
+            grouped,
+            excess_only,
+        },
+        TriggerEventAst::Attacks {
+            actor,
+            grouped,
+            qualifier,
+            ..
+        } => TriggerEventAst::Attacks {
+            subject: Some(Box::new(SubjectRefAst::SelfObject)),
+            actor,
+            grouped,
+            qualifier,
+        },
+        TriggerEventAst::Blocks { attacker, .. } => TriggerEventAst::Blocks {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            attacker,
+        },
+        TriggerEventAst::BecomesBlocked { blocker, .. } => TriggerEventAst::BecomesBlocked {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            blocker,
+        },
+        TriggerEventAst::BecomesBlockedByCount { min_blockers, .. } => {
+            TriggerEventAst::BecomesBlockedByCount {
+                subject: Box::new(SubjectRefAst::SelfObject),
+                min_blockers,
+            }
+        }
+        TriggerEventAst::BecomesTargeted {
+            by_opponent,
+            by_text,
+            ..
+        } => TriggerEventAst::BecomesTargeted {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            by_opponent,
+            by_text,
+        },
+        TriggerEventAst::TapStateChanged {
+            tapped, for_mana, ..
+        } => TriggerEventAst::TapStateChanged {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            tapped,
+            for_mana,
+        },
+        TriggerEventAst::CountersChanged {
+            counter_kind,
+            added,
+            by_you,
+            ..
+        } => TriggerEventAst::CountersChanged {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            counter_kind,
+            added,
+            by_you,
+        },
+        TriggerEventAst::QualifiedTrigger {
+            inner,
+            first_time_each_turn,
+            timing,
+        } => TriggerEventAst::QualifiedTrigger {
+            inner: Box::new(with_trigger_subject_self(*inner)),
+            first_time_each_turn,
+            timing,
+        },
+        other => other,
+    }
+}
+
+/// Pass E12: Parse both `TurnStepAst` and `DelayedStepScope` from a delayed-trigger header.
+fn parse_delayed_step_and_scope(hdr_low: &str) -> (TurnStepAst, DelayedStepScope) {
+    let step = if hdr_low.contains("end of combat") {
+        TurnStepAst::EndOfCombat
+    } else if hdr_low.contains("upkeep") {
+        TurnStepAst::Upkeep
+    } else if hdr_low.contains("draw") {
+        TurnStepAst::DrawStep
+    } else if hdr_low.contains("combat") {
+        TurnStepAst::BeginningOfCombat
+    } else if hdr_low.contains("precombat main") {
+        TurnStepAst::PrecombatMain
+    } else if hdr_low.contains("postcombat main") {
+        TurnStepAst::PostcombatMain
+    } else if hdr_low.contains("main") {
+        TurnStepAst::MainPhase
+    } else if hdr_low.contains("untap") {
+        TurnStepAst::UntapStep
+    } else if hdr_low.contains("cleanup") {
+        TurnStepAst::CleanupStep
+    } else {
+        TurnStepAst::EndStep
+    };
+    let scope = if hdr_low.contains("each of your") {
+        DelayedStepScope::EachOfYour
+    } else if hdr_low.contains("each opponent") {
+        DelayedStepScope::EachOpponents
+    } else if hdr_low.contains("each player") {
+        DelayedStepScope::EachPlayers
+    } else if hdr_low.contains("your next") || hdr_low.contains(" your ") {
+        DelayedStepScope::YourNext
+    } else if hdr_low.contains("that player's")
+        || hdr_low.contains("their next")
+        || hdr_low.contains("that opponent's")
+        || hdr_low.contains("its controller's")
+        || hdr_low.contains("defending player's")
+    {
+        DelayedStepScope::ThatPlayersNext
+    } else if hdr_low.contains("each ") {
+        DelayedStepScope::Each
+    } else {
+        DelayedStepScope::Next
+    };
+    (step, scope)
 }
