@@ -66,7 +66,7 @@ import * as s from "./match.css";
 
 const ICON = designPixels(26);
 
-const PHASE_MAP: Record<
+export const PHASE_MAP: Record<
   PlayerTurn["phase"],
   { phase: MatchPhase; label: string }
 > = {
@@ -549,7 +549,7 @@ function DecisionPanel({
  * tablet), the hand shows beneath it and the board stays above it. Measured
  * from the frame, so the table follows the shell's own layout.
  */
-function useLowerDock(): { trayHeight: number; clearBottom: number } {
+export function useLowerDock(): { trayHeight: number; clearBottom: number } {
   const [dock, setDock] = useState({ trayHeight: 0, clearBottom: 0 });
   const measure = useCallback(() => {
     const panel = document.querySelector('[data-frame="hud-side"]');
