@@ -306,7 +306,7 @@ fn block_legality_reads_the_current_layer_six_removal_and_grant() {
             granted_exalted: 0,
             granted_toxic: None,
             grants_unblockable: false,
-            granted_trigger: None,
+            granted_triggers: vec![],
             granted_combat_keywords: vec![],
             granted_keywords: BTreeSet::from([Reach]),
             suppressed_activations: None,

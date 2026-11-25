@@ -313,11 +313,17 @@ pub(super) fn lower_filter_to_permanent_selector(
         {
             return Err("oracle:selector-multi-subtypes");
         }
-        for st in &f.subtypes {
-            let ct = vocabulary
-                .resolve_label(st)
-                .ok_or("oracle:selector-multi-subtypes")?;
-            sel.any_creature_subtypes.insert(ct);
+        let parsed_lands: Option<BTreeSet<LandType>> =
+            f.subtypes.iter().map(|st| parse_land_subtype(st)).collect();
+        if let Some(lands) = parsed_lands {
+            sel.any_land_subtypes = lands;
+        } else {
+            for st in &f.subtypes {
+                let ct = vocabulary
+                    .resolve_label(st)
+                    .ok_or("oracle:selector-multi-subtypes")?;
+                sel.any_creature_subtypes.insert(ct);
+            }
         }
     } else if let Some(st) = f.subtypes.first() {
         if f.any_types == AstCardTypeMask::PLANESWALKER
@@ -2948,6 +2954,13 @@ fn intersect_object_clauses(
     } else {
         return Err("oracle:unsupported-filter-predicate");
     };
+    let owner = if base.owner == ControllerFilter::Any {
+        extra.owner
+    } else if extra.owner == ControllerFilter::Any || base.owner == extra.owner {
+        base.owner
+    } else {
+        return Err("oracle:unsupported-filter-predicate");
+    };
     let source_relation = if base.source_relation == SourceRelation::Any {
         extra.source_relation
     } else if extra.source_relation == SourceRelation::Any
@@ -3030,6 +3043,7 @@ fn intersect_object_clauses(
         forbidden_supertypes,
         subtypes,
         controller,
+        owner,
         source_relation,
         color,
         combat,
@@ -3128,19 +3142,10 @@ pub(super) fn lower_object_filter(
         ObjectColorFilter::Any
     };
 
-    // Controller and owner (fail closed when both are set so owner is never silently dropped)
-    clause.controller = match (f.controller, f.owner) {
-        (Some(_), Some(_)) => return Err("oracle:unsupported-controller-filter"),
-        (None, Some(owner)) => match owner {
-            ControllerRelation::You
-            | ControllerRelation::YourTeam
-            | ControllerRelation::OwnerYou => ControllerFilter::OwnerYou,
-            ControllerRelation::Opponent
-            | ControllerRelation::Opponents
-            | ControllerRelation::OwnerOpponent => ControllerFilter::OwnerOpponent,
-            _ => return Err("oracle:unsupported-controller-filter"),
-        },
-        (Some(ctrl), None) => match ctrl {
+    // Controller and owner lowered independently
+    clause.controller = match f.controller {
+        None => ControllerFilter::Any,
+        Some(ctrl) => match ctrl {
             ControllerRelation::You | ControllerRelation::YourTeam => ControllerFilter::You,
             ControllerRelation::Opponent | ControllerRelation::Opponents => {
                 ControllerFilter::Opponent
@@ -3155,7 +3160,24 @@ pub(super) fn lower_object_filter(
             ControllerRelation::TargetOpponent => ControllerFilter::TargetOpponent,
             _ => return Err("oracle:unsupported-controller-filter"),
         },
-        (None, None) => ControllerFilter::Any,
+    };
+    clause.owner = match f.owner {
+        None => ControllerFilter::Any,
+        Some(owner) => match owner {
+            ControllerRelation::You
+            | ControllerRelation::YourTeam
+            | ControllerRelation::OwnerYou => ControllerFilter::You,
+            ControllerRelation::Opponent
+            | ControllerRelation::Opponents
+            | ControllerRelation::OwnerOpponent => ControllerFilter::Opponent,
+            ControllerRelation::NotYou => ControllerFilter::NotYou,
+            ControllerRelation::ThatPlayer => ControllerFilter::RelatedPlayer,
+            ControllerRelation::DefendingPlayer => ControllerFilter::DefendingPlayer,
+            ControllerRelation::ActivePlayer => ControllerFilter::ActivePlayer,
+            ControllerRelation::TargetPlayer => ControllerFilter::TargetPlayer,
+            ControllerRelation::TargetOpponent => ControllerFilter::TargetOpponent,
+            _ => return Err("oracle:unsupported-controller-filter"),
+        },
     };
 
     // Combat
@@ -3475,10 +3497,10 @@ pub(super) fn lower_object_filter(
         clause.flags = clause.flags.union(ObjectFilterFlags::ENCHANTED);
     }
     if f.flags.0 & AstFilterFlags::IS_COMMANDER.0 != 0 {
-        if f.any_spell {
-            return Err("oracle:unsupported-filter-flag");
-        }
         clause.flags = clause.flags.union(ObjectFilterFlags::COMMANDER_ONLY);
+    }
+    if f.flags.0 & AstFilterFlags::NOT_COMMANDER.0 != 0 {
+        clause.flags = clause.flags.union(ObjectFilterFlags::NOT_COMMANDER);
     }
     let has_with_any_flag = (f.flags.0 & AstFilterFlags::WITH_ANY_COUNTER.0) != 0;
     let has_without_flag = (f.flags.0 & AstFilterFlags::WITHOUT_COUNTERS.0) != 0;
@@ -3535,6 +3557,24 @@ pub(super) fn lower_object_filter(
             .flags
             .union(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR);
     }
+    if f.flags.0 & AstFilterFlags::MATCHES_CHOSEN_TYPE.0 != 0 {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE);
+    }
+    if f.flags.0 & AstFilterFlags::MATCHES_CHOSEN_CARD_TYPE.0 != 0 {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::MATCHES_CHOSEN_CARD_TYPE);
+    }
+    if f.flags.0 & AstFilterFlags::MATCHES_CHOSEN_NAME.0 != 0 {
+        clause.flags = clause.flags.union(ObjectFilterFlags::MATCHES_CHOSEN_NAME);
+    }
+    if f.flags.0 & AstFilterFlags::DID_NOT_ATTACK_THIS_TURN.0 != 0 {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
+    }
     if f.flags.0 & AstFilterFlags::ATTACHED_TO_SELF.0 != 0 {
         set_clause_source_relation(&mut clause.source_relation, SourceRelation::AttachedToSelf)?;
     }
@@ -3548,11 +3588,13 @@ pub(super) fn lower_object_filter(
         | AstFilterFlags::ENTERED_THIS_TURN.0
         | AstFilterFlags::DEALT_DAMAGE_THIS_TURN.0
         | AstFilterFlags::ATTACKED_THIS_TURN.0
+        | AstFilterFlags::DID_NOT_ATTACK_THIS_TURN.0
         | AstFilterFlags::DIED_THIS_TURN.0
         | AstFilterFlags::MODIFIED.0
         | AstFilterFlags::EQUIPPED.0
         | AstFilterFlags::ENCHANTED.0
         | AstFilterFlags::IS_COMMANDER.0
+        | AstFilterFlags::NOT_COMMANDER.0
         | AstFilterFlags::WITH_ANY_COUNTER.0
         | AstFilterFlags::WITHOUT_COUNTERS.0
         | AstFilterFlags::FACE_DOWN.0
@@ -3560,6 +3602,9 @@ pub(super) fn lower_object_filter(
         | AstFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN.0
         | AstFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR.0
         | AstFilterFlags::MATCHES_CHOSEN_COLOR.0
+        | AstFilterFlags::MATCHES_CHOSEN_TYPE.0
+        | AstFilterFlags::MATCHES_CHOSEN_CARD_TYPE.0
+        | AstFilterFlags::MATCHES_CHOSEN_NAME.0
         | AstFilterFlags::ATTACHED_TO_SELF.0
         | AstFilterFlags::MATCHES_NAMED_AGENDA.0
         | AstFilterFlags::KEYWORDS_MATCH_ANY.0
@@ -3575,6 +3620,13 @@ pub(super) fn lower_object_filter(
             FilterPredicateAst::SubtypesMatchAny => {
                 subtypes_match_any = true;
             }
+            FilterPredicateAst::DealtDamageBy(subj)
+                if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
+            {
+                clause.flags = clause
+                    .flags
+                    .union(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN);
+            }
             FilterPredicateAst::AnyOf(filters) => {
                 if any_of_pair.is_some() || mana_value_pair.is_some() {
                     return Err("oracle:unsupported-filter-predicate");
@@ -3582,12 +3634,6 @@ pub(super) fn lower_object_filter(
                 let [first_ast, second_ast] = filters.as_slice() else {
                     return Err("oracle:unsupported-filter-predicate");
                 };
-                if f.any_spell
-                    && ((first_ast.flags.0 & AstFilterFlags::IS_COMMANDER.0) != 0
-                        || (second_ast.flags.0 & AstFilterFlags::IS_COMMANDER.0) != 0)
-                {
-                    return Err("oracle:unsupported-filter-flag");
-                }
                 let ObjectFilter::Clause(c1) = lower_object_filter(first_ast, vocabulary)? else {
                     return Err("oracle:unsupported-filter-predicate");
                 };
@@ -3806,10 +3852,15 @@ pub(super) fn lower_object_filter(
                         };
                     }
                     "you own" => {
-                        if clause.controller != ControllerFilter::Any {
+                        if clause.owner != ControllerFilter::Any
+                            || matches!(
+                                clause.controller,
+                                ControllerFilter::OwnerYou | ControllerFilter::OwnerOpponent
+                            )
+                        {
                             return Err("oracle:unsupported-filter-predicate");
                         }
-                        clause.controller = ControllerFilter::OwnerYou;
+                        clause.owner = ControllerFilter::You;
                     }
                     "exiled with ~" => {
                         clause.flags = clause.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
@@ -3839,6 +3890,7 @@ pub(super) fn lower_object_filter(
 
     // Forbidden subtypes
     let mut forb_creature_types = Vec::new();
+    let mut forb_land_types = Vec::new();
     for fst in &f.forbidden_subtypes {
         if fst.eq_ignore_ascii_case("aura") {
             clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
@@ -3847,13 +3899,22 @@ pub(super) fn lower_object_filter(
         } else if let Some(ct) = vocabulary.resolve_label(fst) {
             forb_creature_types.push(ct);
         } else if let Some(lt) = parse_land_subtype(fst) {
-            if clause.subtypes != SubtypeFilter::Any {
-                return Err("oracle:multi-subtype-filter");
-            }
-            clause.subtypes = SubtypeFilter::NotLand(lt);
+            forb_land_types.push(lt);
         } else {
             return Err("oracle:unsupported-forbidden-subtype");
         }
+    }
+    if !forb_land_types.is_empty() {
+        if clause.subtypes != SubtypeFilter::Any || !forb_creature_types.is_empty() {
+            return Err("oracle:multi-subtype-filter");
+        }
+        clause.subtypes = match forb_land_types.as_slice() {
+            [lt] => SubtypeFilter::NotLand(*lt),
+            many => {
+                let mask = many.iter().copied().fold(0u32, |acc, lt| acc | lt.bit());
+                SubtypeFilter::NotLandMask(mask)
+            }
+        };
     }
     if !forb_creature_types.is_empty() {
         if clause.subtypes != SubtypeFilter::Any {
@@ -3900,39 +3961,45 @@ pub(super) fn lower_object_filter(
         }
         clause.subtypes =
             resolve_single_subtype(&f.subtypes[0]).ok_or("oracle:unsupported-subtype-filter")?;
-    } else if f.subtypes.len() == 2 && clause.subtypes == SubtypeFilter::Any {
+    } else if f.subtypes.len() >= 2 {
+        if clause.subtypes != SubtypeFilter::Any {
+            return Err("oracle:mixed-subtype-filter");
+        }
         if !subtypes_match_any {
             return Err("oracle:unsupported-multi-subtype");
         }
-        if mana_value_pair.is_some() || any_of_pair.is_some() || keyword_pair.is_some() {
-            return Err("oracle:unsupported-filter-predicate");
-        }
-        if let (Some(sa), Some(sb)) = (
-            resolve_single_subtype(&f.subtypes[0]),
-            resolve_single_subtype(&f.subtypes[1]),
-        ) {
-            let mut c1 = clause;
-            let mut c2 = clause;
-            c1.subtypes = sa;
-            c2.subtypes = sb;
-            return Ok(ObjectFilter::either(c1, c2));
-        }
-        return Err("oracle:unsupported-multi-subtype");
-    } else if f.subtypes.len() == 3 && clause.subtypes == SubtypeFilter::Any {
-        if !subtypes_match_any {
+        if let Some(land_mask) = f.subtypes.iter().try_fold(0u32, |acc, st| {
+            parse_land_subtype(st).map(|lt| acc | lt.bit())
+        }) {
+            clause.subtypes = SubtypeFilter::AnyLandMask(land_mask);
+        } else if f.subtypes.len() == 2 {
+            if mana_value_pair.is_some() || any_of_pair.is_some() || keyword_pair.is_some() {
+                return Err("oracle:unsupported-filter-predicate");
+            }
+            if let (Some(sa), Some(sb)) = (
+                resolve_single_subtype(&f.subtypes[0]),
+                resolve_single_subtype(&f.subtypes[1]),
+            ) {
+                let mut c1 = clause;
+                let mut c2 = clause;
+                c1.subtypes = sa;
+                c2.subtypes = sb;
+                return Ok(ObjectFilter::either(c1, c2));
+            }
             return Err("oracle:unsupported-multi-subtype");
-        }
-        if let (Some(a), Some(b), Some(c)) = (
-            vocabulary.resolve_label(&f.subtypes[0]),
-            vocabulary.resolve_label(&f.subtypes[1]),
-            vocabulary.resolve_label(&f.subtypes[2]),
-        ) {
-            clause.subtypes = SubtypeFilter::AnyOf([a, b, c]);
+        } else if f.subtypes.len() == 3 {
+            if let (Some(a), Some(b), Some(c)) = (
+                vocabulary.resolve_label(&f.subtypes[0]),
+                vocabulary.resolve_label(&f.subtypes[1]),
+                vocabulary.resolve_label(&f.subtypes[2]),
+            ) {
+                clause.subtypes = SubtypeFilter::AnyOf([a, b, c]);
+            } else {
+                return Err("oracle:unsupported-multi-subtype");
+            }
         } else {
-            return Err("oracle:unsupported-multi-subtype");
+            return Err("oracle:too-many-subtypes");
         }
-    } else if f.subtypes.len() > 3 {
-        return Err("oracle:too-many-subtypes");
     }
 
     if let Some((kw_a, kw_b)) = keyword_pair {
@@ -3970,10 +4037,6 @@ pub(super) fn lower_spell_filter(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<SpellFilter, &'static str> {
-    // Keep IS_COMMANDER fail-closed in spell contexts until SupportedAppearance carries commander_owner.
-    if (f.flags.0 & AstFilterFlags::IS_COMMANDER.0) != 0 {
-        return Err("oracle:unsupported-filter-flag");
-    }
     let cast_zone = match f.zone {
         None | Some(ZoneFilter::Stack) => spellwake_engine::program::SpellCastZoneFilter::Any,
         Some(ZoneFilter::YourLibrary) => spellwake_engine::program::SpellCastZoneFilter::OwnLibrary,
@@ -4024,12 +4087,6 @@ pub(super) fn lower_spell_filter(
     } else {
         lower_object_filter(f, vocabulary)?
     };
-    let (c1, c2) = obj.clauses();
-    if c1.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
-        || c2.is_some_and(|c| c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY))
-    {
-        return Err("oracle:unsupported-filter-flag");
-    }
     let mut sf = SpellFilter::from_object(obj);
     sf.cast_zone = cast_zone;
     if single_target {
@@ -4495,7 +4552,7 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
         | Instruction::ModifyGroupByAmount { amount, .. }
         | Instruction::BoostTargetPower { amount, .. } => find_value_expr_cost_object_ref(amount),
         Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations } => creations
+        | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()
             .find_map(|c| find_value_expr_cost_object_ref(&c.amount)),
         _ => None,
@@ -4796,6 +4853,7 @@ fn turn_record_filter_supported(filter: ObjectFilter, allow_artifact_subtypes: b
         };
         subtype_ok
             && c.controller == ControllerFilter::Any
+            && c.owner == ControllerFilter::Any
             && c.combat == CombatFilter::Any
             && c.tapped.is_none()
             && c.token.is_none()

@@ -282,7 +282,7 @@ pub(super) fn spell(
             let trigger = spellwake_engine::program::CounterKeyword::Undying
                 .ability(spellwake_engine::program::TriggeredAbilityId(0));
             let change = AbilityChange {
-                granted_trigger: Some(Box::new(trigger)),
+                granted_triggers: vec![trigger],
                 ..Default::default()
             };
             (
@@ -1161,7 +1161,10 @@ pub(super) fn compile(
             (
                 "Hexproof",
                 vec![(spellwake_engine::program::TriggerSpec::self_attacks(), NoTarget, vec![
-                    CreateAttackingTokens { creations },
+                    CreateAttackingTokens {
+                        creations,
+                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                    },
                     ScheduleCreatedTokenExile(Step::EndCombat),
                 ])],
             )
@@ -1170,7 +1173,10 @@ pub(super) fn compile(
             let CreateTokens { creations } = tokens(
                 "a 2/2 green Wolf creature token", spellwake_engine::program::ValueExpr::count_graveyard(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::ObjectFilter::creature()), true, vocabulary,
             )? else { return None };
-            ("", vec![(spellwake_engine::program::TriggerSpec::self_attacks(), NoTarget, vec![CreateAttackingTokens { creations }])])
+            ("", vec![(spellwake_engine::program::TriggerSpec::self_attacks(), NoTarget, vec![CreateAttackingTokens {
+                creations,
+                defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+            }])])
         }
         "Creatures you control enter as a copy of this creature." => {
             let mut program = base("")?;

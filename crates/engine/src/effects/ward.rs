@@ -23,70 +23,76 @@ impl EffectWindow {
             crate::program::SpellFilter::instant_or_sorcery().matches_card_types(types)
         });
         let mut objects = BTreeSet::new();
+        let mut players = BTreeSet::new();
         for target in entry.targets().targets() {
-            let TargetRef::Object(object) = target.choice().target else {
-                continue;
-            };
-            let Some(sheet) = current.get(object) else {
-                continue;
-            };
-            let Some(controller) = sheet.controller else {
-                continue;
-            };
-            if sheet.zone != ObjectZone::Battlefield {
-                continue;
-            }
-            let excluded = BTreeSet::new();
-            let has_targeted_watcher = current.objects.values().any(|watcher| {
-                watcher.zone == ObjectZone::Battlefield
-                    && watcher
-                        .printed_text
-                        .triggered
-                        .iter()
-                        .filter(|ability| watcher.abilities.triggered.contains(&ability.id))
-                        .chain(watcher.granted_triggers.values())
-                        .any(|ability| {
-                            let TriggerEvent::Targeted {
-                                subject,
-                                by_opponent,
-                                spell_only,
-                                instant_or_sorcery_only,
-                            } = ability.condition.event
-                            else {
-                                return false;
-                            };
-                            if by_opponent && controller == entry.controller() {
-                                return false;
-                            }
-                            if spell_only && !is_spell {
-                                return false;
-                            }
-                            if instant_or_sorcery_only && !instant_or_sorcery {
-                                return false;
-                            }
-                            if subject == ObjectFilter::self_object() {
-                                watcher.object == object
-                            } else if subject == ObjectFilter::any().attached_to_self() {
-                                watcher.attached_to == Some(TargetRef::Object(object))
-                            } else if let Some(watcher_ctrl) = watcher.controller {
-                                self.matches_object_filter(
-                                    subject,
-                                    sheet,
-                                    watcher_ctrl,
-                                    Some(watcher.object),
-                                    &excluded,
-                                    current,
-                                )
-                            } else {
-                                false
-                            }
-                        })
-            });
-            if has_targeted_watcher {
-                objects.insert(object);
+            match target.choice().target {
+                TargetRef::Player(player) => {
+                    players.insert(player);
+                }
+                TargetRef::Object(object) => {
+                    let Some(sheet) = current.get(object) else {
+                        continue;
+                    };
+                    let Some(controller) = sheet.controller else {
+                        continue;
+                    };
+                    if sheet.zone != ObjectZone::Battlefield {
+                        continue;
+                    }
+                    let excluded = BTreeSet::new();
+                    let has_targeted_watcher = current.objects.values().any(|watcher| {
+                        watcher.zone == ObjectZone::Battlefield
+                            && watcher
+                                .printed_text
+                                .triggered
+                                .iter()
+                                .filter(|ability| watcher.abilities.triggered.contains(&ability.id))
+                                .chain(watcher.granted_triggers.values().flatten())
+                                .any(|ability| {
+                                    let TriggerEvent::Targeted {
+                                        subject,
+                                        by_opponent,
+                                        spell_only,
+                                        instant_or_sorcery_only,
+                                    } = ability.condition.event
+                                    else {
+                                        return false;
+                                    };
+                                    if by_opponent && controller == entry.controller() {
+                                        return false;
+                                    }
+                                    if spell_only && !is_spell {
+                                        return false;
+                                    }
+                                    if instant_or_sorcery_only && !instant_or_sorcery {
+                                        return false;
+                                    }
+                                    if subject == ObjectFilter::self_object() {
+                                        watcher.object == object
+                                    } else if subject == ObjectFilter::any().attached_to_self() {
+                                        watcher.attached_to == Some(TargetRef::Object(object))
+                                    } else if let Some(watcher_ctrl) = watcher.controller {
+                                        self.matches_object_filter(
+                                            subject,
+                                            sheet,
+                                            watcher_ctrl,
+                                            Some(watcher.object),
+                                            &excluded,
+                                            current,
+                                        )
+                                    } else {
+                                        false
+                                    }
+                                })
+                    });
+                    if has_targeted_watcher {
+                        objects.insert(object);
+                    }
+                }
+                TargetRef::Stack(_) => {}
             }
         }
-        Ok(objects
+        let mut out: Vec<RulesOccurrence> = objects
             .into_iter()
             .map(|object| RulesOccurrence::PermanentTargeted {
                 object,
@@ -94,7 +100,19 @@ impl EffectWindow {
                 controller: entry.controller(),
                 instant_or_sorcery,
             })
-            .collect())
+            .collect();
+        out.extend(
+            players
+                .into_iter()
+                .map(|player| RulesOccurrence::PlayerTargeted {
+                    player,
+                    entry: id,
+                    controller: entry.controller(),
+                    spell: is_spell,
+                    instant_or_sorcery,
+                }),
+        );
+        Ok(out)
     }
 
     pub(super) fn counter_ward_source(
@@ -153,7 +171,13 @@ impl EffectWindow {
         if !self.window.entries().iter().any(|s| s.id() == target) {
             return Ok(false);
         }
-        if self.spell_cannot_be_countered(target)? {
+        let countering = self
+            .window
+            .entries()
+            .iter()
+            .chain(self.window.resolving())
+            .find(|s| s.id() == source_entry);
+        if self.spell_cannot_be_countered_by(target, countering)? {
             return Ok(false);
         }
         let previous = self.rules_snapshot(None)?;

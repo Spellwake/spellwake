@@ -104,6 +104,12 @@ impl EffectWindow {
                 TriggeredManaRule::ImprintedLandTappedSameType
                 | TriggeredManaRule::LandTappedSameType
                 | TriggeredManaRule::LandTappedWhileMonarch => colored_mana(),
+                TriggeredManaRule::LandTappedChosenColor { .. } => self
+                    .entry_color_choices
+                    .get(&source)
+                    .copied()
+                    .map(|mana| BTreeSet::from([mana]))
+                    .unwrap_or_else(colored_mana),
             },
             ManaOutput::TwoColors { .. } => colored_mana(),
             ManaOutput::CounterBased(kind) => match kind {

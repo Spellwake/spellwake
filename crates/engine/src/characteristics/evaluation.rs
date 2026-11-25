@@ -300,6 +300,7 @@ pub(crate) fn evaluate(
             inherited_mana: BTreeMap::new(),
             granted_combat_keywords: BTreeMap::new(),
             blocking_restrictions: Vec::new(),
+            granted_restrictions: Vec::new(),
             granted_unblockable: false,
             cannot_be_sacrificed: false,
             cannot_be_untapped: false,
@@ -308,6 +309,7 @@ pub(crate) fn evaluate(
             activate_as_though_haste: false,
             cannot_be_targeted_by_auras: false,
             cannot_be_targeted_by_colors: crate::program::ColorMask::EMPTY,
+            cannot_be_targeted_by_spells_of_colors: crate::program::ColorMask::EMPTY,
             hexproof_ignored_by: BTreeSet::new(),
             power_toughness,
         };
@@ -806,6 +808,9 @@ pub(crate) fn evaluate(
                 if let StaticContinuousAbility::Restriction { rule, .. } = ability {
                     collect_restriction(source.object, ctrl, rule, &mut stamped);
                 }
+            }
+            for rule in &source.granted_restrictions {
+                collect_restriction(source.object, ctrl, rule, &mut stamped);
             }
         }
         for temp in world.state.temporary_statics.values() {
@@ -1397,6 +1402,10 @@ fn select_affected(
                 && selector
                     .land_subtype
                     .is_none_or(|kind| object.current_land_subtypes.contains(&kind))
+                && (selector.any_land_subtypes.is_empty()
+                    || !selector
+                        .any_land_subtypes
+                        .is_disjoint(&object.current_land_subtypes))
                 && selector.color.matches(&object.current_colors)
                 && match &selector.name {
                     NameFilter::Any => true,
@@ -1469,7 +1478,9 @@ fn static_source_condition_met(
         }
         OpponentsTurn => world.active_player != controller,
         ControllersTurn => world.active_player == controller,
-        HasKeyword(keyword) => objects[&source].has_keyword(*keyword),
+        HasKeyword(keyword) => objects
+            .get(&source)
+            .is_some_and(|o| o.has_keyword(*keyword)),
         Delirium => {
             let mut types = BTreeSet::new();
             for card in objects
@@ -1767,6 +1778,7 @@ fn static_source_condition_met(
         Eval(cond) => {
             let ctx = super::WorldEvalCtx {
                 active_player: world.active_player,
+                step: world.step,
                 participants: world.participants,
                 life: world.life,
                 combat: world.combat,
@@ -1990,6 +2002,7 @@ fn numeric(
         NumericExpression::Eval(expr) => {
             let ctx = super::WorldEvalCtx {
                 active_player: world.active_player,
+                step: world.step,
                 participants: world.participants,
                 life: world.life,
                 combat: world.combat,
@@ -2483,6 +2496,9 @@ fn generate(
                         StaticPart::BlockingRestriction(value) => {
                             ResolvedPart::BlockingRestriction(value.clone())
                         }
+                        StaticPart::GrantRestriction(restriction) => {
+                            ResolvedPart::GrantRestriction(restriction.clone())
+                        }
                         StaticPart::InheritExiledCreatureAbilities
                         | StaticPart::InheritCounteredCreatureAbilities => {
                             return Err(CharacteristicInvariantError::NoEligibleComponent);
@@ -2863,6 +2879,9 @@ fn generate(
                         StaticPart::BlockingRestriction(value) => {
                             ResolvedPart::BlockingRestriction(value.clone())
                         }
+                        StaticPart::GrantRestriction(restriction) => {
+                            ResolvedPart::GrantRestriction(restriction.clone())
+                        }
                     });
                 }
                 match resolved_parts.len() {
@@ -2989,7 +3008,11 @@ fn apply_part(
             );
         }
         ResolvedPart::GrantTrigger(ability) => {
-            object.granted_triggers.insert(key, (**ability).clone());
+            object
+                .granted_triggers
+                .entry(key)
+                .or_default()
+                .push((**ability).clone());
         }
         ResolvedPart::GrantAnyColorMana => {
             object.granted_any_color_mana.insert(key);
@@ -3006,6 +3029,13 @@ fn apply_part(
         ResolvedPart::CannotBeTargetedByColors(colors) => {
             object.cannot_be_targeted_by_colors =
                 object.cannot_be_targeted_by_colors.union(*colors);
+        }
+        ResolvedPart::CannotBeTargetedBySpellsOfColors(colors) => {
+            object.cannot_be_targeted_by_spells_of_colors =
+                object.cannot_be_targeted_by_spells_of_colors.union(*colors);
+        }
+        ResolvedPart::GrantRestriction(restriction) => {
+            object.granted_restrictions.push((**restriction).clone());
         }
         ResolvedPart::Abilities(change) => {
             if change.removal == Some(AbilityRemoval::Flying) {
@@ -3035,6 +3065,7 @@ fn apply_part(
                 object.granted_triggers.clear();
                 object.granted_activated.clear();
                 object.inherited_activation_terms.clear();
+                object.granted_restrictions.clear();
             }
             object.granted_unblockable |= change.grants_unblockable;
             object.doesnt_untap_during_untap_step |= change.doesnt_untap;
@@ -3047,8 +3078,12 @@ fn apply_part(
                     _ => Some(crate::characteristics::ActivationSuppression::NonMana),
                 };
             }
-            if let Some(trigger) = &change.granted_trigger {
-                object.granted_triggers.insert(key, (**trigger).clone());
+            if !change.granted_triggers.is_empty() {
+                object
+                    .granted_triggers
+                    .entry(key)
+                    .or_default()
+                    .extend(change.granted_triggers.iter().cloned());
             }
             object
                 .suppressed_keywords
@@ -3129,6 +3164,7 @@ fn apply_part(
                 object.granted_triggers.clear();
                 object.granted_activated.clear();
                 object.inherited_activation_terms.clear();
+                object.granted_restrictions.clear();
             }
             apply_subtype_operation(&change.land_subtypes, &mut object.current_land_subtypes);
             if !object.has_type(CardType::Land) {

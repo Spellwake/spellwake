@@ -350,7 +350,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             body: ExecutableBody::new(BodyTarget::None, vec![Instruction::ReturnDyingSourceTapped]),
         };
         let parts = ResolvedPartsSpec(vec![
-            ResolvedPartSpec::Abilities(AbilityChange { granted_trigger: Some(Box::new(grant)), ..Default::default() }),
+            ResolvedPartSpec::Abilities(AbilityChange { granted_triggers: vec![grant], ..Default::default() }),
             ResolvedPartSpec::ModifyPT(PowerToughness {
                 power: signed_stat(power)?.into(), toughness: signed_stat(toughness)?.into(),
             }),

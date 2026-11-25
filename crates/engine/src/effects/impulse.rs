@@ -174,6 +174,7 @@ impl EffectWindow {
                     entry: entry.id(),
                     instruction: index,
                     controller: Some(entry.controller()),
+                    tapped: false,
                 },
                 vec![exiled],
                 append,

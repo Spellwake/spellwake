@@ -318,6 +318,11 @@ impl EffectWindow {
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::MoveCounters { .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+            | Instruction::DrawGame
+            | Instruction::TurnFaceUpSubject { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -643,7 +648,7 @@ impl EffectWindow {
                     .ok_or(EffectError::WrongResolutionFrame)?
                     .results
                     .counter_target_types = target_type_set;
-                if self.spell_cannot_be_countered(countered)? {
+                if self.spell_cannot_be_countered_by(countered, Some(&entry))? {
                     self.resolution_cursor_mut()
                         .ok_or(EffectError::WrongResolutionFrame)?
                         .results
