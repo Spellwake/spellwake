@@ -1,5 +1,10 @@
 import { appearanceSchema } from "./appearance.ts";
 export * from "./qualified-intents.ts";
+export * from "./custom-cards.ts";
+import {
+  customDeckEntriesSchema,
+  deckFaceCardSchema,
+} from "./custom-cards.ts";
 export { appearanceSchema, type AppearanceSelection } from "./appearance.ts";
 import { makeCommandDispositionSchema } from "./command-protocol.ts";
 /** Validated public application protocol, paired with native Rust DTOs. */
@@ -428,7 +433,13 @@ export const saveDeckSchema = z
     deckId: identifierSchema,
     expectedRevisionId: identifierSchema.nullable(),
     entries: deckEntriesSchema,
+    customEntries: customDeckEntriesSchema.optional(),
   })
+  .refine(
+    (input) =>
+      input.entries.length + (input.customEntries?.length ?? 0) <= 1000,
+    "Too many combined deck entries.",
+  )
   .refine(
     (input) => new TextEncoder().encode(JSON.stringify(input)).length <= 262144,
     "Deck request is too large.",
@@ -441,13 +452,23 @@ export const deckSettingsSchema = z.strictObject({
   appearance: appearanceSchema,
 });
 /**
- * A settings change may also name the deck's face card, a card in its saved
- * contents. The observed baseline never carries it; omitting it keeps the
- * current face card.
+ * A settings change may also name the deck's face card (either an official card
+ * definition or a custom card revision in its saved contents, never both).
+ * The observed baseline never carries either face field.
  */
-export const deckSettingsChangeSchema = deckSettingsSchema.extend({
-  faceCardId: identifierSchema.optional(),
-});
+export const deckSettingsChangeSchema = deckSettingsSchema
+  .extend({
+    faceCardId: identifierSchema.optional(),
+    faceCustomCardRevisionId: identifierSchema.optional(),
+  })
+  .refine(
+    (value) =>
+      !(
+        value.faceCardId !== undefined &&
+        value.faceCustomCardRevisionId !== undefined
+      ),
+    "faceCardId and faceCustomCardRevisionId are mutually exclusive.",
+  );
 export const changeDeckSettingsSchema = z
   .strictObject({
     requestId: identifierSchema,
@@ -495,6 +516,10 @@ export const deckCommandErrorsSchema = z.union([
     settings: z.literal("deck settings changed; reload before saving"),
   }),
   z.strictObject({ faceCard: z.literal("card not in deck") }),
+  z.strictObject({
+    customEntries: z.literal("custom cards require open play"),
+  }),
+  z.strictObject({ mode: z.literal("custom cards require open play") }),
 ]);
 export const deckCommandDispositionSchema = makeCommandDispositionSchema(
   deckCommandErrorsSchema,
@@ -520,16 +545,11 @@ export const deckSummarySchema = z.strictObject({
   format: deckFormatSchema,
   appearance: appearanceSchema,
   /**
-   * The card shown on the deck box, with its official art where the catalogue
-   * has it. Null for a deck without cards; absent from servers older than it.
+   * The card shown on the deck box, supporting both official Scryfall art and
+   * custom card revision art. Null for a deck without cards; absent from servers older than it.
    */
-  faceCard: z
-    .strictObject({
-      definitionId: identifierSchema,
-      artUrl: z.string().max(2048).startsWith("https://").nullable(),
-    })
-    .nullable()
-    .optional(),
+  faceCard: deckFaceCardSchema.nullable().optional(),
+  hasCustomCards: z.boolean().optional().default(false),
 });
 export type DeckSummary = z.infer<typeof deckSummarySchema>;
 export const deckDetailSchema = z
@@ -540,6 +560,7 @@ export const deckDetailSchema = z
         id: identifierSchema,
         number: positiveAmountSchema,
         entries: deckEntriesSchema,
+        customEntries: customDeckEntriesSchema.optional().default([]),
       })
       .nullable(),
   })

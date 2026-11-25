@@ -15,6 +15,8 @@ export type LobbyDeck = {
   name: string;
   formatName: string;
   appearance: BoxAppearance;
+  lentByHost?: boolean;
+  hasCustomCards?: boolean;
 };
 /** The AI's own choice of deck, offered first in the AI's chooser. */
 export const RANDOM_DECK = "random";
@@ -58,6 +60,8 @@ export type LobbyRules = {
   match: "Single game" | "Best of three";
   planechase: boolean | null;
   influence: string | null;
+  allowCustomCards?: boolean;
+  shareHostDecks?: boolean;
 };
 /** What the rules drawer may change. A field with no choices is shown but not editable. */
 export type RulesChoices = {
@@ -67,6 +71,9 @@ export type RulesChoices = {
   matches: readonly LobbyRules["match"][];
   planechase: boolean;
   influences: readonly string[];
+  allowCustomCards?: boolean;
+  shareHostDecks?: boolean;
+  canEnableSupporterOptions?: boolean;
 };
 
 export type Phase =

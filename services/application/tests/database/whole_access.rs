@@ -18,7 +18,7 @@ async fn subject(c: &Client, actor: Uuid) -> Result<Uuid, tokio_postgres::Error>
 async fn every_relation_preserves_rls_invoker_views_and_closed_runtime_mutations() -> TestResult {
     let c = connection().await?;
     let relations=c.query("SELECT c.oid,c.relname,c.relkind::text,c.relrowsecurity,c.relforcerowsecurity,coalesce(c.reloptions,'{}'), (SELECT quote_ident(a.attname) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND a.attgenerated='' ORDER BY a.attnum LIMIT 1) FROM pg_class c WHERE c.relnamespace='app'::regnamespace AND c.relkind IN('r','v') ORDER BY c.relname",&[]).await?;
-    assert_eq!(relations.len(), 121);
+    assert_eq!(relations.len(), 126);
     for row in &relations {
         let name: String = row.get(1);
         let kind: String = row.get(2);
@@ -638,7 +638,7 @@ async fn every_selectable_column_matches_the_reviewed_whole_relation_capability_
     let c = connection().await?;
     let approved: Value =
         serde_json::from_str(include_str!("../fixtures/rls-relation-capabilities.json"))?;
-    assert_eq!(approved.as_array().unwrap().len(), 121);
+    assert_eq!(approved.as_array().unwrap().len(), 126);
     for relation in approved.as_array().unwrap() {
         let name = relation["relation"].as_str().unwrap();
         for role in [

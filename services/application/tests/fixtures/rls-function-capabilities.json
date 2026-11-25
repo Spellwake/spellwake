@@ -49,6 +49,13 @@
     ]
   },
   {
+    "name": "archive_custom_card_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_card_id uuid, p_archived boolean",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "assess_bundle",
     "arguments": "p_lines jsonb",
     "roles": [
@@ -100,6 +107,13 @@
   {
     "name": "can_read_conversation",
     "arguments": "p_conversation uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "can_read_custom_card",
+    "arguments": "p_card uuid",
     "roles": [
       "authenticated"
     ]
@@ -336,8 +350,22 @@
     ]
   },
   {
+    "name": "create_custom_card_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_payload jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "create_deck_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_name text, p_mode text, p_format uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "create_open_play_quick_test_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_custom_card_revision_id uuid, p_ai_plays_custom_card boolean",
     "roles": [
       "service_role"
     ]
@@ -372,9 +400,16 @@
   },
   {
     "name": "deck_face_card_json",
-    "arguments": "p_revision uuid, p_face uuid",
+    "arguments": "p_revision uuid, p_face uuid, p_custom_face uuid",
     "roles": [
       "authenticated"
+    ]
+  },
+  {
+    "name": "delete_custom_card_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_card_id uuid",
+    "roles": [
+      "service_role"
     ]
   },
   {
@@ -868,6 +903,13 @@
     ]
   },
   {
+    "name": "read_custom_card_art_for_owner",
+    "arguments": "p_actor uuid, p_revision_id uuid, p_face_index smallint",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "read_deck_command",
     "arguments": "p_subject uuid, p_session uuid, p_kind text, p_command jsonb",
     "roles": [
@@ -959,6 +1001,13 @@
     ]
   },
   {
+    "name": "read_host_shared_decks",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "read_human_ante_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_kind text, p_target uuid, p_expected numeric, p_lines jsonb, p_hash text",
     "roles": [
@@ -970,6 +1019,13 @@
     "arguments": "p_format uuid, p_season uuid, p_offset integer, p_limit integer",
     "roles": [
       "authenticated"
+    ]
+  },
+  {
+    "name": "read_lent_deck_face_art",
+    "arguments": "p_actor uuid, p_room_id uuid, p_deck_id uuid, p_custom_card_revision_id uuid",
+    "roles": [
+      "service_role"
     ]
   },
   {
@@ -1045,6 +1101,13 @@
   {
     "name": "read_my_cosmetic_catalogue",
     "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_custom_cards",
+    "arguments": "p_after uuid, p_limit integer, p_include_archived boolean, p_search text",
     "roles": [
       "authenticated"
     ]
@@ -1687,6 +1750,20 @@
     ]
   },
   {
+    "name": "read_revealed_match_custom_card",
+    "arguments": "p_actor uuid, p_game_id uuid, p_context_id uuid, p_custom_card_revision_id uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_revealed_match_custom_card_art",
+    "arguments": "p_actor uuid, p_game_id uuid, p_context_id uuid, p_custom_card_revision_id uuid, p_face_index smallint",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "read_room_ai_status",
     "arguments": "p_room uuid, p_after uuid, p_limit integer",
     "roles": [
@@ -1724,6 +1801,13 @@
   {
     "name": "read_room_invitation_command",
     "arguments": "p_subject uuid, p_session uuid, p_kind text, p_request uuid, p_target uuid, p_expected numeric, p_token_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_set_ai_slot_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_slot uuid, p_expected numeric, p_revision uuid",
     "roles": [
       "service_role"
     ]
@@ -1848,6 +1932,13 @@
     ]
   },
   {
+    "name": "record_revealed_custom_cards",
+    "arguments": "p_game_id uuid, p_context_id uuid, p_seat_index smallint, p_revision_ids uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "register_account",
     "arguments": "p_subject uuid, p_session uuid, p_username text, p_back uuid, p_sleeve uuid, p_dice uuid",
     "roles": [
@@ -1960,8 +2051,15 @@
     ]
   },
   {
+    "name": "save_custom_card_revision_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_card_id uuid, p_expected_revision uuid, p_payload jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "save_deck_command",
-    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_deck uuid, p_expected_revision uuid, p_entries jsonb",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_deck uuid, p_expected_revision uuid, p_entries jsonb, p_custom_entries jsonb",
     "roles": [
       "service_role"
     ]
@@ -2025,6 +2123,13 @@
   {
     "name": "send_game_message_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_match uuid, p_body text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "set_ai_slot_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_slot uuid, p_expected numeric, p_revision uuid",
     "roles": [
       "service_role"
     ]
@@ -2116,7 +2221,7 @@
   },
   {
     "name": "update_room_options",
-    "arguments": "p_room uuid, p_format_id uuid, p_ai_difficulty text, p_planechase_enabled boolean, p_range_of_influence integer",
+    "arguments": "p_room uuid, p_format_id uuid, p_ai_difficulty text, p_planechase_enabled boolean, p_range_of_influence integer, p_allow_custom_cards boolean, p_share_host_decks boolean",
     "roles": [
       "authenticated"
     ]

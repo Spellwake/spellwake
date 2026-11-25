@@ -36,8 +36,10 @@ export function CardFace({
   useEffect(() => {
     onStateChange?.(state);
   }, [state, onStateChange]);
+  const isLocalBlobOrData =
+    url !== null && (url.startsWith("blob:") || url.startsWith("data:"));
   const source =
-    url && attempt > 0
+    url && attempt > 0 && !isLocalBlobOrData
       ? `${url}${url.includes("?") ? "&" : "?"}try=${attempt}`
       : url;
   return (

@@ -85,7 +85,10 @@ export function RulesDrawer({
           match: match === "Best of three" ? "Best of three" : "Single game",
         }),
       )}
-      {(choices.planechase || choices.influences.length > 0) && (
+      {(choices.planechase ||
+        choices.influences.length > 0 ||
+        choices.allowCustomCards ||
+        choices.shareHostDecks) && (
         <div className={s.advanced}>
           <button
             type="button"
@@ -102,6 +105,66 @@ export function RulesDrawer({
           </button>
           {/* Collapsing hides the fields only; the draft keeps their values. */}
           <div className={s.advancedBody} hidden={!isAdvancedOpen}>
+            {choices.allowCustomCards && (
+              <div className={s.field}>
+                <span>
+                  Allow custom cards
+                  {!choices.canEnableSupporterOptions && " (Patron host)"}
+                </span>
+                <span
+                  className={s.toggle}
+                  role="radiogroup"
+                  aria-label="Allow custom cards"
+                >
+                  {([false, true] as const).map((on) => (
+                    <button
+                      key={String(on)}
+                      type="button"
+                      role="radio"
+                      aria-checked={Boolean(draft.allowCustomCards) === on}
+                      className={s.toggleOption}
+                      disabled={
+                        command.isBusy ||
+                        (on && !choices.canEnableSupporterOptions)
+                      }
+                      onClick={() => change({ allowCustomCards: on })}
+                    >
+                      {on ? "On" : "Off"}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            )}
+            {choices.shareHostDecks && (
+              <div className={s.field}>
+                <span>
+                  Lend my Open Play decks
+                  {!choices.canEnableSupporterOptions && " (Patron host)"}
+                </span>
+                <span
+                  className={s.toggle}
+                  role="radiogroup"
+                  aria-label="Lend my Open Play decks"
+                >
+                  {([false, true] as const).map((on) => (
+                    <button
+                      key={String(on)}
+                      type="button"
+                      role="radio"
+                      aria-checked={Boolean(draft.shareHostDecks) === on}
+                      className={s.toggleOption}
+                      disabled={
+                        command.isBusy ||
+                        (on && !choices.canEnableSupporterOptions)
+                      }
+                      onClick={() => change({ shareHostDecks: on })}
+                    >
+                      {on ? "On" : "Off"}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            )}
             {choices.planechase && (
               <div className={s.field}>
                 <span>Planechase</span>

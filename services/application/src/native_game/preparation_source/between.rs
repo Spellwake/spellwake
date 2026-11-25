@@ -41,6 +41,10 @@ pub struct NativeBetweenMatch {
     pub availability: Availability,
     pub structure: MatchStructure,
     pub started_at: String,
+    #[serde(default)]
+    pub allow_custom_cards: bool,
+    #[serde(default)]
+    pub share_host_decks: bool,
 }
 /// Original pool and currently selected sealed deck remain distinct identities.
 #[derive(Deserialize)]
@@ -62,6 +66,8 @@ pub struct NativeBetweenTerms {
     pub selected_revision_id: Uuid,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub entries: Vec<PreparationEntry>,
+    #[serde(default, deserialize_with = "crate::provider_json::objects")]
+    pub custom_entries: Vec<PreparationCustomEntry>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -76,7 +82,10 @@ impl Record {
         let d = &t.decision;
         let m = &t.r#match;
         valid_digest(&self.source_hash)
-            && t.version == "native-between-source-v1"
+            && matches!(
+                t.version.as_str(),
+                "native-between-source-v1" | "native-between-source-v2"
+            )
             && d.id == decision
             && m.revision == *basis
             && t.selected_revision_id == selected
@@ -95,7 +104,9 @@ impl Record {
                 }
                 None => d.deadline_revision.is_zero(),
             }
-            && valid_entries(&t.entries)
+            && (!(m.allow_custom_cards || m.share_host_decks) || m.mode == PlayMode::Open)
+            && (t.custom_entries.is_empty() || (m.mode == PlayMode::Open && m.allow_custom_cards))
+            && valid_all_entries(&t.entries, &t.custom_entries)
     }
 }
 /// Sealed observation, not permission to answer and not a retained mutation lease.

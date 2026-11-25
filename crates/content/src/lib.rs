@@ -240,6 +240,67 @@ pub struct MeldSet {
 }
 
 impl Inventory {
+    /// Construct a minimal single-card inventory for compiling one custom card without
+    /// altering or impersonating any dated official Scryfall bulk snapshot.
+    #[must_use]
+    pub fn single_custom(
+        card: InventoryCard,
+        loyalties: Vec<Option<String>>,
+        defenses: Vec<Option<String>>,
+        back_color_indicator: Option<Vec<String>>,
+        color_identity: Vec<String>,
+    ) -> Self {
+        let mut source_back_indicators = BTreeMap::new();
+        let mut source_color_identities = BTreeMap::new();
+        let mut source_loyalties = BTreeMap::new();
+        let mut source_defenses = BTreeMap::new();
+
+        if let Some(oracle_id) = card.oracle_id.as_ref() {
+            if let Some(indicator) = back_color_indicator {
+                source_back_indicators.insert(oracle_id.clone(), indicator);
+            }
+            source_color_identities.insert(oracle_id.clone(), color_identity);
+            source_loyalties.insert(oracle_id.clone(), loyalties);
+            if defenses.iter().any(Option::is_some) {
+                source_defenses.insert(oracle_id.clone(), defenses);
+            }
+        }
+
+        Self {
+            source_back_indicators,
+            source_meld_sets: BTreeMap::new(),
+            source_color_identities,
+            source_loyalties,
+            source_defenses,
+            source_preview_legalities: vec![BTreeMap::new()],
+            source_preview_by_oracle: BTreeMap::new(),
+            source: BulkMetadata {
+                object: "custom_card".to_owned(),
+                id: "custom-card-single".to_owned(),
+                kind: "custom_card".to_owned(),
+                updated_at: "1970-01-01T00:00:00Z".to_owned(),
+                jsonl_download_uri: String::new(),
+                compressed_size: 0,
+            },
+            compressed_sha256: String::new(),
+            source_records: 1,
+            unique_oracle_ids: usize::from(card.oracle_id.is_some()),
+            missing_oracle_ids: usize::from(card.oracle_id.is_none()),
+            duplicate_oracle_ids: Vec::new(),
+            unknown_legality_records: 0,
+            missing_required_oracle_ids: 0,
+            base_format_inventory_resolved: false,
+            eligible_by_format: BTreeMap::new(),
+            required_records: 0,
+            required_faces: 0,
+            required_without_program_evidence: 0,
+            qualified_by_this_report: 0,
+            executable_registry: "custom-card-single",
+            scope: "open-play-custom-card",
+            cards: vec![card],
+        }
+    }
+
     /// The two meld components and the result named by this row’s related-card data.
     pub fn meld_set(&self, oracle: &str) -> Option<&MeldSet> {
         self.source_meld_sets.get(oracle)

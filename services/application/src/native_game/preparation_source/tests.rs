@@ -150,7 +150,7 @@ fn reserved_source_rejects_impossible_roster_or_selection_without_a_three_game_c
     let path = "/rest/v1/rpc/read_native_admission_source";
     for (pointer, value) in [
         ("/data/gameId", json!(id(99))),
-        ("/data/version", json!("native-admission-source-v2")),
+        ("/data/version", json!("native-admission-source-v3")),
         ("/data/gameIndex", json!("1")),
         ("/data/competitive", json!(true)),
         ("/data/seats/1/seatId", json!(id(40))),
@@ -362,7 +362,7 @@ fn corruption_matrix_rejects_foreign_scope_actor_slot_cardinality_and_noncanonic
     let mut cases = Vec::new();
     for (path, value) in [
         ("/data/sourceHash", json!("A".repeat(64))),
-        ("/data/terms/version", json!("native-room-source-v2")),
+        ("/data/terms/version", json!("native-room-source-v3")),
         ("/data/terms/room/id", json!(id(99))),
         ("/data/terms/room/revision", json!("1")),
         ("/data/terms/release/id", json!(id(99))),
@@ -435,6 +435,81 @@ fn corruption_matrix_rejects_foreign_scope_actor_slot_cardinality_and_noncanonic
         assert!(read(&repo).is_err());
     }
     assert_eq!(mock.finish().len(), count);
+}
+
+#[test]
+fn v2_sources_enforce_open_play_noncompetitive_isolation_for_custom_entries() {
+    let sample_custom = json!([{
+        "entryId": id(91),
+        "customCardRevisionId": id(92),
+        "customCardId": id(93),
+        "rulesSha256": "c".repeat(64),
+        "name": "Aetherblade Vanguard",
+        "layout": "normal",
+        "rarity": "rare",
+        "facesRules": [{
+            "name": "Aetherblade Vanguard",
+            "manaCost": "{1}{W}{U}",
+            "typeLine": "Creature \u{2014} Human Artificer",
+            "oracleText": "Flying, vigilance",
+            "power": "2",
+            "toughness": "3",
+            "loyalty": null,
+            "defense": null,
+            "colorIndicator": null
+        }],
+        "compilerRevision": "oracle-v1",
+        "section": "main",
+        "quantity": "4"
+    }]);
+
+    let mut valid_room = fixture();
+    valid_room["data"]["terms"]["version"] = json!("native-room-source-v2");
+    valid_room["data"]["terms"]["room"]["allowCustomCards"] = json!(true);
+    valid_room["data"]["terms"]["room"]["shareHostDecks"] = json!(true);
+    valid_room["data"]["terms"]["slots"][0]["entries"] = json!([]);
+    valid_room["data"]["terms"]["slots"][0]["customEntries"] = sample_custom.clone();
+
+    let mut disallowed_room = valid_room.clone();
+    disallowed_room["data"]["terms"]["room"]["allowCustomCards"] = json!(false);
+
+    let mut collection_room = valid_room.clone();
+    collection_room["data"]["terms"]["room"]["mode"] = json!("collection");
+
+    let mut valid_reserved = reserved_fixture(false);
+    valid_reserved["data"]["version"] = json!("native-admission-source-v2");
+    valid_reserved["data"]["allowCustomCards"] = json!(true);
+    valid_reserved["data"]["seats"][0]["entries"] = json!([]);
+    valid_reserved["data"]["seats"][0]["customEntries"] = sample_custom;
+
+    let mut disallowed_reserved = valid_reserved.clone();
+    disallowed_reserved["data"]["allowCustomCards"] = json!(false);
+
+    let mock = Mock::new(vec![
+        Step::json(PATH, valid_room),
+        Step::json(PATH, disallowed_room),
+        Step::json(PATH, collection_room),
+        Step::json("/rest/v1/rpc/read_native_admission_source", valid_reserved),
+        Step::json(
+            "/rest/v1/rpc/read_native_admission_source",
+            disallowed_reserved,
+        ),
+    ]);
+    let repo = repository(&mock);
+    let room = read(&repo).unwrap().unwrap();
+    assert!(room.terms().room.allow_custom_cards);
+    assert_eq!(
+        room.terms().slots[0].custom_entries.as_ref().map(Vec::len),
+        Some(1)
+    );
+    assert!(read(&repo).is_err());
+    assert!(read(&repo).is_err());
+
+    let reserved = repo.reserved_game(id(35)).unwrap().unwrap();
+    assert!(reserved.metadata().allow_custom_cards);
+    assert_eq!(reserved.metadata().seats[0].custom_entries.len(), 1);
+    assert!(repo.reserved_game(id(35)).is_err());
+    assert_eq!(mock.finish().len(), 5);
 }
 #[test]
 fn nested_records_reject_positional_encodings_at_every_boundary() {

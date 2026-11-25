@@ -111,23 +111,116 @@ pub struct DeckSummary {
     /// The card shown on the deck box, or null for a deck without cards.
     #[serde(default, deserialize_with = "crate::provider_json::optional_object")]
     pub face_card: Option<DeckFaceCard>,
+    /// True when the deck's current revision contains one or more Open Play custom cards.
+    #[serde(default)]
+    pub has_custom_cards: bool,
 }
-/// A deck's face card and its official art, where the catalogue has it.
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeckFaceCard {
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
-    pub definition_id: Uuid,
-    pub art_url: Option<String>,
+/// A deck's face card: official catalogue printing or Open Play custom card revision.
+///
+/// Accepts both the new discriminated wire shape (`{ kind: "official" | "custom", ... }`)
+/// and the Phase 1 untagged legacy shape (`{ definitionId, artUrl }`) during zero-downtime
+/// rollout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeckFaceCard {
+    #[serde(rename_all = "camelCase")]
+    Official {
+        definition_id: Uuid,
+        art_url: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Custom {
+        custom_card_revision_id: Uuid,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        art_sha256: Option<String>,
+        art_path: Option<String>,
+    },
 }
+
+impl<'de> Deserialize<'de> for DeckFaceCard {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WireFace {
+            #[serde(default)]
+            kind: Option<String>,
+            #[serde(default, deserialize_with = "crate::identifiers::nullable_uuid")]
+            definition_id: Option<Uuid>,
+            #[serde(default)]
+            art_url: Option<String>,
+            #[serde(default, deserialize_with = "crate::identifiers::nullable_uuid")]
+            custom_card_revision_id: Option<Uuid>,
+            #[serde(default)]
+            art_sha256: Option<String>,
+            #[serde(default)]
+            art_path: Option<String>,
+        }
+        let wire = WireFace::deserialize(deserializer)?;
+        match wire.kind.as_deref() {
+            None | Some("official") => {
+                if wire.custom_card_revision_id.is_some()
+                    || wire.art_sha256.is_some()
+                    || wire.art_path.is_some()
+                {
+                    return Err(serde::de::Error::custom("unexpected custom face fields"));
+                }
+                let definition_id = wire
+                    .definition_id
+                    .ok_or_else(|| serde::de::Error::missing_field("definitionId"))?;
+                Ok(Self::Official {
+                    definition_id,
+                    art_url: wire.art_url,
+                })
+            }
+            Some("custom") => {
+                if wire.definition_id.is_some() || wire.art_url.is_some() {
+                    return Err(serde::de::Error::custom("unexpected official face fields"));
+                }
+                let custom_card_revision_id = wire
+                    .custom_card_revision_id
+                    .ok_or_else(|| serde::de::Error::missing_field("customCardRevisionId"))?;
+                Ok(Self::Custom {
+                    custom_card_revision_id,
+                    art_sha256: wire.art_sha256,
+                    art_path: wire.art_path,
+                })
+            }
+            Some(_) => Err(serde::de::Error::custom("invalid face card kind")),
+        }
+    }
+}
+
 impl DeckFaceCard {
     fn is_valid(&self) -> bool {
-        !self.definition_id.is_nil()
-            && self.art_url.as_deref().is_none_or(|url| {
-                url.starts_with("https://")
-                    && url.len() <= 2048
-                    && !url.contains(char::is_whitespace)
-            })
+        match self {
+            Self::Official {
+                definition_id,
+                art_url,
+            } => {
+                !definition_id.is_nil()
+                    && art_url.as_deref().is_none_or(|url| {
+                        url.starts_with("https://")
+                            && url.len() <= 2048
+                            && !url.contains(char::is_whitespace)
+                    })
+            }
+            Self::Custom {
+                custom_card_revision_id,
+                art_sha256,
+                art_path,
+            } => {
+                !custom_card_revision_id.is_nil()
+                    && art_sha256
+                        .as_deref()
+                        .is_none_or(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                    && art_path.as_deref().is_none_or(|path| {
+                        path.starts_with("/v1/")
+                            && path.len() <= 512
+                            && !path.contains("..")
+                            && !path.contains(char::is_whitespace)
+                    })
+            }
+        }
     }
 }
 impl DeckSummary {

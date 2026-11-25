@@ -31,6 +31,7 @@ const detail: DeckDetail = {
       diceId: id(10),
       playmatId: null,
     },
+    hasCustomCards: false,
   },
   revision: {
     id: REVISION,
@@ -55,6 +56,7 @@ const detail: DeckDetail = {
         quantity: "2",
       },
     ],
+    customEntries: [],
   },
 };
 const labels: CatalogueLabels = {

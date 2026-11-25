@@ -9,7 +9,7 @@ import { useDemoLobby } from "./demo-lobby";
 
 /** Where a mode's lobby returns to. */
 export const shelfPath = (mode: PlayMode): string =>
-  mode === "open" ? "/open-play" : "/collection/decks";
+  mode === "open" ? "/open-play/decks" : "/collection/decks";
 export const lobbyPath = (mode: PlayMode): string =>
   mode === "open" ? "/open-play/lobby" : "/collection/lobby";
 
