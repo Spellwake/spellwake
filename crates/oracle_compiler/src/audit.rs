@@ -35,6 +35,15 @@ pub struct AuditFinding {
     pub detail: String,
 }
 
+impl AuditFinding {
+    /// True when this finding represents silent structural or semantic AST corruption rather than
+    /// an explicit `strict_compile_failure` (for example from a newly released set's mechanics).
+    #[must_use]
+    pub fn is_structural_defect(&self) -> bool {
+        self.severity == AuditSeverity::Critical && self.code != "strict_compile_failure"
+    }
+}
+
 /// Per-card audit report separating strict parse success, critical defects, and opaque strings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardAuditReport {
@@ -58,6 +67,16 @@ impl CardAuditReport {
     pub fn has_zero_critical_defects(&self) -> bool {
         self.strictly_compiled && self.critical_defects.is_empty()
     }
+
+    /// True when the card has zero structural/semantic corruption defects (independent of
+    /// explicit `strict_compile_failure` findings on unparsed clauses).
+    #[must_use]
+    pub fn has_zero_structural_defects(&self) -> bool {
+        !self
+            .critical_defects
+            .iter()
+            .any(AuditFinding::is_structural_defect)
+    }
 }
 
 /// Aggregated corpus-wide audit summary for CI gates, artifacts, and README badges.
@@ -66,11 +85,16 @@ pub struct CorpusAuditSummary {
     pub total_cards: usize,
     pub strictly_compiled_cards: usize,
     pub zero_critical_defect_cards: usize,
+    pub zero_structural_defect_cards: usize,
     pub fully_typed_pure_cards: usize,
     pub cards_with_critical_defects: usize,
+    pub cards_with_structural_defects: usize,
+    pub cards_with_strict_failures: usize,
     pub cards_with_opaque_strings: usize,
     pub critical_defect_counts: BTreeMap<String, usize>,
     pub critical_defect_samples: BTreeMap<String, Vec<String>>,
+    pub structural_defect_counts: BTreeMap<String, usize>,
+    pub structural_defect_samples: BTreeMap<String, Vec<String>>,
     pub opaque_bucket_counts: BTreeMap<String, usize>,
     pub opaque_bucket_samples: BTreeMap<String, Vec<String>>,
 }
@@ -81,9 +105,16 @@ impl CorpusAuditSummary {
         self.total_cards += 1;
         if report.strictly_compiled {
             self.strictly_compiled_cards += 1;
+        } else {
+            self.cards_with_strict_failures += 1;
         }
         if report.has_zero_critical_defects() {
             self.zero_critical_defect_cards += 1;
+        }
+        if report.has_zero_structural_defects() {
+            self.zero_structural_defect_cards += 1;
+        } else {
+            self.cards_with_structural_defects += 1;
         }
         if report.is_fully_typed_pure() {
             self.fully_typed_pure_cards += 1;
@@ -95,6 +126,7 @@ impl CorpusAuditSummary {
             self.cards_with_opaque_strings += 1;
         }
         let mut seen_crit = BTreeSet::new();
+        let mut seen_struct = BTreeSet::new();
         for f in &report.critical_defects {
             *self
                 .critical_defect_counts
@@ -107,6 +139,21 @@ impl CorpusAuditSummary {
                     .or_default();
                 if samples.len() < 10 {
                     samples.push(format!("{} [{}]: {}", report.name, f.path, f.detail));
+                }
+            }
+            if f.is_structural_defect() {
+                *self
+                    .structural_defect_counts
+                    .entry(f.code.clone())
+                    .or_insert(0) += 1;
+                if seen_struct.insert(f.code.clone()) {
+                    let samples = self
+                        .structural_defect_samples
+                        .entry(f.code.clone())
+                        .or_default();
+                    if samples.len() < 10 {
+                        samples.push(format!("{} [{}]: {}", report.name, f.path, f.detail));
+                    }
                 }
             }
         }
@@ -236,13 +283,14 @@ fn audit_face(
                 || !face.case_solved.abilities.is_empty()
                 || !face.case_solved.replacements.is_empty(),
         );
-    if has_rules_text && ast_items == 0 {
+    // 1. Silent empty AST on non-vanilla face (only when no parse failure was already recorded).
+    if has_rules_text && ast_items == 0 && face.failures.is_empty() {
         critical.push(AuditFinding {
             code: "empty_nonvanilla_face".to_string(),
             severity: AuditSeverity::Critical,
             path: path.to_string(),
             detail: format!(
-                "non-empty oracle text produced 0 AST items: {}",
+                "non-empty oracle text produced 0 AST items with no recorded failures: {}",
                 stripped.trim()
             ),
         });

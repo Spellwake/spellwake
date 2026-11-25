@@ -221,8 +221,11 @@ class HealthChecksTests(unittest.TestCase):
                 "totalCards": 32155,
                 "strictlyCompiledCards": 32155,
                 "zeroCriticalDefectCards": 32155,
+                "zeroStructuralDefectCards": 32155,
                 "fullyTypedPureCards": 29309,
                 "cardsWithCriticalDefects": 0,
+                "cardsWithStructuralDefects": 0,
+                "cardsWithStrictFailures": 0,
                 "cardsWithOpaqueStrings": 2846,
             }
             eps = catalog_refresh.write_parser_audit_badges(badges_dir, passing)
@@ -233,13 +236,43 @@ class HealthChecksTests(unittest.TestCase):
             self.assertIn("91.1%", eps["parserTypedAst"]["message"])
             self.assertNotIn("100.0%", eps["parserTypedAst"]["message"])
 
-            failing = dict(passing, zeroCriticalDefectCards=32150, cardsWithCriticalDefects=5)
+            new_set_unparsed = dict(
+                passing,
+                totalCards=32682,
+                strictlyCompiledCards=32541,
+                zeroCriticalDefectCards=32541,
+                zeroStructuralDefectCards=32682,
+                cardsWithCriticalDefects=141,
+                cardsWithStructuralDefects=0,
+                cardsWithStrictFailures=141,
+            )
+            unparsed_eps = catalog_refresh.write_parser_audit_badges(badges_dir, new_set_unparsed)
+            self.assertEqual(unparsed_eps["parserAuditDefects"]["color"], "yellow")
+            self.assertFalse(unparsed_eps["parserAuditDefects"]["isError"])
+            self.assertIn("0 corruption", unparsed_eps["parserAuditDefects"]["message"])
+            self.assertIn("141 unparsed", unparsed_eps["parserAuditDefects"]["message"])
+
+            failing = dict(
+                passing,
+                zeroCriticalDefectCards=32150,
+                zeroStructuralDefectCards=32150,
+                cardsWithCriticalDefects=5,
+                cardsWithStructuralDefects=5,
+            )
             fail_eps = catalog_refresh.write_parser_audit_badges(badges_dir, failing)
             self.assertEqual(fail_eps["parserAuditDefects"]["color"], "red")
             self.assertTrue(fail_eps["parserAuditDefects"]["isError"])
             self.assertIn("fail", fail_eps["parserAuditDefects"]["message"])
+            self.assertIn("5 structural", fail_eps["parserAuditDefects"]["message"])
 
-            empty = dict(passing, totalCards=0, strictlyCompiledCards=0, zeroCriticalDefectCards=0, fullyTypedPureCards=0)
+            empty = dict(
+                passing,
+                totalCards=0,
+                strictlyCompiledCards=0,
+                zeroCriticalDefectCards=0,
+                zeroStructuralDefectCards=0,
+                fullyTypedPureCards=0,
+            )
             empty_eps = catalog_refresh.write_parser_audit_badges(badges_dir, empty)
             self.assertEqual(empty_eps["parserAuditDefects"]["color"], "lightgrey")
             self.assertEqual(empty_eps["parserAuditDefects"]["message"], "unknown")

@@ -970,7 +970,8 @@ fn negative_strictness_and_auditor_self_tests() {
     let slice_ast = compile_card_with_options(&slice_probe, &vocab, opts);
     assert!(!slice_ast.strictly_compiled);
 
-    // 1. Unparseable garbage MUST fail strict compilation and trigger `strict_compile_failure`.
+    // 1. Unparseable garbage MUST fail strict compilation and trigger `strict_compile_failure`
+    //    WITHOUT falsely double-reporting `empty_nonvanilla_face` as structural corruption.
     let bogus_input = CardInput {
         oracle_id: "neg-1",
         name: "Synthetic Unparseable",
@@ -986,10 +987,55 @@ fn negative_strictness_and_auditor_self_tests() {
     let bogus_report = audit_card(&bogus_input, &bogus_ast, opts);
     assert!(!bogus_report.has_zero_critical_defects());
     assert!(
+        bogus_report.has_zero_structural_defects(),
+        "explicit strict_compile_failure must not double-emit structural corruption: {:?}",
+        bogus_report.critical_defects
+    );
+    assert!(
         bogus_report
             .critical_defects
             .iter()
             .any(|f| f.code == "strict_compile_failure")
+    );
+    assert!(
+        !bogus_report
+            .critical_defects
+            .iter()
+            .any(|f| f.code == "empty_nonvanilla_face")
+    );
+
+    // 1b. Trailing chooser suffixes MUST emit FilterPredicateAst::ChosenByPlayer instead of dropping chooser identity.
+    let chooser_input = CardInput {
+        oracle_id: "chooser-trailing",
+        name: "Chooser Trailing Probe",
+        layout: "normal",
+        faces: vec![FaceInput {
+            name: "Chooser Trailing Probe",
+            type_line: "Sorcery",
+            oracle_text: "Target opponent sacrifices a creature of your choice.",
+        }],
+    };
+    let chooser_ast = compile_card_with_options(&chooser_input, &vocab, opts);
+    let chooser_rep = audit_card(&chooser_input, &chooser_ast, opts);
+    assert!(chooser_rep.has_zero_critical_defects());
+    assert!(
+        matches!(
+            chooser_ast.faces[0].spell_effects.first(),
+            Some(InstructionAst::Sacrifice {
+                player: PlayerRefAst::TargetOpponent,
+                subject,
+                ..
+            }) if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Group(flt)
+                    if flt.predicates.iter().any(|p| matches!(
+                        p,
+                        FilterPredicateAst::ChosenByPlayer(PlayerRefAst::You)
+                    ))
+            )
+        ),
+        "trailing 'of your choice' must preserve ChosenByPlayer(You): {:#?}",
+        chooser_ast.faces[0].spell_effects
     );
 
     // 2. Auditor MUST detect synthetic Rust `{:?}` Debug leak, keyword hijack, empty modal,
