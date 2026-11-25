@@ -289,6 +289,108 @@ def _resolve_card_programs_command(binary_override: Path | None) -> list[str]:
     return ["cargo", "run", "--locked", "-p", "spellwake-card-programs", "--"]
 
 
+def _resolve_oracle_audit_command(binary_override: Path | None) -> list[str]:
+    if binary_override is not None:
+        return [str(binary_override)]
+    release_bin = ROOT / "target" / "release" / "spellwake-oracle-audit"
+    if release_bin.is_file():
+        return [str(release_bin)]
+    debug_bin = ROOT / "target" / "debug" / "spellwake-oracle-audit"
+    if debug_bin.is_file():
+        return [str(debug_bin)]
+    return [
+        "cargo",
+        "run",
+        "--locked",
+        "-p",
+        "spellwake-oracle-compiler",
+        "--bin",
+        "spellwake-oracle-audit",
+        "--",
+    ]
+
+
+def run_parser_semantic_audit(
+    snapshot_path: Path,
+    vocab_path: Path,
+    *,
+    audit_binary_override: Path | None = None,
+) -> dict[str, Any]:
+    """Run full-corpus Stage 1 parser semantic and structural invariant audit."""
+    cmd = _resolve_oracle_audit_command(audit_binary_override) + [
+        "audit-corpus",
+        "--snapshot",
+        str(snapshot_path),
+        "--vocab",
+        str(vocab_path),
+    ]
+    env = os.environ.copy()
+    env.setdefault("RUST_MIN_STACK", "67108864")
+    proc = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"spellwake-oracle-audit failed (exit {proc.returncode}): {proc.stderr.strip()}"
+        )
+    raw = json.loads(proc.stdout)
+    total = int(raw["total_cards"])
+    pure = int(raw["fully_typed_pure_cards"])
+    zero_crit = int(raw["zero_critical_defect_cards"])
+    return {
+        "totalCards": total,
+        "strictlyCompiledCards": int(raw["strictly_compiled_cards"]),
+        "zeroCriticalDefectCards": zero_crit,
+        "fullyTypedPureCards": pure,
+        "pureTypedAstPercent": round((pure / total * 100.0), 2) if total else 0.0,
+        "cardsWithCriticalDefects": int(raw["cards_with_critical_defects"]),
+        "cardsWithOpaqueStrings": int(raw["cards_with_opaque_strings"]),
+        "criticalDefectCounts": raw.get("critical_defect_counts", {}),
+        "criticalDefectSamples": raw.get("critical_defect_samples", {}),
+        "opaqueBucketCounts": raw.get("opaque_bucket_counts", {}),
+    }
+
+
+def write_parser_audit_badges(badges_dir: Path, parser_audit: dict[str, Any]) -> dict[str, Any]:
+    """Write honest Stage 1 parser purity and invariant-audit SVG badges."""
+    total = int(parser_audit.get("totalCards", 0))
+    pure = int(parser_audit.get("fullyTypedPureCards", 0))
+    crit = int(parser_audit.get("cardsWithCriticalDefects", 0))
+    pure_pct = (pure / total * 100.0) if total else 0.0
+    pure_color = "green" if pure_pct >= 99.0 else ("blue" if pure_pct >= 85.0 else "yellow")
+    typed_ep = badge_svg.write_badge(
+        badges_dir,
+        "parser-typed-ast",
+        "Parser (Pure Typed AST)",
+        f"{pure:,} / {total:,} ({pure_pct:.1f}%)",
+        pure_color,
+    )
+    if total > 0 and crit == 0:
+        audit_ep = badge_svg.write_badge(
+            badges_dir,
+            "parser-audit-defects",
+            "Parser Audit",
+            f"0 defects · {total:,} cards",
+            "green",
+            is_error=False,
+        )
+    else:
+        audit_ep = badge_svg.write_badge(
+            badges_dir,
+            "parser-audit-defects",
+            "Parser Audit",
+            f"fail · {crit:,} defects" if total > 0 else "unknown",
+            "red" if total > 0 else "lightgrey",
+            is_error=total > 0,
+        )
+    return {"parserTypedAst": typed_ep, "parserAuditDefects": audit_ep}
+
+
 def run_catalog_refresh(
     *,
     metadata_path: Path | None,
@@ -301,6 +403,8 @@ def run_catalog_refresh(
     output_path: Path,
     badges_dir: Path | None,
     binary_override: Path | None = None,
+    audit_binary_override: Path | None = None,
+    skip_parser_audit: bool = False,
     force_full_recompile: bool = False,
     bulk_api_url: str = DEFAULT_BULK_API_URL,
 ) -> dict[str, Any]:
@@ -383,6 +487,15 @@ def run_catalog_refresh(
         required_oracle_ids,
         game_log_path=game_log_path,
     )
+    parser_audit = (
+        None
+        if skip_parser_audit
+        else run_parser_semantic_audit(
+            snapshot_path,
+            vocab_path,
+            audit_binary_override=audit_binary_override,
+        )
+    )
 
     ordinary = report["ordinaryBaseFormats"]
     preview = report["previewFormats"]
@@ -427,6 +540,7 @@ def run_catalog_refresh(
             "byOrdinaryFormat": ordinary["byFormat"],
             "topBlockers": ordinary["topBlockers"],
         },
+        "parserSemanticAudit": parser_audit,
         "isolatedPreviewFormats": preview,
         "hostedPublicationRequirements": {
             "publishedToHostedDatabase": False,
@@ -451,10 +565,12 @@ def run_catalog_refresh(
         badge_svg.write_badge(
             badges_dir,
             "card-support-ast",
-            "Parser",
+            "Parser (Strict Parse)",
             f"{s1:,} / {req:,} ({s1_pct:.1f}%)",
             "blue",
         )
+        if parser_audit is not None:
+            write_parser_audit_badges(badges_dir, parser_audit)
         badge_svg.write_badge(
             badges_dir,
             "card-support-engine",
@@ -488,6 +604,15 @@ def run_catalog_refresh(
             "green" if preview["isolatedFromOrdinaryLegality"] else "red",
         )
 
+    if parser_audit is not None:
+        if parser_audit["totalCards"] == 0:
+            raise RuntimeError("Stage 1 parser semantic audit evaluated 0 cards")
+        if parser_audit["cardsWithCriticalDefects"] > 0:
+            raise RuntimeError(
+                f"Stage 1 parser semantic audit detected {parser_audit['cardsWithCriticalDefects']} "
+                f"card(s) with critical defects: {parser_audit['criticalDefectCounts']}"
+            )
+
     return summary
 
 
@@ -507,6 +632,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--badges-dir", type=Path, default=None)
     parser.add_argument("--binary", type=Path, default=None)
+    parser.add_argument("--audit-binary", type=Path, default=None)
+    parser.add_argument("--skip-parser-audit", action="store_true")
     parser.add_argument("--force-full-recompile", action="store_true")
     parser.add_argument("--bulk-api-url", default=DEFAULT_BULK_API_URL)
     args = parser.parse_args()
@@ -522,6 +649,8 @@ def main() -> int:
         output_path=args.output,
         badges_dir=args.badges_dir,
         binary_override=args.binary,
+        audit_binary_override=args.audit_binary,
+        skip_parser_audit=args.skip_parser_audit,
         force_full_recompile=args.force_full_recompile,
         bulk_api_url=args.bulk_api_url,
     )
