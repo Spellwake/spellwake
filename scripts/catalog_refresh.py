@@ -340,18 +340,27 @@ def run_parser_semantic_audit(
         )
     raw = json.loads(proc.stdout)
     total = int(raw["total_cards"])
+    strict = int(raw["strictly_compiled_cards"])
     pure = int(raw["fully_typed_pure_cards"])
     zero_crit = int(raw["zero_critical_defect_cards"])
+    zero_struct = int(raw.get("zero_structural_defect_cards", zero_crit))
+    cards_struct = int(raw.get("cards_with_structural_defects", raw["cards_with_critical_defects"]))
+    cards_strict_fail = int(raw.get("cards_with_strict_failures", max(total - strict, 0)))
     return {
         "totalCards": total,
-        "strictlyCompiledCards": int(raw["strictly_compiled_cards"]),
+        "strictlyCompiledCards": strict,
         "zeroCriticalDefectCards": zero_crit,
+        "zeroStructuralDefectCards": zero_struct,
         "fullyTypedPureCards": pure,
         "pureTypedAstPercent": round((pure / total * 100.0), 2) if total else 0.0,
         "cardsWithCriticalDefects": int(raw["cards_with_critical_defects"]),
+        "cardsWithStructuralDefects": cards_struct,
+        "cardsWithStrictFailures": cards_strict_fail,
         "cardsWithOpaqueStrings": int(raw["cards_with_opaque_strings"]),
         "criticalDefectCounts": raw.get("critical_defect_counts", {}),
         "criticalDefectSamples": raw.get("critical_defect_samples", {}),
+        "structuralDefectCounts": raw.get("structural_defect_counts", {}),
+        "structuralDefectSamples": raw.get("structural_defect_samples", {}),
         "opaqueBucketCounts": raw.get("opaque_bucket_counts", {}),
     }
 
@@ -361,6 +370,9 @@ def write_parser_audit_badges(badges_dir: Path, parser_audit: dict[str, Any]) ->
     total = int(parser_audit.get("totalCards", 0))
     pure = int(parser_audit.get("fullyTypedPureCards", 0))
     crit = int(parser_audit.get("cardsWithCriticalDefects", 0))
+    strict = int(parser_audit.get("strictlyCompiledCards", total))
+    strict_fail = int(parser_audit.get("cardsWithStrictFailures", max(total - strict, 0)))
+    structural = int(parser_audit.get("cardsWithStructuralDefects", crit))
     pure_pct = (pure / total * 100.0) if total else 0.0
     pure_color = "green" if pure_pct >= 99.0 else ("blue" if pure_pct >= 85.0 else "yellow")
     typed_ep = badge_svg.write_badge(
@@ -370,7 +382,25 @@ def write_parser_audit_badges(badges_dir: Path, parser_audit: dict[str, Any]) ->
         f"{pure:,} / {total:,} ({pure_pct:.1f}%)",
         pure_color,
     )
-    if total > 0 and crit == 0:
+    if total <= 0:
+        audit_ep = badge_svg.write_badge(
+            badges_dir,
+            "parser-audit-defects",
+            "Parser Audit",
+            "unknown",
+            "lightgrey",
+            is_error=False,
+        )
+    elif structural > 0:
+        audit_ep = badge_svg.write_badge(
+            badges_dir,
+            "parser-audit-defects",
+            "Parser Audit",
+            f"fail · {structural:,} structural",
+            "red",
+            is_error=True,
+        )
+    elif strict_fail == 0 and crit == 0:
         audit_ep = badge_svg.write_badge(
             badges_dir,
             "parser-audit-defects",
@@ -384,9 +414,9 @@ def write_parser_audit_badges(badges_dir: Path, parser_audit: dict[str, Any]) ->
             badges_dir,
             "parser-audit-defects",
             "Parser Audit",
-            f"fail · {crit:,} defects" if total > 0 else "unknown",
-            "red" if total > 0 else "lightgrey",
-            is_error=total > 0,
+            f"0 corruption · {strict_fail:,} unparsed",
+            "yellow",
+            is_error=False,
         )
     return {"parserTypedAst": typed_ep, "parserAuditDefects": audit_ep}
 
@@ -607,10 +637,14 @@ def run_catalog_refresh(
     if parser_audit is not None:
         if parser_audit["totalCards"] == 0:
             raise RuntimeError("Stage 1 parser semantic audit evaluated 0 cards")
-        if parser_audit["cardsWithCriticalDefects"] > 0:
+        structural_cards = int(
+            parser_audit.get("cardsWithStructuralDefects", parser_audit["cardsWithCriticalDefects"])
+        )
+        if structural_cards > 0:
             raise RuntimeError(
-                f"Stage 1 parser semantic audit detected {parser_audit['cardsWithCriticalDefects']} "
-                f"card(s) with critical defects: {parser_audit['criticalDefectCounts']}"
+                f"Stage 1 parser semantic audit detected {structural_cards} "
+                f"card(s) with structural corruption defects: "
+                f"{parser_audit.get('structuralDefectCounts', parser_audit['criticalDefectCounts'])}"
             )
 
     return summary

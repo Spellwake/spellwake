@@ -63,7 +63,7 @@ jobs:
           REFRESH_MODE: ${{ inputs.mode || 'scryfall-live' }}
           FORCE_RECOMPILE: ${{ inputs.force_full_recompile || false }}
         run: |
-          mkdir -p .catalog-refresh-state .catalog-refresh-out/badges
+          mkdir -p .catalog-refresh-state catalog-refresh-out/badges
           EXTRA_ARGS=()
           if [ "$FORCE_RECOMPILE" = "true" ]; then
             EXTRA_ARGS+=(--force-full-recompile)
@@ -78,8 +78,8 @@ jobs:
               --snapshot work/catalogue/oracle-cards-20261029210158.jsonl.gz \
               --vocab "$SPELLWAKE_CREATURE_VOCABULARY_INPUT" \
               --state-dir .catalog-refresh-state \
-              --output .catalog-refresh-out/catalog-support-summary.json \
-              --badges-dir .catalog-refresh-out/badges \
+              --output catalog-refresh-out/catalog-support-summary.json \
+              --badges-dir catalog-refresh-out/badges \
               --binary target/release/spellwake-card-programs \
               --audit-binary target/release/spellwake-oracle-audit \
               "${EXTRA_ARGS[@]}"
@@ -88,8 +88,8 @@ jobs:
               --fetch-scryfall \
               --vocab "$SPELLWAKE_CREATURE_VOCABULARY_INPUT" \
               --state-dir .catalog-refresh-state \
-              --output .catalog-refresh-out/catalog-support-summary.json \
-              --badges-dir .catalog-refresh-out/badges \
+              --output catalog-refresh-out/catalog-support-summary.json \
+              --badges-dir catalog-refresh-out/badges \
               --binary target/release/spellwake-card-programs \
               --audit-binary target/release/spellwake-oracle-audit \
               "${EXTRA_ARGS[@]}"
@@ -97,10 +97,10 @@ jobs:
       - name: Publish job summary
         if: always()
         run: |
-          if [ ! -f .catalog-refresh-out/catalog-support-summary.json ]; then exit 0; fi
+          if [ ! -f catalog-refresh-out/catalog-support-summary.json ]; then exit 0; fi
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
-          s = json.load(open(".catalog-refresh-out/catalog-support-summary.json"))
+          s = json.load(open("catalog-refresh-out/catalog-support-summary.json"))
           h = s["honestCardSupport"]
           p = s["isolatedPreviewFormats"]
           inc = s["incremental"]
@@ -117,7 +117,7 @@ jobs:
           print(f"| Stage 1: Strict AST parsed | {h['stage1AstParsed']:,} | `spellwake-oracle-compiler` (`allow_tabletop_honor_system=false`) |")
           pa = s.get("parserSemanticAudit")
           if pa:
-              print(f"| Stage 1 Audit: Zero critical defects | {pa['zeroCriticalDefectCards']:,} / {pa['totalCards']:,} | Critical defect cards: {pa['cardsWithCriticalDefects']:,} (`spellwake-oracle-audit`) |")
+              print(f"| Stage 1 Audit: Zero structural corruption | {pa['zeroStructuralDefectCards']:,} / {pa['totalCards']:,} | Structural defect cards: {pa['cardsWithStructuralDefects']:,}; unparsed cards: {pa['cardsWithStrictFailures']:,} (`spellwake-oracle-audit`) |")
               print(f"| Stage 1 Purity: Pure typed AST | {pa['fullyTypedPureCards']:,} / {pa['totalCards']:,} ({pa['pureTypedAstPercent']:.2f}%) | Cards with opaque fallbacks: {pa['cardsWithOpaqueStrings']:,} |")
           print(f"| Stage 2: Validated engine bound | {h['stage2EngineBound']:,} | `spellwake-card-programs` + `Program::validate` |")
           print(f"| Stage 3: Game qualified | {s3['verifiedCompleteCards'] if s3['verifiedCompleteCards'] is not None else 'unverified in this run'} | Declared hash-matched complete: {s3['declaredCompleteMatchingSnapshot']:,}; stale/drifted: {len(s3['staleOrDriftedEntries']):,} |")
@@ -128,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: catalog-support-report
-          path: .catalog-refresh-out/
+          path: catalog-refresh-out/
           retention-days: 30
 
   publish-badges:
@@ -148,14 +148,22 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: catalog-support-report
-          path: .badges-incoming
+          path: badges-incoming
       - name: Push catalog badges to orphan badges branch
         env:
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RESULT: ${{ needs.catalog-refresh.result }}
         run: |
-          if [ ! -d .badges-incoming/badges ]; then exit 0; fi
-          git init .badges-repo
-          cd .badges-repo
+          if [ ! -d badges-incoming/badges ] || ! compgen -G "badges-incoming/badges/*.svg" >/dev/null; then
+            if [ "$UPSTREAM_RESULT" = "success" ]; then
+              echo "ERROR: catalog-refresh succeeded but no badge SVGs were downloaded." >&2
+              exit 1
+            fi
+            echo "No badge SVGs available from failed catalog-refresh run; skipping push."
+            exit 0
+          fi
+          git init badges-repo
+          cd badges-repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
@@ -166,8 +174,8 @@ jobs:
               git checkout --orphan badges
               git rm -rf . >/dev/null 2>&1 || true
             fi
-            cp ../.badges-incoming/badges/*.svg . 2>/dev/null || true
-            cp ../.badges-incoming/badges/*.json . 2>/dev/null || true
+            cp ../badges-incoming/badges/*.svg . 2>/dev/null || true
+            cp ../badges-incoming/badges/*.json . 2>/dev/null || true
             git add -A
             if git diff --cached --quiet; then
               echo "Catalog badges unchanged."
