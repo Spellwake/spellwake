@@ -217,9 +217,10 @@ class HealthChecksTests(unittest.TestCase):
     def test_badge_svg_renders_valid_svg_and_escapes_xml(self) -> None:
         svg = badge_svg.render_svg("AI & Pets", "unknown <unqualified>", "lightgrey")
         self.assertTrue(svg.startswith("<svg "))
+        self.assertIn("viewBox=", svg)
         self.assertIn("AI &amp; Pets", svg)
         self.assertIn("unknown &lt;unqualified&gt;", svg)
-        self.assertIn("#6e7781", svg)
+        self.assertIn("#57606a", svg)
 
 
 if __name__ == "__main__":
