@@ -41,6 +41,7 @@ import { ImmersiveFrame } from "../../components/shell/ImmersiveFrame";
 import * as frame from "../../components/shell/frames.css";
 import type { MatchSource, ReadyMatch } from "../../match/match-sources";
 import {
+  DOCK_MARGIN,
   handShownHeight,
   seatBoard,
   type TableView,
@@ -57,6 +58,7 @@ import { DamagePills, DamageSources, useDamage } from "./damage";
 import { MatchStack, useStackReading } from "./stack";
 import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
 import { hasUnseen } from "../../match/table-panels";
+import { BUILT_ANSWERS, DecisionAnswer } from "./DecisionAnswers";
 import { MatchTable } from "./MatchTable";
 import { GameEndBand, GameEndPanel } from "./GameEnd";
 import * as table from "./match-table.css";
@@ -174,12 +176,15 @@ function DecisionPanel({
   decision,
   objects,
   seatNames,
+  pool,
   pending,
   onChoose,
 }: {
   decision: PlayerDecision;
   objects: ReadonlyMap<string, PlayerObject>;
   seatNames: ReadonlyMap<string, string>;
+  /** The answering player's unspent mana, for a cost paid from it. */
+  pool: readonly { color: string; amount: number }[];
   pending: boolean;
   onChoose: (
     response: Extract<
@@ -198,6 +203,21 @@ function DecisionPanel({
   const [chosenNumber, setChosenNumber] = useState<string>("0");
 
   const d = decision.domain;
+
+  if (BUILT_ANSWERS.has(d.kind))
+    return (
+      <DecisionAnswer
+        decision={decision}
+        pool={pool}
+        nameOf={(handle) => {
+          const object = objects.get(handle);
+          return object ? objectName(object) : "Card";
+        }}
+        labelOf={(target) => targetLabel(target, objects, seatNames)}
+        pending={pending}
+        onChoose={onChoose}
+      />
+    );
 
   if (d.kind === "options") {
     return (
@@ -547,7 +567,7 @@ function useLowerDock(): { trayHeight: number; clearBottom: number } {
       ? {
           // The frame reserves its tray in design pixels.
           trayHeight: (handShownHeight(stage) * 16) / rootSize,
-          clearBottom: stage.height - top + 10,
+          clearBottom: stage.height - top + DOCK_MARGIN,
         }
       : { trayHeight: 0, clearBottom: 0 };
     setDock((current) =>
@@ -1048,6 +1068,10 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   decision={activeDecision}
                   objects={objectByHandle}
                   seatNames={seatNames}
+                  pool={(viewerPlayer?.manaPool ?? []).map((mana) => ({
+                    color: mana.color,
+                    amount: Number(mana.amount),
+                  }))}
                   pending={source.commandPending}
                   onChoose={(response) =>
                     void source.sendAction({
