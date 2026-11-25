@@ -541,12 +541,7 @@ fn parse_delayed_trigger_header_e8(header_low: &str, vocab: &Vocabulary) -> Opti
             let mut cr = obj_type(CardTypeMask::CREATURE);
             cr.flags = cr.flags.union(ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN);
             cr.predicates
-                .push(FilterPredicateAst::FromSource(Box::new(ObjectFilterAst {
-                    predicates: vec![FilterPredicateAst::StateQualification(format!(
-                        "dealt_damage_by:{src:?}"
-                    ))],
-                    ..Default::default()
-                })));
+                .push(FilterPredicateAst::DealtDamageBy(Box::new(src)));
             SubjectRefAst::Group(Box::new(cr))
         } else {
             parse_subject_or_target(subj_raw.trim(), vocab).ok()?
@@ -1647,12 +1642,11 @@ fn parse_zone_choice_exchange_e8(
                 .unwrap_or(cnt_part.trim());
             ValueExprAst::Const(parse_number_word(num_s.trim())?)
         };
-        return Some(vec![InstructionAst::LookAt {
+        return Some(vec![InstructionAst::PlayerLookTopLibrary {
             player,
-            targets: vec![SubjectRefAst::Anaphora(format!(
-                "top_{count:?}_of_{}",
-                whose_raw.trim()
-            ))],
+            library: whose_raw.trim().to_string(),
+            count: Box::new(count),
+            reveal: false,
         }]);
     }
 
@@ -2405,7 +2399,7 @@ fn parse_sub_effect_e8(s: &str, low: &str, vocab: &Vocabulary) -> Option<Vec<Ins
             InstructionAst::GrantCastPermission {
                 player: PlayerRefAst::You,
                 cast_only: true,
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
                 free: true,
                 duration: "now".to_string(),
                 count_limit: None,

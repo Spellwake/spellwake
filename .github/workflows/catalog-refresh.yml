@@ -47,13 +47,16 @@ jobs:
           restore-keys: |
             spellwake-catalog-refresh-${{ runner.os }}-${{ hashFiles('crates/content/src/**', 'crates/oracle_compiler/src/**', 'crates/card_programs/src/**') }}-
             spellwake-catalog-refresh-${{ runner.os }}-
-      - name: Build content and card-programs CLIs
-        run: cargo build --locked --release -p spellwake-content -p spellwake-card-programs
-      - name: Run catalog and preview-format isolation unit tests
+      - name: Build content, parser audit, and card-programs CLIs
+        run: |
+          cargo build --locked --release -p spellwake-content -p spellwake-card-programs
+          cargo build --locked --release -p spellwake-oracle-compiler --bin spellwake-oracle-audit
+      - name: Run catalog, parser semantic audit, and preview-format isolation tests
         env:
           RUST_MIN_STACK: "67108864"
         run: |
           cargo test --locked -p spellwake-content
+          cargo test --locked -p spellwake-oracle-compiler --test real_card_semantic_suite
           cargo test --locked -p spellwake-card-programs -- catalog_support cli_support_report
       - name: Run incremental Scryfall refresh and honest support count report
         env:
@@ -78,6 +81,7 @@ jobs:
               --output .catalog-refresh-out/catalog-support-summary.json \
               --badges-dir .catalog-refresh-out/badges \
               --binary target/release/spellwake-card-programs \
+              --audit-binary target/release/spellwake-oracle-audit \
               "${EXTRA_ARGS[@]}"
           else
             python3 scripts/catalog_refresh.py \
@@ -87,10 +91,13 @@ jobs:
               --output .catalog-refresh-out/catalog-support-summary.json \
               --badges-dir .catalog-refresh-out/badges \
               --binary target/release/spellwake-card-programs \
+              --audit-binary target/release/spellwake-oracle-audit \
               "${EXTRA_ARGS[@]}"
           fi
       - name: Publish job summary
+        if: always()
         run: |
+          if [ ! -f .catalog-refresh-out/catalog-support-summary.json ]; then exit 0; fi
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           s = json.load(open(".catalog-refresh-out/catalog-support-summary.json"))
@@ -108,11 +115,16 @@ jobs:
           print("| --- | ---: | --- |")
           print(f"| Required ordinary base-format cards | {h['requiredBaseFormatCards']:,} | Commander, Standard, Pioneer, Modern, Legacy, Vintage |")
           print(f"| Stage 1: Strict AST parsed | {h['stage1AstParsed']:,} | `spellwake-oracle-compiler` (`allow_tabletop_honor_system=false`) |")
+          pa = s.get("parserSemanticAudit")
+          if pa:
+              print(f"| Stage 1 Audit: Zero critical defects | {pa['zeroCriticalDefectCards']:,} / {pa['totalCards']:,} | Critical defect cards: {pa['cardsWithCriticalDefects']:,} (`spellwake-oracle-audit`) |")
+              print(f"| Stage 1 Purity: Pure typed AST | {pa['fullyTypedPureCards']:,} / {pa['totalCards']:,} ({pa['pureTypedAstPercent']:.2f}%) | Cards with opaque fallbacks: {pa['cardsWithOpaqueStrings']:,} |")
           print(f"| Stage 2: Validated engine bound | {h['stage2EngineBound']:,} | `spellwake-card-programs` + `Program::validate` |")
           print(f"| Stage 3: Game qualified | {s3['verifiedCompleteCards'] if s3['verifiedCompleteCards'] is not None else 'unverified in this run'} | Declared hash-matched complete: {s3['declaredCompleteMatchingSnapshot']:,}; stale/drifted: {len(s3['staleOrDriftedEntries']):,} |")
           print(f"| Isolated preview format (`future`) | {p['eligibleByFormat'].get('future', 0):,} | Preview-only: {p['previewOnlyRecords']:,}; isolated from ordinary legality: `{p['isolatedFromOrdinaryLegality']}` |")
           PY
       - name: Upload catalog support report and badges
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: catalog-support-report

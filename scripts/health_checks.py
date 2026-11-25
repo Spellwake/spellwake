@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run real domain health checks and generate honest README SVG/JSON badges.
 
-Covers the seven tracked domains:
+Covers the eight tracked domains:
+- Oracle Parser
 - Patreon
 - Stripe
 - AI
@@ -60,10 +61,55 @@ class DomainSpec:
     frontend_checks: tuple[CommandSpec, ...]
     hosted_credentials: tuple[str, ...]
     unqualified_reason: str | None = None
+    local_only: bool = False
     notes: str = ""
 
 
 DOMAINS: tuple[DomainSpec, ...] = (
+    DomainSpec(
+        slug="oracle-parser",
+        label="Oracle Parser",
+        rust_checks=(
+            CommandSpec(
+                kind="cargo",
+                label="oracle compiler real-card semantic suite",
+                args=(
+                    "cargo",
+                    "test",
+                    "--locked",
+                    "-p",
+                    "spellwake-oracle-compiler",
+                    "--test",
+                    "real_card_semantic_suite",
+                ),
+                env_extra={
+                    "CARGO_TARGET_DIR": str(ROOT / "target"),
+                    "RUST_MIN_STACK": "67108864",
+                },
+            ),
+            CommandSpec(
+                kind="cargo",
+                label="oracle compiler unit regression tests",
+                args=(
+                    "cargo",
+                    "test",
+                    "--locked",
+                    "-p",
+                    "spellwake-oracle-compiler",
+                    "--lib",
+                ),
+                env_extra={
+                    "CARGO_TARGET_DIR": str(ROOT / "target"),
+                    "RUST_MIN_STACK": "67108864",
+                },
+            ),
+        ),
+        db_filters=(),
+        frontend_checks=(),
+        hosted_credentials=(),
+        local_only=True,
+        notes="Deterministic offline Stage 1 Oracle compiler verified against 103 real Scryfall cards across 15 layouts plus synthetic auditor self-tests.",
+    ),
     DomainSpec(
         slug="patreon",
         label="Patreon",
@@ -616,13 +662,22 @@ def evaluate_domain(
             "color": badge_color,
             "ariaLabel": f"{spec.label} local: {badge_msg}",
         },
-        "liveStatus": "unknown",
-        "liveBadge": {
-            "label": "",
-            "message": "unknown",
-            "color": "lightgrey",
-            "ariaLabel": f"{spec.label} live: unknown (needs hosted credentials)",
-        },
+        "liveStatus": "not-applicable" if spec.local_only else "unknown",
+        "liveBadge": (
+            {
+                "label": "",
+                "message": "n/a · offline",
+                "color": "lightgrey",
+                "ariaLabel": f"{spec.label} live: not applicable (offline deterministic check)",
+            }
+            if spec.local_only
+            else {
+                "label": "",
+                "message": "unknown",
+                "color": "lightgrey",
+                "ariaLabel": f"{spec.label} live: unknown (needs hosted credentials)",
+            }
+        ),
         "passedTests": total_passed,
         "failedTests": total_failed,
         "dbSkippedReason": db_skipped_reason,
@@ -667,7 +722,7 @@ def main() -> int:
         "--domain",
         action="append",
         choices=[d.slug for d in DOMAINS],
-        help="Run only selected domain(s); omit to run all seven domains.",
+        help="Run only selected domain(s); omit to run all eight domains.",
     )
     parser.add_argument("--skip-db", action="store_true", help="Skip isolated Postgres DB suites")
     parser.add_argument("--skip-frontend", action="store_true", help="Skip frontend Bun contract tests")

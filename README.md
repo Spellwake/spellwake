@@ -12,13 +12,32 @@ Use Bun 1.3.11 and the Rust toolchain pinned in `rust-toolchain.toml`. Run `bun 
 [![Domain Health](https://github.com/Spellwake/spellwake/actions/workflows/domain-health.yml/badge.svg?branch=main)](https://github.com/Spellwake/spellwake/actions/workflows/domain-health.yml)
 [![Catalog Refresh](https://github.com/Spellwake/spellwake/actions/workflows/catalog-refresh.yml/badge.svg?branch=main)](https://github.com/Spellwake/spellwake/actions/workflows/catalog-refresh.yml)
 
-![Parser](https://raw.githubusercontent.com/Spellwake/spellwake/badges/card-support-ast.svg)
+![Parser Strict Parse](https://raw.githubusercontent.com/Spellwake/spellwake/badges/card-support-ast.svg)
+![Parser Pure Typed AST](https://raw.githubusercontent.com/Spellwake/spellwake/badges/parser-typed-ast.svg)
+![Parser Audit](https://raw.githubusercontent.com/Spellwake/spellwake/badges/parser-audit-defects.svg)
 ![Rules Engine](https://raw.githubusercontent.com/Spellwake/spellwake/badges/card-support-engine.svg)
+![Stage 3 Qualified](https://raw.githubusercontent.com/Spellwake/spellwake/badges/card-support-qualified.svg)
+
+## Parser Audit & Testing Kit
+
+Stage 1 Oracle parsing (`crates/oracle_compiler`) is verified on three distinct axes rather than a single parse-count number:
+
+- **Parser (Strict Parse)**: ordinary base-format cards parsed with zero `ParseFailureAst` entries and `allow_tabletop_honor_system=false`.
+- **Parser Audit**: automated full-corpus structural and semantic invariant check (`spellwake-oracle-audit`) gating zero critical defects (no Rust `Debug` leaks, no keyword hijacks, no empty modal shells, no bad mana choices, no spurious `MODIFIED` flag collisions, no empty non-vanilla faces, and no honor-system leaks).
+- **Parser (Pure Typed AST)**: cards compiled purely into typed AST nodes with zero opaque prose fallbacks or uncompiled embedded abilities.
+
+Run the permanent real-card semantic test suite or full-corpus CLI auditor locally:
+
+```sh
+RUST_MIN_STACK=67108864 cargo test --locked -p spellwake-oracle-compiler --test real_card_semantic_suite -- --nocapture
+RUST_MIN_STACK=67108864 cargo run --locked --release -p spellwake-oracle-compiler --bin spellwake-oracle-audit -- audit-corpus --snapshot <oracle-cards.jsonl.gz> --vocab <creature-vocabulary.input.json> --max-critical 0
+```
 
 ## System Health
 
 | Domain | Local CI | Live |
 | --- | --- | --- |
+| **Oracle Parser** | ![Oracle Parser local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-oracle-parser.svg) | ![Oracle Parser live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-oracle-parser-live.svg) |
 | **Patreon** | ![Patreon local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-patreon.svg) | ![Patreon live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-patreon-live.svg) |
 | **Stripe** | ![Stripe local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-stripe.svg) | ![Stripe live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-stripe-live.svg) |
 | **AI** | ![AI local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-ai.svg) | ![AI live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-ai-live.svg) |

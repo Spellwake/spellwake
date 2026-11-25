@@ -450,6 +450,10 @@ pub enum FilterPredicateAst {
     PriorActionZoneRef {
         kind: String,
     },
+    /// Exact printed mana-cost membership (`with mana cost {0} or {1}`, e.g. Urza's Saga Ch. III).
+    ExactManaCostOneOf(Vec<String>),
+    /// Creature/permanent dealt damage by a specific referenced source (`wave_e8` dies-trigger).
+    DealtDamageBy(Box<SubjectRefAst>),
     StateQualification(String),
 }
 
@@ -1614,6 +1618,11 @@ pub enum ConditionAst {
     AllColors(Box<SubjectRefAst>),
     /// Typed check that `player` controls a permanent of each color.
     ControlsEachColor(PlayerRefAst),
+    /// Typed check that `player` gained at least `amount` life this turn (`Angelic Accord`, `Resplendent Angel`).
+    GainedLifeAtLeastThisTurn {
+        player: PlayerRefAst,
+        amount: i32,
+    },
 }
 
 /// Mana production specification.
@@ -2071,6 +2080,15 @@ pub enum TriggerEventAst {
     PlayerOrPermanentBecomesTargeted {
         player: PlayerRefAst,
         permanent_filter: Box<ObjectFilterAst>,
+    },
+    /// Typed trigger when `subject` fights (eliminates `fight:{subj:?}` Debug leak).
+    PermanentFights {
+        subject: Box<SubjectRefAst>,
+    },
+    /// Typed trigger when `subject` regenerates (eliminates `regenerates:{subj:?}` Debug leak).
+    PermanentRegenerates {
+        subject: Box<SubjectRefAst>,
+        this_way: bool,
     },
 }
 
@@ -3503,6 +3521,50 @@ pub enum InstructionAst {
         rule: String,
         duration: DurationAst,
     },
+    /// Typed reveal of a specific subject by `player` (eliminates `LookTopLibrary { library: "ref:{who:?}" }`).
+    RevealByPlayer {
+        player: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+    },
+    /// Optional-cardinality / variable discard (`discard up to two cards`, `discard any number of cards`, `Fable Ch. II`).
+    DiscardUpTo {
+        player: PlayerRefAst,
+        max_count: Box<ValueExprAst>,
+        filter: Option<Box<ObjectFilterAst>>,
+        any_number: bool,
+        all: bool,
+        random: bool,
+    },
+    /// Skip `count` upcoming turns for `player` (`Eater of Days`: skip next two turns).
+    SkipNextTurns {
+        player: PlayerRefAst,
+        count: u8,
+    },
+    /// Apply or remove goaded status on `subject` (distinct from `SetSuspected`).
+    SetGoaded {
+        subject: Box<SubjectRefAst>,
+        remove: bool,
+    },
+    /// Choose a targeted player (`Sen Triplets`: `choose target opponent`).
+    ChoosePlayerTarget {
+        player: PlayerRefAst,
+    },
+    /// Player looks at (or reveals) the top N cards of a specific player's library.
+    PlayerLookTopLibrary {
+        player: PlayerRefAst,
+        library: String,
+        count: Box<ValueExprAst>,
+        reveal: bool,
+    },
+    /// Action performed for the player with the highest or lowest life total (`Loxodon Peacekeeper`, `Celestial Convergence`).
+    ExtremeLifePlayerAction {
+        highest: bool,
+        action: Box<InstructionAst>,
+    },
+    /// Resolution-time imperative `Pay any amount of mana` producing `PriorResult` (`Karn, Living Legacy` -1).
+    PayAnyAmountOfMana {
+        player: PlayerRefAst,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -3913,6 +3975,13 @@ pub enum StaticAbilityAst {
         subject: Box<SubjectRefAst>,
         granted_text: String,
         granted_abilities: Option<Box<FaceAst>>,
+    },
+    /// Additive trigger multiplier scoped to matching trigger-source permanents (`Panharmonicon`: +1 for permanents you control).
+    ScopedTriggerMultiplier {
+        event_desc: String,
+        source_filter: Box<ObjectFilterAst>,
+        additional_triggers: u8,
+        condition: Option<Box<ConditionAst>>,
     },
 }
 
