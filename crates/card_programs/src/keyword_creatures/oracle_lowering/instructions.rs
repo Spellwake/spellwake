@@ -6033,7 +6033,11 @@ pub(super) fn lower_instruction(
             }
             _ => Err("oracle:unsupported-tap-perm"),
         },
-        InstructionAst::UntapPermanent { subject } => match subject.as_ref() {
+        InstructionAst::UntapPermanent { count: Some(_), .. }
+        | InstructionAst::UntapPermanent { up_to: true, .. } => {
+            Err("oracle:unsupported-untap-perm")
+        }
+        InstructionAst::UntapPermanent { subject, .. } => match subject.as_ref() {
             s if is_self_pronoun(s, builder, self_pronoun_valid) => {
                 builder.instructions.push(Instruction::UntapAbilitySource);
                 Ok(())
@@ -6212,6 +6216,8 @@ pub(super) fn lower_instruction(
                     lower_instruction(
                         &InstructionAst::UntapPermanent {
                             subject: Box::new(it.clone()),
+                            count: None,
+                            up_to: false,
                         },
                         builder,
                         vocabulary,
