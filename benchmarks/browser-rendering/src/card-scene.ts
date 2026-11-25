@@ -30,6 +30,7 @@ import {
 } from "./table-interaction";
 import type { SceneSettings, SceneSettingId } from "./scene-settings";
 import { createPressedSleeveSeam } from "./sleeve-profile";
+import { solidSleeveDesigns, solidSleeveDesignSchema } from "./sleeve-colors";
 
 // With the 2.5-inch card width, printed faces sit about 0.28 mm apart.
 const CARD_THICKNESS_SCALE = 0.6;
@@ -459,14 +460,9 @@ export async function mountCardScene(
       return { amount, mask };
     }
     const reverseFoil = ornamentalFoil(reverse.material, "card-back");
-    const sleeveDesignSchema = z.enum([
-      ...supporterNames,
-      "midnight",
-      "black-matte",
-      "black-gloss",
-      "dragon-gloss",
-      "penny",
-      "rigid",
+    const sleeveDesignSchema = z.union([
+      solidSleeveDesignSchema,
+      z.enum([...supporterNames, "midnight", "dragon-gloss", "penny", "rigid"]),
     ]);
     // Reference-derived grain affects lighting only; pigment and artwork remain independent.
     const [matteNormal, matteRoughness] = await Promise.all([
@@ -1684,12 +1680,16 @@ export async function mountCardScene(
         sleeveFoil.amount.value = supporterMask ? 1 : 0;
         sleeveFoil.mask.value =
           supporterMask ?? supporterMasks.get("benefactor");
-        const isMatte = choice === "black-matte" || choice === "initiate";
+        const solidSleeve = solidSleeveDesigns.find(
+          (design) => design.id === choice,
+        );
+        const isMatte =
+          solidSleeve?.finish === "matte" || choice === "initiate";
         matteBackUniform.value = Number(isMatte);
         const isClear = choice === "penny" || choice === "rigid";
         const isRigid = choice === "rigid";
         const isGloss =
-          choice === "black-gloss" ||
+          solidSleeve?.finish === "gloss" ||
           choice === "dragon-gloss" ||
           (supporter.success && !isMatte);
         const hasArtwork = choice === "dragon-gloss";
@@ -1706,14 +1706,11 @@ export async function mountCardScene(
           supporterTexture ??
           (choice === "midnight" ? midnightArt : hasArtwork ? dragonArt : null);
         backMaterial.color.setHex(
-          isClear
-            ? 0xf0f7ff
-            : choice === "black-matte" || choice === "black-gloss"
-              ? isMatte
-                ? 0x303133
-                : 0x101112
-              : 0xffffff,
+          isClear ? 0xf0f7ff : solidSleeve ? solidSleeve.pigment : 0xffffff,
         );
+        // Swatches describe displayed color; colored albedo is toned for this studio light.
+        if (solidSleeve && !solidSleeve.id.startsWith("black-"))
+          backMaterial.color.multiplyScalar(0.45);
         backMaterial.transparent = isClear;
         backMaterial.opacity = isClear ? (isRigid ? 0.055 : 0.025) : 1;
         backMaterial.depthWrite = !isClear;
@@ -1743,21 +1740,48 @@ export async function mountCardScene(
             : isGloss
               ? 0.35
               : 0.3;
-        backMaterial.normalMap = isMatte ? matteNormal : null;
-        backMaterial.normalScale.setScalar(isMatte ? 0.9 : 1);
-        backMaterial.roughnessMap = isMatte ? matteRoughness : null;
+        // Polished film retains faint grain in its reflections without the matte relief.
+        backMaterial.normalMap = isMatte || isGloss ? matteNormal : null;
+        backMaterial.normalScale.setScalar(isMatte ? 0.9 : isGloss ? 0.14 : 1);
+        backMaterial.roughnessMap = isMatte || isGloss ? matteRoughness : null;
+        backMaterial.clearcoatNormalMap = isGloss ? matteNormal : null;
+        backMaterial.clearcoatNormalScale.setScalar(isGloss ? 0.08 : 1);
+        // Solid finishes share pigment and shallow grain; reflection separates them.
+        if (solidSleeve?.finish === "matte") {
+          backMaterial.roughness = 0.6;
+          backMaterial.clearcoat = 0.18;
+          backMaterial.clearcoatRoughness = 0.4;
+          backMaterial.specularIntensity = 0.42;
+          backMaterial.envMapIntensity = 0.42;
+          backMaterial.normalScale.setScalar(0.4);
+          backMaterial.clearcoatNormalMap = matteNormal;
+          backMaterial.clearcoatNormalScale.setScalar(0.08);
+        } else if (solidSleeve?.finish === "gloss") {
+          backMaterial.roughness = 0.24;
+          backMaterial.clearcoat = 0.48;
+          backMaterial.clearcoatRoughness = 0.18;
+          backMaterial.specularIntensity = 0.55;
+          backMaterial.envMapIntensity = 0.5;
+          backMaterial.normalScale.setScalar(0.035);
+          backMaterial.clearcoatNormalScale.setScalar(0.015);
+        }
         backMaterial.needsUpdate = true;
-        const edgeColor = isClear
-          ? 0xc3d9eb
-          : supporter.success
-            ? choice === "benefactor"
-              ? 0x321c24
-              : 0x182233
-            : choice === "midnight"
-              ? 0x283449
-              : 0x101112;
+        const edgeColor = new THREE.Color(
+          isClear
+            ? 0xc3d9eb
+            : solidSleeve
+              ? solidSleeve.pigment
+              : supporter.success
+                ? choice === "benefactor"
+                  ? 0x321c24
+                  : 0x182233
+                : choice === "midnight"
+                  ? 0x283449
+                  : 0x101112,
+        );
+        if (solidSleeve) edgeColor.copy(backMaterial.color);
         for (const material of [rim.material, seams.material]) {
-          material.color.setHex(edgeColor);
+          material.color.copy(edgeColor);
           material.transparent = isClear;
           material.opacity = isClear ? (isRigid ? 0.32 : 0.12) : 1;
           material.depthWrite = !isClear;
@@ -1765,11 +1789,10 @@ export async function mountCardScene(
           material.needsUpdate = true;
         }
         // Compression smooths the grain at the weld without painting a heavy black frame.
-        if (choice === "black-matte")
-          seams.material.color.copy(backMaterial.color);
+        if (solidSleeve) seams.material.color.copy(backMaterial.color);
         if (isMatte) seams.material.roughness = 0.68;
         seams.castShadow = !isClear;
-        sleeveStock.material.color.setHex(edgeColor);
+        sleeveStock.material.color.copy(edgeColor);
         sleeveFront.material.opacity = isClear
           ? isRigid
             ? 0.05

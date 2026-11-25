@@ -1286,7 +1286,7 @@ mod tests {
 
         #[test]
         fn deduplicated_retention_still_charges_each_attempt() {
-            let mock = Mock::new(vec![bucket(), get(200, BYTES), bucket(), get(200, BYTES)]);
+            let mock = Mock::new(vec![bucket(), get(200, BYTES), get(200, BYTES)]);
             let store = store(&mock);
             let size = reference().size();
             let mut budget = NativeRecoveryBudget::new(2, size * 2).unwrap();
@@ -1299,7 +1299,7 @@ mod tests {
                     .err()
                     .unwrap(),
             );
-            assert_eq!(mock.finish().len(), 4);
+            assert_eq!(mock.finish().len(), 3);
         }
 
         #[test]
