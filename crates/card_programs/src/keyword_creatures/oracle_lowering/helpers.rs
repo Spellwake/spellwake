@@ -222,7 +222,7 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
         | InstructionAst::ReturnZone { subject, .. }
         | InstructionAst::MoveZone { subject, .. }
         | InstructionAst::TapPermanent { subject, .. }
-        | InstructionAst::UntapPermanent { subject }
+        | InstructionAst::UntapPermanent { subject, .. }
         | InstructionAst::TapOrUntapPermanent { subject }
         | InstructionAst::SkipNextUntap { subject }
         | InstructionAst::ModifyPT { subject, .. }

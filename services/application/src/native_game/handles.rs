@@ -75,6 +75,16 @@ impl NativeScope<'_> {
         self.validate_reference(reference)?;
         self.register_validated(reference)
     }
+
+    /// Return the already-issued opaque handle for `id` in this scope, if any.
+    ///
+    /// Never issues a new handle or widens snapshot visibility.
+    pub(crate) fn handle_of_object(&self, id: ObjectId) -> Option<PlayerHandle> {
+        self.references
+            .iter()
+            .find(|(_, value)| *value == NativeReference::Object(id))
+            .map(|(handle, _)| handle.clone())
+    }
     /// The projector owns this fresh evaluated cut for the same immutable source.
     /// No externally supplied or cached evaluation reaches this private method.
     pub(super) fn issue_evaluated(

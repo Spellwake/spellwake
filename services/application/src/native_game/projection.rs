@@ -992,10 +992,23 @@ impl Projection<'_, '_> {
                         })
                         .collect()
                 }
-                ObjectZone::Hand(_) => ids
-                    .into_iter()
-                    .filter(|id| source.execution().revealed_by_ninjutsu(*id))
-                    .collect(),
+                ObjectZone::Hand(_) => {
+                    let revealed_select: &[ObjectId] =
+                        match source.pending_decision().map(|d| d.frame()) {
+                            Some(spellwake_engine::game::RuleFrame::ResolutionSelect(frame))
+                                if frame.chooser() == self.scope.binding.actor =>
+                            {
+                                frame.domain()
+                            }
+                            _ => &[],
+                        };
+                    ids.into_iter()
+                        .filter(|id| {
+                            source.execution().revealed_by_ninjutsu(*id)
+                                || revealed_select.contains(id)
+                        })
+                        .collect()
+                }
                 _ => Vec::new(),
             }
         } else {

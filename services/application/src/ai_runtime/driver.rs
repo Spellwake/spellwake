@@ -10,7 +10,8 @@
 //!    `CheckpointCache` (waking human SSE streams immediately).
 use super::{
     affordances::{PriorityAffordances, auto_tap_plan, diagnose_rejection, fallback_command},
-    compact::{AiActionPlan, compact_prompt_with_affordances, compact_reply_schema_for_snapshot},
+    compact::{AiActionPlan, compact_prompt_with_knowledge, compact_reply_schema_for_snapshot},
+    knowledge::SeatKnowledgeView,
     lifecycle::{ActiveAiGameRow, ActiveAiSeatRow, AiControllerRegistry, AiLifecycleClient},
     provider::{AiDecisionProvider, AiModelRequest},
     scheduler::{AiScheduler, ScheduleDecision},
@@ -430,6 +431,7 @@ impl AiRuntimeService {
                         seat,
                         snapshot,
                         &view.affordances,
+                        &view.knowledge,
                         &own_recent,
                         &view_req,
                         state_map,
@@ -456,6 +458,7 @@ impl AiRuntimeService {
         seat: &ActiveAiSeatRow,
         snapshot: &PlayerSnapshot,
         affordances: &PriorityAffordances,
+        knowledge: &SeatKnowledgeView,
         own_recent: &[String],
         view_req: &PlayerViewRequest,
         state_map: &Mutex<HashMap<Uuid, SeatDriverState>>,
@@ -470,9 +473,10 @@ impl AiRuntimeService {
         let mut feedback: Option<String> = None;
 
         for attempt in 0..MAX_RETRIES_PER_BOUNDARY {
-            let Ok((prompt, codec)) = compact_prompt_with_affordances(
+            let Ok((prompt, codec)) = compact_prompt_with_knowledge(
                 snapshot,
                 affordances,
+                Some(knowledge),
                 own_recent,
                 feedback.as_deref(),
             ) else {
