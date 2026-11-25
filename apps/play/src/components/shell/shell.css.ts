@@ -294,6 +294,7 @@ export const balance = style({
   },
 });
 export const iconAction = style({
+  position: "relative",
   appearance: "none",
   display: "grid",
   placeItems: "center",
@@ -395,4 +396,16 @@ export const chevron = style({
       transition: `transform ${m.duration.settle}s ${arrive}`,
     },
   },
+});
+/** Something new waits in Messages. */
+export const newDot = style({
+  position: "absolute",
+  top: "8px",
+  right: "8px",
+  width: "10px",
+  height: "10px",
+  borderRadius: "50%",
+  background: "#f0c873",
+  boxShadow: "0 0 0 2px #0d1014",
+  pointerEvents: "none",
 });

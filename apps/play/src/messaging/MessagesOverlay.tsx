@@ -17,6 +17,9 @@ import {
 import { useConnectedMessaging } from "./connected-messaging";
 import { useDemoMessaging } from "./demo-messaging";
 import type { MessagingSource } from "./messaging-sources";
+import { useConnectedUpdates } from "./connected-updates";
+import { useDemoUpdates } from "./demo-updates";
+import type { UpdatesSource } from "./updates-source";
 import { tradePath } from "../trade/trade-sources";
 
 /** `?messages=` carries what Messages shows: a person, Requests, Find People, or the first friend. */
@@ -24,6 +27,7 @@ export function useMessagesParam() {
   return useQueryState("messages", parseAsString);
 }
 const viewOf = (value: string, source: MessagingSource): MessagesView => {
+  if (value === "updates") return { kind: "updates" };
   if (value === "requests") return { kind: "requests" };
   if (value === "find") return { kind: "find" };
   if (value !== "open") return { kind: "person", id: value };
@@ -35,10 +39,12 @@ const viewOf = (value: string, source: MessagingSource): MessagesView => {
 function Host({
   value,
   source,
+  updates,
   trigger,
 }: {
   value: string;
   source: MessagingSource;
+  updates: UpdatesSource;
   trigger: RefObject<HTMLElement | null>;
 }): ReactElement {
   const [, setValue] = useMessagesParam();
@@ -80,6 +86,7 @@ function Host({
   const body = (
     <MessagesPanel
       source={source}
+      updates={updates}
       view={view}
       onView={(next) =>
         void setValue(next.kind === "person" ? next.id : next.kind)
@@ -112,39 +119,53 @@ function Host({
 
 const useIsPreview = (): boolean =>
   useAccount().state.status === "unconfigured";
+const OTHER_VIEWS = new Set(["updates", "requests", "find", "open"]);
 function PreviewHost(props: {
   value: string;
+  updates: UpdatesSource;
   trigger: RefObject<HTMLElement | null>;
 }) {
   const view = props.value;
-  const source = useDemoMessaging(
-    view === "requests" || view === "find" || view === "open" ? null : view,
-  );
+  const source = useDemoMessaging(OTHER_VIEWS.has(view) ? null : view);
   return <Host {...props} source={source} />;
 }
 function AccountHost(props: {
   value: string;
+  updates: UpdatesSource;
   trigger: RefObject<HTMLElement | null>;
 }) {
   const view = props.value;
-  const source = useConnectedMessaging(
-    view === "requests" || view === "find" || view === "open" ? null : view,
-  );
+  const source = useConnectedMessaging(OTHER_VIEWS.has(view) ? null : view);
   return <Host {...props} source={source} />;
 }
 
 /** Messages over whatever screen is open, while the address names it. */
 export function MessagesOverlay({
   trigger,
+  updates,
 }: {
   trigger: RefObject<HTMLElement | null>;
+  updates: UpdatesSource;
 }): ReactElement | null {
   const [value] = useMessagesParam();
   const isPreview = useIsPreview();
   if (!value) return null;
   return isPreview ? (
-    <PreviewHost value={value} trigger={trigger} />
+    <PreviewHost value={value} updates={updates} trigger={trigger} />
   ) : (
-    <AccountHost value={value} trigger={trigger} />
+    <AccountHost value={value} updates={updates} trigger={trigger} />
   );
+}
+
+/**
+ * The account's updates for the header and Messages, read once for both. The
+ * preview's stand-in is used only in a build with no application API.
+ */
+export function useUpdates(): UpdatesSource {
+  const isPreview = useIsPreview();
+  // `?updates=none` shows the preview with no updates.
+  const [param] = useQueryState("updates", parseAsString);
+  const preview = useDemoUpdates(param === "none" ? "none" : "some");
+  const account = useConnectedUpdates();
+  return isPreview ? preview : account;
 }

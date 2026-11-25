@@ -141,6 +141,15 @@ export function MessagesProbe(): ReactElement {
       </button>
       <MessagesPanel
         source={source}
+        // These probe states cover a person's thread; Updates have their own checks.
+        updates={{
+          status: "ready",
+          items: [],
+          unread: 0,
+          markSeen: noop,
+          open: null,
+          notice: null,
+        }}
         view={view}
         onView={noop}
         onClose={noop}

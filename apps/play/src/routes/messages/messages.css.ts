@@ -402,6 +402,22 @@ export const rowTrail = style({
   color: shellTokens.ink,
 });
 globalStyle(`${rowTrail} svg`, { width: "20px", height: "20px" });
+/** A row that only reads: an update the app cannot open. */
+export const rowStill = style({ cursor: "default" });
+/** An update's mark, where a person's picture sits in other rows. */
+export const updateIcon = style({
+  display: "grid",
+  placeItems: "center",
+  width: "56px",
+  height: "56px",
+  borderRadius: "50%",
+  border: "1px solid #e7cf9f66",
+  color: "#e8dcc6",
+  selectors: {
+    '&[data-new="true"]': { borderColor: "#f0c873", color: "#f0c873" },
+  },
+});
+globalStyle(`${updateIcon} svg`, { width: "26px", height: "26px" });
 export const dot = style({
   width: "10px",
   height: "10px",
