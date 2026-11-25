@@ -256,8 +256,15 @@ function Workbench({ source }: { source: ReadySource }): ReactElement {
       ? "Can’t verify format eligibility."
       : `Not legal in ${format.name}.`;
   };
-  const add = (name: string, to: BuilderSection, card?: CardRef): void =>
-    editEntries((entries) => addCopy(entries, name, to, newId, card));
+  const add = (
+    name: string,
+    to: BuilderSection,
+    card?: CardRef,
+    customCardRevisionId?: string,
+  ): void =>
+    editEntries((entries) =>
+      addCopy(entries, name, to, newId, card, customCardRevisionId),
+    );
   const select = (next: Selection): void => {
     setSelection(next);
     setQuantityDraft(null);
@@ -276,7 +283,7 @@ function Workbench({ source }: { source: ReadySource }): ReactElement {
     else setNotice(result.message);
     return result.status === "success";
   }
-  const shelfPath = deck.mode === "open" ? "/open-play" : "/collection/decks";
+  const shelfPath = deck.mode === "open" ? "/open-play/decks" : "/collection/decks";
   const leave = (): void => {
     if (location.key === "default") void navigate(shelfPath);
     else void navigate(-1);
@@ -921,7 +928,11 @@ function Workbench({ source }: { source: ReadySource }): ReactElement {
                   selection.name === found.name;
                 return (
                   <div
-                    key={found.card?.definitionId ?? found.name}
+                    key={
+                      found.card?.definitionId ??
+                      found.customCardRevisionId ??
+                      found.name
+                    }
                     className={s.result}
                     data-selected={isSelected}
                   >
@@ -974,7 +985,14 @@ function Workbench({ source }: { source: ReadySource }): ReactElement {
                         type="button"
                         className={s.add}
                         aria-label={`Add ${found.name} to ${SECTION_LABEL[section]}`}
-                        onClick={() => add(found.name, section, found.card)}
+                        onClick={() =>
+                          add(
+                            found.name,
+                            section,
+                            found.card,
+                            found.customCardRevisionId,
+                          )
+                        }
                       >
                         <Plus aria-hidden="true" />
                       </button>

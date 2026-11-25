@@ -360,6 +360,15 @@ impl NativeGameSource {
             .filter(|seat| seat.controller_kind == ControllerKind::Human)
             .map(|seat| seat.seat_id)
     }
+    /// Exact SQL `app.match_seat.seat_index` for a seat (preserving sparse indices in 3-6 seat rooms).
+    pub(crate) fn seat_index(&self, seat_id: Uuid) -> Option<i16> {
+        use num_traits::ToPrimitive;
+        self.record
+            .seats
+            .iter()
+            .find(|seat| seat.seat_id == seat_id)
+            .and_then(|seat| seat.seat_index.integer().to_i16())
+    }
     /// Observe the exact selected clock-policy text for one retained match seat.
     /// Unknown policy text is metadata, not executable clock qualification; this
     /// never infers a policy from remaining balance or paused state.

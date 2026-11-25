@@ -24,7 +24,13 @@ fn main() -> Result<(), &'static str> {
     // Native admission owns pooled HTTP clients. Construct and retain their
     // router outside Tokio so client startup and final drop run synchronously.
     let app = router(config);
-    let runtime = tokio::runtime::Runtime::new().map_err(|_| "application API runtime failed")?;
+    // Configure a 16 MiB stack so native custom-card compilation and oracle parsing
+    // satisfy `card_programs::custom_card`'s stack depth invariant on every worker/blocking thread.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()
+        .map_err(|_| "application API runtime failed")?;
     runtime.block_on(async {
         #[cfg(unix)]
         let mut terminate =

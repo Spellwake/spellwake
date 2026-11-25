@@ -5,6 +5,7 @@
 //! Responses API, and one-shot Codex CLI).
 pub mod affordances;
 pub mod codex_app_server;
+pub mod codex_vision;
 pub mod compact;
 pub mod driver;
 pub mod knowledge;
@@ -18,6 +19,10 @@ pub use affordances::{
     diagnose_rejection, fallback_command, probe_priority_affordances,
 };
 pub use codex_app_server::{CodexAppServerConfig, CodexAppServerProvider, HOSTED_CODEX_EXECUTABLE};
+pub use codex_vision::{
+    CodexVisionClient, CodexVisionConfig, VisionArtCropBox, VisionExtractedCard,
+    VisionExtractedFace, VisionImportError,
+};
 pub use driver::{AiRuntimeConfig, AiRuntimeService};
 pub use knowledge::{
     HistoricalRevealView, KnowledgeSource, KnownOpponentHandCard, RevealStatusView,

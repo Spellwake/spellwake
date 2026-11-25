@@ -80,7 +80,7 @@ fn selected_origin(
     let mut count = 0;
     for object in state.execution().window().cards().iter() {
         let original = provenance.physical_card(object).unwrap();
-        assert_eq!(original.definition_id(), reservation.definition_id);
+        assert_eq!(original.definition_id(), Some(reservation.definition_id));
         assert_eq!(original.printing_id(), Some(reservation.printing_id));
         count += 1;
     }

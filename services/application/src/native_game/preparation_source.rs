@@ -78,6 +78,26 @@ pub struct PreparationEntry {
     pub section: DeckSection,
     pub quantity: Amount,
 }
+/// Open Play custom card entry projected by `native_custom_deck_source` in `-v2` sources.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreparationCustomEntry {
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub entry_id: Uuid,
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub custom_card_revision_id: Uuid,
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub custom_card_id: Uuid,
+    pub rules_sha256: String,
+    pub name: String,
+    pub layout: String,
+    pub rarity: String,
+    pub faces_rules: Vec<spellwake_card_programs::custom_card::CustomCardFaceRules>,
+    pub compiler_revision: String,
+    pub section: DeckSection,
+    pub quantity: Amount,
+}
+
 /// Profile revision captured by the SQL source, without executable readiness.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -161,6 +181,8 @@ pub struct PreparationSlot {
     pub selected_revision_id: Option<Uuid>,
     #[serde(deserialize_with = "crate::provider_json::optional_objects")]
     pub entries: Option<Vec<PreparationEntry>>,
+    #[serde(default, deserialize_with = "crate::provider_json::optional_objects")]
+    pub custom_entries: Option<Vec<PreparationCustomEntry>>,
 }
 /// Current room metadata at the exact requested revision.
 #[derive(Deserialize)]
@@ -183,6 +205,10 @@ pub struct PreparationRoom {
     pub structure: MatchStructure,
     #[serde(deserialize_with = "Option::deserialize")]
     pub countdown_at: Option<String>,
+    #[serde(default)]
+    pub allow_custom_cards: bool,
+    #[serde(default)]
+    pub share_host_decks: bool,
 }
 /// Exact222 source terms, shared later by preparation and original execution.
 #[derive(Deserialize)]
@@ -208,35 +234,55 @@ struct RoomRecord {
     terms: NativeRoomTerms,
 }
 
-pub(super) fn valid_entries(entries: &[PreparationEntry]) -> bool {
+pub(super) fn valid_all_entries(
+    entries: &[PreparationEntry],
+    custom_entries: &[PreparationCustomEntry],
+) -> bool {
     let mut total = Amount::from(0u64);
     let maximum = Amount::from(1000u64);
-    !entries.is_empty()
-        && entries.len() <= 1000
-        && entries
-            .iter()
-            .map(|entry| entry.entry_id)
-            .collect::<BTreeSet<_>>()
-            .len()
-            == entries.len()
-        && entries.iter().all(|entry| {
-            if entry.quantity.is_zero() || entry.quantity > maximum {
-                return false;
-            }
-            let Ok(next) = total.checked_add(&entry.quantity) else {
-                return false;
-            };
-            total = next;
-            true
-        })
-        && total <= maximum
+    let combined_len = entries.len().saturating_add(custom_entries.len());
+    if combined_len == 0 || combined_len > 1000 {
+        return false;
+    }
+    let mut ids = BTreeSet::new();
+    for entry in entries {
+        if !ids.insert(entry.entry_id) || entry.quantity.is_zero() || entry.quantity > maximum {
+            return false;
+        }
+        let Ok(next) = total.checked_add(&entry.quantity) else {
+            return false;
+        };
+        total = next;
+    }
+    for entry in custom_entries {
+        if !ids.insert(entry.entry_id)
+            || entry.custom_card_revision_id.is_nil()
+            || entry.custom_card_id.is_nil()
+            || entry.faces_rules.is_empty()
+            || entry.faces_rules.len() > 2
+            || entry.quantity.is_zero()
+            || entry.quantity > maximum
+        {
+            return false;
+        }
+        let Ok(next) = total.checked_add(&entry.quantity) else {
+            return false;
+        };
+        total = next;
+    }
+    total <= maximum
 }
 impl RoomRecord {
     fn valid(&self, room: Uuid, basis: &Amount, release: Uuid, legality: Uuid) -> bool {
         let t = &self.terms;
         let p = &t.profile;
+        let allow_custom =
+            t.room.allow_custom_cards && t.room.mode == PlayMode::Open && !t.room.competitive;
         valid_digest(&self.source_hash)
-            && t.version == "native-room-source-v1"
+            && matches!(
+                t.version.as_str(),
+                "native-room-source-v1" | "native-room-source-v2"
+            )
             && t.room.id == room
             && t.room.revision == *basis
             && t.release.id == release
@@ -245,6 +291,8 @@ impl RoomRecord {
             && p.valid()
             && matches!(t.room.state.as_str(), "lobby" | "countdown")
             && (t.room.mode != PlayMode::Open || !t.room.competitive)
+            && (!(t.room.allow_custom_cards || t.room.share_host_decks)
+                || (t.room.mode == PlayMode::Open && !t.room.competitive))
             && match (&t.room.countdown_at, t.room.state.as_str()) {
                 (Some(time), "countdown") => parse_utc_microsecond(time).is_some(),
                 (None, "lobby") => true,
@@ -263,17 +311,19 @@ impl RoomRecord {
                 .windows(2)
                 .all(|pair| pair[0].seat_index < pair[1].seat_index)
             && t.slots.iter().all(|slot| {
+                let custom = slot.custom_entries.as_deref().unwrap_or(&[]);
                 slot.seat_index < p.seat_capacity
                     && valid_controller(slot.controller_kind, slot.account_id, slot.sponsor_id)
+                    && (custom.is_empty() || allow_custom)
                     && match (
                         &slot.source_status,
                         &slot.selected_revision_id,
                         &slot.entries,
                     ) {
                         (PreparationStatus::Unselected, None, None)
-                        | (PreparationStatus::Unsupported, Some(_), None) => true,
+                        | (PreparationStatus::Unsupported, Some(_), None) => custom.is_empty(),
                         (PreparationStatus::Available, Some(_), Some(entries)) => {
-                            valid_entries(entries)
+                            valid_all_entries(entries, custom)
                         }
                         _ => false,
                     }

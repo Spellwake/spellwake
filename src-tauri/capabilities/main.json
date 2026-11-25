@@ -10,9 +10,13 @@
     "core:event:allow-unlisten",
     "dialog:allow-save",
     "fs:allow-write-text-file",
+    "fs:allow-write-file",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://checkout.stripe.com/*" }]
+      "allow": [
+        { "url": "https://checkout.stripe.com/*" },
+        { "url": "https://www.patreon.com/*" }
+      ]
     }
   ]
 }

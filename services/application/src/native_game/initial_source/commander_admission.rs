@@ -107,14 +107,19 @@ impl CommanderRelease {
             && release.program_manifest_ref.as_str() == source.identity().as_str()
     }
 
-    pub(in crate::native_game) fn validate_deck(
+    pub(in crate::native_game) fn validate_deck_with_custom(
         &self,
         source: &NativeProgramSource,
         entries: &[PreparationEntry],
+        custom_entries: &[crate::native_game::preparation_source::PreparationCustomEntry],
+        allow_custom_cards: bool,
     ) -> bool {
         let Some(inventory) = &source.commander_inventory else {
             return false;
         };
+        if !custom_entries.is_empty() && !allow_custom_cards {
+            return false;
+        }
         let mut main = Vec::new();
         let mut commanders = Vec::new();
         let mut count = 0;
@@ -155,14 +160,116 @@ impl CommanderRelease {
                 _ => return false,
             }
         }
-        prepare_deck(
-            inventory,
-            &source.names,
-            &commanders,
-            &main,
-            &BTreeMap::new(),
-        )
-        .is_ok()
+        if custom_entries.is_empty() {
+            return prepare_deck(
+                inventory,
+                &source.names,
+                &commanders,
+                &main,
+                &BTreeMap::new(),
+            )
+            .is_ok();
+        }
+        let mut seen_names = std::collections::BTreeSet::<String>::new();
+        let mut commander_ci = std::collections::BTreeSet::<String>::new();
+        for cmd in &commanders {
+            let Some(card) = source.source_card(cmd) else {
+                return false;
+            };
+            if !seen_names.insert(card.name.to_ascii_lowercase()) {
+                return false;
+            }
+            let Some(ci) = inventory.source_color_identity(cmd.as_str()) else {
+                return false;
+            };
+            commander_ci.extend(ci.iter().cloned());
+        }
+        let mut official_main_ci = Vec::new();
+        for oracle in &main {
+            let Some(card) = source.source_card(oracle) else {
+                return false;
+            };
+            let is_basic = card
+                .faces
+                .first()
+                .and_then(|f| f.type_line.as_deref())
+                .and_then(|line| line.split('—').next())
+                .is_some_and(|left| left.split_whitespace().any(|w| w == "Basic"));
+            if !is_basic && !seen_names.insert(card.name.to_ascii_lowercase()) {
+                return false;
+            }
+            let Some(ci) = inventory.source_color_identity(oracle.as_str()) else {
+                return false;
+            };
+            official_main_ci.push(ci);
+        }
+
+        let mut custom_commanders = 0usize;
+        let mut custom_main_ci = Vec::new();
+        for ce in custom_entries {
+            if ce.compiler_revision
+                != spellwake_card_programs::catalog_support::SUPPORT_COMPILER_REVISION
+            {
+                return false;
+            }
+            let compiled = spellwake_card_programs::custom_card::compile_custom_card(
+                &spellwake_card_programs::custom_card::CustomCardCompileInput {
+                    layout: ce.layout.clone(),
+                    rarity: ce.rarity.clone(),
+                    faces: ce.faces_rules.clone(),
+                },
+                &source.vocabulary,
+            );
+            if !compiled.report.stage2_playable || compiled.report.rules_sha256 != ce.rules_sha256 {
+                return false;
+            }
+            let Some(quantity) = ce.quantity.integer().to_usize().filter(|n| *n == 1) else {
+                return false;
+            };
+            if !seen_names.insert(ce.name.to_ascii_lowercase()) {
+                return false;
+            }
+            count += quantity;
+            if count > 100 {
+                return false;
+            }
+            match ce.section.as_str() {
+                "main" => custom_main_ci.push(compiled.report.color_identity),
+                "commander" => {
+                    let front = ce.faces_rules.first();
+                    let eligible = front.is_some_and(|face| {
+                        let types_part =
+                            face.type_line.split('—').next().unwrap_or(&face.type_line);
+                        let words: Vec<&str> = types_part.split_whitespace().collect();
+                        (words.contains(&"Legendary") && words.contains(&"Creature"))
+                            || face
+                                .oracle_text
+                                .to_ascii_lowercase()
+                                .contains("can be your commander")
+                    });
+                    if !eligible {
+                        return false;
+                    }
+                    commander_ci.extend(compiled.report.color_identity);
+                    custom_commanders += 1;
+                }
+                _ => return false,
+            }
+        }
+        let total_commanders = commanders.len() + custom_commanders;
+        if count != 100 || !(1..=2).contains(&total_commanders) {
+            return false;
+        }
+        if official_main_ci
+            .iter()
+            .any(|ci| ci.iter().any(|c| !commander_ci.contains(c)))
+            || custom_main_ci
+                .iter()
+                .any(|ci| ci.iter().any(|c| !commander_ci.contains(c)))
+        {
+            return false;
+        }
+        true
     }
 
     pub(in crate::native_game) fn prepare_room(
@@ -195,11 +302,18 @@ impl CommanderRelease {
             .find(|slot| slot.account_id == Some(actor))?;
         let selected = actor_slot.selected_revision_id?;
         let stamp = digest(observation.source_hash().as_bytes());
+        let allow_custom =
+            room.allow_custom_cards && room.mode == PlayMode::Open && !room.competitive;
         let qualified_roster = || {
             terms.slots.iter().all(|slot| {
-                slot.entries
-                    .as_ref()
-                    .is_some_and(|entries| self.validate_deck(source, entries))
+                slot.entries.as_ref().is_some_and(|entries| {
+                    self.validate_deck_with_custom(
+                        source,
+                        entries,
+                        slot.custom_entries.as_deref().unwrap_or(&[]),
+                        allow_custom,
+                    )
+                })
             })
         };
         let mut prepared = json!({
@@ -216,7 +330,12 @@ impl CommanderRelease {
         }
         prepared["selectedRevisionId"] = json!(selected);
         let entries = actor_slot.entries.as_ref()?;
-        if !self.validate_deck(source, entries) {
+        if !self.validate_deck_with_custom(
+            source,
+            entries,
+            actor_slot.custom_entries.as_deref().unwrap_or(&[]),
+            allow_custom,
+        ) {
             prepared["version"] = json!("native-ready-rejected-v1");
             prepared["qualificationRef"] = json!("native-ready-deck-rejected-v1");
             return Some(prepared);

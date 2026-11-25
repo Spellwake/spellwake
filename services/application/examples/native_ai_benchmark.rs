@@ -149,6 +149,7 @@ impl NativeDisplaySource for Display<'_> {
         Ok(NativeObjectDisplay {
             definition_id: None,
             printing_id: None,
+            custom_card_revision_id: None,
             characteristics: self.description(definition)?,
         })
     }

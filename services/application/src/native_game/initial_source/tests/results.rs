@@ -208,6 +208,7 @@ impl NativeDisplaySource for SourceOnlyReplayDisplay<'_> {
         Ok(NativeObjectDisplay {
             definition_id: None,
             printing_id: None,
+            custom_card_revision_id: None,
             characteristics: ch,
         })
     }

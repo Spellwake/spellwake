@@ -490,7 +490,7 @@ async fn patreon_intake_capabilities_are_service_only_and_private_helpers_cannot
         )
         .await?
         .get::<_, i64>(0),
-        111
+        116
     );
     Ok(())
 }

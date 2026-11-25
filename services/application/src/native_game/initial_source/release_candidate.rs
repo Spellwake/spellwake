@@ -175,10 +175,19 @@ impl NativeProgramSource {
         release: &preparation_source::PreparationRelease,
         entries: &[preparation_source::PreparationEntry],
     ) -> Result<(), NativeInitialError> {
+        self.verify_constructed_release_content_with_custom(release, entries, &[])
+    }
+
+    pub(crate) fn verify_constructed_release_content_with_custom(
+        &self,
+        release: &preparation_source::PreparationRelease,
+        entries: &[preparation_source::PreparationEntry],
+        custom_entries: &[preparation_source::PreparationCustomEntry],
+    ) -> Result<(), NativeInitialError> {
         if release.kernel_ref.as_str() != format!("sha256:{}", native_runtime_identity())
             || release.rules_ref.as_str() != hash_text(self.vocabulary.rules_sha256()).as_str()
             || release.program_manifest_ref.as_str() != self.identity().as_str()
-            || !preparation_source::valid_entries(entries)
+            || !preparation_source::valid_all_entries(entries, custom_entries)
         {
             return Err(NativeInitialError::ForeignSource);
         }
@@ -236,21 +245,44 @@ impl NativeProgramSource {
         format_key: &str,
         entries: &[preparation_source::PreparationEntry],
     ) -> Result<(u32, u32), NativeInitialError> {
+        self.inspect_selected_match_deck_with_custom(format_key, entries, &[], false)
+    }
+
+    pub(crate) fn inspect_selected_match_deck_with_custom(
+        &self,
+        format_key: &str,
+        entries: &[preparation_source::PreparationEntry],
+        custom_entries: &[preparation_source::PreparationCustomEntry],
+        allow_custom_cards: bool,
+    ) -> Result<(u32, u32), NativeInitialError> {
         let counts = self
-            .selected_match_deck_counts(format_key, entries)?
+            .selected_match_deck_counts_with_custom(
+                format_key,
+                entries,
+                custom_entries,
+                allow_custom_cards,
+            )?
             .map_err(|_| NativeInitialError::ForeignSource)?;
         Ok((counts.main, counts.sideboard))
     }
 
     // Separate a supported source's deck-rule refusal from failures to bind
     // the release's native card data.
-    pub(super) fn selected_match_deck_counts(
+    pub(super) fn selected_match_deck_counts_with_custom(
         &self,
         format_key: &str,
         entries: &[preparation_source::PreparationEntry],
+        custom_entries: &[preparation_source::PreparationCustomEntry],
+        allow_custom_cards: bool,
     ) -> Result<Result<DeckCounts, DeckFailure>, NativeInitialError> {
-        if !preparation_source::valid_entries(entries) {
+        if !preparation_source::valid_all_entries(entries, custom_entries) {
             return Err(NativeInitialError::ForeignSource);
+        }
+        if !custom_entries.is_empty() {
+            if !allow_custom_cards || matches!(format_key, "draft" | "cube") {
+                return Err(NativeInitialError::ForeignSource);
+            }
+            return self.constructed_deck_with_custom(format_key, entries, custom_entries);
         }
         let entries = entries
             .iter()
@@ -280,6 +312,104 @@ impl NativeProgramSource {
             format: format_key.to_owned(),
             entries,
         }))
+    }
+
+    fn constructed_deck_with_custom(
+        &self,
+        format_key: &str,
+        entries: &[preparation_source::PreparationEntry],
+        custom_entries: &[preparation_source::PreparationCustomEntry],
+    ) -> Result<Result<DeckCounts, DeckFailure>, NativeInitialError> {
+        if !matches!(
+            format_key,
+            "standard" | "pioneer" | "modern" | "legacy" | "vintage"
+        ) {
+            return Ok(Err(DeckFailure::UnsupportedFormat));
+        }
+        let mut counts = DeckCounts {
+            main: 0,
+            sideboard: 0,
+        };
+        let mut copies = BTreeMap::<String, u32>::new();
+        for e in entries {
+            let oracle_ref = OracleId::try_from(e.oracle_ref.as_str().to_owned())
+                .map_err(|_| NativeInitialError::ForeignSource)?;
+            let card = self
+                .source_card(&oracle_ref)
+                .ok_or(NativeInitialError::ForeignSource)?;
+            if basic_land(card) != e.unlimited_basic_land {
+                return Err(NativeInitialError::ForeignSource);
+            }
+            let Some(quantity) = e.quantity.integer().to_u32().filter(|n| *n > 0) else {
+                return Ok(Err(DeckFailure::InvalidQuantity));
+            };
+            let limit = if basic_land(card) { u32::MAX } else { 4 };
+            let total = copies.entry(card.name.clone()).or_default();
+            let Some(next) = total.checked_add(quantity) else {
+                return Ok(Err(DeckFailure::InvalidQuantity));
+            };
+            *total = next;
+            if *total > limit {
+                return Ok(Err(DeckFailure::CopyLimit));
+            }
+            let section = match e.section.as_str() {
+                "main" => &mut counts.main,
+                "sideboard" => &mut counts.sideboard,
+                _ => return Ok(Err(DeckFailure::UnsupportedSection)),
+            };
+            let Some(next_sec) = section.checked_add(quantity) else {
+                return Ok(Err(DeckFailure::InvalidQuantity));
+            };
+            *section = next_sec;
+        }
+        for ce in custom_entries {
+            if ce.compiler_revision
+                != spellwake_card_programs::catalog_support::SUPPORT_COMPILER_REVISION
+            {
+                return Err(NativeInitialError::ForeignSource);
+            }
+            let compiled = spellwake_card_programs::custom_card::compile_custom_card(
+                &spellwake_card_programs::custom_card::CustomCardCompileInput {
+                    layout: ce.layout.clone(),
+                    rarity: ce.rarity.clone(),
+                    faces: ce.faces_rules.clone(),
+                },
+                &self.vocabulary,
+            );
+            if !compiled.report.stage2_playable || compiled.report.rules_sha256 != ce.rules_sha256 {
+                return Ok(Err(DeckFailure::UnsupportedCard));
+            }
+            let Some(quantity) = ce.quantity.integer().to_u32().filter(|n| *n > 0) else {
+                return Ok(Err(DeckFailure::InvalidQuantity));
+            };
+            let total = copies.entry(ce.name.clone()).or_default();
+            let Some(next) = total.checked_add(quantity) else {
+                return Ok(Err(DeckFailure::InvalidQuantity));
+            };
+            *total = next;
+            if *total > 4 {
+                return Ok(Err(DeckFailure::CopyLimit));
+            }
+            let section = match ce.section.as_str() {
+                "main" => &mut counts.main,
+                "sideboard" => &mut counts.sideboard,
+                _ => return Ok(Err(DeckFailure::UnsupportedSection)),
+            };
+            let Some(next_sec) = section.checked_add(quantity) else {
+                return Ok(Err(DeckFailure::InvalidQuantity));
+            };
+            *section = next_sec;
+        }
+        if u64::from(counts.main) + u64::from(counts.sideboard) > 1000 {
+            return Ok(Err(DeckFailure::PreparationCapacity));
+        }
+        if counts.main < 60 {
+            return Ok(Err(DeckFailure::MainTooSmall));
+        }
+        if counts.sideboard > 15 {
+            return Ok(Err(DeckFailure::SideboardTooLarge));
+        }
+        Ok(Ok(counts))
     }
     /// Materialize an ordinary twenty-life constructed candidate from every reserved seat.
     /// Main-deck occurrences keep their exact SQL entry and printing. Sideboards
@@ -317,10 +447,18 @@ impl NativeProgramSource {
         super::constructed_policy::verify_reserved_format(source.metadata(), format_key)?;
         let mut participants = Vec::new();
         let mut selections = Vec::new();
+        let allow_custom = source.metadata().allow_custom_cards
+            && source.metadata().mode == crate::decks::PlayMode::Open
+            && !source.metadata().competitive;
         for seat in &source.metadata().seats {
             self.verify_constructed_release_content(&source.metadata().release, &seat.entries)?;
-            let (participant, selection) =
-                self.selected_constructed_participant(format_key, seat.seat_id, &seat.entries)?;
+            let (participant, selection) = self.selected_constructed_participant(
+                format_key,
+                seat.seat_id,
+                &seat.entries,
+                &seat.custom_entries,
+                allow_custom,
+            )?;
             participants.push(participant);
             selections.push(selection);
         }
@@ -342,8 +480,15 @@ impl NativeProgramSource {
         format_key: &str,
         seat_id: Uuid,
         entries: &[preparation_source::PreparationEntry],
+        custom_entries: &[preparation_source::PreparationCustomEntry],
+        allow_custom: bool,
     ) -> Result<(NativeInitialParticipant, NativeInitialSelection), NativeInitialError> {
-        self.inspect_selected_match_deck(format_key, entries)?;
+        self.inspect_selected_match_deck_with_custom(
+            format_key,
+            entries,
+            custom_entries,
+            allow_custom,
+        )?;
         let mut cards = Vec::new();
         let mut entry_ids = Vec::new();
         for entry in entries.iter().filter(|e| e.section.as_str() == "main") {
@@ -353,6 +498,23 @@ impl NativeProgramSource {
                 .to_usize()
                 .ok_or(NativeInitialError::ForeignSource)?;
             let oracle_id = OracleId::try_from(entry.oracle_ref.as_str().to_owned())
+                .map_err(|_| NativeInitialError::ForeignSource)?;
+            cards.extend((0..quantity).map(|_| NativeInitialCard {
+                oracle_id: oracle_id.clone(),
+                zone: NativeInitialZone::Library,
+            }));
+            entry_ids.extend(std::iter::repeat_n(entry.entry_id, quantity));
+        }
+        for entry in custom_entries
+            .iter()
+            .filter(|e| e.section.as_str() == "main")
+        {
+            let quantity = entry
+                .quantity
+                .integer()
+                .to_usize()
+                .ok_or(NativeInitialError::ForeignSource)?;
+            let oracle_id = OracleId::try_from(entry.custom_card_revision_id.to_string())
                 .map_err(|_| NativeInitialError::ForeignSource)?;
             cards.extend((0..quantity).map(|_| NativeInitialCard {
                 oracle_id: oracle_id.clone(),
@@ -620,7 +782,7 @@ mod tests {
         ];
         let seat = Uuid::from_u128(10);
         let (player, selection) = source
-            .selected_constructed_participant("legacy", seat, &entries)
+            .selected_constructed_participant("legacy", seat, &entries, &[], false)
             .unwrap();
         assert_eq!(player.cards.len(), 60);
         assert_eq!(selection.entry_ids.len(), 60);
@@ -637,14 +799,14 @@ mod tests {
         entries[2].unlimited_basic_land = true;
         assert!(
             source
-                .selected_constructed_participant("legacy", seat, &entries)
+                .selected_constructed_participant("legacy", seat, &entries, &[], false)
                 .is_err()
         );
         entries[2].unlimited_basic_land = false;
         entries[0].unlimited_basic_land = false;
         assert!(
             source
-                .selected_constructed_participant("legacy", seat, &entries)
+                .selected_constructed_participant("legacy", seat, &entries, &[], false)
                 .is_err()
         );
     }

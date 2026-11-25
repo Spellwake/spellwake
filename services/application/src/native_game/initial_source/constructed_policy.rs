@@ -108,8 +108,16 @@ impl NativeProgramSource {
                 .entries
                 .as_deref()
                 .ok_or(NativeInitialError::ForeignSource)?;
+            let custom_entries = slot.custom_entries.as_deref().unwrap_or(&[]);
+            let allow_custom =
+                t.room.allow_custom_cards && t.room.mode == PlayMode::Open && !t.room.competitive;
             self.verify_constructed_release_content(&t.release, entries)?;
-            self.inspect_selected_match_deck(key, entries)?;
+            self.inspect_selected_match_deck_with_custom(
+                key,
+                entries,
+                custom_entries,
+                allow_custom,
+            )?;
             seats.push(Seat {
                 index: &slot.seat_index,
                 controller: slot.controller_kind,
