@@ -360,6 +360,12 @@ impl EffectWindow {
             }
         }
         if domain.is_empty() && !choose_land_kind {
+            if *instruction == Instruction::MayRevealLibraryTop
+                && let Some(cursor) = self.resolution_cursor_mut()
+            {
+                cursor.results.last_action_succeeded = false;
+                cursor.results.last_action_count = Some(0.into());
+            }
             self.advance_instruction()?;
             return Ok(true);
         }
@@ -1146,6 +1152,8 @@ impl EffectWindow {
             let mut append = RulesJournal::default();
             work.cursor.results.revealed_top_types.clear();
             work.cursor.results.revealed_top_card = None;
+            work.cursor.results.last_action_succeeded = !selected.is_empty();
+            work.cursor.results.last_action_count = Some(RulesInteger::from_usize(selected.len()));
             if let Some(&id) = selected.first() {
                 let before = next.rules_snapshot(None)?;
                 let object = next

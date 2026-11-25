@@ -116,10 +116,12 @@ fn matches_compact_clause(
     if !subtype_ok {
         return false;
     }
-    if clause.flags.contains(ObjectFilterFlags::HISTORIC)
-        && !types.contains(CardType::Artifact)
-        && !super_set.contains(&Supertype::Legendary)
-    {
+    let is_historic =
+        types.contains(CardType::Artifact) || super_set.contains(&Supertype::Legendary);
+    if clause.flags.contains(ObjectFilterFlags::HISTORIC) && !is_historic {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
         return false;
     }
     true
@@ -982,6 +984,15 @@ impl EffectWindow {
                                     *zone,
                                 ));
                         i64::from(matched).into()
+                    }
+                    SourceStateExpr::DonorControlledByController => {
+                        let related = self
+                            .resolving_player_at(
+                                crate::program::ResolvingPlayer::UniqueRelatedPlayer,
+                                cursor,
+                            )
+                            .ok();
+                        i64::from(related == Some(controller)).into()
                     }
                 };
                 Ok(val)

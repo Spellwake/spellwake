@@ -114,14 +114,20 @@ pub(super) struct FlowFacts {
     pub maybe_moved_library_cards: bool,
     pub definitely_milled: bool,
     pub definitely_milled_top: bool,
+    pub maybe_milled_top: bool,
     pub definitely_exiled_milled: bool,
+    pub maybe_exiled_milled: bool,
     pub definitely_checked_top: bool,
     pub maybe_checked_top: bool,
     pub definitely_sacrificed: bool,
     pub maybe_sacrificed: bool,
     pub definitely_selected_graveyard_exile: bool,
+    pub maybe_selected_graveyard_exile: bool,
     pub returned_graveyard_target: bool,
     pub defined_resolution_x: bool,
+    pub maybe_defined_resolution_x: bool,
+    pub chose_player: bool,
+    pub maybe_chose_player: bool,
 }
 impl FlowFacts {
     /// Promote any `maybe_*` facts produced by a prior optional action onto `definitely_*`
@@ -132,8 +138,13 @@ impl FlowFacts {
         self.definitely_destroyed |= self.maybe_destroyed;
         self.checked_destruction_target |= self.maybe_checked_destruction_target;
         self.moved_library_cards |= self.maybe_moved_library_cards;
+        self.definitely_milled_top |= self.maybe_milled_top;
+        self.definitely_exiled_milled |= self.maybe_exiled_milled;
         self.definitely_checked_top |= self.maybe_checked_top;
         self.definitely_sacrificed |= self.maybe_sacrificed;
+        self.definitely_selected_graveyard_exile |= self.maybe_selected_graveyard_exile;
+        self.defined_resolution_x |= self.maybe_defined_resolution_x;
+        self.chose_player |= self.maybe_chose_player;
     }
 
     /// Snapshot current `definitely_*` facts into `maybe_*` so an optional branch keeps
@@ -144,8 +155,13 @@ impl FlowFacts {
         self.maybe_destroyed |= self.definitely_destroyed;
         self.maybe_checked_destruction_target |= self.checked_destruction_target;
         self.maybe_moved_library_cards |= self.moved_library_cards;
+        self.maybe_milled_top |= self.definitely_milled_top;
+        self.maybe_exiled_milled |= self.definitely_exiled_milled;
         self.maybe_checked_top |= self.definitely_checked_top;
         self.maybe_sacrificed |= self.definitely_sacrificed;
+        self.maybe_selected_graveyard_exile |= self.definitely_selected_graveyard_exile;
+        self.maybe_defined_resolution_x |= self.defined_resolution_x;
+        self.maybe_chose_player |= self.chose_player;
     }
 
     pub fn merge_into(&self, destination: &mut Option<Self>) {
@@ -168,15 +184,21 @@ impl FlowFacts {
             previous.maybe_moved_library_cards |= self.maybe_moved_library_cards;
             previous.definitely_milled &= self.definitely_milled;
             previous.definitely_milled_top &= self.definitely_milled_top;
+            previous.maybe_milled_top |= self.maybe_milled_top;
             previous.definitely_checked_top &= self.definitely_checked_top;
             previous.maybe_checked_top |= self.maybe_checked_top;
             previous.definitely_sacrificed &= self.definitely_sacrificed;
             previous.maybe_sacrificed |= self.maybe_sacrificed;
             previous.definitely_selected_graveyard_exile &=
                 self.definitely_selected_graveyard_exile;
+            previous.maybe_selected_graveyard_exile |= self.maybe_selected_graveyard_exile;
             previous.definitely_exiled_milled &= self.definitely_exiled_milled;
+            previous.maybe_exiled_milled |= self.maybe_exiled_milled;
             previous.returned_graveyard_target |= self.returned_graveyard_target;
             previous.defined_resolution_x &= self.defined_resolution_x;
+            previous.maybe_defined_resolution_x |= self.maybe_defined_resolution_x;
+            previous.chose_player &= self.chose_player;
+            previous.maybe_chose_player |= self.maybe_chose_player;
         } else {
             *destination = Some(self.clone());
         }

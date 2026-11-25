@@ -529,120 +529,25 @@ pub(super) fn lower_replacement(
             optional: true,
             filter,
             exception,
-        } => {
-            if exception.as_deref().is_some_and(|e| {
-                let l = e.to_ascii_lowercase();
-                l.contains("tapped") || l.contains("until end of turn")
-            }) {
-                return Err("oracle:unsupported-enters-as-copy");
-            }
-            if exception.is_none()
-                && filter.forbidden_types.is_empty()
-                && filter.subtypes.is_empty()
-                && filter.forbidden_subtypes.is_empty()
-                && filter.any_colors.is_empty()
-                && filter.forbidden_colors.is_empty()
-                && filter.required_supertypes.is_empty()
-                && filter.forbidden_supertypes.is_empty()
-                && filter.required_keywords.is_empty()
-                && filter.forbidden_keywords.is_empty()
-                && filter.stat_bounds.is_empty()
-                && filter.combat.is_none()
-                && filter.tapped.is_none()
-                && filter.token.is_none()
-                && filter.flags.is_empty()
-                && let Some(rule) = match (filter.zone, filter.controller, filter.any_types) {
-                    (Some(ZoneFilter::AnyGraveyard), None, m) if m == AstCardTypeMask::CREATURE => {
-                        Some(EntryCopyRule::GraveyardCreature)
-                    }
-                    (None | Some(ZoneFilter::Battlefield), None, m)
-                        if m == AstCardTypeMask::CREATURE =>
-                    {
-                        Some(EntryCopyRule::BattlefieldCreature)
-                    }
-                    (None | Some(ZoneFilter::Battlefield), Some(ControllerRelation::You), m)
-                        if m == AstCardTypeMask::CREATURE =>
-                    {
-                        Some(EntryCopyRule::ControlledCreature)
-                    }
-                    (None | Some(ZoneFilter::Battlefield), None, m)
-                        if m == AstCardTypeMask::ARTIFACT =>
-                    {
-                        Some(EntryCopyRule::BattlefieldArtifact)
-                    }
-                    (None | Some(ZoneFilter::Battlefield), None, m)
-                        if m == AstCardTypeMask::ENCHANTMENT =>
-                    {
-                        Some(EntryCopyRule::BattlefieldEnchantment)
-                    }
-                    _ => None,
-                }
-            {
-                if program.entry_copy.replace(rule).is_some() {
-                    return Err("oracle:duplicate-entry-copy");
-                }
-                return Ok(());
-            }
-            let zone = match filter.zone {
-                None | Some(ZoneFilter::Battlefield) => EntryCopyZone::Battlefield,
-                Some(ZoneFilter::YourGraveyard) => EntryCopyZone::OwnGraveyard,
-                Some(ZoneFilter::AnyGraveyard) => EntryCopyZone::AnyGraveyard,
-                _ => return Err("oracle:unsupported-enters-as-copy"),
-            };
-            let mut inner = filter.as_ref().clone();
-            inner.zone = None;
-            let obj_filter = if is_unrestricted_filter(&inner) {
-                ObjectFilter::any()
-            } else {
-                lower_object_filter(&inner, vocabulary)
-                    .map_err(|_| "oracle:unsupported-enters-as-copy")?
-            };
-            let mut ext = EntryCopySpecExt {
-                zone,
-                filter: obj_filter,
-                nonlegendary: false,
-                extra_types: BTreeSet::new(),
-                extra_creature_subtypes: BTreeSet::new(),
-                extra_keywords: BTreeSet::new(),
-                extra_counters: Vec::new(),
-                conditional_counters: Vec::new(),
-                extra_activated: Vec::new(),
-                extra_triggered: Vec::new(),
-                extra_static: Vec::new(),
-                override_pt: None,
-                extra_colors: BTreeSet::new(),
-                keep_name: false,
-            };
-            if let Some(exc_raw) = exception.as_deref() {
-                lower_entry_copy_exception(exc_raw, &mut ext, vocabulary, ids)?;
-            }
-            let rule = if ext.extra_counters.len() <= 1
-                && ext.conditional_counters.is_empty()
-                && ext.extra_activated.len() <= 1
-                && ext.extra_triggered.len() <= 1
-                && ext.extra_static.is_empty()
-                && ext.override_pt.is_none()
-                && ext.extra_colors.is_empty()
-                && !ext.keep_name
-            {
-                EntryCopyRule::Matching(Box::new(spellwake_engine::program::EntryCopySpec {
-                    zone: ext.zone,
-                    filter: ext.filter,
-                    nonlegendary: ext.nonlegendary,
-                    extra_types: ext.extra_types,
-                    extra_creature_subtypes: ext.extra_creature_subtypes,
-                    extra_keywords: ext.extra_keywords,
-                    extra_counters: ext.extra_counters.into_iter().next(),
-                    extra_activated: ext.extra_activated.into_iter().next().map(Box::new),
-                    extra_triggered: ext.extra_triggered.into_iter().next().map(Box::new),
-                }))
-            } else {
-                EntryCopyRule::MatchingExt(Box::new(ext))
-            };
-            if program.entry_copy.replace(rule).is_some() {
-                return Err("oracle:duplicate-entry-copy");
-            }
-            Ok(())
+        } => lower_enters_as_copy(
+            filter,
+            exception.as_deref(),
+            false,
+            program,
+            vocabulary,
+            ids,
+        ),
+        ReplacementEffectAst::EntersAsCopyModified(spec)
+            if spec.optional && spec.duration == DurationAst::Permanent =>
+        {
+            lower_enters_as_copy(
+                &spec.filter,
+                spec.exception.as_deref(),
+                spec.enters_tapped,
+                program,
+                vocabulary,
+                ids,
+            )
         }
         ReplacementEffectAst::OthersEnterAsCopy {
             affected,
@@ -5692,11 +5597,148 @@ fn validate_inline_followup_body(
     .is_ok()
 }
 
+fn lower_enters_as_copy(
+    filter: &ObjectFilterAst,
+    exception: Option<&str>,
+    enters_tapped: bool,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    if exception.is_some_and(|e| e.to_ascii_lowercase().contains("until end of turn")) {
+        return Err("oracle:unsupported-enters-as-copy");
+    }
+    if !enters_tapped
+        && exception.is_none()
+        && filter.forbidden_types.is_empty()
+        && filter.subtypes.is_empty()
+        && filter.forbidden_subtypes.is_empty()
+        && filter.any_colors.is_empty()
+        && filter.forbidden_colors.is_empty()
+        && filter.required_supertypes.is_empty()
+        && filter.forbidden_supertypes.is_empty()
+        && filter.required_keywords.is_empty()
+        && filter.forbidden_keywords.is_empty()
+        && filter.stat_bounds.is_empty()
+        && filter.combat.is_none()
+        && filter.tapped.is_none()
+        && filter.token.is_none()
+        && filter.flags.is_empty()
+        && let Some(rule) = match (filter.zone, filter.controller, filter.any_types) {
+            (Some(ZoneFilter::AnyGraveyard), None, m) if m == AstCardTypeMask::CREATURE => {
+                Some(EntryCopyRule::GraveyardCreature)
+            }
+            (None | Some(ZoneFilter::Battlefield), None, m) if m == AstCardTypeMask::CREATURE => {
+                Some(EntryCopyRule::BattlefieldCreature)
+            }
+            (None | Some(ZoneFilter::Battlefield), Some(ControllerRelation::You), m)
+                if m == AstCardTypeMask::CREATURE =>
+            {
+                Some(EntryCopyRule::ControlledCreature)
+            }
+            (None | Some(ZoneFilter::Battlefield), None, m) if m == AstCardTypeMask::ARTIFACT => {
+                Some(EntryCopyRule::BattlefieldArtifact)
+            }
+            (None | Some(ZoneFilter::Battlefield), None, m)
+                if m == AstCardTypeMask::ENCHANTMENT =>
+            {
+                Some(EntryCopyRule::BattlefieldEnchantment)
+            }
+            _ => None,
+        }
+    {
+        if program.entry_copy.replace(rule).is_some() {
+            return Err("oracle:duplicate-entry-copy");
+        }
+        return Ok(());
+    }
+    let zone = match filter.zone {
+        None | Some(ZoneFilter::Battlefield) => EntryCopyZone::Battlefield,
+        Some(ZoneFilter::YourGraveyard) => EntryCopyZone::OwnGraveyard,
+        Some(ZoneFilter::AnyGraveyard) => EntryCopyZone::AnyGraveyard,
+        Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
+            EntryCopyZone::OpponentGraveyard
+        }
+        _ => return Err("oracle:unsupported-enters-as-copy"),
+    };
+    let mut inner = filter.clone();
+    inner.zone = None;
+    let obj_filter = if is_unrestricted_filter(&inner) {
+        ObjectFilter::any()
+    } else {
+        lower_object_filter(&inner, vocabulary).map_err(|_| "oracle:unsupported-enters-as-copy")?
+    };
+    let mut ext = EntryCopySpecExt::new(zone, obj_filter);
+    ext.enters_tapped = enters_tapped;
+    if let Some(exc_raw) = exception {
+        lower_entry_copy_exception(exc_raw, &mut ext, vocabulary, ids)?;
+    }
+    let rule = if ext.optional
+        && !ext.enters_tapped
+        && ext.extra_mana.is_empty()
+        && ext.extra_counters.len() <= 1
+        && ext.conditional_counters.is_empty()
+        && ext.extra_activated.len() <= 1
+        && ext.extra_triggered.len() <= 1
+        && ext.extra_static.is_empty()
+        && ext.override_pt.is_none()
+        && ext.extra_colors.is_empty()
+        && !ext.keep_name
+    {
+        EntryCopyRule::Matching(Box::new(spellwake_engine::program::EntryCopySpec {
+            zone: ext.zone,
+            filter: ext.filter,
+            nonlegendary: ext.nonlegendary,
+            extra_types: ext.extra_types,
+            extra_creature_subtypes: ext.extra_creature_subtypes,
+            extra_keywords: ext.extra_keywords,
+            extra_counters: ext.extra_counters.into_iter().next(),
+            extra_activated: ext.extra_activated.into_iter().next().map(Box::new),
+            extra_triggered: ext.extra_triggered.into_iter().next().map(Box::new),
+        }))
+    } else {
+        EntryCopyRule::MatchingExt(Box::new(ext))
+    };
+    if program.entry_copy.replace(rule).is_some() {
+        return Err("oracle:duplicate-entry-copy");
+    }
+    Ok(())
+}
+
 fn parse_entry_copy_condition(
     cond_raw: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ResolutionCondition> {
     let trimmed = cond_raw.trim().trim_end_matches(',').trim();
+    let low = trimmed.to_ascii_lowercase();
+    if matches!(
+        low.as_str(),
+        "you control that creature"
+            | "you control that permanent"
+            | "you control it"
+            | "you control the copied creature"
+            | "you control the copied permanent"
+    ) {
+        return Some(ResolutionCondition {
+            left: ValueExpr::SourceState(SourceStateExpr::DonorControlledByController),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        });
+    }
+    if matches!(
+        low.as_str(),
+        "an opponent controls that creature"
+            | "an opponent controls that permanent"
+            | "you don't control that creature"
+            | "you don't control that permanent"
+            | "you don't control it"
+    ) {
+        return Some(ResolutionCondition {
+            left: ValueExpr::SourceState(SourceStateExpr::DonorControlledByController),
+            comparison: Comparison::Equal,
+            right: ValueExpr::literal(0),
+        });
+    }
     let copy_filter_raw = trimmed
         .strip_prefix("it enters as a copy of ")
         .or_else(|| trimmed.strip_prefix("it enters the battlefield as a copy of "))
@@ -5789,15 +5831,7 @@ fn lower_entry_copy_exception(
         let quoted = rest[q1 + 1..q1 + 1 + q2_rel].trim().to_string();
         let before = rest[..q1].trim();
         let after = rest[q1 + 2 + q2_rel..].trim();
-        let norm_q = quoted
-            .replace("this creature", "~")
-            .replace("This creature", "~")
-            .replace("this permanent", "~")
-            .replace("This permanent", "~")
-            .replace("this artifact", "~")
-            .replace("This artifact", "~")
-            .replace("this enchantment", "~")
-            .replace("This enchantment", "~");
+        let norm_q = normalize_token_ability_text(&quoted, "");
         let synthetic = compile_card(
             &CardInput {
                 oracle_id: "",
@@ -5889,9 +5923,10 @@ fn lower_entry_copy_exception(
                 || !scratch.extra_activation_costs.is_empty()
                 || !scratch.activation_hybrid_symbols.is_empty()
                 || !scratch.activation_modes.is_empty()
+                || !scratch.activation_cost_reductions.is_empty()
+                || !scratch.activation_target_cost_reductions.is_empty()
                 || !scratch.loyalty_costs.is_empty()
                 || !scratch.static_conditions.is_empty()
-                || !scratch.mana.is_empty()
                 || !scratch.zone_replacements.is_empty()
                 || scratch.entry_copy.is_some()
                 || scratch.entry_tap_unless.is_some()
@@ -5921,6 +5956,7 @@ fn lower_entry_copy_exception(
             if scratch.printed_keywords.is_empty()
                 && scratch.activated.is_empty()
                 && scratch.triggered.is_empty()
+                && scratch.mana.is_empty()
                 && statics.is_empty()
             {
                 return Err("oracle:unsupported-enters-as-copy");
@@ -5928,18 +5964,47 @@ fn lower_entry_copy_exception(
             ext.extra_keywords.extend(scratch.printed_keywords);
             ext.extra_activated.extend(scratch.activated);
             ext.extra_triggered.extend(scratch.triggered);
+            ext.extra_mana.extend(scratch.mana);
             ext.extra_static.extend(statics);
         }
         rest = format!("{before} {after}").trim().to_string();
     }
 
     let mut low = rest.to_ascii_lowercase();
-    if low.contains("tapped") || low.contains("until end of turn") {
+    if low.contains("until end of turn") || low.contains("tapped and attacking") {
         return Err("oracle:unsupported-enters-as-copy");
     }
     low = low
         .replace("except ", " ")
         .replace("enters the battlefield with ", "enters with ");
+
+    // 1b. Enters tapped
+    for phrase in [
+        "enters the battlefield tapped and with ",
+        "enters tapped and with ",
+    ] {
+        if low.contains(phrase) {
+            ext.enters_tapped = true;
+            low = low.replace(phrase, "enters with ");
+        }
+    }
+    for phrase in [
+        "it enters the battlefield tapped",
+        "he enters the battlefield tapped",
+        "she enters the battlefield tapped",
+        "~ enters the battlefield tapped",
+        "enters the battlefield tapped",
+        "it enters tapped",
+        "he enters tapped",
+        "she enters tapped",
+        "~ enters tapped",
+        "enters tapped",
+    ] {
+        if low.contains(phrase) {
+            ext.enters_tapped = true;
+            low = low.replace(phrase, " ");
+        }
+    }
 
     // 2. Keep name
     for phrase in [
@@ -6229,6 +6294,12 @@ fn lower_entry_copy_exception(
         } else {
             (None, v_pos + "vanishing".len())
         };
+        if let Some(n) = van_n
+            && n > 0
+        {
+            let cnt = u8::try_from(n).map_err(|_| "oracle:unsupported-enters-as-copy")?;
+            ext.extra_counters.push((CounterKind::Time, cnt));
+        }
         ext.extra_triggered
             .push(CounterKeyword::Vanishing(van_n).ability(ids.triggered()));
         ext.extra_triggered
@@ -6242,6 +6313,10 @@ fn lower_entry_copy_exception(
         if !clean_num.is_empty()
             && let Ok(n) = clean_num.parse::<u32>()
         {
+            if n > 0 {
+                let cnt = u8::try_from(n).map_err(|_| "oracle:unsupported-enters-as-copy")?;
+                ext.extra_counters.push((CounterKind::Fade, cnt));
+            }
             ext.extra_triggered
                 .push(CounterKeyword::Fading(n).ability(ids.triggered()));
             let end = f_pos + "fading ".len() + next_tok.len();
@@ -6381,16 +6456,21 @@ fn lower_entry_copy_exception(
         "it has",
         "he has",
         "she has",
+        "~ has",
         "it gains",
         "he gains",
         "she gains",
+        "~ gains",
     ] {
         scrubbed = scrubbed.replace(phrase, " ");
     }
     let scrubbed = scrubbed.replace([',', '.', ';'], " ");
-    let has_unrecognized = scrubbed
-        .split_whitespace()
-        .any(|tok| !matches!(tok, "it" | "he" | "she" | "and" | "except"));
+    let has_unrecognized = scrubbed.split_whitespace().any(|tok| {
+        !matches!(
+            tok,
+            "it" | "he" | "she" | "~" | "and" | "except" | "still" | "also"
+        )
+    });
     if has_unrecognized {
         return Err("oracle:unsupported-enters-as-copy");
     }
