@@ -994,8 +994,8 @@ BEGIN
       count_text := entry->>'quantity';
       IF section_name !~ '^[a-z][a-z0-9_]{0,31}$'
          OR count_text !~ '^[1-9][0-9]{0,77}$'
-         OR NOT EXISTS (SELECT 1 FROM app.card_definition WHERE id = v_definition)
-         OR (v_printing IS NOT NULL AND NOT EXISTS (SELECT 1 FROM app.printing WHERE id = v_printing AND definition_id = v_definition)) THEN
+         OR NOT EXISTS (SELECT 1 FROM app.card_definition WHERE id = v_definition AND app.catalogue_source_visible(catalogue_receipt_id))
+         OR (v_printing IS NOT NULL AND NOT EXISTS (SELECT 1 FROM app.printing WHERE id = v_printing AND definition_id = v_definition AND app.catalogue_source_visible(catalogue_receipt_id))) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid deck entry';
       END IF;
     END LOOP;
@@ -1932,7 +1932,7 @@ BEGIN
      ) THEN
     RETURN false;
   END IF;
-  IF occupied <> profile.seat_capacity THEN RETURN false; END IF;
+  IF occupied <> COALESCE(lobby.target_seat_count, profile.seat_capacity) THEN RETURN false; END IF;
   IF NOT p_force AND EXISTS (
     SELECT 1 FROM app.room_slot WHERE retired_at IS NULL AND room_id = p_room AND (account_id IS NOT NULL OR controller_kind = 'ai') AND NOT ready
   ) THEN RETURN false; END IF;
@@ -1975,8 +1975,8 @@ BEGIN
     END IF;
   END IF;
   UPDATE app.command_receipt SET normalized_source = jsonb_build_object('version', 'ai-bootstrap-v1', 'slotId', slot.id, 'sponsorId', slot.sponsor_id, 'roomId', lobby.id, 'configurationId', lobby.configuration_id, 'epoch', '1', 'startKey', receipt.id::text) WHERE id = receipt.id;
-  INSERT INTO app.ai_runner_binding(room_slot_id, binding_epoch, desired_state, observed_state, bootstrap_receipt_id, epoch_receipt_id)
-  VALUES (slot.id, 1, 'running', 'pending', receipt.id, receipt.id) RETURNING id INTO binding_id;
+  INSERT INTO app.ai_runner_binding(room_slot_id, binding_epoch, desired_state, observed_state, bootstrap_receipt_id, epoch_receipt_id, provider_start_receipt_id)
+  VALUES (slot.id, 1, 'running', 'pending', receipt.id, receipt.id, receipt.id) RETURNING id INTO binding_id;
   UPDATE app.room_slot SET deck_revision_id = p_revision, ready = false WHERE id = slot.id;
   UPDATE app.room_slot SET ready = false WHERE room_id = lobby.id AND retired_at IS NULL AND controller_kind = 'human';
   UPDATE app.room SET state = 'lobby', countdown_at = NULL, revision = revision + 1 WHERE id = lobby.id;
@@ -2193,7 +2193,7 @@ BEGIN
     IF receipt.state = 'pending' THEN RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'AI ready disposition pending'; END IF;
     RETURN receipt.response_payload;
   END IF;
-  PERFORM id FROM app.account WHERE id = original_sponsor AND state = 'active' FOR NO KEY UPDATE;
+  PERFORM id FROM app.account WHERE id = original_sponsor AND (state = 'active' OR app.ai_sponsor_continuing_match(source_binding, original_sponsor)) FOR NO KEY UPDATE;
   IF NOT FOUND THEN RETURN app.finish_account_command(receipt.id, false, jsonb_build_object('sponsor', 'unavailable')); END IF;
   SELECT * INTO slot FROM app.room_slot WHERE retired_at IS NULL AND id = source_slot;
   SELECT * INTO lobby FROM app.room WHERE id = slot.room_id FOR NO KEY UPDATE;
@@ -2203,7 +2203,7 @@ BEGIN
   IF slot.sponsor_id IS DISTINCT FROM original_sponsor OR binding.room_slot_id <> slot.id THEN RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'AI sponsor or slot changed before fence'; END IF;
   IF lobby.configuration_id IS DISTINCT FROM p_configuration THEN RETURN app.finish_account_command(receipt.id, false, jsonb_build_object('configuration', 'stale')); END IF;
   IF binding.binding_epoch <> p_epoch OR binding.desired_state <> 'running' OR binding.observed_state NOT IN ('running', 'ready') OR binding.provider_runner_ref IS NULL
-     OR (lobby.state NOT IN ('lobby', 'countdown') AND NOT (lobby.state = 'started' AND EXISTS (SELECT 1 FROM app.match m JOIN app.match_seat seat ON seat.match_id = m.id WHERE seat.id = binding.match_seat_id AND m.room_id = lobby.id AND m.state = 'ready')))
+     OR (lobby.state NOT IN ('lobby', 'countdown') AND NOT (lobby.state = 'started' AND EXISTS (SELECT 1 FROM app.match m JOIN app.match_seat seat ON seat.match_id = m.id WHERE seat.id = binding.match_seat_id AND m.room_id = lobby.id AND m.state IN ('ready', 'active', 'between_games'))))
      OR NOT EXISTS (SELECT 1 FROM app.controller_grant WHERE id = p_grant AND binding_id = binding.id AND binding_epoch = p_epoch AND match_seat_id IS NOT DISTINCT FROM binding.match_seat_id AND state = 'active' AND (issue_receipt_id IS NULL OR delivery_state = 'delivered') FOR SHARE) THEN
     RETURN app.finish_account_command(receipt.id, false, jsonb_build_object('controller', 'stale or unavailable'));
   END IF;
