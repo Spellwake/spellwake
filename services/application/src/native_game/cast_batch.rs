@@ -50,11 +50,20 @@ impl Error for NativeCastBatchError {
 pub struct PreparedNativeCastBatch {
     state: GameState,
     records: Vec<Vec<u8>>,
+    candidates: Vec<NativeCandidate>,
 }
 impl PreparedNativeCastBatch {
     /// Read the final uninstalled state to qualify the proposed sequence.
     pub fn state(&self) -> &GameState {
         &self.state
+    }
+    /// Ordered accepted native candidates for each step in this batch.
+    pub fn candidates(&self) -> &[NativeCandidate] {
+        &self.candidates
+    }
+    /// Consume this prepared batch into its ordered accepted native candidates.
+    pub fn into_candidates(self) -> Vec<NativeCandidate> {
+        self.candidates
     }
     /// Transfer final state and ordered original-input records to the acceptance owner.
     pub fn into_parts(self) -> (GameState, Vec<Vec<u8>>) {
@@ -104,6 +113,7 @@ impl NativeScope<'_> {
         }
         let mut state = self.source.clone();
         let mut records = Vec::with_capacity(originals.len());
+        let mut candidates = Vec::with_capacity(originals.len());
         for (step, original) in originals.iter().enumerate() {
             if state.pending_decision().is_some()
                 || state.outcome().is_some()
@@ -186,9 +196,15 @@ impl NativeScope<'_> {
                 return Err(NativeCastBatchError::ReplayMismatch { step });
             }
             records.push(record);
-            state = prepared.into_parts().3.into_state();
+            let candidate = prepared.into_parts().3;
+            state = candidate.state().clone();
+            candidates.push(candidate);
         }
-        Ok(PreparedNativeCastBatch { state, records })
+        Ok(PreparedNativeCastBatch {
+            state,
+            records,
+            candidates,
+        })
     }
 
     /// Lightweight read-only probe: apply `taps` once on a cloned state (without

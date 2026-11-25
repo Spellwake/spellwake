@@ -2303,11 +2303,17 @@ pub(super) fn replace_targets_with_each_ins(
                 c,
             ))
         }
-        InstructionAst::UntapPermanent { subject } => {
+        InstructionAst::UntapPermanent {
+            subject,
+            count,
+            up_to,
+        } => {
             let (s, c) = replace_targets_with_each_subject(subject)?;
             Ok((
                 InstructionAst::UntapPermanent {
                     subject: Box::new(s),
+                    count: count.clone(),
+                    up_to: *up_to,
                 },
                 c,
             ))
