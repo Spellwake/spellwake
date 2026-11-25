@@ -142,6 +142,20 @@ pub struct SupportedAppearance {
     pub time_counters: Option<RulesInteger>,
     pub fade_counters: Option<RulesInteger>,
     pub renowned: bool,
+    /// This exact permanent has become monstrous (CR 701.31).
+    pub monstrous: bool,
+    /// This exact permanent is suspected (CR 701.58).
+    pub suspected: bool,
+    /// This exact permanent is goaded (CR 701.38).
+    pub goaded: bool,
+    /// This exact Case permanent is solved (CR 719.3).
+    pub solved: bool,
+    /// This exact permanent is prepared.
+    pub prepared: bool,
+    /// This exact permanent was exerted this turn (CR 701.39).
+    pub exerted: bool,
+    /// This object's copiable definition has an Adventure alternative face (CR 715).
+    pub has_adventure: bool,
     pub toxic_value: Option<RulesInteger>,
     /// Whether the creature had the granted evasion ability at this cut.
     pub granted_unblockable: bool,
@@ -213,6 +227,13 @@ impl SupportedAppearance {
             time_counters: None,
             fade_counters: None,
             renowned: false,
+            monstrous: false,
+            suspected: false,
+            goaded: false,
+            solved: false,
+            prepared: false,
+            exerted: false,
+            has_adventure: false,
             toxic_value: None,
             granted_unblockable: false,
             granted_exalted: BTreeMap::new(),
@@ -1386,6 +1407,11 @@ pub enum RulesOccurrence {
         position: TurnPosition,
         active: SeatId,
     },
+    /// Two creatures fought each other (CR 701.12).
+    PermanentFought {
+        object: ObjectId,
+        opponent: ObjectId,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventOccurrence {
@@ -1974,7 +2000,20 @@ impl RulesView<'_> {
                 .cloned(),
             kicker_choices: stack_spell
                 .map(|entry| entry.kicker_choices().clone())
-                .unwrap_or_default(),
+                .or_else(|| {
+                    self.characteristics
+                        .kicker_counts
+                        .get(&object)
+                        .cloned()
+                        .filter(|counts| !counts.is_empty())
+                })
+                .unwrap_or_else(|| {
+                    if self.characteristics.kicked.contains(&object) {
+                        BTreeMap::from([(0, 1.into())])
+                    } else {
+                        BTreeMap::new()
+                    }
+                }),
             commander_owner: current.commander_owner,
             object: physical.clone(),
             copiable_names: current.defined.names.clone(),
@@ -2023,6 +2062,20 @@ impl RulesView<'_> {
                 })
                 .flatten(),
             renowned: self.characteristics.renowned.contains(&object),
+            monstrous: self.characteristics.monstrous.contains(&object),
+            suspected: self
+                .characteristics
+                .suspect_counters
+                .get(&object)
+                .is_some_and(RulesInteger::is_positive),
+            goaded: false,
+            solved: self.characteristics.solved_cases.contains(&object),
+            prepared: self.characteristics.prepared.contains(&object),
+            exerted: self
+                .characteristics
+                .exerted_objects_this_turn
+                .contains(&object),
+            has_adventure: current.defined.has_adventure,
             toxic_value: current.toxic_value.clone(),
             granted_triggers: current.granted_triggers.clone(),
             granted_unblockable: current.granted_unblockable,
@@ -2155,6 +2208,7 @@ pub(crate) struct TriggerState {
     delayed_copy_waiting: BTreeMap<TriggerInstanceId, (SeatId, StackEntryId, DelayedCopyAction)>,
     delayed_copy_steps: Vec<(SeatId, StackEntryId, crate::turn::Step, DelayedCopyAction)>,
     token_leave_triggers: BTreeMap<ObjectId, (SupportedAppearance, SeatId)>,
+    earthbent_returns: BTreeMap<ObjectId, (SupportedAppearance, SeatId)>,
     speed_triggered_turn: Option<(u64, SeatId)>,
     current_speed_turn: Option<(u64, SeatId)>,
     declared_attackers_this_turn: BTreeSet<ObjectId>,
@@ -2195,6 +2249,7 @@ impl Default for TriggerState {
             delayed_copy_waiting: BTreeMap::new(),
             delayed_copy_steps: Vec::new(),
             token_leave_triggers: BTreeMap::new(),
+            earthbent_returns: BTreeMap::new(),
             speed_triggered_turn: None,
             current_speed_turn: None,
             declared_attackers_this_turn: BTreeSet::new(),
@@ -2451,6 +2506,15 @@ impl TriggerState {
     ) {
         self.token_leave_triggers
             .insert(token, (source, controller));
+    }
+    /// Schedule a delayed return trigger for an earthbent land if it dies or is exiled.
+    pub fn delay_earthbend_return(
+        &mut self,
+        land: ObjectId,
+        source: SupportedAppearance,
+        controller: SeatId,
+    ) {
+        self.earthbent_returns.insert(land, (source, controller));
     }
     pub(crate) fn delay_return_with_counters(
         &mut self,
@@ -2888,6 +2952,11 @@ impl TriggerState {
         };
         let mut discoveries = Vec::new();
         for (source, _) in self.token_leave_triggers.values_mut() {
+            if let Some(current) = before.appearance(source.object.id()) {
+                *source = current;
+            }
+        }
+        for (source, _) in self.earthbent_returns.values_mut() {
             if let Some(current) = before.appearance(source.object.id()) {
                 *source = current;
             }
@@ -3431,6 +3500,48 @@ impl TriggerState {
                     body: ExecutableBody::new(
                         crate::program::BodyTarget::None,
                         vec![crate::program::Instruction::ReturnTokenLinkedExile],
+                    ),
+                };
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+            if let RulesOccurrence::ZoneChange(change) = &occurrence.value
+                && change.before.object.zone() == ObjectZone::Battlefield
+                && change.after.object.zone() != ObjectZone::Battlefield
+                && let Some((source, controller)) =
+                    self.earthbent_returns.remove(&change.before.object.id())
+                && !change.before.object.is_token()
+                && matches!(
+                    change.after.object.zone(),
+                    ObjectZone::Graveyard(_) | ObjectZone::Exile
+                )
+            {
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(controller),
+                        related: TriggerRelated::ZoneChange {
+                            before: change.before.clone(),
+                            after: change.after.clone(),
+                        },
+                    }],
+                )?;
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    causes,
+                    source,
+                    controller,
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![crate::program::Instruction::ReturnEarthbentCard],
                     ),
                 };
                 self.next_instance = self

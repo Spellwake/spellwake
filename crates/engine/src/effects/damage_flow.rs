@@ -954,6 +954,47 @@ impl EffectWindow {
         }
         Ok(())
     }
+    pub(super) fn emit_fight_occurrences(
+        &mut self,
+        entry: StackEntryId,
+        instruction: usize,
+        pairs: &[(ObjectId, ObjectId)],
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let before = self.rules_snapshot(None)?;
+        let current = &before.view().evaluated;
+        let mut occurrences = Vec::new();
+        for &(first, second) in pairs {
+            let both_creatures = [first, second].into_iter().all(|id| {
+                current
+                    .get(id)
+                    .is_some_and(|view| view.zone == ObjectZone::Battlefield && view.is_creature())
+            });
+            if both_creatures {
+                occurrences.push(RulesOccurrence::PermanentFought {
+                    object: first,
+                    opponent: second,
+                });
+                if first != second {
+                    occurrences.push(RulesOccurrence::PermanentFought {
+                        object: second,
+                        opponent: first,
+                    });
+                }
+            }
+        }
+        if !occurrences.is_empty() {
+            self.emit_from(
+                EventCause::Instruction { entry, instruction },
+                &before,
+                None,
+                append,
+                |_, _, _| Ok(occurrences),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn fight_damage_inputs(
         &self,
         pairs: &[(ObjectId, ObjectId)],

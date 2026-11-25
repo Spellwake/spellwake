@@ -1180,6 +1180,185 @@ impl EffectWindow {
         } else {
             quoted
         };
+        let quoted = if granting_effect.is_none()
+            && let Some((target_filter, discount)) = current
+                .printed_text
+                .activation_target_cost_reductions
+                .get(&selected.id)
+            && let Some(TargetRef::Object(target_id)) = target.or_else(|| match &origin {
+                ActivationOrigin::PermanentTargets(targets) if targets.len() == 1 => {
+                    targets.first().copied()
+                }
+                _ => None,
+            })
+            && evaluated.get(target_id).is_some_and(|target_view| {
+                self.matches_object_filter(
+                    *target_filter,
+                    target_view,
+                    actor,
+                    Some(source),
+                    &BTreeSet::new(),
+                    &evaluated,
+                )
+            }) {
+            let mut reduced = quoted;
+            reduced.generic = reduced
+                .generic
+                .minus(&i64::from(*discount).into())
+                .max(0.into());
+            reduced
+        } else {
+            quoted
+        };
+        let quoted = {
+            use crate::characteristics::{
+                ActivatedCostScope, StaticContinuousAbility, StaticModifierRule,
+            };
+            let scope_matches = |scope: &ActivatedCostScope,
+                                 rule_ctrl: SeatId,
+                                 rule_source: Option<ObjectId>|
+             -> bool {
+                match scope {
+                    ActivatedCostScope::Any => true,
+                    ActivatedCostScope::PermanentFilter(filter) => {
+                        current.zone == ObjectZone::Battlefield
+                            && self.matches_object_filter(
+                                **filter,
+                                current,
+                                rule_ctrl,
+                                rule_source,
+                                &BTreeSet::new(),
+                                &evaluated,
+                            )
+                    }
+                    ActivatedCostScope::Equip => selected.body.instructions.iter().any(|op| {
+                        matches!(
+                            op,
+                            Instruction::Attach(crate::attachment::AttachAbility::Equip)
+                        )
+                    }),
+                    ActivatedCostScope::Boast => restriction
+                        .as_ref()
+                        .is_some_and(crate::activated::ActivationRestriction::is_boast),
+                    ActivatedCostScope::Cycling => matches!(
+                        selected.source_cost,
+                        SourceCost::HandDiscardSelf(crate::activated::HandDiscardKeyword::Cycling)
+                    ),
+                    ActivatedCostScope::Ninjutsu => selected.source_cost.is_ninjutsu(),
+                    ActivatedCostScope::Unearth => {
+                        selected.body.instructions.contains(&Instruction::Unearth)
+                    }
+                    ActivatedCostScope::Encore => {
+                        selected.body.instructions.contains(&Instruction::Encore)
+                    }
+                }
+            };
+            let controller_matches =
+                |relation: crate::program::PlayerRelation, rule_ctrl: SeatId| -> bool {
+                    match relation {
+                        crate::program::PlayerRelation::Controller => actor == rule_ctrl,
+                        crate::program::PlayerRelation::Opponent => self
+                            .combat_rules
+                            .opponents(self.window.participants(), rule_ctrl)
+                            .is_ok_and(|ops| ops.contains(&actor)),
+                        crate::program::PlayerRelation::AnyParticipant => true,
+                    }
+                };
+            let mut increases: Vec<RulesInteger> = Vec::new();
+            let mut reductions: Vec<(RulesInteger, u8)> = Vec::new();
+            let mut collect_modifier =
+                |ability: &StaticContinuousAbility,
+                 rule_ctrl: SeatId,
+                 rule_source: Option<ObjectId>| {
+                    let StaticContinuousAbility::Modifier {
+                        rule:
+                            StaticModifierRule::ActivatedAbilityCost {
+                                scope,
+                                controller,
+                                delta,
+                                less,
+                                scale,
+                                minimum_total_mana,
+                            },
+                        ..
+                    } = ability
+                    else {
+                        return;
+                    };
+                    if !controller_matches(*controller, rule_ctrl)
+                        || !scope_matches(scope, rule_ctrl, rule_source)
+                    {
+                        return;
+                    }
+                    let factor = if let Some(expr) = scale {
+                        let ctx = crate::characteristics::WorldEvalCtx {
+                            active_player: self.window.active_player(),
+                            step: self.current_step,
+                            participants: self.window.participants(),
+                            life: Some(&self.life),
+                            combat: self.combat.as_ref(),
+                            cards: self.window.cards(),
+                            programs: &self.programs,
+                            state: &self.characteristics,
+                            objects: &evaluated.objects,
+                            source: rule_source.unwrap_or(source),
+                            controller: rule_ctrl,
+                            name_rules: &self.name_rules,
+                            trigger_subject: None,
+                            related_player: None,
+                            defending_player: None,
+                        };
+                        crate::characteristics::eval_world_value_expr(&ctx, expr).max(0.into())
+                    } else {
+                        RulesInteger::from(1)
+                    };
+                    let amount = RulesInteger::from(i64::from(*delta)).times(&factor);
+                    if !amount.is_positive() {
+                        return;
+                    }
+                    if *less {
+                        reductions.push((amount, *minimum_total_mana));
+                    } else {
+                        increases.push(amount);
+                    }
+                };
+            for permanent in evaluated
+                .objects
+                .values()
+                .filter(|p| p.zone == ObjectZone::Battlefield)
+            {
+                let Some(rule_ctrl) = permanent.controller else {
+                    continue;
+                };
+                for ability in permanent.active_battlefield_rules() {
+                    collect_modifier(ability, rule_ctrl, Some(permanent.object));
+                }
+            }
+            for (rule_ctrl, ability) in &evaluated.emblem_rules {
+                collect_modifier(ability, *rule_ctrl, None);
+            }
+            for active in &self.temporary_rules {
+                if let Some(ability) = self.active_temporary_static(active, &evaluated) {
+                    collect_modifier(ability, active.controller, active.source_object);
+                }
+            }
+            let mut adjusted = quoted;
+            for increase in increases {
+                adjusted.generic = adjusted.generic.plus(&increase);
+            }
+            let colored_total = adjusted
+                .required
+                .values()
+                .fold(RulesInteger::from(0), |acc, v| acc.plus(v));
+            for (reduction, min_total) in reductions {
+                let min_generic = RulesInteger::from(i64::from(min_total))
+                    .minus(&colored_total)
+                    .max(0.into())
+                    .min(adjusted.generic.clone());
+                adjusted.generic = adjusted.generic.minus(&reduction).max(min_generic);
+            }
+            adjusted
+        };
         let mut only_spend_mana_types = Vec::new();
         if let Some(ref res) = restriction {
             collect_only_spend_mana_types(res, &mut only_spend_mana_types);
@@ -2583,6 +2762,20 @@ impl EffectWindow {
                 return Err(EffectError::ActivationConditionNotMet);
             }
             ActivationRestriction::OnlySpendManaType(_) => {}
+            ActivationRestriction::Boast => {
+                if !self.triggers.attacked_this_turn(source) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+                if self
+                    .activated_this_turn
+                    .get(exhausted_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+                {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
             ActivationRestriction::All(items) => {
                 for item in items {
                     self.check_activation_restriction_with_x(

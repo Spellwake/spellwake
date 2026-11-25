@@ -184,6 +184,10 @@ pub(crate) struct CharacteristicState {
     pub(crate) paid_alternative_objects: BTreeSet<ObjectId>,
     /// Graveyard object incarnations that died (moved battlefield -> graveyard) this turn.
     pub(crate) died_this_turn: BTreeSet<ObjectId>,
+    /// Graveyard object incarnations put into a graveyard from anywhere this turn.
+    pub(crate) put_into_gy_this_turn: BTreeSet<ObjectId>,
+    /// Graveyard object incarnations put into a graveyard from a library this turn.
+    pub(crate) put_into_gy_from_library_this_turn: BTreeSet<ObjectId>,
     /// Card names chosen via `ResolutionChoiceDomain::CardName` linked to a source permanent.
     pub(crate) named_cards: BTreeMap<ObjectId, String>,
     pub(crate) activated_sources_this_turn: BTreeMap<ObjectId, u16>,
@@ -359,6 +363,8 @@ impl Default for CharacteristicState {
             entered_from_graveyard: BTreeSet::new(),
             paid_alternative_objects: BTreeSet::new(),
             died_this_turn: BTreeSet::new(),
+            put_into_gy_this_turn: BTreeSet::new(),
+            put_into_gy_from_library_this_turn: BTreeSet::new(),
             named_cards: BTreeMap::new(),
             activated_sources_this_turn: BTreeMap::new(),
             ability_resolutions_by_source_this_turn: BTreeMap::new(),
@@ -956,6 +962,8 @@ impl CharacteristicState {
         self.dice_rolled_this_turn.clear();
         self.other_spells_mv_this_turn.clear();
         self.attacked_records_this_turn.clear();
+        self.put_into_gy_this_turn.clear();
+        self.put_into_gy_from_library_this_turn.clear();
     }
 
     pub(crate) fn expire_at_turn_start(

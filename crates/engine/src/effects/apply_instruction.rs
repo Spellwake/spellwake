@@ -102,6 +102,7 @@ impl EffectWindow {
             | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
+            | Instruction::DiscardUpToExt { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. }
@@ -402,7 +403,16 @@ impl EffectWindow {
             | Instruction::TapTargetWhileControllingSource
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
+            | Instruction::Earthbend { .. }
+            | Instruction::ReturnEarthbentCard
+            | Instruction::RegenerateSubject { .. }
             | Instruction::AddMana(_)
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
+            | Instruction::AttachChoosingPermanent { .. }
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy

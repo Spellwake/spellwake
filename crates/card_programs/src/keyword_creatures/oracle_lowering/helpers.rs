@@ -1279,6 +1279,453 @@ fn is_permanent_body_target(target: BodyTarget) -> bool {
     )
 }
 
+fn is_self_anaphora_label_local(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "it" | "its"
+            | "this creature"
+            | "this permanent"
+            | "this artifact"
+            | "this enchantment"
+            | "this land"
+            | "this planeswalker"
+    )
+}
+
+fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
+    matches!(
+        ops.last(),
+        Some(
+            Instruction::CreateTokens { .. }
+                | Instruction::CreateTokenCopy { .. }
+                | Instruction::CreateTokenCopyExt { .. }
+                | Instruction::CreateTokenAndAttach { .. }
+                | Instruction::CreateAuraTokenAttached { .. }
+                | Instruction::CreateAttackingTokens { .. }
+        )
+    ) || matches!(
+        ops.last(),
+        Some(
+            Instruction::ModifyGroupUntilEndOfTurn { group, .. }
+                | Instruction::ChangeGroup { group, .. }
+                | Instruction::ModifyGroupByAmount { group, .. }
+                | Instruction::SuppressGroupKeywords { group, .. }
+        ) if matches!(group.as_ref(), EffectSubject::CreatedTokens)
+    ) || matches!(
+        ops.last(),
+        Some(
+            Instruction::PutCountersOnSubject { subject, .. }
+                | Instruction::RemoveCountersFromSubject { subject, .. }
+                | Instruction::SetSubjectTapped { subject, .. }
+                | Instruction::SkipNextUntap { subject }
+                | Instruction::RequireCombatAction { subject, .. }
+        ) if matches!(subject.as_ref(), EffectSubject::CreatedTokens)
+    )
+}
+
+fn existing_affect_permanent_targets_bounds(ops: &[Instruction]) -> Option<(u16, u16)> {
+    ops.iter().rev().find_map(|op| {
+        if let Instruction::AffectPermanentTargets {
+            minimum, maximum, ..
+        } = op
+        {
+            Some((*minimum, *maximum))
+        } else {
+            None
+        }
+    })
+}
+
+fn rewrite_object_filter_controller_local(
+    obj: &mut ObjectFilter,
+    from: ControllerFilter,
+    to: ControllerFilter,
+) {
+    let patch = |c: &mut ObjectClause| {
+        if c.controller == from {
+            c.controller = to;
+        }
+    };
+    match obj {
+        ObjectFilter::Clause(c) => patch(c),
+        ObjectFilter::Either(a, b) => {
+            patch(a);
+            patch(b);
+        }
+    }
+}
+
+fn rewrite_trigger_power_to_target_power_local(obj: &mut ObjectFilter) {
+    use spellwake_engine::program::DynamicStatAnchor;
+    let patch = |c: &mut ObjectClause| {
+        if let PowerFilter::CompareAnchor { op, anchor } = c.power
+            && anchor == DynamicStatAnchor::TriggerSubjectPower
+        {
+            c.power = PowerFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            };
+        }
+        if let ToughnessFilter::CompareAnchor { op, anchor } = c.toughness
+            && anchor == DynamicStatAnchor::TriggerSubjectPower
+        {
+            c.toughness = ToughnessFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            };
+        }
+        if let ManaValueFilter::CompareAnchor { op, anchor } = c.mana_value
+            && anchor == DynamicStatAnchor::TriggerSubjectPower
+        {
+            c.mana_value = ManaValueFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            };
+        }
+    };
+    match obj {
+        ObjectFilter::Clause(c) => patch(c),
+        ObjectFilter::Either(a, b) => {
+            patch(a);
+            patch(b);
+        }
+    }
+}
+
+fn lower_object_filter_in_context_local(
+    f: &ObjectFilterAst,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<ObjectFilter, &'static str> {
+    let mut obj = lower_object_filter(f, vocabulary)?;
+    if f.controller == Some(ControllerRelation::DefendingPlayer) {
+        rewrite_object_filter_controller_local(
+            &mut obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::DefendingPlayer,
+        );
+    } else if !in_trigger
+        && builder.target == BodyTarget::None
+        && builder.instructions.is_empty()
+        && f.controller == Some(ControllerRelation::ThatPlayer)
+    {
+        rewrite_object_filter_controller_local(
+            &mut obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::ActivePlayer,
+        );
+    }
+    if !in_trigger && is_permanent_body_target(builder.target) {
+        rewrite_trigger_power_to_target_power_local(&mut obj);
+    }
+    Ok(obj)
+}
+
+fn lower_battlefield_body_target_in_context_local(
+    f: &ObjectFilterAst,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<BodyTarget, &'static str> {
+    let mut bt = lower_battlefield_body_target(f, vocabulary)?;
+    if !in_trigger
+        && builder.target == BodyTarget::None
+        && builder.instructions.is_empty()
+        && f.controller == Some(ControllerRelation::ThatPlayer)
+        && let BodyTarget::FilteredPermanent(ref mut obj) = bt
+    {
+        rewrite_object_filter_controller_local(
+            obj,
+            ControllerFilter::RelatedPlayer,
+            ControllerFilter::ActivePlayer,
+        );
+    }
+    Ok(bt)
+}
+
+fn merge_object_clauses_by_types_local(clauses: Vec<ObjectClause>) -> Vec<ObjectClause> {
+    let mut merged: Vec<ObjectClause> = Vec::with_capacity(clauses.len());
+    for c in clauses {
+        if merged.contains(&c) {
+            continue;
+        }
+        let mut combined = false;
+        if !c.any_types.is_empty() {
+            for existing in &mut merged {
+                if !existing.any_types.is_empty() {
+                    let mut probe = *existing;
+                    probe.any_types = c.any_types;
+                    if probe == c {
+                        existing.any_types = existing.any_types.union(c.any_types);
+                        combined = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !combined {
+            merged.push(c);
+        }
+    }
+    merged
+}
+
+fn lower_target_one_of_permanent_filter_local(
+    options: &[SubjectRefAst],
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<ObjectFilter, &'static str> {
+    if options.is_empty() {
+        return Err("oracle:unsupported-modify-pt-subject");
+    }
+    let mut perm_clauses: Vec<ObjectClause> = Vec::new();
+    for opt in options {
+        let SubjectRefAst::TargetObject {
+            filter,
+            count: TargetCountAst::Exact(1),
+        } = opt
+        else {
+            return Err("oracle:unsupported-modify-pt-subject");
+        };
+        if filter.zone.is_some() || filter.is_ability || filter.any_spell {
+            return Err("oracle:unsupported-modify-pt-subject");
+        }
+        let obj = lower_object_filter_in_context_local(filter, builder, in_trigger, vocabulary)?;
+        if obj.has_target_player() {
+            return Err("oracle:unsupported-modify-pt-subject");
+        }
+        match obj {
+            ObjectFilter::Clause(c) => perm_clauses.push(c),
+            ObjectFilter::Either(a, b) => {
+                perm_clauses.push(a);
+                perm_clauses.push(b);
+            }
+        }
+    }
+    let perm_clauses = merge_object_clauses_by_types_local(perm_clauses);
+    match perm_clauses.len() {
+        1 => Ok(ObjectFilter::Clause(perm_clauses[0])),
+        2 => Ok(ObjectFilter::Either(perm_clauses[0], perm_clauses[1])),
+        _ => Err("oracle:unsupported-modify-pt-subject"),
+    }
+}
+
+fn lower_target_one_of_permanent_body_target_local(
+    options: &[SubjectRefAst],
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<BodyTarget, &'static str> {
+    let filter =
+        lower_target_one_of_permanent_filter_local(options, builder, in_trigger, vocabulary)?;
+    if filter == ObjectFilter::creature() {
+        Ok(BodyTarget::SingleCreature)
+    } else if filter == ObjectFilter::planeswalker() {
+        Ok(BodyTarget::SinglePlaneswalker)
+    } else if filter == ObjectFilter::any() {
+        Ok(BodyTarget::SinglePermanent)
+    } else {
+        Ok(BodyTarget::FilteredPermanent(filter))
+    }
+}
+
+fn subject_contains_player_ref_local(subject: &SubjectRefAst) -> bool {
+    match subject {
+        SubjectRefAst::Player(_)
+        | SubjectRefAst::PlayerMatching { .. }
+        | SubjectRefAst::TargetPlayer { .. }
+        | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
+        | SubjectRefAst::AnyTarget => true,
+        SubjectRefAst::Compound(items) => items.iter().any(subject_contains_player_ref_local),
+        SubjectRefAst::InZone { subject, .. } => subject_contains_player_ref_local(subject),
+        _ => false,
+    }
+}
+
+fn is_other_than_target_state_qual(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "other than that creature" | "other than that permanent"
+    )
+}
+
+fn try_extract_compound_target_relation(
+    items: &[SubjectRefAst],
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<Option<(BodyTarget, EffectSubject)>, &'static str> {
+    let [
+        SubjectRefAst::TargetObject {
+            filter: f1,
+            count: TargetCountAst::Exact(1),
+        },
+        SubjectRefAst::All(f2) | SubjectRefAst::Each(f2),
+    ] = items
+    else {
+        return Ok(None);
+    };
+    if f1.zone.is_some() || f2.zone.is_some() {
+        return Ok(None);
+    }
+
+    let is_same_name_target = matches!(&f2.named, Some(NameFilterAst::SameAsReferenced))
+        || matches!(
+            &f2.named,
+            Some(NameFilterAst::SameAs(ref_subj))
+                if matches!(
+                    ref_subj.as_ref(),
+                    SubjectRefAst::Anaphora(_) | SubjectRefAst::TargetObject { .. }
+                )
+        );
+    if is_same_name_target {
+        let bt =
+            lower_battlefield_body_target_in_context_local(f1, builder, in_trigger, vocabulary)?;
+        let mut f2_clean = f2.as_ref().clone();
+        f2_clean.named = None;
+        f2_clean.flags.0 &= !AstFilterFlags::EXCLUDE_SELF.0;
+        f2_clean.predicates.retain(|pred| match pred {
+            FilterPredicateAst::Exclude(subj) => {
+                !matches!(subj.as_ref(), SubjectRefAst::Anaphora(_))
+            }
+            FilterPredicateAst::StateQualification(raw) => {
+                let norm = raw.trim().to_ascii_lowercase();
+                !matches!(
+                    norm.as_str(),
+                    "with the same name as that creature"
+                        | "with the same name as that permanent"
+                        | "with the same name as that land"
+                        | "with the same name as that card"
+                        | "other than that creature"
+                        | "other than that permanent"
+                )
+            }
+            _ => true,
+        });
+        let obj = lower_object_filter_in_context_local(&f2_clean, builder, in_trigger, vocabulary)?;
+        if obj.has_target_player() {
+            return Err("oracle:unsupported-modify-pt-subject");
+        }
+        return Ok(Some((bt, EffectSubject::TargetAndSameNameMatching(obj))));
+    }
+
+    let share_color_idx = f2.predicates.iter().position(|pred| {
+        matches!(
+            pred,
+            FilterPredicateAst::SharesPropertyWith {
+                property,
+                reference,
+                negated: false,
+            } if property.eq_ignore_ascii_case("color")
+                && match reference.as_ref() {
+                    SubjectRefAst::Anaphora(raw) => !raw.trim().eq_ignore_ascii_case("group"),
+                    SubjectRefAst::TargetObject { .. } => true,
+                    _ => false,
+                }
+        )
+    });
+    if let Some(idx) = share_color_idx {
+        let bt =
+            lower_battlefield_body_target_in_context_local(f1, builder, in_trigger, vocabulary)?;
+        let mut f2_clean = f2.as_ref().clone();
+        f2_clean.predicates.remove(idx);
+        f2_clean.flags.0 &= !AstFilterFlags::EXCLUDE_SELF.0;
+        f2_clean.predicates.retain(|pred| match pred {
+            FilterPredicateAst::Exclude(subj) => {
+                !matches!(subj.as_ref(), SubjectRefAst::Anaphora(_))
+            }
+            FilterPredicateAst::StateQualification(raw) => !is_other_than_target_state_qual(raw),
+            _ => true,
+        });
+        let obj = lower_object_filter_in_context_local(&f2_clean, builder, in_trigger, vocabulary)?;
+        if obj.has_target_player() {
+            return Err("oracle:unsupported-modify-pt-subject");
+        }
+        return Ok(Some((
+            bt,
+            EffectSubject::TargetAndSharingColorMatching(obj),
+        )));
+    }
+
+    Ok(None)
+}
+
+fn lower_modify_pt_group_subject(
+    f: &ObjectFilterAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+) -> Result<EffectSubject, &'static str> {
+    if let Some(excl_target_idx) = f.predicates.iter().position(|pred| {
+        matches!(
+            pred,
+            FilterPredicateAst::Exclude(subj)
+                if matches!(
+                    subj.as_ref(),
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: TargetCountAst::Exact(1),
+                    } if filter.zone.is_none()
+                )
+        )
+    }) {
+        let FilterPredicateAst::Exclude(subj) = &f.predicates[excl_target_idx] else {
+            return Err("oracle:unsupported-modify-pt-subject");
+        };
+        let SubjectRefAst::TargetObject { filter: tf, .. } = subj.as_ref() else {
+            return Err("oracle:unsupported-modify-pt-subject");
+        };
+        let bt =
+            lower_battlefield_body_target_in_context_local(tf, builder, in_trigger, vocabulary)?;
+        let mut f_clean = f.clone();
+        f_clean.predicates.remove(excl_target_idx);
+        let obj = lower_object_filter_in_context_local(&f_clean, builder, in_trigger, vocabulary)?;
+        if obj.has_target_player() {
+            return Err("oracle:unsupported-modify-pt-subject");
+        }
+        builder.bind_target(bt)?;
+        return Ok(EffectSubject::MatchingOtherThanTarget(obj));
+    }
+
+    if is_permanent_body_target(builder.target) {
+        let excl_anaphora_idx = f.predicates.iter().position(|pred| match pred {
+            FilterPredicateAst::Exclude(subj) => {
+                matches!(subj.as_ref(), SubjectRefAst::Anaphora(_))
+            }
+            FilterPredicateAst::StateQualification(raw) => is_other_than_target_state_qual(raw),
+            _ => false,
+        });
+        if let Some(idx) = excl_anaphora_idx {
+            let mut f_clean = f.clone();
+            f_clean.predicates.remove(idx);
+            let obj =
+                lower_object_filter_in_context_local(&f_clean, builder, in_trigger, vocabulary)?;
+            if obj.has_target_player() {
+                return Err("oracle:unsupported-modify-pt-subject");
+            }
+            return Ok(EffectSubject::MatchingOtherThanTarget(obj));
+        }
+        if !self_pronoun_valid && !in_trigger && (f.flags.0 & AstFilterFlags::EXCLUDE_SELF.0) != 0 {
+            let mut f_clean = f.clone();
+            f_clean.flags.0 &= !AstFilterFlags::EXCLUDE_SELF.0;
+            let obj =
+                lower_object_filter_in_context_local(&f_clean, builder, in_trigger, vocabulary)?;
+            if obj.has_target_player() {
+                return Err("oracle:unsupported-modify-pt-subject");
+            }
+            return Ok(EffectSubject::MatchingOtherThanTarget(obj));
+        }
+    }
+
+    let obj = lower_object_filter_in_context_local(f, builder, in_trigger, vocabulary)?;
+    bind_filter_player_target_local(builder, &obj)?;
+    builder.last_group_filter = Some(obj);
+    Ok(EffectSubject::Matching(obj))
+}
+
 pub(super) fn lower_modify_pt_part(
     subject: &SubjectRefAst,
     part: ResolvedPartSpec,
@@ -1299,11 +1746,54 @@ pub(super) fn lower_modify_pt_part(
             });
             Ok(())
         }
+        SubjectRefAst::Compound(items) => {
+            if items.is_empty() || items.iter().any(subject_contains_player_ref_local) {
+                return Err("oracle:unsupported-modify-pt-subject");
+            }
+            if let Some((bt, group)) =
+                try_extract_compound_target_relation(items, builder, in_trigger, vocabulary)?
+            {
+                builder.bind_target(bt)?;
+                builder.instructions.push(Instruction::ChangeGroup {
+                    group: Box::new(group),
+                    parts: ResolvedPartsSpec(vec![part]),
+                    duration: dur,
+                });
+                return Ok(());
+            }
+            let mut trial = builder.clone();
+            let mut target_binders = 0usize;
+            for item in items {
+                let prev_target = trial.target;
+                lower_modify_pt_part(
+                    item,
+                    part.clone(),
+                    dur,
+                    &mut trial,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                )?;
+                if trial.target != prev_target {
+                    target_binders += 1;
+                    if target_binders > 1 {
+                        return Err("oracle:unsupported-modify-pt-subject");
+                    }
+                }
+            }
+            if items.len() > 1 {
+                trial.last_group_filter = None;
+            }
+            *builder = trial;
+            Ok(())
+        }
         SubjectRefAst::TargetObject {
             filter,
             count: TargetCountAst::Exact(1),
         } if filter.zone.is_none() => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt = lower_battlefield_body_target_in_context_local(
+                filter, builder, in_trigger, vocabulary,
+            )?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -1317,7 +1807,9 @@ pub(super) fn lower_modify_pt_part(
             filter,
             count: TargetCountAst::Exact(n),
         } if filter.zone.is_none() && *n >= 2 => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt = lower_battlefield_body_target_in_context_local(
+                filter, builder, in_trigger, vocabulary,
+            )?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -1335,7 +1827,9 @@ pub(super) fn lower_modify_pt_part(
             filter,
             count: TargetCountAst::UpTo(max),
         } if filter.zone.is_none() && *max > 0 => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            let bt = lower_battlefield_body_target_in_context_local(
+                filter, builder, in_trigger, vocabulary,
+            )?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -1351,9 +1845,31 @@ pub(super) fn lower_modify_pt_part(
         }
         SubjectRefAst::TargetObject {
             filter,
+            count: TargetCountAst::ChosenX,
+        } if filter.zone.is_none() && !in_trigger => {
+            let bt = lower_battlefield_body_target_in_context_local(
+                filter, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(bt)?;
+            builder.x_target_count = true;
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: 0,
+                    maximum: u16::MAX,
+                    action: PermanentTargetAction::Modify {
+                        parts: ResolvedPartsSpec(vec![part]),
+                        duration: dur,
+                    },
+                });
+            Ok(())
+        }
+        SubjectRefAst::TargetObject {
+            filter,
             count: TargetCountAst::AnyNumber,
         } if filter.zone.is_none() => {
-            let obj = lower_object_filter(filter, vocabulary)?;
+            let obj =
+                lower_object_filter_in_context_local(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
@@ -1363,13 +1879,144 @@ pub(super) fn lower_modify_pt_part(
                 });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::Exact(1),
+        } => {
+            let bt = lower_target_one_of_permanent_body_target_local(
+                options, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(bt)?;
             builder
                 .instructions
                 .push(Instruction::CreateContinuousEffect {
                     parts: ResolvedPartsSpec(vec![part]),
                     duration: dur,
                 });
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::Exact(n),
+        } if *n >= 2 => {
+            let bt = lower_target_one_of_permanent_body_target_local(
+                options, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(bt)?;
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: *n,
+                    maximum: *n,
+                    action: PermanentTargetAction::Modify {
+                        parts: ResolvedPartsSpec(vec![part]),
+                        duration: dur,
+                    },
+                });
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::UpTo(max),
+        } if *max > 0 => {
+            let bt = lower_target_one_of_permanent_body_target_local(
+                options, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(bt)?;
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: 0,
+                    maximum: *max,
+                    action: PermanentTargetAction::Modify {
+                        parts: ResolvedPartsSpec(vec![part]),
+                        duration: dur,
+                    },
+                });
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::ChosenX,
+        } if !in_trigger => {
+            let bt = lower_target_one_of_permanent_body_target_local(
+                options, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(bt)?;
+            builder.x_target_count = true;
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: 0,
+                    maximum: u16::MAX,
+                    action: PermanentTargetAction::Modify {
+                        parts: ResolvedPartsSpec(vec![part]),
+                        duration: dur,
+                    },
+                });
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::AnyNumber,
+        } => {
+            let obj = lower_target_one_of_permanent_filter_local(
+                options, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder
+                .instructions
+                .push(Instruction::ModifyAnyNumberOfPermanents {
+                    parts: ResolvedPartsSpec(vec![part]),
+                    duration: dur,
+                });
+            Ok(())
+        }
+        SubjectRefAst::Anaphora(raw)
+            if last_instruction_created_tokens_local(&builder.instructions)
+                && (!is_permanent_body_target(builder.target)
+                    || raw.to_ascii_lowercase().contains("token")) =>
+        {
+            builder.instructions.push(Instruction::ChangeGroup {
+                group: Box::new(EffectSubject::CreatedTokens),
+                parts: ResolvedPartsSpec(vec![part]),
+                duration: dur,
+            });
+            Ok(())
+        }
+        SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+            if let Some((minimum, maximum)) =
+                existing_affect_permanent_targets_bounds(&builder.instructions)
+            {
+                builder
+                    .instructions
+                    .push(Instruction::AffectPermanentTargets {
+                        minimum,
+                        maximum,
+                        action: PermanentTargetAction::Modify {
+                            parts: ResolvedPartsSpec(vec![part]),
+                            duration: dur,
+                        },
+                    });
+            } else if builder
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::ModifyAnyNumberOfPermanents { .. }))
+            {
+                builder
+                    .instructions
+                    .push(Instruction::ModifyAnyNumberOfPermanents {
+                        parts: ResolvedPartsSpec(vec![part]),
+                        duration: dur,
+                    });
+            } else {
+                builder
+                    .instructions
+                    .push(Instruction::CreateContinuousEffect {
+                        parts: ResolvedPartsSpec(vec![part]),
+                        duration: dur,
+                    });
+            }
             Ok(())
         }
         SubjectRefAst::Anaphora(_)
@@ -1391,8 +2038,10 @@ pub(super) fn lower_modify_pt_part(
             });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_)
-            if in_trigger && !self_pronoun_valid && builder.target == BodyTarget::None =>
+        SubjectRefAst::Anaphora(raw)
+            if in_trigger
+                && (!self_pronoun_valid || !is_self_anaphora_label_local(raw))
+                && builder.target == BodyTarget::None =>
         {
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::TriggerSubject),
@@ -1414,11 +2063,15 @@ pub(super) fn lower_modify_pt_part(
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
             if f.zone.is_none() =>
         {
-            let obj = lower_object_filter(f, vocabulary)?;
-            bind_filter_player_target_local(builder, &obj)?;
-            builder.last_group_filter = Some(obj);
+            let group = lower_modify_pt_group_subject(
+                f,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )?;
             builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(obj)),
+                group: Box::new(group),
                 parts: ResolvedPartsSpec(vec![part]),
                 duration: dur,
             });
@@ -1459,6 +2112,49 @@ pub(super) fn lower_modify_pt_target(
             }
             Ok(())
         }
+        SubjectRefAst::Compound(items) if dur == ResolvedDuration::UntilEndOfTurn => {
+            if items.is_empty() || items.iter().any(subject_contains_player_ref_local) {
+                return Err("oracle:unsupported-modify-pt-subject");
+            }
+            if let Some((bt, group)) =
+                try_extract_compound_target_relation(items, builder, in_trigger, vocabulary)?
+            {
+                builder.bind_target(bt)?;
+                builder
+                    .instructions
+                    .push(Instruction::ModifyGroupUntilEndOfTurn {
+                        group: Box::new(group),
+                        power_toughness: Some(pt),
+                        keywords: BTreeSet::new(),
+                    });
+                return Ok(());
+            }
+            let mut trial = builder.clone();
+            let mut target_binders = 0usize;
+            for item in items {
+                let prev_target = trial.target;
+                lower_modify_pt_target(
+                    item,
+                    pt.clone(),
+                    dur,
+                    &mut trial,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                )?;
+                if trial.target != prev_target {
+                    target_binders += 1;
+                    if target_binders > 1 {
+                        return Err("oracle:unsupported-modify-pt-subject");
+                    }
+                }
+            }
+            if items.len() > 1 {
+                trial.last_group_filter = None;
+            }
+            *builder = trial;
+            Ok(())
+        }
         SubjectRefAst::TriggerSubject if in_trigger && dur == ResolvedDuration::UntilEndOfTurn => {
             builder
                 .instructions
@@ -1469,16 +2165,16 @@ pub(super) fn lower_modify_pt_target(
                 });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_)
-            if in_trigger
-                && !self_pronoun_valid
-                && builder.target == BodyTarget::None
-                && dur == ResolvedDuration::UntilEndOfTurn =>
+        SubjectRefAst::Anaphora(raw)
+            if dur == ResolvedDuration::UntilEndOfTurn
+                && last_instruction_created_tokens_local(&builder.instructions)
+                && (!is_permanent_body_target(builder.target)
+                    || raw.to_ascii_lowercase().contains("token")) =>
         {
             builder
                 .instructions
                 .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::TriggerSubject),
+                    group: Box::new(EffectSubject::CreatedTokens),
                     power_toughness: Some(pt),
                     keywords: BTreeSet::new(),
                 });
@@ -1493,6 +2189,21 @@ pub(super) fn lower_modify_pt_target(
                 .instructions
                 .push(Instruction::ModifyGroupUntilEndOfTurn {
                     group: Box::new(EffectSubject::Matching(group_obj)),
+                    power_toughness: Some(pt),
+                    keywords: BTreeSet::new(),
+                });
+            Ok(())
+        }
+        SubjectRefAst::Anaphora(raw)
+            if in_trigger
+                && (!self_pronoun_valid || !is_self_anaphora_label_local(raw))
+                && builder.target == BodyTarget::None
+                && dur == ResolvedDuration::UntilEndOfTurn =>
+        {
+            builder
+                .instructions
+                .push(Instruction::ModifyGroupUntilEndOfTurn {
+                    group: Box::new(EffectSubject::TriggerSubject),
                     power_toughness: Some(pt),
                     keywords: BTreeSet::new(),
                 });
@@ -1513,13 +2224,17 @@ pub(super) fn lower_modify_pt_target(
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
             if f.zone.is_none() && dur == ResolvedDuration::UntilEndOfTurn =>
         {
-            let obj = lower_object_filter(f, vocabulary)?;
-            bind_filter_player_target_local(builder, &obj)?;
-            builder.last_group_filter = Some(obj);
+            let group = lower_modify_pt_group_subject(
+                f,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )?;
             builder
                 .instructions
                 .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::Matching(obj)),
+                    group: Box::new(group),
                     power_toughness: Some(pt),
                     keywords: BTreeSet::new(),
                 });
@@ -2457,6 +3172,42 @@ fn extract_search_mana_value(
         .enumerate()
         .filter_map(|(idx, sb)| (sb.stat == StatKind::ManaValue).then_some(idx))
         .collect();
+    if mv_indices.is_empty() {
+        let exact_indices: Vec<usize> = filter
+            .predicates
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, pred)| {
+                matches!(pred, FilterPredicateAst::ExactManaCostOneOf(_)).then_some(idx)
+            })
+            .collect();
+        if exact_indices.len() != 1 {
+            return Ok((None, None));
+        }
+        let idx = exact_indices[0];
+        let FilterPredicateAst::ExactManaCostOneOf(raw_costs) = &filter.predicates[idx] else {
+            return Ok((None, None));
+        };
+        if raw_costs.is_empty() {
+            return Ok((None, None));
+        }
+        let mut costs = Vec::with_capacity(raw_costs.len());
+        for raw in raw_costs {
+            if raw.trim().is_empty() {
+                return Ok((None, None));
+            }
+            let Some(cost) = parse_fixed_mana_cost(raw) else {
+                return Ok((None, None));
+            };
+            costs.push(cost);
+        }
+        let mut stripped = filter.clone();
+        stripped.predicates.remove(idx);
+        return Ok((
+            Some(SearchManaValue::ExactManaCostOneOf(costs)),
+            Some(stripped),
+        ));
+    }
     if mv_indices.len() != 1 {
         return Ok((None, None));
     }
@@ -2982,7 +3733,7 @@ fn uppercase_mana_braces(raw: &str) -> String {
     brace_norm
 }
 
-fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
+pub(super) fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
     let mut s = raw
         .trim()
         .trim_end_matches([',', ';'])

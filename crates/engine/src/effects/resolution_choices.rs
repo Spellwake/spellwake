@@ -169,6 +169,8 @@ pub(super) struct OptionalEffectWork {
 pub(super) struct ResolutionPaymentWork {
     variable: bool,
     defines_x: bool,
+    x_factor: RulesInteger,
+    record_last_action: bool,
     restricted_colors: Option<[ManaType; 2]>,
     pub(super) cursor: ResolutionCursor,
     pub(super) payer: SeatId,
@@ -923,6 +925,22 @@ impl EffectWindow {
                 };
                 opponents[pick]
             }
+            ResolvingPlayer::SourceOwner => match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    source.owner()
+                }
+                StackKind::CardSpell(id) => self
+                    .window
+                    .cards()
+                    .get(*id)
+                    .map(GameObject::owner)
+                    .unwrap_or_else(|| entry.controller()),
+                _ => self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .map(|t| t.source.object.owner())
+                    .unwrap_or_else(|| entry.controller()),
+            },
         };
         if !self.window.original_participants().contains(&player) {
             return Err(EffectError::InvalidResolvingPlayer);
@@ -1679,6 +1697,14 @@ impl EffectWindow {
             | Instruction::CreateOpponentEmblems(_)
             | Instruction::UntapUpTo { .. }
             | Instruction::DiscardUpTo { .. }
+            | Instruction::DiscardUpToExt { .. }
+            | Instruction::RegenerateSubject { .. }
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
+            | Instruction::AttachChoosingPermanent { .. }
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::PutCounterOnRelatedPermanent
@@ -2089,6 +2115,7 @@ impl EffectWindow {
             | Instruction::WeakenTargetByChosenX
             | Instruction::BoostTargetPower { .. }
             | Instruction::AnimateTargetAsCountedCreature { .. }
+            | Instruction::Earthbend { .. }
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
@@ -2104,6 +2131,7 @@ impl EffectWindow {
             Instruction::ReturnCardsDestroyedThisWay
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
+            | Instruction::ReturnEarthbentCard
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::ExileNonlandForFormerControllers
             | Instruction::ExileMilledCreatures { .. }
@@ -2462,6 +2490,8 @@ impl EffectWindow {
                     ResolutionPaymentWork {
                         variable: true,
                         defines_x: false,
+                        x_factor: 1.into(),
+                        record_last_action: false,
                         restricted_colors: None,
                         cursor,
                         payer,
@@ -2488,7 +2518,16 @@ impl EffectWindow {
                     .resolving()
                     .ok_or(EffectError::WrongResolutionFrame)?
                     .controller();
-                let defines_x = *extra_generic == ValueExpr::chosen_x();
+                let (defines_x, x_factor) = if *extra_generic == ValueExpr::chosen_x() {
+                    (true, RulesInteger::from(1))
+                } else if let ValueExpr::Scale { expr, factor } = extra_generic
+                    && **expr == ValueExpr::chosen_x()
+                    && factor.is_positive()
+                {
+                    (true, factor.clone())
+                } else {
+                    (false, RulesInteger::from(1))
+                };
                 let mut cost = fixed.clone();
                 if !defines_x {
                     let extra = self
@@ -2501,6 +2540,8 @@ impl EffectWindow {
                     ResolutionPaymentWork {
                         variable: defines_x,
                         defines_x,
+                        x_factor,
+                        record_last_action: true,
                         restricted_colors: None,
                         cursor,
                         payer,
@@ -2533,6 +2574,8 @@ impl EffectWindow {
                     ResolutionPaymentWork {
                         variable: false,
                         defines_x: false,
+                        x_factor: 1.into(),
+                        record_last_action: false,
                         restricted_colors,
                         cursor,
                         payer,
@@ -2890,6 +2933,7 @@ impl EffectWindow {
             | Instruction::TapTargetWhileControllingSource
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
+            | Instruction::ReturnEarthbentCard
             | Instruction::AddMana(_)
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
@@ -2999,6 +3043,7 @@ impl EffectWindow {
             | Instruction::WeakenTargetByChosenX
             | Instruction::BoostTargetPower { .. }
             | Instruction::AnimateTargetAsCountedCreature { .. }
+            | Instruction::Earthbend { .. }
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
@@ -3048,7 +3093,15 @@ impl EffectWindow {
             | Instruction::ExileSubjectUntilSourceLeaves { .. }
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. } => return Ok(false),
+            | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::DiscardUpToExt { .. }
+            | Instruction::RegenerateSubject { .. }
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
+            | Instruction::AttachChoosingPermanent { .. } => return Ok(false),
         }
         Ok(true)
     }
@@ -3580,8 +3633,31 @@ impl EffectWindow {
                             crate::mana::ManaPaymentError::WrongTotal,
                         ));
                     }
-                    let x = amount.minus(&fixed_total);
-                    work.cost.generic = work.cost.generic.plus(&x);
+                    let extra = amount.minus(&fixed_total);
+                    let x = if work.x_factor > 1.into() {
+                        let factor =
+                            work.x_factor
+                                .to_usize()
+                                .ok_or(EffectError::InvalidManaPayment(
+                                    crate::mana::ManaPaymentError::WrongTotal,
+                                ))?;
+                        let extra_u = extra.to_usize().ok_or(EffectError::InvalidManaPayment(
+                            crate::mana::ManaPaymentError::WrongTotal,
+                        ))?;
+                        if factor == 0 || extra_u % factor != 0 {
+                            return Err(EffectError::InvalidManaPayment(
+                                crate::mana::ManaPaymentError::WrongTotal,
+                            ));
+                        }
+                        RulesInteger::from_usize(extra_u / factor)
+                    } else {
+                        extra.clone()
+                    };
+                    work.cost.generic = work.cost.generic.plus(&extra);
+                    if work.record_last_action {
+                        work.cursor.results.last_action_count = Some(x.clone());
+                        work.cursor.results.last_action_succeeded = x.is_positive();
+                    }
                     paid_x = Some(x);
                 } else if work.variable {
                     let amount = allocation
@@ -3596,6 +3672,9 @@ impl EffectWindow {
                             .as_ref()
                             .map_or(amount.clone(), |total| total.plus(&amount)),
                     );
+                } else if work.record_last_action {
+                    work.cursor.results.last_action_count = Some(work.cost.total());
+                    work.cursor.results.last_action_succeeded = true;
                 }
                 let spend = prepare_payment(&work.cost, Some(&allocation), |kind| {
                     self.unrestricted_mana(work.payer, kind)
@@ -3615,7 +3694,13 @@ impl EffectWindow {
                 }
                 ResolutionPaymentOutcome::Paid(payment)
             }
-            ResolutionPaymentReply::Decline => ResolutionPaymentOutcome::Declined,
+            ResolutionPaymentReply::Decline => {
+                if work.record_last_action {
+                    work.cursor.results.last_action_count = Some(0.into());
+                    work.cursor.results.last_action_succeeded = false;
+                }
+                ResolutionPaymentOutcome::Declined
+            }
         };
         next.revision = revision;
         next.finish_resolution_payment(*work, outcome, &mut append)?;
@@ -3635,6 +3720,10 @@ impl EffectWindow {
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         let frame = work.frame(self.revision);
+        if work.record_last_action && matches!(outcome, ResolutionPaymentOutcome::UnpaidDeparted) {
+            work.cursor.results.last_action_count = Some(0.into());
+            work.cursor.results.last_action_succeeded = false;
+        }
         let mut destination = match outcome {
             ResolutionPaymentOutcome::Paid(_) => work.paid_destination,
             ResolutionPaymentOutcome::Declined | ResolutionPaymentOutcome::UnpaidDeparted => {

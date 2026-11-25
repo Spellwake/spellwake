@@ -323,9 +323,12 @@ impl EffectWindow {
             .resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?
             .clone();
-        let collective = self.current_instruction()? == &Instruction::ShuffleEachHandAndGraveyard;
+        let is_each_hand_gy =
+            self.current_instruction()? == &Instruction::ShuffleEachHandAndGraveyard;
+        let collective = is_each_hand_gy
+            || self.current_instruction()? == &Instruction::ShuffleTargetIntoLibrary;
         let mut remaining_players = std::collections::VecDeque::new();
-        let player = if collective {
+        let player = if is_each_hand_gy {
             remaining_players = self.window.apnap_players()?.collect();
             remaining_players
                 .pop_front()
@@ -335,7 +338,7 @@ impl EffectWindow {
         };
         let objects = if let Some(targets) = targets {
             targets
-        } else if collective {
+        } else if is_each_hand_gy {
             self.window
                 .cards()
                 .iter()

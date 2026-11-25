@@ -1353,6 +1353,8 @@ pub struct EffectWindow {
     extra_turns: Vec<SeatId>,
     additional_combats: usize,
     resume_turn_order_at: Option<SeatId>,
+    /// Turns remaining to be skipped per living player (CR 614.10).
+    skip_turns_remaining: BTreeMap<SeatId, u16>,
     /// Departed seats whose turn slots were passed before the upcoming untap.
     skipped_turns: BTreeSet<SeatId>,
     departed_damage_sources: BTreeMap<ObjectId, crate::damage::DepartedDamageSource>,
@@ -2627,6 +2629,7 @@ impl EffectWindow {
             extra_turns: Vec::new(),
             additional_combats:0,
             resume_turn_order_at: None,
+            skip_turns_remaining: BTreeMap::new(),
             skipped_turns: BTreeSet::new(),
             departed_damage_sources: BTreeMap::new(),
             departed_reflexive_sources: BTreeMap::new(),
@@ -3911,7 +3914,16 @@ impl EffectWindow {
                                         .is_some_and(|list| list.contains(&object))
                             })
                     }
-                    crate::program::SourceZoneFilter::LastMoved => false,
+                    crate::program::SourceZoneFilter::LastMoved => {
+                        active.resolved_objects.contains(&object)
+                            && matches!(
+                                card.zone(),
+                                ObjectZone::Exile
+                                    | ObjectZone::Graveyard(_)
+                                    | ObjectZone::Hand(_)
+                                    | ObjectZone::Library(_)
+                            )
+                    }
                 };
                 if !zone_ok {
                     continue;
@@ -4557,6 +4569,10 @@ impl EffectWindow {
         next.characteristics.blocked_objects_this_turn.clear();
         next.characteristics.entered_objects_this_turn.clear();
         next.characteristics.died_this_turn.clear();
+        next.characteristics.put_into_gy_this_turn.clear();
+        next.characteristics
+            .put_into_gy_from_library_this_turn
+            .clear();
         next.characteristics.activated_sources_this_turn.clear();
         next.characteristics
             .ability_resolutions_by_source_this_turn
@@ -8749,6 +8765,110 @@ impl EffectWindow {
         }
         if clause
             .flags
+            .contains(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN)
+            && !self.characteristics.put_into_gy_this_turn.contains(&id)
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN)
+            && !self
+                .characteristics
+                .put_into_gy_from_library_this_turn
+                .contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::KICKED) {
+            let is_kicked = self.characteristics.kicked.contains(&id)
+                || self
+                    .characteristics
+                    .kicker_counts
+                    .get(&id)
+                    .is_some_and(|counts| !counts.is_empty())
+                || self.window.entries().iter().any(|entry| {
+                    matches!(entry.kind(), StackKind::CardSpell(spell_id) if *spell_id == id)
+                        && !entry.kicker_choices().is_empty()
+                });
+            if !is_kicked {
+                return false;
+            }
+        }
+        if clause.flags.contains(ObjectFilterFlags::RENOWNED)
+            && !self.characteristics.renowned.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::SADDLED)
+            && !self.characteristics.saddled.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::MONSTROUS)
+            && !self.characteristics.monstrous.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::SUSPECTED)
+            && !self
+                .characteristics
+                .suspect_counters
+                .get(&id)
+                .is_some_and(RulesInteger::is_positive)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::GOADED)
+            && !self
+                .goaded
+                .get(&id)
+                .is_some_and(|goaders| !goaders.is_empty())
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::SOLVED)
+            && !self.characteristics.solved_cases.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::PREPARED)
+            && !self.characteristics.prepared.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::EXERTED)
+            && !self.characteristics.exerted_objects_this_turn.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::NON_HISTORIC) {
+            let is_historic = p.has_type(CardType::Artifact)
+                || p.current_supertypes
+                    .contains(&crate::program::Supertype::Legendary)
+                || p.current_enchantment_subtypes
+                    .contains(&crate::program::EnchantmentSubtype::Saga);
+            if is_historic {
+                return false;
+            }
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+            && !self.characteristics.counters(id).minus_one.is_positive()
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::HAS_ADVENTURE)
+            && !(p.defined.has_adventure
+                || self
+                    .copiable_program(id)
+                    .is_some_and(|prog| prog.adventure.is_some()))
+        {
+            return false;
+        }
+        if clause
+            .flags
             .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
             && !ability_source.is_some_and(|src| {
                 self.characteristics
@@ -9569,6 +9689,7 @@ impl EffectWindow {
             | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
+            | Instruction::DiscardUpToExt { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. }
@@ -9679,6 +9800,7 @@ impl EffectWindow {
             | Instruction::WeakenTargetByChosenX
             | Instruction::BoostTargetPower { .. }
             | Instruction::AnimateTargetAsCountedCreature { .. }
+            | Instruction::Earthbend { .. }
             | Instruction::CopyTargetToSource { .. }
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
@@ -9855,7 +9977,15 @@ impl EffectWindow {
             | Instruction::TapTargetWhileControllingSource
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
+            | Instruction::ReturnEarthbentCard
+            | Instruction::RegenerateSubject { .. }
             | Instruction::AddMana(_)
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
+            | Instruction::AttachChoosingPermanent { .. }
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
