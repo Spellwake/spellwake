@@ -2050,6 +2050,91 @@ impl EffectWindow {
                 }
             }
         }
+        let keyword_cast_matches = |kind: crate::characteristics::CastKeywordCostKind| -> bool {
+            use crate::characteristics::CastKeywordCostKind as K;
+            use crate::program::{ConditionalCastCost, EndStepCast};
+            match kind {
+                K::Dash => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::EndStep {
+                                kind: EndStepCast::Dash,
+                                ..
+                            })
+                        )
+                }
+                K::Blitz => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::EndStep {
+                                kind: EndStepCast::Blitz,
+                                ..
+                            })
+                        )
+                }
+                K::Warp => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::EndStep {
+                                kind: EndStepCast::Warp,
+                                ..
+                            })
+                        )
+                }
+                K::Flashback => via_flashback,
+                K::Buyback => bought_back,
+                K::Bestow => cast_bestowed,
+                K::Evoke => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::Evoke(_))
+                        )
+                }
+                K::Mutate => cast_mutating,
+                K::Escape => via_escape,
+                K::Foretell => from_foretell,
+                K::Madness => {
+                    resolving_cast.is_some_and(|cast| cast.kind == ExileCastAbility::Madness)
+                }
+                K::Kicker => !kicked.is_empty(),
+                K::Spectacle => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::Spectacle(_))
+                        )
+                }
+                K::Prowl => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::Prowl(_))
+                        )
+                }
+                K::Surge => {
+                    payment.use_alternative
+                        && matches!(
+                            current_spell.printed_text.conditional_cost,
+                            Some(ConditionalCastCost::Surge(_))
+                        )
+                }
+            }
+        };
+        let keyword_cost_controller_matches =
+            |relation: crate::program::PlayerRelation, rule_ctrl: SeatId| -> bool {
+                match relation {
+                    crate::program::PlayerRelation::Controller => actor == rule_ctrl,
+                    crate::program::PlayerRelation::Opponent => self
+                        .combat_rules
+                        .opponents(self.window.participants(), rule_ctrl)
+                        .is_ok_and(|ops| ops.contains(&actor)),
+                    crate::program::PlayerRelation::AnyParticipant => true,
+                }
+            };
         for permanent in current
             .objects
             .values()
@@ -2101,8 +2186,59 @@ impl EffectWindow {
                     {
                         cost.generic = cost.generic.plus(&i64::from(amount.get()).into());
                     }
+                    crate::characteristics::StaticContinuousAbility::CostModifier {
+                        id,
+                        modifier:
+                            crate::characteristics::SpellCostModifier::KeywordCastCost {
+                                keyword,
+                                controller,
+                                delta,
+                                less: false,
+                            },
+                    } if active_rule(id)
+                        && permanent.controller.is_some_and(|ctrl| {
+                            keyword_cost_controller_matches(*controller, ctrl)
+                        })
+                        && keyword_cast_matches(*keyword) =>
+                    {
+                        cost.generic = cost.generic.plus(&i64::from(*delta).into());
+                    }
                     _ => {}
                 }
+            }
+        }
+        for (seat, rule) in &current.emblem_rules {
+            if let crate::characteristics::StaticContinuousAbility::CostModifier {
+                modifier:
+                    crate::characteristics::SpellCostModifier::KeywordCastCost {
+                        keyword,
+                        controller,
+                        delta,
+                        less: false,
+                    },
+                ..
+            } = rule
+                && keyword_cost_controller_matches(*controller, *seat)
+                && keyword_cast_matches(*keyword)
+            {
+                cost.generic = cost.generic.plus(&i64::from(*delta).into());
+            }
+        }
+        for active in &self.temporary_rules {
+            if let Some(crate::characteristics::StaticContinuousAbility::CostModifier {
+                modifier:
+                    crate::characteristics::SpellCostModifier::KeywordCastCost {
+                        keyword,
+                        controller,
+                        delta,
+                        less: false,
+                    },
+                ..
+            }) = self.active_temporary_static(active, &current)
+                && keyword_cost_controller_matches(*controller, active.controller)
+                && keyword_cast_matches(*keyword)
+            {
+                cost.generic = cost.generic.plus(&i64::from(*delta).into());
             }
         }
         if let Some(discount) = emerge_discount {
@@ -2364,6 +2500,24 @@ impl EffectWindow {
                         .minus(&i64::from(*discount).into())
                         .max(0.into());
                 }
+                if let StaticContinuousAbility::CostModifier {
+                    id,
+                    modifier:
+                        SpellCostModifier::KeywordCastCost {
+                            keyword,
+                            controller,
+                            delta,
+                            less: true,
+                        },
+                } = rule
+                    && active_rule(id)
+                    && permanent
+                        .controller
+                        .is_some_and(|ctrl| keyword_cost_controller_matches(*controller, ctrl))
+                    && keyword_cast_matches(*keyword)
+                {
+                    cost.generic = cost.generic.minus(&i64::from(*delta).into()).max(0.into());
+                }
             }
             if permanent.controller != Some(actor) {
                 continue;
@@ -2494,11 +2648,41 @@ impl EffectWindow {
                     .minus(&i64::from(*discount).into())
                     .max(0.into());
             }
+            if let crate::characteristics::StaticContinuousAbility::CostModifier {
+                modifier:
+                    crate::characteristics::SpellCostModifier::KeywordCastCost {
+                        keyword,
+                        controller,
+                        delta,
+                        less: true,
+                    },
+                ..
+            } = rule
+                && keyword_cost_controller_matches(*controller, *seat)
+                && keyword_cast_matches(*keyword)
+            {
+                cost.generic = cost.generic.minus(&i64::from(*delta).into()).max(0.into());
+            }
         }
         for active in &self.temporary_rules {
             let Some(rule) = self.active_temporary_static(active, &current) else {
                 continue;
             };
+            if let crate::characteristics::StaticContinuousAbility::CostModifier {
+                modifier:
+                    crate::characteristics::SpellCostModifier::KeywordCastCost {
+                        keyword,
+                        controller,
+                        delta,
+                        less: true,
+                    },
+                ..
+            } = rule
+                && keyword_cost_controller_matches(*controller, active.controller)
+                && keyword_cast_matches(*keyword)
+            {
+                cost.generic = cost.generic.minus(&i64::from(*delta).into()).max(0.into());
+            }
             if let crate::characteristics::StaticContinuousAbility::CostModifier {
                 modifier:
                     crate::characteristics::SpellCostModifier::FirstSpellRule {

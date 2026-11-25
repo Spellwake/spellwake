@@ -1530,6 +1530,335 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Complete(RuleCompletion::GameEnded));
         }
+        if let Instruction::SkipNextTurns { player, count } = instruction {
+            let cursor_snap = self
+                .resolution_cursor()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .clone();
+            let seat = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
+            if self.window.participants().contains(&seat) && count > 0 {
+                let remaining = self.skip_turns_remaining.entry(seat).or_insert(0);
+                *remaining = remaining.saturating_add(u16::from(count));
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::SelectExtremeLifePlayer { highest, tie_mode } = instruction {
+            let apnap: Vec<SeatId> = self.window.apnap_players()?.collect();
+            let mut extreme: Option<RulesInteger> = None;
+            let mut tied: Vec<SeatId> = Vec::new();
+            for seat in apnap {
+                let Some(life) = self.life.get(seat) else {
+                    continue;
+                };
+                match &extreme {
+                    None => {
+                        extreme = Some(life.clone());
+                        tied.push(seat);
+                    }
+                    Some(best) => {
+                        let better = if highest { life > best } else { life < best };
+                        if better {
+                            extreme = Some(life.clone());
+                            tied.clear();
+                            tied.push(seat);
+                        } else if life == best {
+                            tied.push(seat);
+                        }
+                    }
+                }
+            }
+            match tied.as_slice() {
+                [] => {
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.chosen_opponent = None;
+                        cursor.results.last_action_succeeded = false;
+                    }
+                }
+                [winner] => {
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.chosen_opponent = Some(*winner);
+                        cursor.results.last_action_succeeded = true;
+                    }
+                }
+                _ => match tie_mode {
+                    crate::program::ExtremeLifeTieMode::ControllerChooses => {
+                        let chosen = self
+                            .resolution_cursor_mut()
+                            .and_then(|cursor| cursor.chosen_option_index.take());
+                        let Some(idx) = chosen else {
+                            let count = u8::try_from(tied.len())
+                                .map_err(|_| EffectError::InconsistentProgram)?;
+                            let labels = (0..tied.len())
+                                .map(|i| format!("Player {}", i + 1))
+                                .collect();
+                            let frame = EffectDecision::OptionIndex(OptionIndexFrame {
+                                revision: self.revision,
+                                entry: entry.id(),
+                                instruction: index,
+                                chooser: entry.controller(),
+                                count,
+                                labels,
+                            });
+                            return Ok(StepOutcome::Pending(frame));
+                        };
+                        let seat = tied
+                            .get(usize::from(idx))
+                            .copied()
+                            .ok_or(EffectError::InconsistentProgram)?;
+                        if let Some(cursor) = self.resolution_cursor_mut() {
+                            cursor.chosen_opponent = Some(seat);
+                            cursor.results.last_action_succeeded = true;
+                        }
+                    }
+                    crate::program::ExtremeLifeTieMode::DrawGame => {
+                        let participants = self.window.participants().to_vec();
+                        for seat in participants {
+                            self.state_based_losses.insert(seat);
+                        }
+                        return Ok(StepOutcome::Complete(RuleCompletion::GameEnded));
+                    }
+                    crate::program::ExtremeLifeTieMode::Skip => {
+                        if let Some(cursor) = self.resolution_cursor_mut() {
+                            cursor.chosen_opponent = None;
+                            cursor.results.last_action_succeeded = false;
+                        }
+                    }
+                },
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::Earthbend { amount } = instruction {
+            let target = match self.instruction_target(entry)?.choice().target {
+                TargetRef::Object(id) => id,
+                _ => return Err(EffectError::InconsistentProgram),
+            };
+            let n = self.resolve_value_expr(entry.controller(), &amount)?;
+            if self
+                .window
+                .cards()
+                .get(target)
+                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+            {
+                let before = self.rules_snapshot(None)?;
+                let parts = crate::characteristics::ResolvedParts(vec![
+                    crate::characteristics::ResolvedPart::Type(
+                        crate::characteristics::TypeChange {
+                            land_subtypes: crate::characteristics::SubtypeOperation::Keep,
+                            supertypes: crate::characteristics::TypeOperation::Keep,
+                            types: crate::characteristics::TypeOperation::Add(BTreeSet::from([
+                                CardType::Creature,
+                            ])),
+                            subtypes: crate::characteristics::SubtypeOperation::Keep,
+                        },
+                    ),
+                    crate::characteristics::ResolvedPart::Abilities(
+                        crate::characteristics::AbilityChange::grant_keywords([
+                            KeywordAbility::Haste,
+                        ]),
+                    ),
+                    crate::characteristics::ResolvedPart::SetPT(
+                        crate::characteristics::PowerToughness {
+                            power: 0.into(),
+                            toughness: 0.into(),
+                        },
+                    ),
+                ]);
+                let effect = self.characteristics.add_effect(
+                    entry.id(),
+                    target,
+                    parts,
+                    crate::characteristics::ResolvedDuration::NoStatedDuration,
+                )?;
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |old, new, _| {
+                        let appearances = occurrence_flow::characteristic_appearance_changes(
+                            old,
+                            new,
+                            effect.affected.iter().copied(),
+                        )?;
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::ContinuousEffectCreated {
+                                effect,
+                                appearances,
+                            },
+                        ])
+                    },
+                )?;
+                if n.is_positive() {
+                    let before_counters = self.rules_snapshot(None)?;
+                    let raw = crate::characteristics::PowerToughnessCounters {
+                        plus_one: n.clone(),
+                        minus_one: 0.into(),
+                    };
+                    let counters = self.adjusted_pt_counters(
+                        &before_counters.view().evaluated,
+                        target,
+                        raw,
+                        None,
+                    )?;
+                    if counters.valid_placement() {
+                        let previous = self.characteristics.counters(target);
+                        self.characteristics.place_counters(target, &counters)?;
+                        let after_pt = self.characteristics.counters(target);
+                        self.emit_from(
+                            crate::occurrence::EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before_counters,
+                            None,
+                            ctx.append,
+                            |_, _, _| {
+                                Ok(vec![
+                                    crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                                        object: target,
+                                        kind: CounterKind::PlusOne,
+                                        before: previous.plus_one,
+                                        after: after_pt.plus_one,
+                                    },
+                                ])
+                            },
+                        )?;
+                    }
+                }
+                let snapshot = self.rules_snapshot(None)?;
+                let source_appearance = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => snapshot
+                        .view()
+                        .appearance(source.id())
+                        .or_else(|| self.departed_reflexive_sources.get(&source.id()).cloned())
+                        .or_else(|| {
+                            self.execution_bindings(entry.id())
+                                .and_then(|b| b.trigger.as_ref())
+                                .map(|t| t.source.clone())
+                        }),
+                    StackKind::CardSpell(id) => snapshot.view().appearance(*id),
+                    _ => None,
+                }
+                .or_else(|| snapshot.view().appearance(target))
+                .ok_or(EffectError::InconsistentProgram)?;
+                self.triggers
+                    .delay_earthbend_return(target, source_appearance, entry.controller());
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &snapshot,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::KeywordActionPerformed {
+                                player: entry.controller(),
+                                action: crate::program::PlayerTriggerAction::Earthbent,
+                            },
+                        ])
+                    },
+                )?;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if instruction == Instruction::ReturnEarthbentCard {
+            let binding = self
+                .execution_bindings(entry.id())
+                .and_then(|bindings| bindings.trigger.as_ref())
+                .ok_or(EffectError::InconsistentProgram)?;
+            let [member] = binding.causes.members() else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            let crate::occurrence::TriggerRelated::ZoneChange { after, .. } = &member.related
+            else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            let card_id = after.object.id();
+            if self.window.cards().get(card_id).is_some_and(|card| {
+                matches!(card.zone(), ObjectZone::Graveyard(_) | ObjectZone::Exile)
+            }) {
+                self.move_objects_to_subject_destination_ids(
+                    entry,
+                    index,
+                    entry.controller(),
+                    &[card_id],
+                    crate::program::SubjectDestination::Battlefield {
+                        tapped: true,
+                        attacking: false,
+                        transformed: false,
+                        under_owner_control: true,
+                        with_counter: None,
+                        attach_to_self: false,
+                    },
+                    ctx.append,
+                )?;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if instruction == Instruction::AttachFixedTargets {
+            if let Some((att_id, host_ref)) = self.legal_linked_target_refs()? {
+                let before = self.rules_snapshot(None)?;
+                if let Some(change) = self.attach_if_legal(entry.id(), att_id, host_ref)? {
+                    self.emit_from(
+                        crate::occurrence::EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |_, _, _| Ok(vec![change]),
+                    )?;
+                }
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::AttachPermanentToPlayer { attachment, player } = instruction {
+            let cursor_snap = self
+                .resolution_cursor()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .clone();
+            let seat = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
+            if self.window.participants().contains(&seat) {
+                let attachments = self.resolve_move_subject_objects(entry, attachment)?;
+                if !attachments.is_empty() {
+                    let before = self.rules_snapshot(None)?;
+                    let mut changes = Vec::new();
+                    for att_id in attachments {
+                        if let Some(change) =
+                            self.attach_if_legal(entry.id(), att_id, TargetRef::Player(seat))?
+                        {
+                            changes.push(change);
+                        }
+                    }
+                    if !changes.is_empty() {
+                        self.emit_from(
+                            crate::occurrence::EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before,
+                            None,
+                            ctx.append,
+                            |_, _, _| Ok(changes),
+                        )?;
+                    }
+                }
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if let Instruction::TurnFaceUpSubject { subject } = instruction {
             let targets: Vec<ObjectId> = self
                 .effect_group(entry, *subject)?
@@ -2596,13 +2925,25 @@ impl EffectWindow {
             let seats = self.selection_players(players, entry.controller(), Some(&cursor_snap))?;
             let evaluated = self.evaluated_characteristics()?;
             let excluded = BTreeSet::new();
+            let ability_source = match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                StackKind::CardSpell(id) => Some(*id),
+                _ => None,
+            };
             let mut objects = Vec::new();
             for seat in seats {
                 for &id in self.window.cards().graveyard(seat) {
                     if evaluated.get(id).is_some_and(|card| {
-                        filter.matches_static_characteristics(card, &excluded, || {
-                            self.copiable_program(id).map(Program::mana_value)
-                        })
+                        self.matches_object_filter(
+                            *filter,
+                            card,
+                            entry.controller(),
+                            ability_source,
+                            &excluded,
+                            &evaluated,
+                        )
                     }) {
                         objects.push(id);
                     }
@@ -3230,6 +3571,22 @@ impl EffectWindow {
                             }
                             _ => BTreeSet::new(),
                         };
+                        let resolved_objects = match &other {
+                            crate::program::TemporaryRuleKind::ZoneCastPermission {
+                                zone: crate::program::SourceZoneFilter::LastMoved,
+                                ..
+                            } => cursor
+                                .as_ref()
+                                .map(|c| {
+                                    c.results
+                                        .last_moved_objects
+                                        .iter()
+                                        .copied()
+                                        .collect::<BTreeSet<_>>()
+                                })
+                                .unwrap_or_default(),
+                            _ => BTreeSet::new(),
+                        };
                         let id = self.next_temp_rule_id;
                         self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
                         self.temporary_rules.push(super::ActiveTemporaryRule {
@@ -3241,7 +3598,7 @@ impl EffectWindow {
                             rule: other,
                             duration: resolved_dur,
                             resolved_players,
-                            resolved_objects: BTreeSet::new(),
+                            resolved_objects,
                             target: bound_target,
                             second_target: second_bound_target,
                             consumed: false,
@@ -5029,6 +5386,20 @@ impl EffectWindow {
                 | Instruction::RevealOpponentChoosesCreature
                 | Instruction::RevealToNameAfterSourceShuffle(_)
         ) {
+            let look_top_reveal_only_count = match &instruction {
+                Instruction::LookTopChoose {
+                    count,
+                    reveal_only: true,
+                    ..
+                } => Some(count.clone()),
+                _ => None,
+            };
+            if look_top_reveal_only_count.is_some()
+                && let Some(cursor) = self.resolution_cursor_mut()
+            {
+                cursor.results.revealed_top_card = None;
+                cursor.results.revealed_top_types.clear();
+            }
             let player = if let Instruction::RevealToNameAfterSourceShuffle(_) = instruction {
                 self.resolution_cursor()
                     .and_then(|cursor| cursor.results.shuffled_source_owner)
@@ -5052,6 +5423,30 @@ impl EffectWindow {
             }
             if self.random_resolution_pending() {
                 return Ok(StepOutcome::Continue);
+            }
+            if let Some(count_expr) = look_top_reveal_only_count {
+                let revealed_count = if let Some(seat) = player {
+                    let lib_len = self.window.cards().library(seat).len();
+                    let requested = self
+                        .resolve_value_expr(entry.controller(), &count_expr)?
+                        .max(0.into())
+                        .min(RulesInteger::from_usize(lib_len));
+                    if self
+                        .resolution_cursor()
+                        .and_then(|c| c.results.revealed_top_card)
+                        .is_some()
+                    {
+                        requested
+                    } else {
+                        0.into()
+                    }
+                } else {
+                    0.into()
+                };
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.last_action_succeeded = revealed_count.is_positive();
+                    cursor.results.last_action_count = Some(revealed_count);
+                }
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -5923,509 +6318,23 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::AddMana(ref mana_yield) = instruction {
-            use crate::program::EffectManaYield;
-            let (inner_yield, retain_until_cleanup) = match mana_yield {
-                EffectManaYield::RetainedUntilCleanup(inner) => (inner.as_ref(), true),
-                other => (other, false),
-            };
-            let mana_lot_source = retain_until_cleanup
-                .then(|| {
-                    self.execution_bindings(entry.id())
-                        .and_then(|bindings| bindings.trigger.as_ref())
-                        .map(|t| t.source.clone())
-                        .or_else(|| {
-                            let sid = match entry.kind() {
-                                StackKind::ActivatedAbility { source }
-                                | StackKind::TriggeredAbility { source } => Some(source.id()),
-                                StackKind::CardSpell(id) => Some(*id),
-                                _ => None,
-                            }?;
-                            self.rules_snapshot(None)
-                                .ok()
-                                .and_then(|snap| snap.view().appearance(sid))
-                        })
-                })
-                .flatten();
-            let produced: BTreeMap<_, _> = match inner_yield {
-                EffectManaYield::RetainedUntilCleanup(_) => {
-                    return Err(EffectError::InconsistentProgram);
-                }
-                EffectManaYield::RestrictedChoice {
-                    colors,
-                    amount,
-                    restriction,
-                } => {
-                    let qty = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !qty.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let color = self
-                        .resolution_cursor()
-                        .and_then(|cursor| cursor.chosen_effect_color);
-                    let Some(color) = color else {
-                        let frame =
-                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                colors: colors.clone(),
-                                split: None,
-                            });
-                        return Ok(StepOutcome::Pending(frame));
-                    };
-                    if !colors.contains(&color) {
-                        return Err(EffectError::InconsistentProgram);
-                    }
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_effect_color = None;
-                    let before_snapshot = self.rules_snapshot(None)?;
-                    let player = entry.controller();
-                    let prior = self.mana(player, color);
-                    let after = prior.plus(&qty);
-                    self.mana.insert((player, color), after.clone());
-                    let key = (player, color, *restriction);
-                    let previous = self
-                        .restricted_mana
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or_else(|| 0.into());
-                    self.restricted_mana.insert(key, previous.plus(&qty));
-                    if let Some(source) = mana_lot_source {
-                        let retained: BTreeMap<_, _> = [(color, qty.clone())].into();
-                        self.record_mana_lots(
-                            source,
-                            player,
-                            &retained,
-                            crate::mana::ManaSpendEffect::RetainUntilCleanup,
-                        )?;
-                    }
-                    self.emit_from(
-                        crate::occurrence::EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before_snapshot,
-                        None,
-                        ctx.append,
-                        |_, _, _| {
-                            Ok(vec![
-                                crate::occurrence::RulesOccurrence::ManaAddedByEffect {
-                                    entry: entry.id(),
-                                    player,
-                                    produced: [(color, qty.clone())].into(),
-                                    before: [(color, prior)].into(),
-                                    after: [(color, after)].into(),
-                                },
-                            ])
-                        },
-                    )?;
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                }
-                EffectManaYield::RestrictedFixed {
-                    bundle,
-                    restriction,
-                } => {
-                    let before_snapshot = self.rules_snapshot(None)?;
-                    let player = entry.controller();
-                    let mut before_map = BTreeMap::new();
-                    let mut after_map = BTreeMap::new();
-                    for (&color, amount) in bundle {
-                        let prior = self.mana(player, color);
-                        let after = prior.plus(amount);
-                        self.mana.insert((player, color), after.clone());
-                        let key = (player, color, *restriction);
-                        let previous = self
-                            .restricted_mana
-                            .get(&key)
-                            .cloned()
-                            .unwrap_or_else(|| 0.into());
-                        self.restricted_mana.insert(key, previous.plus(amount));
-                        before_map.insert(color, prior);
-                        after_map.insert(color, after);
-                    }
-                    if let Some(source) = mana_lot_source {
-                        self.record_mana_lots(
-                            source,
-                            player,
-                            bundle,
-                            crate::mana::ManaSpendEffect::RetainUntilCleanup,
-                        )?;
-                    }
-                    self.emit_from(
-                        crate::occurrence::EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before_snapshot,
-                        None,
-                        ctx.append,
-                        |_, _, _| {
-                            Ok(vec![
-                                crate::occurrence::RulesOccurrence::ManaAddedByEffect {
-                                    entry: entry.id(),
-                                    player,
-                                    produced: bundle.clone(),
-                                    before: before_map,
-                                    after: after_map,
-                                },
-                            ])
-                        },
-                    )?;
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                }
-                EffectManaYield::Choice { colors, amount } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !resolved.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let color = self
-                        .resolution_cursor()
-                        .and_then(|cursor| cursor.chosen_effect_color);
-                    let Some(color) = color else {
-                        let frame =
-                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                colors: colors.clone(),
-                                split: None,
-                            });
-                        return Ok(StepOutcome::Pending(frame));
-                    };
-                    if !colors.contains(&color) {
-                        return Err(EffectError::InconsistentProgram);
-                    }
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_effect_color = None;
-                    [(color, resolved)].into()
-                }
-                EffectManaYield::ChoiceBundle { options } => {
-                    let chosen = self
-                        .resolution_cursor_mut()
-                        .and_then(|cursor| cursor.chosen_option_index.take());
-                    let Some(idx) = chosen else {
-                        let count = u8::try_from(options.len())
-                            .map_err(|_| EffectError::InconsistentProgram)?;
-                        let labels = options
-                            .iter()
-                            .map(|bundle| {
-                                let mut s = String::from("Add ");
-                                for (mana_type, qty) in bundle {
-                                    let sym = match mana_type {
-                                        crate::mana::ManaType::White => "{W}",
-                                        crate::mana::ManaType::Blue => "{U}",
-                                        crate::mana::ManaType::Black => "{B}",
-                                        crate::mana::ManaType::Red => "{R}",
-                                        crate::mana::ManaType::Green => "{G}",
-                                        crate::mana::ManaType::Colourless => "{C}",
-                                    };
-                                    let n = qty.to_usize().unwrap_or(1);
-                                    for _ in 0..n {
-                                        s.push_str(sym);
-                                    }
-                                }
-                                s
-                            })
-                            .collect();
-                        let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                            revision: self.revision,
-                            entry: entry.id(),
-                            instruction: index,
-                            chooser: entry.controller(),
-                            count,
-                            labels,
-                        });
-                        return Ok(StepOutcome::Pending(frame));
-                    };
-                    options
-                        .get(usize::from(idx))
-                        .cloned()
-                        .ok_or(EffectError::InconsistentProgram)?
-                }
-                EffectManaYield::LandProducible { controller, amount } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !resolved.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let cursor = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?;
-                    let players: BTreeSet<SeatId> = self
-                        .selection_players(*controller, entry.controller(), Some(cursor))?
-                        .into_iter()
-                        .collect();
-                    let colors = self.land_colors_for_players(&players)?;
-                    if colors.is_empty() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let color = self
-                        .resolution_cursor()
-                        .and_then(|cursor| cursor.chosen_effect_color);
-                    let Some(color) = color else {
-                        let frame =
-                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                colors,
-                                split: None,
-                            });
-                        return Ok(StepOutcome::Pending(frame));
-                    };
-                    if !colors.contains(&color) {
-                        return Err(EffectError::InconsistentProgram);
-                    }
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_effect_color = None;
-                    [(color, resolved)].into()
-                }
-                EffectManaYield::CommanderIdentity { amount } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !resolved.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let colors = self.commander_mana_colors(entry.controller())?;
-                    if colors.is_empty() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let color = self
-                        .resolution_cursor()
-                        .and_then(|cursor| cursor.chosen_effect_color);
-                    let Some(color) = color else {
-                        let frame =
-                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                colors,
-                                split: None,
-                            });
-                        return Ok(StepOutcome::Pending(frame));
-                    };
-                    if !colors.contains(&color) {
-                        return Err(EffectError::InconsistentProgram);
-                    }
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_effect_color = None;
-                    [(color, resolved)].into()
-                }
-                EffectManaYield::SourceChosenColor { amount } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-                    let source_id = match entry.kind() {
-                        StackKind::ActivatedAbility { source }
-                        | StackKind::TriggeredAbility { source } => Some(source.id()),
-                        _ => None,
-                    };
-                    let chosen =
-                        source_id.and_then(|id| self.entry_color_choices.get(&id).copied());
-                    if !resolved.is_positive() || chosen.is_none() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let Some(color) = chosen else { unreachable!() };
-                    [(color, resolved)].into()
-                }
-                EffectManaYield::DistinctColors { amount } => {
-                    let resolved = self
-                        .resolve_value_expr(entry.controller(), amount)?
-                        .max(0.into())
-                        .min(5.into());
-                    let needed = resolved.to_usize().unwrap_or(0);
-                    if needed == 0 {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    if let Some(color) = self
-                        .resolution_cursor_mut()
-                        .and_then(|cursor| cursor.chosen_effect_color.take())
-                    {
-                        self.resolution_cursor_mut()
-                            .ok_or(EffectError::WrongResolutionFrame)?
-                            .chosen_distinct_colors
-                            .push(color);
-                    }
-                    let picked = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_distinct_colors
-                        .clone();
-                    if picked.len() < needed {
-                        let remaining: BTreeSet<ManaType> = mana_domains::colored_mana()
-                            .into_iter()
-                            .filter(|c| !picked.contains(c))
-                            .collect();
-                        let frame =
-                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                colors: remaining,
-                                split: None,
-                            });
-                        return Ok(StepOutcome::Pending(frame));
-                    }
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_distinct_colors
-                        .clear();
-                    picked.into_iter().map(|c| (c, 1.into())).collect()
-                }
-                EffectManaYield::RetainedUntilEndOfCombat { kind, amount } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !resolved.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let produced: BTreeMap<_, _> = [(*kind, resolved)].into();
-                    let source = self
-                        .execution_bindings(entry.id())
-                        .and_then(|bindings| bindings.trigger.as_ref())
-                        .map(|t| t.source.clone())
-                        .or_else(|| {
-                            let sid = match entry.kind() {
-                                StackKind::ActivatedAbility { source }
-                                | StackKind::TriggeredAbility { source } => Some(source.id()),
-                                StackKind::CardSpell(id) => Some(*id),
-                                _ => None,
-                            }?;
-                            self.rules_snapshot(None)
-                                .ok()
-                                .and_then(|snap| snap.view().appearance(sid))
-                        });
-                    if let Some(source) = source {
-                        self.record_mana_lots(
-                            source,
-                            entry.controller(),
-                            &produced,
-                            crate::mana::ManaSpendEffect::RetainUntilEndOfCombat,
-                        )?;
-                    }
-                    produced
-                }
-                EffectManaYield::CombatDamageUntilCleanup(kind) => {
-                    let damage = self.resolve_value_expr(
-                        entry.controller(),
-                        &ValueExpr::event(EventValueKind::CombatDamageToPlayer),
-                    )?;
-                    let source = self
-                        .execution_bindings(entry.id())
-                        .and_then(|bindings| bindings.trigger.as_ref())
-                        .ok_or(EffectError::InconsistentProgram)?
-                        .source
-                        .clone();
-                    let produced = [(*kind, damage)].into();
-                    self.record_mana_lots(
-                        source,
-                        entry.controller(),
-                        &produced,
-                        crate::mana::ManaSpendEffect::RetainUntilCleanup,
-                    )?;
-                    produced
-                }
-                EffectManaYield::Counted { kind, amount } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !resolved.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    [(*kind, resolved)].into()
-                }
-                EffectManaYield::Split {
-                    first,
-                    second,
-                    amount,
-                } => {
-                    let total = self.resolve_value_expr(entry.controller(), amount)?;
-                    if !total.is_positive() {
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                    let Some(portion) = self
-                        .resolution_cursor_mut()
-                        .and_then(|cursor| cursor.chosen_mana_split.take())
-                    else {
-                        let frame =
-                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                colors: [*first, *second].into(),
-                                split: Some((*first, *second, total)),
-                            });
-                        return Ok(StepOutcome::Pending(frame));
-                    };
-                    let remainder = total.minus(&portion);
-                    [(*first, portion), (*second, remainder)]
-                        .into_iter()
-                        .filter(|(_, amount)| amount.is_positive())
-                        .collect()
-                }
-                EffectManaYield::Fixed(produced) => produced.clone(),
-            };
-            if let Some(source) = mana_lot_source
-                && !produced.is_empty()
-            {
-                self.record_mana_lots(
-                    source,
-                    entry.controller(),
-                    &produced,
-                    crate::mana::ManaSpendEffect::RetainUntilCleanup,
-                )?;
+            return self.execute_add_mana(ctx, entry, index, entry.controller(), mana_yield);
+        }
+        if let Instruction::AddManaForPlayer {
+            player,
+            ref yield_kind,
+        } = instruction
+        {
+            let cursor_snap = self
+                .resolution_cursor()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .clone();
+            let recipient = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
+            if !self.window.participants().contains(&recipient) {
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
             }
-            let before_snapshot = self.rules_snapshot(None)?;
-            let player = entry.controller();
-            let before: BTreeMap<_, _> = produced
-                .keys()
-                .map(|kind| (*kind, self.mana(player, *kind)))
-                .collect();
-            for (kind, amount) in &produced {
-                let current = self.mana(player, *kind);
-                self.mana.insert((player, *kind), current.plus(amount));
-            }
-            let after: BTreeMap<_, _> = produced
-                .keys()
-                .map(|kind| (*kind, self.mana(player, *kind)))
-                .collect();
-            self.emit_from(
-                crate::occurrence::EventCause::Instruction {
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                &before_snapshot,
-                None,
-                ctx.append,
-                |_, _, _| {
-                    Ok(vec![
-                        crate::occurrence::RulesOccurrence::ManaAddedByEffect {
-                            entry: entry.id(),
-                            player,
-                            produced,
-                            before,
-                            after,
-                        },
-                    ])
-                },
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
+            return self.execute_add_mana(ctx, entry, index, recipient, yield_kind);
         }
         if let Instruction::CreateOpponentEmblems(ref definition) = instruction {
             self.resolve_create_opponent_emblems(entry, index, definition.clone(), ctx.append)?;
@@ -7441,6 +7350,7 @@ impl EffectWindow {
                 };
                 Some((source.id(), target))
             };
+            self.emit_fight_occurrences(entry.id(), index, pairs.as_slice(), ctx.append)?;
             let inputs = self.fight_damage_inputs(pairs.as_slice())?;
             if inputs.is_empty() {
                 self.advance_instruction()?;
@@ -7458,6 +7368,7 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::FightPairedCreatures(pairs) = &instruction {
+            self.emit_fight_occurrences(entry.id(), index, pairs, ctx.append)?;
             let inputs = self.fight_damage_inputs(pairs)?;
             if inputs.is_empty() {
                 self.advance_instruction()?;
@@ -8165,6 +8076,12 @@ impl EffectWindow {
                 })
                 .map(|permanent| permanent.object)
                 .collect();
+            self.create_regeneration_shields(entry.id(), index, subjects, ctx.append)?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::RegenerateSubject { subject } = instruction {
+            let subjects: Vec<ObjectId> = self.effect_group(entry, *subject)?.into_iter().collect();
             self.create_regeneration_shields(entry.id(), index, subjects, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -9390,6 +9307,14 @@ impl EffectWindow {
                 crate::program::PermanentTargetAction::SkipNextUntap => {
                     self.skip_next_controller_untap
                         .extend(selected.iter().copied());
+                }
+                crate::program::PermanentTargetAction::Regenerate => {
+                    self.create_regeneration_shields(
+                        entry.id(),
+                        index,
+                        selected.into_iter().collect(),
+                        ctx.append,
+                    )?;
                 }
                 crate::program::PermanentTargetAction::PutCounters { kind, amount } => {
                     let resolved = self.resolve_value_expr(entry.controller(), amount)?;
@@ -10747,7 +10672,7 @@ impl EffectWindow {
         Ok(())
     }
 
-    fn resolve_move_subject_objects(
+    pub(super) fn resolve_move_subject_objects(
         &self,
         entry: &crate::stack_window::StackEntry,
         subject: crate::program::MoveSubjectRef,
@@ -10780,11 +10705,15 @@ impl EffectWindow {
                 _ => Vec::new(),
             },
             crate::program::MoveSubjectRef::RevealedCard => self
-                .window
-                .cards()
-                .library(entry.controller())
-                .first()
-                .copied()
+                .resolution_cursor()
+                .and_then(|c| c.results.revealed_top_card)
+                .or_else(|| {
+                    self.window
+                        .cards()
+                        .library(entry.controller())
+                        .first()
+                        .copied()
+                })
                 .into_iter()
                 .collect(),
             crate::program::MoveSubjectRef::CreatedTokens => self
@@ -10812,6 +10741,514 @@ impl EffectWindow {
                 .into_iter()
                 .collect(),
         })
+    }
+
+    fn execute_add_mana(
+        &mut self,
+        ctx: &mut RuleStepContext<'_>,
+        entry: &crate::stack_window::StackEntry,
+        index: usize,
+        recipient: SeatId,
+        mana_yield: &crate::program::EffectManaYield,
+    ) -> Result<StepOutcome, EffectError> {
+        use crate::program::EffectManaYield;
+        let (inner_yield, retain_until_cleanup) = match mana_yield {
+            EffectManaYield::RetainedUntilCleanup(inner) => (inner.as_ref(), true),
+            other => (other, false),
+        };
+        let mana_lot_source = retain_until_cleanup
+            .then(|| {
+                self.execution_bindings(entry.id())
+                    .and_then(|bindings| bindings.trigger.as_ref())
+                    .map(|t| t.source.clone())
+                    .or_else(|| {
+                        let sid = match entry.kind() {
+                            StackKind::ActivatedAbility { source }
+                            | StackKind::TriggeredAbility { source } => Some(source.id()),
+                            StackKind::CardSpell(id) => Some(*id),
+                            _ => None,
+                        }?;
+                        self.rules_snapshot(None)
+                            .ok()
+                            .and_then(|snap| snap.view().appearance(sid))
+                    })
+            })
+            .flatten();
+        let produced: BTreeMap<_, _> = match inner_yield {
+            EffectManaYield::RetainedUntilCleanup(_) => {
+                return Err(EffectError::InconsistentProgram);
+            }
+            EffectManaYield::RestrictedChoice {
+                colors,
+                amount,
+                restriction,
+            } => {
+                let qty = self.resolve_value_expr(entry.controller(), amount)?;
+                if !qty.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let color = self
+                    .resolution_cursor()
+                    .and_then(|cursor| cursor.chosen_effect_color);
+                let Some(color) = color else {
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        colors: colors.clone(),
+                        split: None,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                if !colors.contains(&color) {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_effect_color = None;
+                let before_snapshot = self.rules_snapshot(None)?;
+                let player = recipient;
+                let prior = self.mana(player, color);
+                let after = prior.plus(&qty);
+                self.mana.insert((player, color), after.clone());
+                let key = (player, color, *restriction);
+                let previous = self
+                    .restricted_mana
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| 0.into());
+                self.restricted_mana.insert(key, previous.plus(&qty));
+                if let Some(source) = mana_lot_source {
+                    let retained: BTreeMap<_, _> = [(color, qty.clone())].into();
+                    self.record_mana_lots(
+                        source,
+                        player,
+                        &retained,
+                        crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                    )?;
+                }
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before_snapshot,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::ManaAddedByEffect {
+                                entry: entry.id(),
+                                player,
+                                produced: [(color, qty.clone())].into(),
+                                before: [(color, prior)].into(),
+                                after: [(color, after)].into(),
+                            },
+                        ])
+                    },
+                )?;
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            EffectManaYield::RestrictedFixed {
+                bundle,
+                restriction,
+            } => {
+                let before_snapshot = self.rules_snapshot(None)?;
+                let player = recipient;
+                let mut before_map = BTreeMap::new();
+                let mut after_map = BTreeMap::new();
+                for (&color, amount) in bundle {
+                    let prior = self.mana(player, color);
+                    let after = prior.plus(amount);
+                    self.mana.insert((player, color), after.clone());
+                    let key = (player, color, *restriction);
+                    let previous = self
+                        .restricted_mana
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into());
+                    self.restricted_mana.insert(key, previous.plus(amount));
+                    before_map.insert(color, prior);
+                    after_map.insert(color, after);
+                }
+                if let Some(source) = mana_lot_source {
+                    self.record_mana_lots(
+                        source,
+                        player,
+                        bundle,
+                        crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                    )?;
+                }
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before_snapshot,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::ManaAddedByEffect {
+                                entry: entry.id(),
+                                player,
+                                produced: bundle.clone(),
+                                before: before_map,
+                                after: after_map,
+                            },
+                        ])
+                    },
+                )?;
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            EffectManaYield::Choice { colors, amount } => {
+                let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                if !resolved.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let color = self
+                    .resolution_cursor()
+                    .and_then(|cursor| cursor.chosen_effect_color);
+                let Some(color) = color else {
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        colors: colors.clone(),
+                        split: None,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                if !colors.contains(&color) {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_effect_color = None;
+                [(color, resolved)].into()
+            }
+            EffectManaYield::ChoiceBundle { options } => {
+                let chosen = self
+                    .resolution_cursor_mut()
+                    .and_then(|cursor| cursor.chosen_option_index.take());
+                let Some(idx) = chosen else {
+                    let count = u8::try_from(options.len())
+                        .map_err(|_| EffectError::InconsistentProgram)?;
+                    let labels = options
+                        .iter()
+                        .map(|bundle| {
+                            let mut s = String::from("Add ");
+                            for (mana_type, qty) in bundle {
+                                let sym = match mana_type {
+                                    crate::mana::ManaType::White => "{W}",
+                                    crate::mana::ManaType::Blue => "{U}",
+                                    crate::mana::ManaType::Black => "{B}",
+                                    crate::mana::ManaType::Red => "{R}",
+                                    crate::mana::ManaType::Green => "{G}",
+                                    crate::mana::ManaType::Colourless => "{C}",
+                                };
+                                let n = qty.to_usize().unwrap_or(1);
+                                for _ in 0..n {
+                                    s.push_str(sym);
+                                }
+                            }
+                            s
+                        })
+                        .collect();
+                    let frame = EffectDecision::OptionIndex(OptionIndexFrame {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        count,
+                        labels,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                options
+                    .get(usize::from(idx))
+                    .cloned()
+                    .ok_or(EffectError::InconsistentProgram)?
+            }
+            EffectManaYield::LandProducible { controller, amount } => {
+                let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                if !resolved.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let cursor = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let players: BTreeSet<SeatId> = self
+                    .selection_players(*controller, recipient, Some(cursor))?
+                    .into_iter()
+                    .collect();
+                let colors = self.land_colors_for_players(&players)?;
+                if colors.is_empty() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let color = self
+                    .resolution_cursor()
+                    .and_then(|cursor| cursor.chosen_effect_color);
+                let Some(color) = color else {
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        colors,
+                        split: None,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                if !colors.contains(&color) {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_effect_color = None;
+                [(color, resolved)].into()
+            }
+            EffectManaYield::CommanderIdentity { amount } => {
+                let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                if !resolved.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let colors = self.commander_mana_colors(recipient)?;
+                if colors.is_empty() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let color = self
+                    .resolution_cursor()
+                    .and_then(|cursor| cursor.chosen_effect_color);
+                let Some(color) = color else {
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        colors,
+                        split: None,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                if !colors.contains(&color) {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_effect_color = None;
+                [(color, resolved)].into()
+            }
+            EffectManaYield::SourceChosenColor { amount } => {
+                let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                let source_id = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                let chosen = source_id.and_then(|id| self.entry_color_choices.get(&id).copied());
+                if !resolved.is_positive() || chosen.is_none() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let Some(color) = chosen else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                [(color, resolved)].into()
+            }
+            EffectManaYield::DistinctColors { amount } => {
+                let resolved = self
+                    .resolve_value_expr(entry.controller(), amount)?
+                    .max(0.into())
+                    .min(5.into());
+                let needed = resolved.to_usize().unwrap_or(0);
+                if needed == 0 {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                if let Some(color) = self
+                    .resolution_cursor_mut()
+                    .and_then(|cursor| cursor.chosen_effect_color.take())
+                {
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .chosen_distinct_colors
+                        .push(color);
+                }
+                let picked = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_distinct_colors
+                    .clone();
+                if picked.len() < needed {
+                    let remaining: BTreeSet<ManaType> = mana_domains::colored_mana()
+                        .into_iter()
+                        .filter(|c| !picked.contains(c))
+                        .collect();
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        colors: remaining,
+                        split: None,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                }
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_distinct_colors
+                    .clear();
+                picked.into_iter().map(|c| (c, 1.into())).collect()
+            }
+            EffectManaYield::RetainedUntilEndOfCombat { kind, amount } => {
+                let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                if !resolved.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let produced: BTreeMap<_, _> = [(*kind, resolved)].into();
+                let source = self
+                    .execution_bindings(entry.id())
+                    .and_then(|bindings| bindings.trigger.as_ref())
+                    .map(|t| t.source.clone())
+                    .or_else(|| {
+                        let sid = match entry.kind() {
+                            StackKind::ActivatedAbility { source }
+                            | StackKind::TriggeredAbility { source } => Some(source.id()),
+                            StackKind::CardSpell(id) => Some(*id),
+                            _ => None,
+                        }?;
+                        self.rules_snapshot(None)
+                            .ok()
+                            .and_then(|snap| snap.view().appearance(sid))
+                    });
+                if let Some(source) = source {
+                    self.record_mana_lots(
+                        source,
+                        recipient,
+                        &produced,
+                        crate::mana::ManaSpendEffect::RetainUntilEndOfCombat,
+                    )?;
+                }
+                produced
+            }
+            EffectManaYield::CombatDamageUntilCleanup(kind) => {
+                let damage = self.resolve_value_expr(
+                    entry.controller(),
+                    &ValueExpr::event(EventValueKind::CombatDamageToPlayer),
+                )?;
+                let source = self
+                    .execution_bindings(entry.id())
+                    .and_then(|bindings| bindings.trigger.as_ref())
+                    .ok_or(EffectError::InconsistentProgram)?
+                    .source
+                    .clone();
+                let produced = [(*kind, damage)].into();
+                self.record_mana_lots(
+                    source,
+                    recipient,
+                    &produced,
+                    crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                )?;
+                produced
+            }
+            EffectManaYield::Counted { kind, amount } => {
+                let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                if !resolved.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                [(*kind, resolved)].into()
+            }
+            EffectManaYield::Split {
+                first,
+                second,
+                amount,
+            } => {
+                let total = self.resolve_value_expr(entry.controller(), amount)?;
+                if !total.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let Some(portion) = self
+                    .resolution_cursor_mut()
+                    .and_then(|cursor| cursor.chosen_mana_split.take())
+                else {
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: recipient,
+                        colors: [*first, *second].into(),
+                        split: Some((*first, *second, total)),
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                let remainder = total.minus(&portion);
+                [(*first, portion), (*second, remainder)]
+                    .into_iter()
+                    .filter(|(_, amount)| amount.is_positive())
+                    .collect()
+            }
+            EffectManaYield::Fixed(produced) => produced.clone(),
+        };
+        if let Some(source) = mana_lot_source
+            && !produced.is_empty()
+        {
+            self.record_mana_lots(
+                source,
+                recipient,
+                &produced,
+                crate::mana::ManaSpendEffect::RetainUntilCleanup,
+            )?;
+        }
+        let before_snapshot = self.rules_snapshot(None)?;
+        let player = recipient;
+        let before: BTreeMap<_, _> = produced
+            .keys()
+            .map(|kind| (*kind, self.mana(player, *kind)))
+            .collect();
+        for (kind, amount) in &produced {
+            let current = self.mana(player, *kind);
+            self.mana.insert((player, *kind), current.plus(amount));
+        }
+        let after: BTreeMap<_, _> = produced
+            .keys()
+            .map(|kind| (*kind, self.mana(player, *kind)))
+            .collect();
+        self.emit_from(
+            crate::occurrence::EventCause::Instruction {
+                entry: entry.id(),
+                instruction: index,
+            },
+            &before_snapshot,
+            None,
+            ctx.append,
+            |_, _, _| {
+                Ok(vec![
+                    crate::occurrence::RulesOccurrence::ManaAddedByEffect {
+                        entry: entry.id(),
+                        player,
+                        produced,
+                        before,
+                        after,
+                    },
+                ])
+            },
+        )?;
+        self.advance_instruction()?;
+        Ok(StepOutcome::Continue)
     }
 
     fn splice_before_current_op(

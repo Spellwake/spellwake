@@ -110,6 +110,21 @@ impl EffectWindow {
                     .copied()
                     .map(|mana| BTreeSet::from([mana]))
                     .unwrap_or_else(colored_mana),
+                TriggeredManaRule::EnchantedLandTapped { extra } => match extra {
+                    crate::mana::EnchantedLandManaBonus::Fixed(pool) => pool
+                        .iter()
+                        .filter(|(_, count)| count.is_positive())
+                        .map(|(mana_type, _)| *mana_type)
+                        .collect(),
+                    crate::mana::EnchantedLandManaBonus::ChosenColor => self
+                        .entry_color_choices
+                        .get(&source)
+                        .copied()
+                        .map(|mana| BTreeSet::from([mana]))
+                        .unwrap_or_else(colored_mana),
+                    crate::mana::EnchantedLandManaBonus::AnyColor { .. }
+                    | crate::mana::EnchantedLandManaBonus::AnyCombination { .. } => colored_mana(),
+                },
             },
             ManaOutput::TwoColors { .. } => colored_mana(),
             ManaOutput::CounterBased(kind) => match kind {

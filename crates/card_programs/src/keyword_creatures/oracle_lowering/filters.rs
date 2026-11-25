@@ -3031,7 +3031,13 @@ fn intersect_object_clauses(
     let flags = base.flags.union(extra.flags);
     if flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS)
         && (flags.contains(ObjectFilterFlags::WITH_ANY_COUNTER)
-            || flags.contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER))
+            || flags.contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)
+            || flags.contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER))
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    if flags.contains(ObjectFilterFlags::HISTORIC)
+        && flags.contains(ObjectFilterFlags::NON_HISTORIC)
     {
         return Err("oracle:unsupported-filter-predicate");
     }
@@ -3118,7 +3124,10 @@ pub(super) fn lower_object_filter(
         forb_sup = forb_sup.union(SupertypeMask::WORLD);
     }
     if f.forbidden_supertypes.0 & AstSupertypeMask::HISTORIC.0 != 0 {
-        return Err("oracle:forbidden-historic");
+        if clause.flags.contains(ObjectFilterFlags::HISTORIC) {
+            return Err("oracle:forbidden-historic");
+        }
+        clause.flags = clause.flags.union(ObjectFilterFlags::NON_HISTORIC);
     }
     clause.forbidden_supertypes = forb_sup;
 
@@ -3521,6 +3530,9 @@ pub(super) fn lower_object_filter(
                 "+1/+1" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
                 }
+                "-1/-1" => {
+                    clause = clause.with_flags(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER);
+                }
                 "any" | "a" | "one or more" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITH_ANY_COUNTER);
                 }
@@ -3612,6 +3624,27 @@ pub(super) fn lower_object_filter(
     if (f.flags.0 & !handled_flags) != 0 {
         return Err("oracle:unsupported-filter-flag");
     }
+    let is_graveyard_zone = |zone: ZoneFilter| {
+        matches!(
+            zone,
+            ZoneFilter::YourGraveyard
+                | ZoneFilter::OpponentGraveyard
+                | ZoneFilter::OpponentsGraveyards
+                | ZoneFilter::TargetOpponentGraveyard
+                | ZoneFilter::DefendingPlayerGraveyard
+                | ZoneFilter::SingleGraveyard
+                | ZoneFilter::AnyGraveyard
+                | ZoneFilter::AllGraveyards
+                | ZoneFilter::ThatPlayerGraveyard
+                | ZoneFilter::TargetPlayerGraveyard
+                | ZoneFilter::ItsOwnerGraveyard
+        )
+    };
+    let in_graveyard_context = match f.zone {
+        Some(z) => is_graveyard_zone(z),
+        None => f.any_card && !f.any_spell,
+    };
+    let zone_compatible_with_graveyard = f.zone.is_none_or(is_graveyard_zone);
     let mut mana_value_pair: Option<(u32, u32)> = None;
     let mut any_of_pair: Option<(ObjectClause, ObjectClause)> = None;
     let mut subtypes_match_any = false;
@@ -3619,6 +3652,28 @@ pub(super) fn lower_object_filter(
         match pred {
             FilterPredicateAst::SubtypesMatchAny => {
                 subtypes_match_any = true;
+            }
+            FilterPredicateAst::PutIntoZoneThisTurn => {
+                if !in_graveyard_context {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                clause.flags = clause.flags.union(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN);
+            }
+            FilterPredicateAst::EnteredZoneFromThisTurn { from_zone } => {
+                if !in_graveyard_context {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                match from_zone {
+                    ZoneFilter::YourLibrary | ZoneFilter::AnyLibrary => {
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN);
+                    }
+                    ZoneFilter::Battlefield => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::DIED_THIS_TURN);
+                    }
+                    _ => return Err("oracle:unsupported-filter-predicate"),
+                }
             }
             FilterPredicateAst::DealtDamageBy(subj)
                 if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
@@ -3806,6 +3861,18 @@ pub(super) fn lower_object_filter(
                         }
                         clause.flags = clause.flags.union(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
                     }
+                    "with a -1/-1 counter on it"
+                    | "that have -1/-1 counters on them"
+                    | "that has a -1/-1 counter on it"
+                    | "with -1/-1 counters on them"
+                    | "with a -1/-1 counter on them" => {
+                        if clause.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER);
+                    }
                     "with a counter on it"
                     | "with counters on it"
                     | "with a counter on them"
@@ -3824,10 +3891,110 @@ pub(super) fn lower_object_filter(
                             || clause
                                 .flags
                                 .contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)
+                            || clause
+                                .flags
+                                .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
                         {
                             return Err("oracle:unsupported-filter-predicate");
                         }
                         clause.flags = clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+                    }
+                    "that were put there from the battlefield this turn"
+                    | "that was put there from the battlefield this turn"
+                    | "that were put into your graveyard from the battlefield this turn"
+                    | "that were put into graveyards from the battlefield this turn"
+                    | "that was put into your graveyard from the battlefield this turn"
+                    | "put into a graveyard from the battlefield this turn"
+                    | "that was put into a graveyard from the battlefield this turn"
+                    | "that were put into a graveyard from the battlefield this turn"
+                    | "put into your graveyard from the battlefield this turn"
+                    | "put into graveyards from the battlefield this turn" => {
+                        if !zone_compatible_with_graveyard {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::DIED_THIS_TURN);
+                    }
+                    "put into your graveyard this turn"
+                    | "that were put into your graveyard this turn"
+                    | "that was put into your graveyard this turn"
+                    | "that were put into a graveyard this turn"
+                    | "put into a graveyard this turn"
+                    | "that was put into a graveyard this turn"
+                    | "that were put into graveyards this turn"
+                    | "put into graveyards this turn" => {
+                        if !zone_compatible_with_graveyard {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN);
+                    }
+                    "that were put into your graveyard from your library this turn"
+                    | "put into your graveyard from your library this turn"
+                    | "that was put into your graveyard from your library this turn" => {
+                        if !zone_compatible_with_graveyard {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN);
+                    }
+                    "that was put there from your library this turn"
+                    | "that were put there from libraries this turn" => {
+                        if !in_graveyard_context {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN);
+                    }
+                    "adventure" => {
+                        if clause.subtypes != SubtypeFilter::Any {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.subtypes = SubtypeFilter::Spell(SpellSubtype::Adventure);
+                    }
+                    "that has an adventure" | "that have an adventure" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ADVENTURE);
+                    }
+                    "that didn't attack this turn" => {
+                        if clause.flags.contains(ObjectFilterFlags::ATTACKED_THIS_TURN) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
+                    }
+                    "kicked" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::KICKED);
+                    }
+                    "renowned" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::RENOWNED);
+                    }
+                    "saddled" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SADDLED);
+                    }
+                    "monstrous" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::MONSTROUS);
+                    }
+                    "suspected" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SUSPECTED);
+                    }
+                    "goaded" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::GOADED);
+                    }
+                    "solved" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SOLVED);
+                    }
+                    "prepared" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::PREPARED);
+                    }
+                    "exerted" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::EXERTED);
+                    }
+                    "that's not historic" | "not historic" => {
+                        if clause.flags.contains(ObjectFilterFlags::HISTORIC) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::NON_HISTORIC);
                     }
                     "with power less than ~'s"
                     | "with power less than ~'s power"
@@ -4037,9 +4204,10 @@ pub(super) fn lower_spell_filter(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<SpellFilter, &'static str> {
-    let cast_zone = match f.zone {
-        None | Some(ZoneFilter::Stack) => spellwake_engine::program::SpellCastZoneFilter::Any,
-        Some(ZoneFilter::YourLibrary) => spellwake_engine::program::SpellCastZoneFilter::OwnLibrary,
+    use spellwake_engine::program::SpellCastZoneFilter;
+    let mut cast_zone = match f.zone {
+        None | Some(ZoneFilter::Stack) => SpellCastZoneFilter::Any,
+        Some(ZoneFilter::YourLibrary) => SpellCastZoneFilter::OwnLibrary,
         Some(
             ZoneFilter::YourGraveyard
             | ZoneFilter::OpponentGraveyard
@@ -4048,13 +4216,65 @@ pub(super) fn lower_spell_filter(
             | ZoneFilter::AllGraveyards
             | ZoneFilter::ThatPlayerGraveyard
             | ZoneFilter::TargetPlayerGraveyard,
-        ) => spellwake_engine::program::SpellCastZoneFilter::Graveyard,
-        Some(ZoneFilter::Exile) => spellwake_engine::program::SpellCastZoneFilter::Exile,
-        Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand) => {
-            spellwake_engine::program::SpellCastZoneFilter::Hand
-        }
+        ) => SpellCastZoneFilter::Graveyard,
+        Some(ZoneFilter::Exile) => SpellCastZoneFilter::Exile,
+        Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand) => SpellCastZoneFilter::Hand,
         _ => return Err("oracle:spell-filter-zone"),
     };
+    let mut ordinal_this_turn: Option<NonZeroU32> = None;
+    let mut stripped_spell_pred = false;
+    let mut remaining_predicates = Vec::with_capacity(f.predicates.len());
+    for pred in &f.predicates {
+        match pred {
+            FilterPredicateAst::NthSpellCastThisTurn(n) => {
+                let ord =
+                    NonZeroU32::new(u32::from(*n)).ok_or("oracle:unsupported-filter-predicate")?;
+                if ordinal_this_turn.is_some_and(|prev| prev != ord) {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                ordinal_this_turn = Some(ord);
+                stripped_spell_pred = true;
+            }
+            FilterPredicateAst::StateQualification(raw) => {
+                let norm = raw.trim().to_ascii_lowercase();
+                match norm.as_str() {
+                    "cast from a graveyard"
+                    | "cast from your graveyard"
+                    | "cast from any graveyard" => {
+                        if !matches!(
+                            cast_zone,
+                            SpellCastZoneFilter::Any | SpellCastZoneFilter::Graveyard
+                        ) {
+                            return Err("oracle:spell-filter-zone");
+                        }
+                        cast_zone = SpellCastZoneFilter::Graveyard;
+                        stripped_spell_pred = true;
+                    }
+                    "that wasn't cast from its owner's hand" => {
+                        if !matches!(
+                            cast_zone,
+                            SpellCastZoneFilter::Any | SpellCastZoneFilter::NotOwnersHand
+                        ) {
+                            return Err("oracle:spell-filter-zone");
+                        }
+                        cast_zone = SpellCastZoneFilter::NotOwnersHand;
+                        stripped_spell_pred = true;
+                    }
+                    "that's the second spell cast this turn" => {
+                        let ord =
+                            NonZeroU32::new(2).ok_or("oracle:unsupported-filter-predicate")?;
+                        if ordinal_this_turn.is_some_and(|prev| prev != ord) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        ordinal_this_turn = Some(ord);
+                        stripped_spell_pred = true;
+                    }
+                    _ => remaining_predicates.push(pred.clone()),
+                }
+            }
+            _ => remaining_predicates.push(pred.clone()),
+        }
+    }
     let single_target = (f.flags.0 & AstFilterFlags::SINGLE_TARGET.0) != 0;
     let chosen_entry_type = (f.flags.0 & AstFilterFlags::MATCHES_CHOSEN_TYPE.0) != 0;
     if chosen_entry_type {
@@ -4062,6 +4282,9 @@ pub(super) fn lower_spell_filter(
         stripped.flags.0 &=
             !(AstFilterFlags::SINGLE_TARGET.0 | AstFilterFlags::MATCHES_CHOSEN_TYPE.0);
         stripped.zone = None;
+        if stripped_spell_pred {
+            stripped.predicates = remaining_predicates.clone();
+        }
         if (stripped.any_types.is_empty() || stripped.any_types == AstCardTypeMask::CREATURE)
             && filter_only_has(
                 &stripped,
@@ -4073,22 +4296,27 @@ pub(super) fn lower_spell_filter(
         {
             let mut sf = SpellFilter::any().of_chosen_entry_type();
             sf.cast_zone = cast_zone;
+            sf.ordinal_this_turn = ordinal_this_turn;
             if single_target {
                 sf.target_shape = spellwake_engine::program::SpellTargetShape::SingleTarget;
             }
             return Ok(sf);
         }
     }
-    let obj = if single_target || f.zone.is_some() {
+    let obj = if single_target || f.zone.is_some() || stripped_spell_pred {
         let mut stripped = f.clone();
         stripped.flags.0 &= !AstFilterFlags::SINGLE_TARGET.0;
         stripped.zone = None;
+        if stripped_spell_pred {
+            stripped.predicates = remaining_predicates;
+        }
         lower_object_filter(&stripped, vocabulary)?
     } else {
         lower_object_filter(f, vocabulary)?
     };
     let mut sf = SpellFilter::from_object(obj);
     sf.cast_zone = cast_zone;
+    sf.ordinal_this_turn = ordinal_this_turn;
     if single_target {
         sf.target_shape = spellwake_engine::program::SpellTargetShape::SingleTarget;
     }
@@ -5628,8 +5856,9 @@ fn lower_value_expr_inner(
                     if inner.controller.is_some() || inner.owner.is_some() {
                         return Err("oracle:unsupported-count-zone");
                     }
-                    inner.controller = Some(ControllerRelation::OwnerOpponent);
-                    let opp_obj = lower_object_filter(&inner, vocabulary)?;
+                    let mut with_zone = f.as_ref().clone();
+                    with_zone.controller = Some(ControllerRelation::OwnerOpponent);
+                    let opp_obj = lower_object_filter(&with_zone, vocabulary)?;
                     return Ok(ValueExpr::Count {
                         zone: ValueZone::AllGraveyards,
                         filter: Box::new(opp_obj),
@@ -5639,7 +5868,7 @@ fn lower_value_expr_inner(
                 let obj = if is_unrestricted_filter(&inner) {
                     ObjectFilter::any()
                 } else {
-                    lower_object_filter(&inner, vocabulary)?
+                    lower_object_filter(f, vocabulary)?
                 };
                 return match zone {
                     ZoneFilter::YourGraveyard => {
@@ -6583,6 +6812,16 @@ fn lower_value_expr_inner(
                         divisor: two,
                         round_up: true,
                     })
+                }
+                "aura and equipment attached to ~"
+                | "aura or equipment attached to ~"
+                | "auras and equipment attached to ~"
+                | "auras or equipment attached to ~"
+                    if player.is_none() =>
+                {
+                    Ok(ValueExpr::AttachedCount(
+                        spellwake_engine::program::AttachedCountKind::AurasAndEquipmentOnSource,
+                    ))
                 }
                 "other creature you control" if player.is_none() => {
                     Ok(ValueExpr::count_battlefield(ObjectFilter::from_clause(

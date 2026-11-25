@@ -118,6 +118,13 @@ fn resolve_world_player(ctx: &WorldEvalCtx<'_>, role: ResolvingPlayer) -> Option
         ResolvingPlayer::SourceChosenPlayer => {
             ctx.state.entry_player_choices.get(&ctx.source).copied()
         }
+        ResolvingPlayer::SourceOwner => {
+            ctx.objects.get(&ctx.source).map(|o| o.owner).or_else(|| {
+                ctx.cards
+                    .get(ctx.source)
+                    .map(crate::object_identity::GameObject::owner)
+            })
+        }
         _ => None,
     }
 }
@@ -235,10 +242,12 @@ fn matches_compact_clause(
     if !subtype_ok {
         return false;
     }
-    if clause.flags.contains(ObjectFilterFlags::HISTORIC)
-        && !types.contains(CardType::Artifact)
-        && !super_set.contains(&Supertype::Legendary)
-    {
+    let is_historic =
+        types.contains(CardType::Artifact) || super_set.contains(&Supertype::Legendary);
+    if clause.flags.contains(ObjectFilterFlags::HISTORIC) && !is_historic {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
         return false;
     }
     true
@@ -600,6 +609,72 @@ fn matches_world_clause(
     if clause.flags.contains(ObjectFilterFlags::DIED_THIS_TURN)
         && !ctx.state.died_this_turn.contains(&id)
     {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN)
+        && !ctx.state.put_into_gy_this_turn.contains(&id)
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN)
+        && !ctx.state.put_into_gy_from_library_this_turn.contains(&id)
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::KICKED)
+        && !(ctx.state.kicked.contains(&id)
+            || ctx
+                .state
+                .kicker_counts
+                .get(&id)
+                .is_some_and(|counts| !counts.is_empty()))
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::RENOWNED) && !ctx.state.renowned.contains(&id) {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::SADDLED) && !ctx.state.saddled.contains(&id) {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::MONSTROUS) && !ctx.state.monstrous.contains(&id) {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::SUSPECTED)
+        && !ctx
+            .state
+            .suspect_counters
+            .get(&id)
+            .is_some_and(RulesInteger::is_positive)
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::GOADED) {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::SOLVED) && !ctx.state.solved_cases.contains(&id) {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::PREPARED) && !ctx.state.prepared.contains(&id) {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::EXERTED)
+        && !ctx.state.exerted_objects_this_turn.contains(&id)
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+        && !p.has_minus_one_counter
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !p.defined.has_adventure {
         return false;
     }
     if clause
@@ -1296,6 +1371,9 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     || (ctx.state.entered_from_graveyard.contains(&ctx.source)
                         && source_zone_matches(crate::program::SourceZoneFilter::Graveyard, *zone));
                 i64::from(matched).into()
+            }
+            SourceStateExpr::DonorControlledByController => {
+                i64::from(ctx.related_player == Some(ctx.controller)).into()
             }
         },
         ValueExpr::CountOtherSharingSourceSubtype => {

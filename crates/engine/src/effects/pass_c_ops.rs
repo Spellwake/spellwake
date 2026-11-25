@@ -40,11 +40,15 @@ impl EffectWindow {
                 _ => None,
             },
             MoveSubjectRef::RevealedCard => self
-                .window
-                .cards()
-                .library(entry.controller())
-                .first()
-                .copied(),
+                .resolution_cursor()
+                .and_then(|c| c.results.revealed_top_card)
+                .or_else(|| {
+                    self.window
+                        .cards()
+                        .library(entry.controller())
+                        .first()
+                        .copied()
+                }),
             MoveSubjectRef::CreatedTokens => self
                 .resolution_cursor()
                 .and_then(|c| c.last_created_tokens.first().copied()),
@@ -1646,6 +1650,7 @@ impl EffectWindow {
                         }
                     }
                 }
+                self.emit_fight_occurrences(entry.id(), index, &pairs, ctx.append)?;
                 let inputs = self.fight_damage_inputs(&pairs)?;
                 if inputs.is_empty() {
                     self.advance_instruction()?;

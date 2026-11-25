@@ -33,6 +33,7 @@ pub(super) struct BodyBuilder {
     pub(super) up_to_one_target: bool,
     pub(super) last_group_filter: Option<ObjectFilter>,
     pub(super) trigger_hint: TriggerHint,
+    pub(super) has_source: bool,
 }
 
 impl BodyBuilder {
@@ -45,6 +46,7 @@ impl BodyBuilder {
             up_to_one_target: false,
             last_group_filter: None,
             trigger_hint: TriggerHint::None,
+            has_source: false,
         }
     }
 
@@ -1213,7 +1215,7 @@ fn split_compound_restriction_clauses(low: &str) -> Vec<&str> {
 
 pub(super) fn rewrite_instruction_anaphora(op: &mut Instruction, replacement: ValueObjectRef) {
     match op {
-        Instruction::AddMana(yield_kind) => {
+        Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
             if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                 rewrite_value_expr_anaphora(amount, replacement);
             }
@@ -1236,6 +1238,10 @@ pub(super) fn rewrite_instruction_anaphora(op: &mut Instruction, replacement: Va
         | Instruction::DrainOpponents(amount)
         | Instruction::Discard { amount, .. }
         | Instruction::DiscardFiltered { amount, .. }
+        | Instruction::DiscardUpToExt {
+            max_count: amount, ..
+        }
+        | Instruction::Earthbend { amount }
         | Instruction::Sacrifice { amount, .. }
         | Instruction::ReturnControlledPermanents { amount, .. }
         | Instruction::AddPlayerCounter { amount, .. }
@@ -1376,7 +1382,8 @@ pub(super) fn rewrite_body_prior_result(body: &mut ExecutableBody, replacement: 
     for op in &mut body.instructions {
         if !saw_count_action {
             match op {
-                Instruction::AddMana(yield_kind) => {
+                Instruction::AddMana(yield_kind)
+                | Instruction::AddManaForPlayer { yield_kind, .. } => {
                     if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                         rewrite_value_expr_prior_result(amount, replacement);
                     }
@@ -1399,6 +1406,10 @@ pub(super) fn rewrite_body_prior_result(body: &mut ExecutableBody, replacement: 
                 | Instruction::DrainOpponents(amount)
                 | Instruction::Discard { amount, .. }
                 | Instruction::DiscardFiltered { amount, .. }
+                | Instruction::DiscardUpToExt {
+                    max_count: amount, ..
+                }
+                | Instruction::Earthbend { amount }
                 | Instruction::Sacrifice { amount, .. }
                 | Instruction::ReturnControlledPermanents { amount, .. }
                 | Instruction::AddPlayerCounter { amount, .. }
@@ -1446,6 +1457,7 @@ pub(super) fn rewrite_body_prior_result(body: &mut ExecutableBody, replacement: 
             Instruction::Discard { .. }
                 | Instruction::DiscardFiltered { .. }
                 | Instruction::DiscardUpTo { .. }
+                | Instruction::DiscardUpToExt { .. }
                 | Instruction::Mill { .. }
                 | Instruction::Sacrifice { .. }
                 | Instruction::SacrificeMatching(_)
@@ -2371,7 +2383,7 @@ fn rewrite_value_expr_trigger_subject(expr: &mut ValueExpr, replacement: ValueOb
 fn rewrite_body_trigger_subject_stats(body: &mut ExecutableBody, replacement: ValueObjectRef) {
     for op in &mut body.instructions {
         match op {
-            Instruction::AddMana(yield_kind) => {
+            Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
                 if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                     rewrite_value_expr_trigger_subject(amount, replacement);
                 }
@@ -2394,6 +2406,10 @@ fn rewrite_body_trigger_subject_stats(body: &mut ExecutableBody, replacement: Va
             | Instruction::DrainOpponents(amount)
             | Instruction::Discard { amount, .. }
             | Instruction::DiscardFiltered { amount, .. }
+            | Instruction::DiscardUpToExt {
+                max_count: amount, ..
+            }
+            | Instruction::Earthbend { amount }
             | Instruction::Sacrifice { amount, .. }
             | Instruction::ReturnControlledPermanents { amount, .. }
             | Instruction::AddPlayerCounter { amount, .. }
@@ -4242,6 +4258,7 @@ fn resolve_prev_anaphora_ref(
         Instruction::Discard { .. }
         | Instruction::DiscardFiltered { .. }
         | Instruction::DiscardUpTo { .. }
+        | Instruction::DiscardUpToExt { .. }
         | Instruction::DiscardOneAtRandom(_) => Some(MatchObjectRef::DiscardedCard),
         Instruction::Mill { .. } | Instruction::PutLibraryCohortIntoGraveyard(_) => {
             Some(MatchObjectRef::MovedLibraryCard)
@@ -4293,18 +4310,7 @@ fn parse_library_top_anaphora(
         "the top card of their library"
         | "top card of their library"
         | "the top card of that player's library"
-        | "top card of that player's library" => {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
-                Some(ResolvingPlayer::TargetPlayer)
-            } else if in_trigger {
-                Some(ResolvingPlayer::UniqueRelatedPlayer)
-            } else {
-                None
-            }
-        }
+        | "top card of that player's library" => resolve_their_library_owner(builder, in_trigger),
         "the top card of the active player's library"
         | "the top card of active player's library"
         | "top card of active player's library" => Some(ResolvingPlayer::ActivePlayer),
@@ -11830,6 +11836,7 @@ pub(super) fn lower_trigger_effect_body(
 ) -> Result<ExecutableBody, &'static str> {
     let hint = TriggerHint::from_event(&spec.event);
     let mut builder = BodyBuilder::with_trigger_hint(hint);
+    builder.has_source = true;
     match lower_instruction_seq(
         ins,
         &mut builder,
@@ -11856,6 +11863,7 @@ pub(super) fn lower_effect_body_impl(
     allow_fixed_clauses: bool,
 ) -> Result<ExecutableBody, &'static str> {
     let mut builder = BodyBuilder::new();
+    builder.has_source = in_trigger || self_pronoun_valid;
     match lower_instruction_seq(
         ins,
         &mut builder,
@@ -11878,6 +11886,33 @@ pub(super) fn lower_effect_body_impl(
         }
         Err(err) => Err(err),
     }
+}
+
+pub(super) fn lower_die_roll_band_body(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    inherited_target: BodyTarget,
+) -> Result<ExecutableBody, &'static str> {
+    let mut builder = BodyBuilder::new();
+    builder.target = inherited_target;
+    builder.has_source = in_trigger || self_pronoun_valid;
+    lower_instruction_seq(
+        ins,
+        &mut builder,
+        vocabulary,
+        ids,
+        in_trigger,
+        self_pronoun_valid,
+        None,
+    )?;
+    if builder.target != inherited_target {
+        return Err("oracle:die-roll-band-target");
+    }
+    builder.target = BodyTarget::None;
+    builder.finish()
 }
 
 fn subject_has_explicit_target(subject: &SubjectRefAst) -> bool {
@@ -13213,9 +13248,28 @@ fn lower_replace_pair(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<LoweredReplacePair, &'static str> {
     let stripped = strip_replace_effect(raw_alt);
-    let alt_slice = substitute_those_tokens(&stripped, base_slice);
+    let mut alt_slice = substitute_those_tokens(&stripped, base_slice);
+    if let [
+        InstructionAst::ModifyPT {
+            duration: base_dur, ..
+        },
+    ] = base_slice
+        && *base_dur != DurationAst::Instant
+        && let [
+            InstructionAst::ModifyPT {
+                subject: alt_subj,
+                duration: alt_dur,
+                ..
+            },
+        ] = alt_slice.as_mut_slice()
+        && matches!(alt_subj.as_ref(), SubjectRefAst::Anaphora(_))
+        && *alt_dur == DurationAst::Instant
+    {
+        *alt_dur = base_dur.clone();
+    }
 
     let mut base_builder = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+    base_builder.has_source = builder.has_source;
     base_builder.target = builder.target;
     base_builder.graveyard_target_bounds = builder.graveyard_target_bounds;
     base_builder.x_target_count = builder.x_target_count;
@@ -13231,6 +13285,7 @@ fn lower_replace_pair(
     )?;
 
     let mut alt_builder = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+    alt_builder.has_source = builder.has_source;
     alt_builder.target = builder.target;
     alt_builder.graveyard_target_bounds = builder.graveyard_target_bounds;
     alt_builder.x_target_count = builder.x_target_count;
@@ -13256,6 +13311,7 @@ fn lower_replace_pair(
     };
     if need_relower {
         alt_builder = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+        alt_builder.has_source = builder.has_source;
         alt_builder.target = base_builder.target;
         alt_builder.graveyard_target_bounds = base_builder.graveyard_target_bounds;
         alt_builder.x_target_count = base_builder.x_target_count;
@@ -13355,7 +13411,7 @@ fn wrap_retained_mana_yield(yield_kind: EffectManaYield) -> EffectManaYield {
 
 fn retain_mana_in_instruction(op: &mut Instruction) -> bool {
     match op {
-        Instruction::AddMana(yield_kind) => {
+        Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
             let current = std::mem::replace(yield_kind, EffectManaYield::Fixed(BTreeMap::new()));
             *yield_kind = wrap_retained_mana_yield(current);
             true
@@ -13791,6 +13847,7 @@ fn lower_multi_target_fixed_clauses(
         }
 
         let mut probe = BodyBuilder::with_trigger_hint(trigger_hint);
+        probe.has_source = in_trigger || self_pronoun_valid;
         lower_instruction_seq(
             unit,
             &mut probe,
@@ -14607,9 +14664,12 @@ fn is_revealed_card_move_op(ins: &InstructionAst) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_revealed_top_branch(
     branch: &[InstructionAst],
     outer_builder: &BodyBuilder,
+    library_owner: ResolvingPlayer,
+    cond_tests_revealed_top: bool,
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
     in_trigger: bool,
@@ -14617,10 +14677,17 @@ fn lower_revealed_top_branch(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<BodyBuilder, &'static str> {
     let mut sub = BodyBuilder::with_trigger_hint(outer_builder.trigger_hint);
+    sub.has_source = outer_builder.has_source;
     sub.target = outer_builder.target;
+    let prior_shuffled_target = outer_builder.instructions.iter().any(|op| {
+        matches!(
+            op,
+            Instruction::ShuffleTargetIntoLibrary | Instruction::PutTargetInLibrary(_)
+        )
+    });
     sub.instructions.push(Instruction::LookTopChoose {
         count: ValueExpr::literal(1),
-        library_owner: ResolvingPlayer::Controller,
+        library_owner,
         filter: None,
         reveal: true,
         reveal_only: true,
@@ -14637,11 +14704,14 @@ fn lower_revealed_top_branch(
     for step in branch {
         if is_revealed_card_move_op(step) {
             let saved_target = sub.target;
+            let saved_has_source = sub.has_source;
             let inner_step = match step {
                 InstructionAst::Optional(v) if v.len() == 1 => &v[0],
                 other => other,
             };
             let force_card_ref = saved_target == BodyTarget::None
+                || cond_tests_revealed_top
+                || prior_shuffled_target
                 || matches!(
                     inner_step,
                     InstructionAst::MoveZone { subject, .. }
@@ -14655,7 +14725,14 @@ fn lower_revealed_top_branch(
                         )
                 );
             if force_card_ref {
+                let dest_explicitly_under_your_control = match inner_step {
+                    InstructionAst::MoveZone { to, .. } | InstructionAst::ReturnZone { to, .. } => {
+                        to.to_ascii_lowercase().contains("under your control")
+                    }
+                    _ => false,
+                };
                 sub.target = BodyTarget::None;
+                let before_len = sub.instructions.len();
                 let res = lower_instruction_seq(
                     std::slice::from_ref(step),
                     &mut sub,
@@ -14666,7 +14743,25 @@ fn lower_revealed_top_branch(
                     bound_x,
                 );
                 sub.target = saved_target;
+                sub.has_source = saved_has_source;
                 res?;
+                if library_owner != ResolvingPlayer::Controller
+                    && !dest_explicitly_under_your_control
+                {
+                    for op in &mut sub.instructions[before_len..] {
+                        if let Instruction::MoveSubject {
+                            subject: MoveSubjectRef::RevealedCard,
+                            destination:
+                                SubjectDestination::Battlefield {
+                                    under_owner_control,
+                                    ..
+                                },
+                        } = op
+                        {
+                            *under_owner_control = true;
+                        }
+                    }
+                }
                 continue;
             }
         }
@@ -14769,6 +14864,69 @@ fn is_card_anaphora_grant_cast(ins: &InstructionAst) -> Option<&InstructionAst> 
     }
 }
 
+fn resolve_their_library_owner(builder: &BodyBuilder, in_trigger: bool) -> Option<ResolvingPlayer> {
+    match builder.target {
+        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+            Some(ResolvingPlayer::TargetPlayer)
+        }
+        BodyTarget::SinglePermanent
+        | BodyTarget::SingleCreature
+        | BodyTarget::SinglePlaneswalker
+        | BodyTarget::FilteredPermanent(_)
+        | BodyTarget::SingleOwnGraveyardCard
+        | BodyTarget::FilteredOwnGraveyardCard(_)
+        | BodyTarget::FilteredAnyGraveyardCard { .. }
+        | BodyTarget::AnyGraveyardCard
+        | BodyTarget::AnyGraveyardCreature
+        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+            if builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::ShuffleTargetIntoLibrary | Instruction::PutTargetInLibrary(_)
+                )
+            }) =>
+        {
+            Some(ResolvingPlayer::TargetOwner)
+        }
+        BodyTarget::SinglePermanent
+        | BodyTarget::SingleCreature
+        | BodyTarget::SinglePlaneswalker
+        | BodyTarget::FilteredPermanent(_)
+        | BodyTarget::SinglePlayerOrPlaneswalker
+        | BodyTarget::SingleOpponentOrPlaneswalker
+        | BodyTarget::SingleCreatureOrPlayer
+        | BodyTarget::SingleAnyTarget => Some(ResolvingPlayer::TargetController),
+        BodyTarget::SingleOwnGraveyardCard | BodyTarget::FilteredOwnGraveyardCard(_) => {
+            Some(ResolvingPlayer::Controller)
+        }
+        BodyTarget::FilteredAnyGraveyardCard { .. }
+        | BodyTarget::AnyGraveyardCard
+        | BodyTarget::AnyGraveyardCreature
+        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Some(ResolvingPlayer::TargetOwner),
+        BodyTarget::SingleSpell(_)
+        | BodyTarget::SingleStackObject(_)
+        | BodyTarget::SingleStackEntry
+        | BodyTarget::ControlledAbility { .. }
+        | BodyTarget::StackEntryTargetingControlledPermanent => {
+            Some(ResolvingPlayer::TargetSpellController)
+        }
+        _ if builder.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::ChooseValue {
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
+                    ..
+                } | Instruction::SelectExtremeLifePlayer { .. }
+            )
+        }) =>
+        {
+            Some(ResolvingPlayer::ChosenPlayer)
+        }
+        _ if in_trigger => Some(ResolvingPlayer::UniqueRelatedPlayer),
+        _ => None,
+    }
+}
+
 fn parse_look_top_library_owner(
     library: &str,
     builder: &BodyBuilder,
@@ -14787,7 +14945,7 @@ fn parse_look_top_library_owner(
             Some(BodyTarget::SingleOpponent),
             ResolvingPlayer::TargetPlayer,
         )),
-        "target" | "their" | "their library"
+        "target"
             if matches!(
                 builder.target,
                 BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
@@ -14795,19 +14953,119 @@ fn parse_look_top_library_owner(
         {
             Some((None, ResolvingPlayer::TargetPlayer))
         }
-        "their" | "their library" | "that player" | "that player's" | "thatplayer"
-            if in_trigger =>
-        {
-            Some((None, ResolvingPlayer::UniqueRelatedPlayer))
+        "their" | "their library" | "that player" | "that player's" | "thatplayer" => {
+            resolve_their_library_owner(builder, in_trigger).map(|rp| (None, rp))
         }
+        "its controller" | "its controller's" | "itscontroller" => match builder.target {
+            BodyTarget::SinglePermanent
+            | BodyTarget::SingleCreature
+            | BodyTarget::SinglePlaneswalker
+            | BodyTarget::FilteredPermanent(_)
+            | BodyTarget::SinglePlayerOrPlaneswalker
+            | BodyTarget::SingleOpponentOrPlaneswalker
+            | BodyTarget::SingleCreatureOrPlayer
+            | BodyTarget::SingleAnyTarget => Some((None, ResolvingPlayer::TargetController)),
+            BodyTarget::SingleSpell(_)
+            | BodyTarget::SingleStackObject(_)
+            | BodyTarget::SingleStackEntry
+            | BodyTarget::ControlledAbility { .. }
+            | BodyTarget::StackEntryTargetingControlledPermanent => {
+                Some((None, ResolvingPlayer::TargetSpellController))
+            }
+            _ if in_trigger => Some((None, ResolvingPlayer::TriggerSubjectController)),
+            _ => None,
+        },
+        "its owner" | "its owner's" | "itsowner" => match builder.target {
+            BodyTarget::SinglePermanent
+            | BodyTarget::SingleCreature
+            | BodyTarget::SinglePlaneswalker
+            | BodyTarget::FilteredPermanent(_)
+            | BodyTarget::SingleOwnGraveyardCard
+            | BodyTarget::FilteredOwnGraveyardCard(_)
+            | BodyTarget::FilteredAnyGraveyardCard { .. }
+            | BodyTarget::AnyGraveyardCard
+            | BodyTarget::AnyGraveyardCreature
+            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+            | BodyTarget::SingleSpell(_) => Some((None, ResolvingPlayer::TargetOwner)),
+            _ if in_trigger => Some((None, ResolvingPlayer::TriggerSubjectOwner)),
+            _ => None,
+        },
         "defending player" | "defending player's" | "defendingplayer" => {
             Some((None, ResolvingPlayer::DefendingPlayer))
         }
-        "enchanted player" | "enchanted player's" | "enchantedplayer" => {
+        "enchanted player" | "enchanted player's" | "enchantedplayer" if builder.has_source => {
             Some((None, ResolvingPlayer::EnchantedPlayer))
         }
         "active player" | "active player's" | "activeplayer" => {
             Some((None, ResolvingPlayer::ActivePlayer))
+        }
+        _ => None,
+    }
+}
+
+fn parse_extreme_life_tie_mode(
+    ins: &InstructionAst,
+    highest: bool,
+) -> Option<spellwake_engine::program::ExtremeLifeTieMode> {
+    use spellwake_engine::program::ExtremeLifeTieMode;
+    let InstructionAst::IfCondition {
+        condition,
+        then_body,
+    } = ins
+    else {
+        return None;
+    };
+    let cond_matches = match condition.as_ref() {
+        ConditionAst::PlayersTiedFor { metric, min_tied } if *min_tied == 2 => {
+            let ml = metric.trim().to_ascii_lowercase();
+            if highest {
+                (ml.contains("highest") || ml.contains("most") || ml.contains("greatest"))
+                    && !ml.contains("lowest")
+                    && !ml.contains("least")
+                    && !ml.contains("fewest")
+            } else {
+                (ml.contains("lowest") || ml.contains("least") || ml.contains("fewest"))
+                    && !ml.contains("highest")
+                    && !ml.contains("most")
+                    && !ml.contains("greatest")
+            }
+        }
+        ConditionAst::EventOccurredThisTurn { event } => {
+            let el = event.trim().trim_end_matches('.').to_ascii_lowercase();
+            matches!(el.as_str(), "there is a tie" | "there's a tie")
+        }
+        _ => false,
+    };
+    if !cond_matches {
+        return None;
+    }
+    match then_body.as_slice() {
+        [InstructionAst::ChooseOption(opt)]
+            if matches!(
+                opt.trim()
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "you choose one of them"
+                    | "one of them"
+                    | "choose one of them"
+                    | "you choose one"
+                    | "choose one"
+            ) =>
+        {
+            Some(ExtremeLifeTieMode::ControllerChooses)
+        }
+        [
+            InstructionAst::AbilityRestriction {
+                restriction,
+                condition: None,
+            },
+        ] if restriction
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("the game is a draw") =>
+        {
+            Some(ExtremeLifeTieMode::DrawGame)
         }
         _ => None,
     }
@@ -15263,7 +15521,14 @@ fn parse_look_top_single_keep_op(
                     max_picks,
                 })
             }
-            [InstructionAst::RevealCards { subject: rev_subj }, mv] => {
+            [
+                InstructionAst::RevealCards { subject: rev_subj }
+                | InstructionAst::RevealByPlayer {
+                    player: PlayerRefAst::You,
+                    subject: rev_subj,
+                },
+                mv,
+            ] => {
                 let (keep_to, tapped_flag) = match mv {
                     InstructionAst::MoveZone { subject, to }
                         if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
@@ -15553,18 +15818,24 @@ fn try_fuse_look_top_extended(
             FromLooked(&'a ObjectFilterAst, &'a str),
         }
         let rev_step = match &ins[i + 1] {
-            InstructionAst::RevealCards { subject } => {
-                Some(LookTopRevealStep::Cards(subject.as_ref()))
-            }
+            InstructionAst::RevealCards { subject }
+            | InstructionAst::RevealByPlayer {
+                player: PlayerRefAst::You,
+                subject,
+            } => Some(LookTopRevealStep::Cards(subject.as_ref())),
             InstructionAst::RevealFromLooked { filter, to }
                 if to == "revealed" || to.starts_with("revealed:") =>
             {
                 Some(LookTopRevealStep::FromLooked(filter.as_ref(), to.as_str()))
             }
             InstructionAst::Optional(inner) => match inner.as_slice() {
-                [InstructionAst::RevealCards { subject }] => {
-                    Some(LookTopRevealStep::Cards(subject.as_ref()))
-                }
+                [
+                    InstructionAst::RevealCards { subject }
+                    | InstructionAst::RevealByPlayer {
+                        player: PlayerRefAst::You,
+                        subject,
+                    },
+                ] => Some(LookTopRevealStep::Cards(subject.as_ref())),
                 [InstructionAst::RevealFromLooked { filter, to }]
                     if to == "revealed" || to.starts_with("revealed:") =>
                 {
@@ -15812,6 +16083,7 @@ fn try_fuse_choose_keyword_grant(
     let mut branches = Vec::with_capacity(kw_options.len());
     for kw in kw_options {
         let mut br = BodyBuilder::with_trigger_hint(probe.trigger_hint);
+        br.has_source = probe.has_source;
         br.target = probe.target;
         let synth = InstructionAst::GrantKeywords {
             subject: subject.clone(),
@@ -15926,6 +16198,7 @@ pub(super) fn lower_instruction_seq(
     self_pronoun_valid: bool,
     bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
+    builder.has_source = in_trigger || self_pronoun_valid;
     let mut standalone_x: Option<&ValueExprAst> = None;
     let mut empty_bind_count = 0usize;
     if bound_x.is_none() {
@@ -16289,6 +16562,7 @@ pub(super) fn lower_instruction_seq(
             }
 
             let mut cond_builder = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+            cond_builder.has_source = builder.has_source;
             cond_builder.target = pair.merged_target;
             let effective_cond = (!in_trigger && !self_pronoun_valid)
                 .then(|| rewrite_spell_self_has_status_to_anaphora(condition));
@@ -16805,6 +17079,145 @@ pub(super) fn lower_instruction_seq(
             }
             continue;
         }
+        // Pull a trailing extreme-life tie-breaker sentence into an enclosing IfCondition whose
+        // then_body ends with ExtremeLifePlayerAction (e.g. Celestial Convergence).
+        if i + 1 < ins.len()
+            && let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = &ins[i]
+            && let Some(InstructionAst::ExtremeLifePlayerAction { highest, .. }) = then_body.last()
+            && parse_extreme_life_tie_mode(&ins[i + 1], *highest).is_some()
+        {
+            let mut merged_then = Vec::with_capacity(then_body.len() + 1);
+            merged_then.extend_from_slice(then_body);
+            merged_then.push(ins[i + 1].clone());
+            let synthetic = InstructionAst::IfCondition {
+                condition: condition.clone(),
+                then_body: merged_then,
+            };
+            lower_instruction_seq(
+                std::slice::from_ref(&synthetic),
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            i += 2;
+            continue;
+        }
+        // Lower IfCondition(MatchesFilter(Anaphora, f), then_body) (+ optional Otherwise)
+        // directly following an already-emitted LookTopChoose { reveal_only: true }.
+        if let Some(&Instruction::LookTopChoose {
+            reveal_only: true,
+            library_owner,
+            ..
+        }) = builder.instructions.last()
+            && let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = &ins[i]
+            && let ConditionAst::MatchesFilter { subject, filter } = condition.as_ref()
+            && matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+        {
+            let mut inner_f = filter.as_ref().clone();
+            inner_f.zone = None;
+            if let Ok(obj_filter) = lower_object_filter(&inner_f, vocabulary) {
+                let else_opt = if i + 1 < ins.len()
+                    && let InstructionAst::Otherwise(eb) = &ins[i + 1]
+                {
+                    Some(eb.as_slice())
+                } else {
+                    None
+                };
+                let then_b = lower_revealed_top_branch(
+                    then_body,
+                    builder,
+                    library_owner,
+                    true,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                );
+                let else_b = match else_opt {
+                    Some(eb) => lower_revealed_top_branch(
+                        eb,
+                        builder,
+                        library_owner,
+                        true,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )
+                    .map(Some),
+                    None => Ok(None),
+                };
+                if let (Ok(then_b), Ok(else_b_opt)) = (then_b, else_b)
+                    && (then_b.target == BodyTarget::None || then_b.target == builder.target)
+                    && else_b_opt.as_ref().is_none_or(|eb| {
+                        eb.target == BodyTarget::None || eb.target == builder.target
+                    })
+                {
+                    let branch_idx = builder.instructions.len();
+                    builder.instructions.push(Instruction::BranchIfFalse {
+                        condition: ResolutionCondition {
+                            left: ValueExpr::object_matches(
+                                MatchObjectRef::RevealedTop,
+                                obj_filter,
+                            ),
+                            comparison: Comparison::Equal,
+                            right: ValueExpr::literal(1),
+                        },
+                        destination: 0,
+                    });
+                    let then_shift = isize::try_from(builder.instructions.len())
+                        .map_err(|_| "oracle:jump-shift-ovf")?;
+                    for mut op in then_b.instructions {
+                        op.shift_jumps(then_shift, 0);
+                        builder.instructions.push(op);
+                    }
+                    if let Some(else_b) = else_b_opt {
+                        let jump_idx = builder.instructions.len();
+                        builder
+                            .instructions
+                            .push(Instruction::Jump { destination: 0 });
+                        let else_start = builder.instructions.len();
+                        if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                            builder.instructions.get_mut(branch_idx)
+                        {
+                            *destination = else_start;
+                        }
+                        let else_shift =
+                            isize::try_from(else_start).map_err(|_| "oracle:jump-shift-ovf")?;
+                        for mut op in else_b.instructions {
+                            op.shift_jumps(else_shift, 0);
+                            builder.instructions.push(op);
+                        }
+                        let end_dest = builder.instructions.len();
+                        if let Some(Instruction::Jump { destination }) =
+                            builder.instructions.get_mut(jump_idx)
+                        {
+                            *destination = end_dest;
+                        }
+                    } else {
+                        let end_dest = builder.instructions.len();
+                        if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                            builder.instructions.get_mut(branch_idx)
+                        {
+                            *destination = end_dest;
+                        }
+                    }
+                    i += if else_opt.is_some() { 2 } else { 1 };
+                    continue;
+                }
+            }
+        }
         // Lower IfCondition (+ optional Otherwise) via BranchIfFalse + Jump (including And/Or).
         // When the condition references target anaphora (e.g. Fatal Push / Overload:
         // "Destroy target creature if it has mana value 2 or less") and no target is bound yet,
@@ -16836,6 +17249,7 @@ pub(super) fn lower_instruction_seq(
                         builder.x_target_count = prev_x;
                         builder.last_group_filter = prev_group;
                         let mut then_builder = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+                        then_builder.has_source = builder.has_source;
                         then_builder.last_group_filter = prev_group;
                         lower_instruction_seq(
                             then_body,
@@ -17005,6 +17419,7 @@ pub(super) fn lower_instruction_seq(
                 };
             if let Some((paid_slice, declined_slice, advance)) = offer_follow {
                 let mut probe = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+                probe.has_source = builder.has_source;
                 probe.target = builder.target;
                 probe.graveyard_target_bounds = builder.graveyard_target_bounds;
                 probe.x_target_count = builder.x_target_count;
@@ -17039,6 +17454,7 @@ pub(super) fn lower_instruction_seq(
                     let declined_body = match declined_slice {
                         Some(d_ast) => {
                             let mut dec_sub = BodyBuilder::with_trigger_hint(probe.trigger_hint);
+                            dec_sub.has_source = probe.has_source;
                             dec_sub.last_group_filter = probe.last_group_filter;
                             lower_instruction_seq(
                                 d_ast,
@@ -17352,6 +17768,9 @@ pub(super) fn lower_instruction_seq(
                         | InstructionAst::Sacrifice { .. }
                         | InstructionAst::Discard { .. }
                         | InstructionAst::DiscardHand { .. }
+                        | InstructionAst::DiscardUpTo { .. }
+                        | InstructionAst::RevealByPlayer { .. }
+                        | InstructionAst::PayAnyAmountOfMana { .. }
                         | InstructionAst::GainPlayerCounters { .. }
                         | InstructionAst::PayCost(_)
                         | InstructionAst::RemoveCounters { .. }
@@ -17444,6 +17863,9 @@ pub(super) fn lower_instruction_seq(
                         | InstructionAst::Sacrifice { .. }
                         | InstructionAst::Discard { .. }
                         | InstructionAst::DiscardHand { .. }
+                        | InstructionAst::DiscardUpTo { .. }
+                        | InstructionAst::RevealByPlayer { .. }
+                        | InstructionAst::PayAnyAmountOfMana { .. }
                         | InstructionAst::GainPlayerCounters { .. }
                         | InstructionAst::PayCost(_)
                         | InstructionAst::RemoveCounters { .. }
@@ -18435,19 +18857,27 @@ pub(super) fn lower_instruction_seq(
             i += 2;
             continue;
         }
-        // Fuse mandatory LookTopLibrary(1, reveal: true) + IfCondition(MatchesFilter(Anaphora, f), then_body) (+ optional Otherwise)
+        // Fuse mandatory LookTopLibrary/PlayerLookTopLibrary(1, reveal: true)
+        // + IfCondition(MatchesFilter(Anaphora, f), then_body) (+ optional Otherwise)
         // -> LookTopChoose(reveal_only: true) + BranchIfFalse(ObjectMatches(RevealedTop, f))
         if i + 1 < ins.len()
-            && let InstructionAst::LookTopLibrary {
-                reveal: true,
-                library,
-                count,
-            } = &ins[i]
-            && matches!(
-                library.trim().to_ascii_lowercase().as_str(),
-                "your" | "own" | "" | "you"
-            )
-            && matches!(count.as_ref(), ValueExprAst::Const(1))
+            && let Some((library, count)) = match &ins[i] {
+                InstructionAst::LookTopLibrary {
+                    reveal: true,
+                    library,
+                    count,
+                }
+                | InstructionAst::PlayerLookTopLibrary {
+                    reveal: true,
+                    library,
+                    count,
+                    ..
+                } => Some((library.as_str(), count.as_ref())),
+                _ => None,
+            }
+            && matches!(count, ValueExprAst::Const(1))
+            && let Some((req_bt, library_owner)) =
+                parse_look_top_library_owner(library, builder, in_trigger)
             && let InstructionAst::IfCondition {
                 condition,
                 then_body,
@@ -18457,7 +18887,9 @@ pub(super) fn lower_instruction_seq(
         {
             let mut inner_f = filter.as_ref().clone();
             inner_f.zone = None;
-            if let Ok(obj_filter) = lower_object_filter(&inner_f, vocabulary) {
+            let mut probe = builder.clone();
+            let target_ok = req_bt.is_none_or(|bt| probe.bind_target(bt).is_ok());
+            if target_ok && let Ok(obj_filter) = lower_object_filter(&inner_f, vocabulary) {
                 let else_opt = if i + 2 < ins.len()
                     && let InstructionAst::Otherwise(eb) = &ins[i + 2]
                 {
@@ -18467,7 +18899,9 @@ pub(super) fn lower_instruction_seq(
                 };
                 let then_b = lower_revealed_top_branch(
                     then_body,
-                    builder,
+                    &probe,
+                    library_owner,
+                    true,
                     vocabulary,
                     ids,
                     in_trigger,
@@ -18477,7 +18911,9 @@ pub(super) fn lower_instruction_seq(
                 let else_b = match else_opt {
                     Some(eb) => lower_revealed_top_branch(
                         eb,
-                        builder,
+                        &probe,
+                        library_owner,
+                        true,
                         vocabulary,
                         ids,
                         in_trigger,
@@ -18488,14 +18924,15 @@ pub(super) fn lower_instruction_seq(
                     None => Ok(None),
                 };
                 if let (Ok(then_b), Ok(else_b_opt)) = (then_b, else_b)
-                    && (then_b.target == BodyTarget::None || then_b.target == builder.target)
-                    && else_b_opt.as_ref().is_none_or(|eb| {
-                        eb.target == BodyTarget::None || eb.target == builder.target
-                    })
+                    && (then_b.target == BodyTarget::None || then_b.target == probe.target)
+                    && else_b_opt
+                        .as_ref()
+                        .is_none_or(|eb| eb.target == BodyTarget::None || eb.target == probe.target)
                 {
+                    *builder = probe;
                     builder.instructions.push(Instruction::LookTopChoose {
                         count: ValueExpr::literal(1),
-                        library_owner: ResolvingPlayer::Controller,
+                        library_owner,
                         filter: None,
                         reveal: true,
                         reveal_only: true,
@@ -18657,6 +19094,8 @@ pub(super) fn lower_instruction_seq(
                     let then_b = lower_revealed_top_branch(
                         then_slice,
                         builder,
+                        ResolvingPlayer::Controller,
+                        true,
                         vocabulary,
                         ids,
                         in_trigger,
@@ -18667,6 +19106,8 @@ pub(super) fn lower_instruction_seq(
                         Some(eb) => lower_revealed_top_branch(
                             eb,
                             builder,
+                            ResolvingPlayer::Controller,
+                            true,
                             vocabulary,
                             ids,
                             in_trigger,
@@ -18775,6 +19216,7 @@ pub(super) fn lower_instruction_seq(
             )
         {
             let mut sub = BodyBuilder::new();
+            sub.has_source = builder.has_source;
             if lower_instruction_seq(
                 inner,
                 &mut sub,
@@ -19918,60 +20360,15 @@ pub(super) fn lower_instruction_seq(
         } = &ins[i]
         {
             let lib_low = library.trim().to_ascii_lowercase();
-            let owner_opt = match lib_low.as_str() {
-                "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" => {
-                    Some((None, ResolvingPlayer::Controller))
-                }
-                "target player" | "target player's" | "targetplayer" => Some((
-                    Some(BodyTarget::SinglePlayer),
-                    ResolvingPlayer::TargetPlayer,
-                )),
-                "target opponent" | "target opponent's" | "targetopponent" => Some((
-                    Some(BodyTarget::SingleOpponent),
-                    ResolvingPlayer::TargetPlayer,
-                )),
-                "target"
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
-                {
-                    Some((None, ResolvingPlayer::TargetPlayer))
-                }
-                "their" | "their library"
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
-                {
-                    Some((None, ResolvingPlayer::TargetPlayer))
-                }
-                "their" | "their library" => Some((None, ResolvingPlayer::UniqueRelatedPlayer)),
-                "that player" | "that player's" | "thatplayer" | "its controller"
-                | "its controller's" | "itscontroller"
-                    if in_trigger || builder.target == BodyTarget::None =>
-                {
-                    Some((None, ResolvingPlayer::UniqueRelatedPlayer))
-                }
-                "its controller" | "its controller's" | "itscontroller"
-                    if builder.target != BodyTarget::None =>
-                {
-                    Some((None, ResolvingPlayer::TargetController))
-                }
-                "its owner" | "its owner's" | "itsowner" if builder.target != BodyTarget::None => {
-                    Some((None, ResolvingPlayer::TargetOwner))
-                }
-                "defending player" | "defending player's" | "defendingplayer" => {
-                    Some((None, ResolvingPlayer::DefendingPlayer))
-                }
-                "enchanted player" | "enchanted player's" | "enchantedplayer" => {
-                    Some((None, ResolvingPlayer::EnchantedPlayer))
-                }
-                "active player" | "active player's" | "activeplayer" => {
-                    Some((None, ResolvingPlayer::ActivePlayer))
-                }
-                _ => None,
-            };
+            let owner_opt = parse_look_top_library_owner(library, builder, in_trigger);
+            if owner_opt.is_none()
+                && matches!(
+                    lib_low.as_str(),
+                    "their" | "their library" | "that player" | "that player's" | "thatplayer"
+                )
+            {
+                return Err("oracle:unbound-that-player");
+            }
             if let Some((req_bt, library_owner)) = owner_opt {
                 if let Some(bt) = req_bt {
                     builder.bind_target(bt)?;
@@ -21077,6 +21474,60 @@ pub(super) fn lower_instruction_seq(
             i += if keep_types { 2 } else { 1 };
             continue;
         }
+        // Fuse ExtremeLifePlayerAction + recognized tie-breaker clause (Loxodon Peacekeeper,
+        // Celestial Convergence). Fail closed whenever the tie-breaker is absent or unrecognized.
+        if let InstructionAst::ExtremeLifePlayerAction { highest, action } = &ins[i] {
+            let Some(tie_mode) = ins
+                .get(i + 1)
+                .and_then(|next| parse_extreme_life_tie_mode(next, *highest))
+            else {
+                return Err("oracle:unsupported-extreme-life-tie");
+            };
+            if builder.target != BodyTarget::None {
+                return Err("oracle:unsupported-extreme-life-tie");
+            }
+            let sentinel_idx = builder.instructions.len();
+            builder.instructions.push(Instruction::ChooseValue {
+                chooser: ResolvingPlayer::Controller,
+                domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                    opponents_only: false,
+                },
+            });
+            lower_instruction(
+                action,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            if let Some(slot) = builder.instructions.get_mut(sentinel_idx) {
+                *slot = Instruction::SelectExtremeLifePlayer {
+                    highest: *highest,
+                    tie_mode,
+                };
+            }
+            i += 2;
+            continue;
+        }
+        // Unwrap Optional([DiscardUpTo { all: false, .. }]) (e.g. Fable of the Mirror-Breaker Ch. II)
+        // directly into DiscardUpToExt (min = 0) without emitting a redundant Yes/No prompt.
+        if let InstructionAst::Optional(inner) = &ins[i]
+            && let [d @ InstructionAst::DiscardUpTo { all: false, .. }] = inner.as_slice()
+        {
+            lower_instruction(
+                d,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            i += 1;
+            continue;
+        }
         lower_instruction(
             &ins[i],
             builder,
@@ -22036,7 +22487,94 @@ fn is_milled_zone_ref_predicate(pred: &spellwake_oracle_compiler::ast::FilterPre
         spellwake_oracle_compiler::ast::FilterPredicateAst::AffectedByPriorAction(
             spellwake_oracle_compiler::ast::PriorActionRefKind::PutIntoGraveyardThisWay,
         ) => true,
+        spellwake_oracle_compiler::ast::FilterPredicateAst::StateQualification(s) => matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "milled this way"
+                | "they milled this way"
+                | "that player milled this way"
+                | "you milled this way"
+        ),
         _ => false,
+    }
+}
+
+fn clean_milled_object_filter(
+    f: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<(bool, ObjectFilter)> {
+    let mut cleaned = f.clone();
+    let mut had_milled = cleaned.predicates.iter().any(is_milled_zone_ref_predicate);
+    cleaned
+        .predicates
+        .retain(|p| !is_milled_zone_ref_predicate(p));
+    for pred in &mut cleaned.predicates {
+        if let spellwake_oracle_compiler::ast::FilterPredicateAst::AnyOf(items) = pred {
+            for item in items.iter_mut() {
+                if item.predicates.iter().any(is_milled_zone_ref_predicate) {
+                    had_milled = true;
+                    item.predicates.retain(|p| !is_milled_zone_ref_predicate(p));
+                }
+                if matches!(
+                    item.zone,
+                    Some(
+                        ZoneFilter::YourGraveyard
+                            | ZoneFilter::ThatPlayerGraveyard
+                            | ZoneFilter::AnyGraveyard
+                    )
+                ) {
+                    item.zone = None;
+                }
+                if item.zone.is_some() || !item.extra_zones.is_empty() {
+                    return None;
+                }
+            }
+        }
+    }
+    if matches!(
+        cleaned.zone,
+        Some(
+            ZoneFilter::YourGraveyard | ZoneFilter::ThatPlayerGraveyard | ZoneFilter::AnyGraveyard
+        )
+    ) {
+        cleaned.zone = None;
+    }
+    if cleaned.zone.is_some() || !cleaned.extra_zones.is_empty() {
+        return None;
+    }
+    let obj = if is_unrestricted_filter(&cleaned) {
+        ObjectFilter::any()
+    } else {
+        lower_object_filter(&cleaned, vocabulary).ok()?
+    };
+    Some((had_milled, obj))
+}
+
+fn lower_milled_zone_ref_subject(
+    subject: &SubjectRefAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ObjectFilter> {
+    match subject {
+        SubjectRefAst::Group(f) => {
+            let (had_milled, obj) = clean_milled_object_filter(f, vocabulary)?;
+            had_milled.then_some(obj)
+        }
+        SubjectRefAst::Compound(items) => {
+            let [SubjectRefAst::Group(f1), SubjectRefAst::Group(f2)] = items.as_slice() else {
+                return None;
+            };
+            let (had1, obj1) = clean_milled_object_filter(f1, vocabulary)?;
+            let (had2, obj2) = clean_milled_object_filter(f2, vocabulary)?;
+            if !(had1 || had2) {
+                return None;
+            }
+            match (obj1, obj2) {
+                (ObjectFilter::Clause(c1), ObjectFilter::Clause(c2)) => {
+                    Some(ObjectFilter::Either(c1, c2))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -22090,7 +22628,14 @@ fn parse_milled_zone_ref_move(
         }
         InstructionAst::Optional(inner) => match inner.as_slice() {
             [single] => (None, true, false, single),
-            [InstructionAst::RevealCards { subject: rev_subj }, mv] => {
+            [
+                InstructionAst::RevealCards { subject: rev_subj }
+                | InstructionAst::RevealByPlayer {
+                    player: PlayerRefAst::You,
+                    subject: rev_subj,
+                },
+                mv,
+            ] => {
                 let (to_str, tapped_flag) = match mv {
                     InstructionAst::MoveZone { subject, to }
                         if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
@@ -22113,34 +22658,7 @@ fn parse_milled_zone_ref_move(
                     }
                     _ => return None,
                 };
-                let SubjectRefAst::Group(f) = rev_subj.as_ref() else {
-                    return None;
-                };
-                if !f.predicates.iter().any(is_milled_zone_ref_predicate) {
-                    return None;
-                }
-                let mut cleaned = f.as_ref().clone();
-                cleaned
-                    .predicates
-                    .retain(|p| !is_milled_zone_ref_predicate(p));
-                if matches!(
-                    cleaned.zone,
-                    Some(
-                        ZoneFilter::YourGraveyard
-                            | ZoneFilter::ThatPlayerGraveyard
-                            | ZoneFilter::AnyGraveyard
-                    )
-                ) {
-                    cleaned.zone = None;
-                }
-                if cleaned.zone.is_some() || !cleaned.extra_zones.is_empty() {
-                    return None;
-                }
-                let obj = if is_unrestricted_filter(&cleaned) {
-                    ObjectFilter::any()
-                } else {
-                    lower_object_filter(&cleaned, vocabulary).ok()?
-                };
+                let obj = lower_milled_zone_ref_subject(rev_subj, vocabulary)?;
                 let destination = parse_milled_move_dest(to_str, tapped_flag)?;
                 return Some(MilledZoneRefPick {
                     selector: None,
@@ -22205,32 +22723,7 @@ fn parse_milled_zone_ref_move(
         _ => return None,
     };
 
-    let SubjectRefAst::Group(f) = subject else {
-        return None;
-    };
-    if !f.predicates.iter().any(is_milled_zone_ref_predicate) {
-        return None;
-    }
-    let mut cleaned = f.as_ref().clone();
-    cleaned
-        .predicates
-        .retain(|p| !is_milled_zone_ref_predicate(p));
-    if matches!(
-        cleaned.zone,
-        Some(
-            ZoneFilter::YourGraveyard | ZoneFilter::ThatPlayerGraveyard | ZoneFilter::AnyGraveyard
-        )
-    ) {
-        cleaned.zone = None;
-    }
-    if cleaned.zone.is_some() || !cleaned.extra_zones.is_empty() {
-        return None;
-    }
-    let obj = if is_unrestricted_filter(&cleaned) {
-        ObjectFilter::any()
-    } else {
-        lower_object_filter(&cleaned, vocabulary).ok()?
-    };
+    let obj = lower_milled_zone_ref_subject(subject, vocabulary)?;
     let destination = parse_milled_move_dest(to_str, tapped_flag)?;
     let (min, max) = if any_number {
         (
@@ -22480,6 +22973,11 @@ fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::DiscardFiltered {
                 players, amount, ..
             }
+            | Instruction::DiscardUpToExt {
+                players,
+                max_count: amount,
+                ..
+            }
             | Instruction::Sacrifice {
                 players, amount, ..
             }
@@ -22598,7 +23096,8 @@ fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::OptionalEffect { chooser }
             | Instruction::OptionalSequence { chooser, .. }
             | Instruction::Clash { chooser }
-            | Instruction::ChooseValue { chooser, .. } => {
+            | Instruction::ChooseValue { chooser, .. }
+            | Instruction::AttachChoosingPermanent { chooser, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);
             }
             Instruction::ChooseOption { chooser, options } => {
@@ -22607,10 +23106,23 @@ fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut br.body.instructions);
                 }
             }
+            Instruction::AddMana(yield_kind) => {
+                if let Some(amount) = mana_yield_amount_mut(yield_kind) {
+                    rewrite_offer_chosen_to_loop_ve(amount);
+                }
+            }
+            Instruction::AddManaForPlayer { player, yield_kind } => {
+                rewrite_offer_chosen_to_loop_rp(player);
+                if let Some(amount) = mana_yield_amount_mut(yield_kind) {
+                    rewrite_offer_chosen_to_loop_ve(amount);
+                }
+            }
             Instruction::ShufflePlayerLibrary(rp)
             | Instruction::RevealPlayerHand(rp)
             | Instruction::DiscardOneAtRandom(rp)
             | Instruction::WinGame(rp)
+            | Instruction::SkipNextTurns { player: rp, .. }
+            | Instruction::AttachPermanentToPlayer { player: rp, .. }
             | Instruction::ExileLibraryTop { player: rp, .. }
             | Instruction::ExileCardsFromGraveyard { player: rp, .. }
             | Instruction::PutHandPermanentFiltered { player: rp, .. }
@@ -22740,9 +23252,14 @@ fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::PutNamedCounterOnTarget { amount, .. }
             | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::DealDamageToAnnouncedTargets { amount, .. }
+            | Instruction::Earthbend { amount }
             | Instruction::BindResolutionX(amount) => {
                 rewrite_offer_chosen_to_loop_ve(amount);
             }
+            Instruction::ReturnEarthbentCard
+            | Instruction::RegenerateSubject { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets => {}
             Instruction::RemoveCountersFromSubject {
                 amount: Some(amt), ..
             } => {
@@ -22770,6 +23287,7 @@ fn lower_offer_loop_player_sub_body(
         return Err("oracle:empty-loop-body");
     }
     let mut sub = BodyBuilder::with_trigger_hint(outer_builder.trigger_hint);
+    sub.has_source = outer_builder.has_source;
     sub.last_group_filter = outer_builder.last_group_filter;
     sub.instructions.push(Instruction::ChooseValue {
         chooser: ResolvingPlayer::Controller,
@@ -22799,7 +23317,7 @@ fn lower_offer_loop_player_sub_body(
             Instruction::ChooseValue {
                 domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                 ..
-            }
+            } | Instruction::SelectExtremeLifePlayer { .. }
         )
     }) {
         return Err("oracle:loop-body-chooses-player");
