@@ -3724,7 +3724,7 @@ mod tests {
                 "Primal Prayers",
                 "Enchantment",
                 "You may cast creature spells with mana value 3 or less by paying {E} rather than paying their mana costs. If you cast a spell this way, you may cast it as though it had flash.",
-                "\"flash\"",
+                "\"as_though_flash\":true",
             ),
             (
                 "Disciple of Caelus Nin",
@@ -4102,6 +4102,273 @@ mod tests {
             assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
             for tok in *expected {
                 assert!(json.contains(tok), "{name} missing {tok}: {json}");
+            }
+        }
+    }
+
+    #[test]
+    fn pass_e11_lossless_ast_hardening_regressions() {
+        let members: Vec<String> = [
+            "Human",
+            "Soldier",
+            "Djinn",
+            "Ooze",
+            "Demon",
+            "Orc",
+            "Warrior",
+            "Rogue",
+            "Goblin",
+            "Zombie",
+            "Dragon",
+            "Elf",
+            "Beast",
+            "Dinosaur",
+            "Fungus",
+            "Spirit",
+            "Angel",
+            "Knight",
+            "Wizard",
+            "Wall",
+            "Phyrexian",
+            "Giant",
+            "Shapeshifter",
+            "Avatar",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e11",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        type E11Case<'a> = (&'a str, &'a str, &'a str, &'a [&'a str], &'a [&'a str]);
+        let cases: &[E11Case<'_>] = &[
+            // Wave 5: Opening-hand reveal vs Exert-on-attack split
+            (
+                "Chancellor of the Forge",
+                "Creature \u{2014} Phyrexian Giant",
+                "You may reveal this card from your opening hand. If you do, at the beginning of the first upkeep, create a 1/1 red Phyrexian Goblin creature token with haste.",
+                &["\"OpeningHandRevealAction\""],
+                &["\"FollowUp\""],
+            ),
+            (
+                "Nef-Crop Entangler",
+                "Creature \u{2014} Zombie Warrior",
+                "Trample\nYou may exert Nef-Crop Entangler as it attacks. When you do, it gets +1/+2 until end of turn.",
+                &["\"ExertOnAttackAction\""],
+                &["\"FollowUp\""],
+            ),
+            // Wave 5: Most common permanent color (Sulam Djinn)
+            (
+                "Sulam Djinn",
+                "Creature \u{2014} Djinn",
+                "Trample\nSulam Djinn gets -2/-2 as long as green is the most common color among all permanents or is tied for most common.",
+                &["\"MostCommonPermanentColor\"", "\"or_tied\":true"],
+                &["\"ControlsGreatestStat\""],
+            ),
+            // Wave 5: During your end step & Once during each of your turns
+            (
+                "End Step Static Test",
+                "Enchantment",
+                "During your end step, creatures you control get +1/+1.\nOnce during each of your turns, you may cast a creature spell from your graveyard.",
+                &["\"DuringStep\"", "\"EndStep\"", "\"OnceDuringYourTurn\""],
+                &["\"IsYourTurn\""],
+            ),
+            // Wave 6: Modal keyword choice (Butcher of the Horde)
+            (
+                "Butcher of the Horde",
+                "Creature \u{2014} Demon",
+                "Flying\nSacrifice another creature: Butcher of the Horde gains your choice of vigilance, lifelink, or haste until end of turn.",
+                &["\"Choice\"", "\"vigilance\"", "\"lifelink\"", "\"haste\""],
+                &[],
+            ),
+            // Wave 6: Bane Alley Broker face_down: true
+            (
+                "Bane Alley Broker",
+                "Creature \u{2014} Human Rogue",
+                "{T}: Draw a card, then exile a card from your hand face down.",
+                &["\"Exile\"", "\"face_down\":true"],
+                &["\"face_down\":false"],
+            ),
+            // Wave 6: Release to the Wind subject-preserving RemainsExiled
+            (
+                "Release to the Wind",
+                "Instant",
+                "Exile target nonland permanent. For as long as that card remains exiled, its owner may cast it without paying its mana cost.",
+                &["\"SubjectRemainsExiled\"", "\"that card\""],
+                &["\"RemainsExiled\""],
+            ),
+            // Wave 6: Hinder preserves instead_of
+            (
+                "Hinder",
+                "Instant",
+                "Counter target spell. If that spell is countered this way, put that card on your choice of the top or bottom of its owner's library instead of into that player's graveyard.",
+                &[
+                    "\"ReplaceEffectWith\"",
+                    "\"instead_of\":\"into that player's graveyard\"",
+                ],
+                &[],
+            ),
+            // Wave 6: Volrath's Laboratory chosen color & type token
+            (
+                "Volrath's Laboratory",
+                "Artifact",
+                "As Volrath's Laboratory enters, choose a color and a creature type.\n{5}, {T}: Create a 2/2 creature token of the chosen color and type.",
+                &[
+                    "\"CreateQualifiedToken\"",
+                    "\"chosen_color\":true",
+                    "\"chosen_type\":true",
+                ],
+                &[],
+            ),
+            // Wave 6: Dragon's Approach SelfName (not MATCHES_NAMED_AGENDA)
+            (
+                "Dragon's Approach",
+                "Sorcery",
+                "Dragon's Approach deals 3 damage to each opponent. You may exile Dragon's Approach and four cards named Dragon's Approach from your graveyard.",
+                &["\"SelfName\""],
+                &[],
+            ),
+            // Wave 7: Essence of the Wild & Infinite Reflection OthersEnterAsCopy
+            (
+                "Essence of the Wild",
+                "Creature \u{2014} Avatar",
+                "Creatures you control enter as a copy of Essence of the Wild.",
+                &["\"OthersEnterAsCopy\""],
+                &["\"EntersAsCopy\""],
+            ),
+            (
+                "Infinite Reflection",
+                "Enchantment \u{2014} Aura",
+                "Enchant creature\nNontoken creatures you control enter as a copy of enchanted creature.",
+                &["\"OthersEnterAsCopy\""],
+                &["\"EntersAsCopy\""],
+            ),
+            // Wave 7: EntersAsCopyModified (tapped / until end of turn)
+            (
+                "Tapped Clone Test",
+                "Creature \u{2014} Shapeshifter",
+                "You may have Tapped Clone Test enter tapped as a copy of any creature on the battlefield.",
+                &["\"EntersAsCopyModified\"", "\"enters_tapped\":true"],
+                &[],
+            ),
+            // Wave 7: As ~ becomes attached to a creature -> AsBecomesAttachedAction
+            (
+                "Attach Choice Test",
+                "Enchantment \u{2014} Aura",
+                "Enchant creature\nAs Attach Choice Test becomes attached to a creature, choose a color.",
+                &["\"AsBecomesAttachedAction\""],
+                &["\"AsEntersAction\""],
+            ),
+            // Wave 7: Green Slime AbilityCounteredThisWay (not NotManaAbility)
+            (
+                "Green Slime",
+                "Creature \u{2014} Ooze",
+                "Flash\nWhen Green Slime enters, counter target activated or triggered ability from an artifact or enchantment source. If a permanent's ability is countered this way, destroy that permanent.",
+                &["\"AbilityCounteredThisWay\"", "\"permanent_only\":true"],
+                &["\"NotManaAbility\""],
+            ),
+            // Wave 7: Excess damage trigger sets excess_only: true
+            (
+                "Excess Damage Test",
+                "Enchantment",
+                "Whenever excess damage is dealt to a creature an opponent controls, draw a card.",
+                &["\"excess_only\":true"],
+                &["\"excess_only\":false"],
+            ),
+            // Wave 7: Not that player's turn uses IsPlayersTurn(ThatPlayer), not IsYourTurn
+            (
+                "Not Their Turn Test",
+                "Instant",
+                "If it's not that player's turn, draw a card.",
+                &["\"IsPlayersTurn\":\"ThatPlayer\""],
+                &["\"IsYourTurn\""],
+            ),
+            // Wave 7: It's not a creature uses MatchesFilter, not ControlsCount
+            (
+                "Not Filter Test",
+                "Instant",
+                "If it isn't a creature, draw a card.",
+                &["\"MatchesFilter\""],
+                &["\"ControlsCount\""],
+            ),
+            // Wave 7: Opponent entered / left battlefield / filtered morbid use ZoneChangeThisTurn
+            (
+                "Zone Change Cond Test",
+                "Instant",
+                "If a creature left the battlefield this turn, draw a card.",
+                &["\"ZoneChangeThisTurn\""],
+                &["\"EnteredUnderYourControlThisTurn\""],
+            ),
+            // Wave 7: Shuffle library trigger does not emit LibrarySearched
+            (
+                "Shuffle Trigger Test",
+                "Enchantment",
+                "Whenever a player shuffles their library, you gain 1 life.",
+                &["\"shuffle_library\""],
+                &["\"LibrarySearched\""],
+            ),
+            // Wave 7: You cast your commander sets IS_COMMANDER flag (1 << 24 = 16777216)
+            (
+                "Commander Cast Trigger Test",
+                "Enchantment",
+                "Whenever you cast your commander, draw a card.",
+                &["\"flags\":16777216"],
+                &["\"spell\":null"],
+            ),
+            // Pass E11: Flash cast permission with additional non-mana cost or behold condition
+            (
+                "Tegwyll's Scouring",
+                "Sorcery",
+                "You may cast Tegwyll's Scouring as though it had flash by tapping three untapped creatures you control with flying in addition to paying its other costs.\nDestroy all creatures.",
+                &[
+                    "\"GrantModifiedCastPermission\"",
+                    "\"as_though_flash\":true",
+                    "tapping three untapped creatures you control with flying",
+                ],
+                &[],
+            ),
+            (
+                "Molten Exhale",
+                "Sorcery",
+                "You may cast Molten Exhale as though it had flash if you behold a Dragon as an additional cost to cast it.\nMolten Exhale deals 4 damage to target creature.",
+                &[
+                    "\"GrantModifiedCastPermission\"",
+                    "\"as_though_flash\":true",
+                    "if you behold a dragon as an additional cost to cast it",
+                ],
+                &[],
+            ),
+        ];
+
+        for (name, tl, ot, must_have, must_not_have) in cases {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Pass E11 card {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(!json.contains("\"StructuredRule\""), "{name}: {json}");
+            assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
+            for tok in *must_have {
+                assert!(json.contains(tok), "{name} missing {tok}: {json}");
+            }
+            for bad in *must_not_have {
+                assert!(!json.contains(bad), "{name} must NOT contain {bad}: {json}");
             }
         }
     }

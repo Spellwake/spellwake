@@ -2,17 +2,18 @@
 
 use crate::ast::{
     AltCastCostAst, CardTypeMask, CompareOp, ConditionAst, ControllerRelation, CostAtomAst,
-    CountLimitAst, DelayedStepScope, DurationAst, ExchangeKind, GameMarker, InstructionAst,
-    InteractiveChoiceKind, NameFilterAst, ObjectFilterAst, ObjectFilterFlags, ParseFailureAst,
-    PileRefAst, PlayerRefAst, ReplacementEffectAst, Rounding, SearchModifierAst, StatKind,
-    StaticAbilityAst, SubjectRefAst, TriggerEventAst, TriggerSpecAst, TurnStepAst, ValueExprAst,
-    ZoneFilter,
+    CountLimitAst, DelayedStepScope, DurationAst, EntersAsCopyModifiedAst, ExchangeKind,
+    GameMarker, InstructionAst, InteractiveChoiceKind, ModifiedCastPermissionAst, NameFilterAst,
+    ObjectFilterAst, ObjectFilterFlags, ParseFailureAst, PileRefAst, PlayerRefAst,
+    QualifiedTokenCreationAst, ReplaceEffectWithAst, ReplacementEffectAst, Rounding,
+    SearchModifierAst, StatKind, StaticAbilityAst, SubjectRefAst, TriggerEventAst, TriggerSpecAst,
+    TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use crate::compile_granted_ability;
 use crate::filter::{
-    parse_condition, parse_for_each_value_expr, parse_keyword_list, parse_mana_spec,
-    parse_object_filter, parse_player_ref, parse_subject_or_target, parse_token_creation,
-    parse_value_expr,
+    RichTokenCreationAst, parse_condition, parse_for_each_value_expr, parse_keyword_list,
+    parse_mana_spec, parse_object_filter, parse_player_ref, parse_subject_or_target,
+    parse_token_creation_rich, parse_value_expr,
 };
 use crate::preprocess::{
     EM_DASH, count_symbol_sequence, is_mana_sequence, is_physical_tabletop_clause, parse_base_pt,
@@ -1798,36 +1799,57 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
             action: "become_monarch".to_string(),
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" activates a loyalty ability")
-        .or_else(|| blow.strip_suffix(" activates an ability that isn't a mana ability"))
+    if let Some(who_raw) = blow.strip_suffix(" activates a loyalty ability")
         && let Some(player) = parse_player_ref(who_raw)
     {
-        return Ok(vec![TriggerEventAst::AbilityActivated {
+        return Ok(vec![TriggerEventAst::QualifiedAbilityActivated {
             player,
             source_filter: Box::new(crate::ast::ObjectFilterAst {
                 any_permanent: true,
                 ..Default::default()
             }),
+            loyalty_only: true,
+            nonmana_only: false,
+        }]);
+    }
+    if let Some(who_raw) = blow.strip_suffix(" activates an ability that isn't a mana ability")
+        && let Some(player) = parse_player_ref(who_raw)
+    {
+        return Ok(vec![TriggerEventAst::QualifiedAbilityActivated {
+            player,
+            source_filter: Box::new(crate::ast::ObjectFilterAst {
+                any_permanent: true,
+                ..Default::default()
+            }),
+            loyalty_only: false,
+            nonmana_only: true,
         }]);
     }
     if let Some((who_raw, flt_raw)) = blow
         .split_once(" activates an ability of ")
         .or_else(|| blow.split_once(" activate an ability of "))
-        && let (Some(player), Ok(flt)) = (
-            parse_player_ref(who_raw),
-            parse_object_filter(
-                flt_raw
-                    .strip_suffix(" that isn't a mana ability")
-                    .unwrap_or(flt_raw),
-                vocab,
-            ),
-        )
     {
-        return Ok(vec![TriggerEventAst::AbilityActivated {
-            player,
-            source_filter: Box::new(flt),
-        }]);
+        let (flt_clean, nonmana_only) = match flt_raw.strip_suffix(" that isn't a mana ability") {
+            Some(c) => (c, true),
+            None => (flt_raw, false),
+        };
+        if let (Some(player), Ok(flt)) = (
+            parse_player_ref(who_raw),
+            parse_object_filter(flt_clean, vocab),
+        ) {
+            if nonmana_only {
+                return Ok(vec![TriggerEventAst::QualifiedAbilityActivated {
+                    player,
+                    source_filter: Box::new(flt),
+                    loyalty_only: false,
+                    nonmana_only: true,
+                }]);
+            }
+            return Ok(vec![TriggerEventAst::AbilityActivated {
+                player,
+                source_filter: Box::new(flt),
+            }]);
+        }
     }
     if blow == "a spell or ability is put onto the stack" {
         return Ok(vec![TriggerEventAst::SpellOrAbilityOnStack]);
@@ -1919,14 +1941,22 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         && let Ok(subj) =
             parse_subject_or_target(after.strip_suffix(" this way").unwrap_or(after), vocab)
     {
-        return Ok(vec![TriggerEventAst::DamageDealt {
+        let ev = TriggerEventAst::DamageDealt {
             combat_only: false,
             noncombat_only: false,
             source: None,
             recipient: Some(Box::new(subj)),
             grouped: false,
-            excess_only: false,
-        }]);
+            excess_only: true,
+        };
+        if after.ends_with(" this way") {
+            return Ok(vec![TriggerEventAst::QualifiedTrigger {
+                inner: Box::new(ev),
+                first_time_each_turn: false,
+                timing: Some("this_way".to_string()),
+            }]);
+        }
+        return Ok(vec![ev]);
     }
     if low.starts_with("when there are no ")
         && let Ok(cond) = parse_condition(&low[5..], vocab)
@@ -2288,17 +2318,54 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
             include_copy: false,
         }]);
     }
-    if blow == "you cast a spell other than your first spell each turn"
-        || blow == "you cast a spell during your turn"
-        || blow == "you cast a spell during combat"
-        || blow == "you cast your first spell with {x} in its mana cost each turn"
-    {
+    if blow == "you cast a spell other than your first spell each turn" {
+        return Ok(vec![TriggerEventAst::QualifiedTrigger {
+            inner: Box::new(TriggerEventAst::SpellCast {
+                caster: PlayerRefAst::You,
+                spell: None,
+                self_spell: false,
+                targets: None,
+                nth_each_turn: None,
+                include_copy: false,
+            }),
+            first_time_each_turn: false,
+            timing: Some("other_than_first_each_turn".to_string()),
+        }]);
+    }
+    if blow == "you cast a spell during your turn" || blow == "you cast a spell during combat" {
+        return Ok(vec![TriggerEventAst::QualifiedTrigger {
+            inner: Box::new(TriggerEventAst::SpellCast {
+                caster: PlayerRefAst::You,
+                spell: None,
+                self_spell: false,
+                targets: None,
+                nth_each_turn: None,
+                include_copy: false,
+            }),
+            first_time_each_turn: false,
+            timing: Some(if blow.ends_with("during combat") {
+                "during_combat".to_string()
+            } else {
+                "during_your_turn".to_string()
+            }),
+        }]);
+    }
+    if blow == "you cast your first spell with {x} in its mana cost each turn" {
+        let mut x_flt = crate::ast::ObjectFilterAst {
+            any_spell: true,
+            ..Default::default()
+        };
+        x_flt
+            .predicates
+            .push(crate::ast::FilterPredicateAst::HasManaSymbolInCost(
+                "{x}".to_string(),
+            ));
         return Ok(vec![TriggerEventAst::SpellCast {
             caster: PlayerRefAst::You,
-            spell: None,
+            spell: Some(Box::new(x_flt)),
             self_spell: false,
             targets: None,
-            nth_each_turn: None,
+            nth_each_turn: Some(1),
             include_copy: false,
         }]);
     }
@@ -2554,7 +2621,7 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
                 source: None,
                 recipient: Some(Box::new(tgt)),
                 grouped: false,
-                excess_only: false,
+                excess_only: suf.contains("excess "),
             }]);
         }
     }
@@ -3618,8 +3685,13 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
     if blow == "a spell or ability causes a player to shuffle their library"
         || blow == "a player shuffles their library"
     {
-        return Ok(vec![TriggerEventAst::LibrarySearched {
+        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
             player: PlayerRefAst::AnyPlayer,
+            action: if blow.starts_with("a spell or ability") {
+                "spell_or_ability_shuffle_library".to_string()
+            } else {
+                "shuffle_library".to_string()
+            },
         }]);
     }
     if blow == "one or more of your opponents are dealt combat damage"
@@ -3680,17 +3752,27 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         }]);
     }
 
-    // Peel trailing temporal qualifier (" this turn" / " this way" / " during your turn" / " during combat" / " for the first time each turn") and retry
-    if let Some(stripped) = blow
-        .strip_suffix(" for the first time each turn")
-        .or_else(|| blow.strip_suffix(" during your turn"))
-        .or_else(|| blow.strip_suffix(" during their turn"))
-        .or_else(|| blow.strip_suffix(" during combat"))
-        .or_else(|| blow.strip_suffix(" this turn"))
-        .or_else(|| blow.strip_suffix(" this way"))
-        && let Ok(evs) = parse_trigger_events(&format!("whenever {stripped}"), vocab)
-    {
-        return Ok(evs);
+    // Peel trailing temporal/frequency qualifier and preserve it via `QualifiedTrigger`
+    for (suf, first_time, timing_tag) in [
+        (" for the first time each turn", true, None),
+        (" during your turn", false, Some("during_your_turn")),
+        (" during their turn", false, Some("during_their_turn")),
+        (" during combat", false, Some("during_combat")),
+        (" this turn", false, Some("this_turn")),
+        (" this way", false, Some("this_way")),
+    ] {
+        if let Some(stripped) = blow.strip_suffix(suf)
+            && let Ok(evs) = parse_trigger_events(&format!("whenever {stripped}"), vocab)
+        {
+            return Ok(evs
+                .into_iter()
+                .map(|ev| TriggerEventAst::QualifiedTrigger {
+                    inner: Box::new(ev),
+                    first_time_each_turn: first_time,
+                    timing: timing_tag.map(str::to_string),
+                })
+                .collect());
+        }
     }
 
     // Pass Q orthogonal trigger events:
@@ -3724,16 +3806,27 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         }]);
     }
     if let Some(flt_raw) = blow.strip_prefix("you play ")
-        && parse_object_filter(flt_raw, vocab).is_ok()
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::LandPlayed {
+        if flt_raw.trim() == "a land" || flt_raw.trim() == "land" {
+            return Ok(vec![TriggerEventAst::LandPlayed {
+                player: PlayerRefAst::You,
+            }]);
+        }
+        return Ok(vec![TriggerEventAst::CardPlayed {
             player: PlayerRefAst::You,
+            filter: Box::new(flt),
         }]);
     }
     if blow == "you cast your commander" {
+        let cmdr_flt = crate::ast::ObjectFilterAst {
+            any_spell: true,
+            flags: crate::ast::ObjectFilterFlags::IS_COMMANDER,
+            ..Default::default()
+        };
         return Ok(vec![TriggerEventAst::SpellCast {
             caster: PlayerRefAst::You,
-            spell: None,
+            spell: Some(Box::new(cmdr_flt)),
             self_spell: false,
             targets: None,
             nth_each_turn: None,
@@ -4268,13 +4361,17 @@ fn parse_instead_body(instead_raw: &str, vocab: &Vocabulary) -> Option<Vec<Instr
     if fails.is_empty() && !ins.is_empty() {
         return Some(ins);
     }
-    // Typed CR 614 replacement action patterns (multipliers, additions, skips, damage redirection, exile/enters-tapped)
+    // Strictly lossless CR 614 replacement action patterns: never fabricate placeholder
+    // instructions that alter multipliers, steps, amounts, plural targets, or drop riders.
+    // Complex replacements remain faithfully in `EventInstead::instead` with `instead_body: None`.
     let clow = cleaned.to_ascii_lowercase();
-    if clow.contains("double that damage")
-        || clow.contains("twice that much damage")
-        || clow.contains("triple that damage")
-        || clow.contains("that much damage plus ")
-        || clow.contains("that much damage minus ")
+    let has_rider = clow.contains(" and ") || clow.contains(", ") || clow.contains(" then ");
+    if !has_rider
+        && (clow == "double that damage"
+            || clow == "it deals double that damage"
+            || clow == "that source deals double that damage"
+            || clow == "it deals twice that much damage"
+            || clow == "that source deals twice that much damage")
     {
         return Some(vec![InstructionAst::DoubleStatOrCounters {
             subject: Box::new(SubjectRefAst::Anaphora("damage".to_string())),
@@ -4282,67 +4379,48 @@ fn parse_instead_body(instead_raw: &str, vocab: &Vocabulary) -> Option<Vec<Instr
             duration: DurationAst::Instant,
         }]);
     }
-    if clow.contains("twice that many ")
-        || clow.contains("twice that much ")
-        || clow.contains("that many plus one")
-        || clow.contains("plus one ")
-        || clow.contains("an additional ")
-    {
-        return Some(vec![InstructionAst::DoubleStatOrCounters {
-            subject: Box::new(SubjectRefAst::Anaphora("replacement_event".to_string())),
-            kind: "modified_count".to_string(),
-            duration: DurationAst::Instant,
-        }]);
-    }
-    if clow.starts_with("skip ") || clow.contains(" skips ") || clow.contains(" skip ") {
-        return Some(vec![InstructionAst::SkipNextStep {
-            player: PlayerRefAst::ThatPlayer,
-            step: TurnStepAst::DrawStep,
-        }]);
-    }
-    if clow.contains("prevent that damage") || clow.contains("prevent all of that damage") {
+    if !has_rider && (clow == "prevent that damage" || clow == "prevent all of that damage") {
         return Some(vec![InstructionAst::PreventAllDamage {
             combat_only: false,
             target: None,
             duration: DurationAst::Instant,
         }]);
     }
-    if clow.contains("exile it") || clow.contains("exile them") || clow.contains("exile that card")
+    if !has_rider
+        && matches!(
+            clow.as_str(),
+            "exile it" | "exile them" | "exile that card" | "exile that permanent"
+        )
     {
+        let anaphora = clow.strip_prefix("exile ").unwrap_or("it");
         return Some(vec![InstructionAst::Exile {
             actor: None,
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            subject: Box::new(SubjectRefAst::Anaphora(anaphora.to_string())),
             random: false,
             face_down: false,
             into_pile: false,
         }]);
     }
-    if clow.contains("enters tapped") || clow.contains("enter tapped") {
-        return Some(vec![InstructionAst::TapPermanent {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            any_number: false,
-        }]);
-    }
-    if clow.contains("dealt to ") || clow.contains("deal that damage to ") {
-        return Some(vec![InstructionAst::RedirectDamage {
-            amount: Box::new(ValueExprAst::PriorResult),
-            from: Box::new(SubjectRefAst::Anaphora("original_target".to_string())),
-            to: Box::new(SubjectRefAst::Anaphora("replacement_target".to_string())),
-            source_choice: None,
-            duration: None,
-        }]);
-    }
-    if clow.contains("put it on ")
-        || clow.contains("put it into ")
-        || clow.contains("put it onto ")
-        || clow.contains("puts it on ")
-        || clow.contains("puts it into ")
-        || clow.contains("puts it onto ")
-    {
-        return Some(vec![InstructionAst::MoveZone {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            to: clow,
-        }]);
+    if !has_rider {
+        let step_opt = if clow.ends_with(" draw step") {
+            Some(TurnStepAst::DrawStep)
+        } else if clow.ends_with(" untap step") {
+            Some(TurnStepAst::UntapStep)
+        } else if clow.ends_with(" upkeep") || clow.ends_with(" upkeep step") {
+            Some(TurnStepAst::Upkeep)
+        } else {
+            None
+        };
+        if let Some(step) = step_opt
+            && (clow.starts_with("skip ") || clow.contains(" skips ") || clow.contains(" skip "))
+        {
+            let player = if clow.starts_with("skip your ") || clow.starts_with("you skip ") {
+                PlayerRefAst::You
+            } else {
+                PlayerRefAst::ThatPlayer
+            };
+            return Some(vec![InstructionAst::SkipNextStep { player, step }]);
+        }
     }
     None
 }
@@ -5442,11 +5520,14 @@ pub fn parse_atomic_effect(
         {
             let kws = parse_keyword_list(kw_raw, vocab).unwrap_or_else(|| vec![kw_raw.to_string()]);
             return Ok(vec![InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::GrantKeywords {
-                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                    keywords: kws,
-                    condition: None,
-                    paired_rule: None,
+                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                    filter: Box::new(flt.clone()),
+                    effect: Box::new(StaticAbilityAst::GrantKeywords {
+                        subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                        keywords: kws,
+                        condition: None,
+                        paired_rule: None,
+                    }),
                 }),
                 duration: DurationAst::UntilEndOfTurn,
             }]);
@@ -5456,11 +5537,14 @@ pub fn parse_atomic_effect(
             || tail == "can't be countered"
         {
             return Ok(vec![InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::PlayOrCastPermission {
-                    cast_only: true,
-                    filter: Box::new(flt),
-                    permission: tail.to_string(),
-                    condition: None,
+                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                    filter: Box::new(flt.clone()),
+                    effect: Box::new(StaticAbilityAst::PlayOrCastPermission {
+                        cast_only: true,
+                        filter: Box::new(flt),
+                        permission: tail.to_string(),
+                        condition: None,
+                    }),
                 }),
                 duration: DurationAst::UntilEndOfTurn,
             }]);
@@ -5830,13 +5914,20 @@ pub fn parse_atomic_effect(
             .split_once(", exile ")
             .map_or(rest, |(before, _)| before)
             .trim();
+        let exile_anaphora = if rest.contains(", exile them ") {
+            "them"
+        } else if rest.contains(", exile that card ") {
+            "that card"
+        } else {
+            "it"
+        };
         return Ok(vec![InstructionAst::OneShotReplacement {
             subject: subj_raw.trim().to_string(),
             event: ev.to_string(),
             replace_with: "exile".to_string(),
             instead_body: Some(vec![InstructionAst::Exile {
                 actor: None,
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                subject: Box::new(SubjectRefAst::Anaphora(exile_anaphora.to_string())),
                 random: false,
                 face_down: false,
                 into_pile: false,
@@ -6144,11 +6235,13 @@ pub fn parse_atomic_effect(
         }]);
     }
     if low.starts_with("you may activate ")
-        && low.contains("loyalty abilities of ")
-        && low.ends_with(" twice this turn rather than only once")
+        && let Some((_, after_lo)) = low.split_once("loyalty abilities of ")
+        && let Some(subj_raw) = after_lo.strip_suffix(" twice this turn rather than only once")
     {
+        let subject = parse_subject_or_target(subj_raw.trim(), vocab)
+            .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
         return Ok(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: Box::new(subject),
             rule: "activate_loyalty_twice".to_string(),
             duration: DurationAst::UntilEndOfTurn,
         }]);
@@ -6358,7 +6451,13 @@ pub fn parse_atomic_effect(
             "until the beginning of your next upkeep, ",
             DurationAst::UntilYourNextTurn,
         ),
-        ("until your next end step, ", DurationAst::UntilYourNextTurn),
+        (
+            "until your next end step, ",
+            DurationAst::ForAsLongAs(Box::new(ConditionAst::Marker(GameMarker::UntilStep {
+                player: PlayerRefAst::You,
+                step: TurnStepAst::EndStep,
+            }))),
+        ),
         ("until your next upkeep, ", DurationAst::UntilYourNextTurn),
         ("until your next turn, ", DurationAst::UntilYourNextTurn),
         ("during your next turn, ", DurationAst::UntilEndOfNextTurn),
@@ -6374,11 +6473,17 @@ pub fn parse_atomic_effect(
     ] {
         if low.starts_with(pref) {
             let rest = &s[pref.len()..];
-            if let Ok(mut inner) = parse_atomic_effect(rest, vocab) {
-                for ins in &mut inner {
-                    match ins {
+            if let Ok(inner) = parse_atomic_effect(rest, vocab) {
+                let mut wrapped = Vec::with_capacity(inner.len());
+                for mut ins in inner {
+                    match &mut ins {
                         InstructionAst::GrantCastPermission { duration, .. } => {
                             *duration = format!("{dur:?}");
+                            wrapped.push(ins);
+                        }
+                        InstructionAst::GrantModifiedCastPermission(perm) => {
+                            perm.duration = format!("{dur:?}");
+                            wrapped.push(ins);
                         }
                         InstructionAst::TemporaryTrigger { duration, .. }
                         | InstructionAst::TemporaryReplacement { duration, .. }
@@ -6389,13 +6494,20 @@ pub fn parse_atomic_effect(
                         | InstructionAst::RemoveAllAbilities { duration, .. }
                         | InstructionAst::ModifyPT { duration, .. }
                         | InstructionAst::AnimateOrSetBasePT { duration, .. }
-                        | InstructionAst::CombatRuleMod { duration, .. } => {
+                        | InstructionAst::CombatRuleMod { duration, .. }
+                        | InstructionAst::ForcedBlockByFilter { duration, .. } => {
                             *duration = dur.clone();
+                            wrapped.push(ins);
                         }
-                        _ => {}
+                        _ => {
+                            wrapped.push(InstructionAst::ScopedDuration {
+                                duration: dur.clone(),
+                                body: vec![ins],
+                            });
+                        }
                     }
                 }
-                return Ok(inner);
+                return Ok(wrapped);
             }
             if let Ok(sr) = parse_static_or_replacement(rest, vocab) {
                 return Ok(vec![match sr {
@@ -8071,6 +8183,25 @@ pub fn parse_atomic_effect(
         && let Some((who, tok_raw)) = split_leading_player_verb(s, "create", "creates")
     {
         let tok_low = tok_raw.to_ascii_lowercase();
+        let make_tok_ins = |controller: PlayerRefAst, rich: RichTokenCreationAst| {
+            if rich.is_plain() {
+                InstructionAst::CreateToken {
+                    controller,
+                    token: rich.token,
+                }
+            } else {
+                InstructionAst::CreateQualifiedToken(Box::new(QualifiedTokenCreationAst {
+                    controller,
+                    token: rich.token,
+                    blocking: rich.blocking,
+                    dynamic_power: rich.dynamic_power.map(Box::new),
+                    dynamic_toughness: rich.dynamic_toughness.map(Box::new),
+                    dynamic_pt_text: rich.dynamic_pt_text,
+                    chosen_color: rich.chosen_color,
+                    chosen_type: rich.chosen_type,
+                }))
+            }
+        };
         if let Some(choice_raw) = tok_low
             .strip_prefix("your choice of ")
             .or_else(|| tok_low.strip_prefix("their choice of "))
@@ -8082,26 +8213,17 @@ pub fn parse_atomic_effect(
                 let p = p.strip_prefix("or ").unwrap_or(p).trim();
                 if let Some((a, b)) = p.split_once(" or ") {
                     if let (Ok(ta), Ok(tb)) = (
-                        parse_token_creation(a.trim(), vocab),
-                        parse_token_creation(b.trim(), vocab),
+                        parse_token_creation_rich(a.trim(), vocab),
+                        parse_token_creation_rich(b.trim(), vocab),
                     ) {
-                        branches.push(vec![InstructionAst::CreateToken {
-                            controller: who,
-                            token: ta,
-                        }]);
-                        branches.push(vec![InstructionAst::CreateToken {
-                            controller: who,
-                            token: tb,
-                        }]);
+                        branches.push(vec![make_tok_ins(who, ta)]);
+                        branches.push(vec![make_tok_ins(who, tb)]);
                     } else {
                         ok = false;
                         break;
                     }
-                } else if let Ok(tok) = parse_token_creation(p, vocab) {
-                    branches.push(vec![InstructionAst::CreateToken {
-                        controller: who,
-                        token: tok,
-                    }]);
+                } else if let Ok(tok) = parse_token_creation_rich(p, vocab) {
+                    branches.push(vec![make_tok_ins(who, tok)]);
                 } else {
                     ok = false;
                     break;
@@ -8111,11 +8233,8 @@ pub fn parse_atomic_effect(
                 return Ok(vec![InstructionAst::Choice(branches)]);
             }
         }
-        if let Ok(tok) = parse_token_creation(tok_raw, vocab) {
-            return Ok(vec![InstructionAst::CreateToken {
-                controller: who,
-                token: tok,
-            }]);
+        if let Ok(tok) = parse_token_creation_rich(tok_raw, vocab) {
+            return Ok(vec![make_tok_ins(who, tok)]);
         }
         // Multi-token creation list: "create <tok1>, <tok2>, and <tok3>" / "create <tok1> and <tok2>" (Triplicate Titan, etc.)
         if tok_raw.contains(" token") && (tok_raw.contains(", ") || tok_raw.contains(" and ")) {
@@ -8127,25 +8246,16 @@ pub fn parse_atomic_effect(
                 if p.is_empty() {
                     continue;
                 }
-                if let Ok(tok) = parse_token_creation(p, vocab) {
-                    toks.push(InstructionAst::CreateToken {
-                        controller: who,
-                        token: tok,
-                    });
+                if let Ok(tok) = parse_token_creation_rich(p, vocab) {
+                    toks.push(make_tok_ins(who, tok));
                 } else if let Some((a, b)) = p.split_once(" and ")
                     && let (Ok(ta), Ok(tb)) = (
-                        parse_token_creation(a.trim(), vocab),
-                        parse_token_creation(b.trim(), vocab),
+                        parse_token_creation_rich(a.trim(), vocab),
+                        parse_token_creation_rich(b.trim(), vocab),
                     )
                 {
-                    toks.push(InstructionAst::CreateToken {
-                        controller: who,
-                        token: ta,
-                    });
-                    toks.push(InstructionAst::CreateToken {
-                        controller: who,
-                        token: tb,
-                    });
+                    toks.push(make_tok_ins(who, ta));
+                    toks.push(make_tok_ins(who, tb));
                 } else {
                     ok = false;
                     break;
@@ -8492,12 +8602,28 @@ pub fn parse_atomic_effect(
             duration: dur,
         }]);
     }
-    if low == "the next spell you cast this turn can't be countered"
-        || low == "the next creature spell you cast this turn can't be countered"
-    {
+    if low == "the next spell you cast this turn can't be countered" {
         return Ok(vec![InstructionAst::CombatRuleMod {
             subject: Box::new(SubjectRefAst::Player(PlayerRefAst::You)),
             rule: "next_spell_cant_be_countered".to_string(),
+            duration: DurationAst::UntilEndOfTurn,
+        }]);
+    }
+    if low == "the next creature spell you cast this turn can't be countered" {
+        let creature_flt = crate::ast::ObjectFilterAst {
+            any_types: crate::ast::CardTypeMask::CREATURE,
+            ..Default::default()
+        };
+        return Ok(vec![InstructionAst::TemporaryStatic {
+            static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                filter: Box::new(creature_flt.clone()),
+                effect: Box::new(StaticAbilityAst::PlayOrCastPermission {
+                    cast_only: true,
+                    filter: Box::new(creature_flt),
+                    permission: "can't be countered".to_string(),
+                    condition: None,
+                }),
+            }),
             duration: DurationAst::UntilEndOfTurn,
         }]);
     }
@@ -10931,7 +11057,9 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
     };
 
     let (body, cast_only) = rest;
-    // Strip trailing mana-fixing clause: ", and mana of any type can be spent to cast ..." / ", and you may spend mana as though it were mana of any color ..."
+    // Capture trailing mana-fixing, flash, face-down, and additional-cost modifiers losslessly
+    let spend_mana_as_any_color = body.contains(", and mana of any type can be spent")
+        || body.contains("spend mana as though it were mana of any color");
     let body = body
         .split_once(", and mana of any type can be spent")
         .or_else(|| body.split_once(", and you may spend mana as though it were mana of any color"))
@@ -10940,17 +11068,47 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
     let free = body.contains("without paying its mana cost")
         || body.contains("without paying their mana costs");
     let face_down_2_2 = body.contains(" face down as a 2/2 creature spell");
+    let as_though_flash =
+        body.contains(" as though they had flash") || body.contains(" as though it had flash");
     let clean = body
         .replace(" without paying its mana cost", "")
         .replace(" without paying their mana costs", "")
         .replace(" face down as a 2/2 creature spell", "")
-        .replace(" this turn as though they had flash", "")
-        .replace(" as though they had flash", "");
-    // Strip optional "by paying <cost> in addition to its other costs"
-    let clean = match clean.split_once(" by paying ") {
-        Some((before, _)) => before.to_string(),
-        None => clean,
+        .replace(" this turn as though they had flash", " this turn")
+        .replace(" as though they had flash", "")
+        .replace(" as though it had flash", "");
+    // Capture optional additional cost / condition tails losslessly:
+    // - " by paying <cost> ..."
+    // - "~ by <cost>" (e.g. Tegwyll's Scouring)
+    // - "~ if <cond_or_cost>" (e.g. Molten Exhale)
+    // - " by <cost containing 'in addition to (paying )?its other costs'>"
+    // - " if <cond containing 'as an additional cost'>"
+    let (clean, additional_cost) = if let Some((before, pay_tail)) = clean.split_once(" by paying ")
+    {
+        (before.to_string(), Some(pay_tail.trim().to_string()))
+    } else if let Some(by_tail) = clean.strip_prefix("~ by ") {
+        ("~".to_string(), Some(by_tail.trim().to_string()))
+    } else if let Some(if_tail) = clean.strip_prefix("~ if ") {
+        ("~".to_string(), Some(format!("if {}", if_tail.trim())))
+    } else if let Some((before, by_tail)) = clean.split_once(" by ") {
+        if by_tail.contains("in addition to paying its other costs")
+            || by_tail.contains("in addition to its other costs")
+        {
+            (before.to_string(), Some(by_tail.trim().to_string()))
+        } else {
+            (clean, None)
+        }
+    } else if let Some((before, if_tail)) = clean.split_once(" if ") {
+        if if_tail.contains("as an additional cost") {
+            (before.to_string(), Some(format!("if {}", if_tail.trim())))
+        } else {
+            (clean, None)
+        }
+    } else {
+        (clean, None)
     };
+    let has_cast_modifiers =
+        as_though_flash || spend_mana_as_any_color || additional_cost.is_some();
     let (obj_raw, dur) = if let Some(o) = clean
         .strip_suffix(" until the end of your next turn")
         .or_else(|| clean.strip_suffix(" until the end of their next turn"))
@@ -11002,20 +11160,41 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
         .strip_prefix("any number of ")
         .or_else(|| obj_nozone.trim().strip_prefix("one of "))
         .unwrap_or(obj_nozone.trim());
-    if obj_trim == "~"
-        || obj_trim.starts_with("~ as though it had flash")
-        || obj_trim == "~ from your graveyard"
-        || obj_trim == "~ from exile"
-    {
-        return Some(InstructionAst::GrantCastPermission {
-            player,
-            cast_only,
-            subject: Box::new(SubjectRefAst::SelfObject),
-            free,
-            duration: dur.to_string(),
-            count_limit: None,
-            alt_cost: None,
-        });
+    let build_cast_perm = |subject: SubjectRefAst| {
+        if face_down_2_2 && !has_cast_modifiers {
+            InstructionAst::CastFaceDown {
+                player,
+                subject: Box::new(subject),
+                power: 2,
+                toughness: 2,
+                without_paying_mana_cost: free,
+            }
+        } else if has_cast_modifiers || face_down_2_2 {
+            InstructionAst::GrantModifiedCastPermission(Box::new(ModifiedCastPermissionAst {
+                player,
+                subject: Box::new(subject),
+                cast_only,
+                free,
+                duration: dur.to_string(),
+                as_though_flash,
+                face_down_2_2,
+                spend_mana_as_any_color,
+                additional_cost: additional_cost.clone(),
+            }))
+        } else {
+            InstructionAst::GrantCastPermission {
+                player,
+                cast_only,
+                subject: Box::new(subject),
+                free,
+                duration: dur.to_string(),
+                count_limit: None,
+                alt_cost: None,
+            }
+        }
+    };
+    if obj_trim == "~" || obj_trim == "~ from your graveyard" || obj_trim == "~ from exile" {
+        return Some(build_cast_perm(SubjectRefAst::SelfObject));
     }
     if matches!(
         obj_trim,
@@ -11033,24 +11212,9 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
             | "card they exiled this way"
             | "the cards they exiled this way"
     ) {
-        if face_down_2_2 {
-            return Some(InstructionAst::CastFaceDown {
-                player,
-                subject: Box::new(SubjectRefAst::Anaphora(obj_trim.to_string())),
-                power: 2,
-                toughness: 2,
-                without_paying_mana_cost: free,
-            });
-        }
-        return Some(InstructionAst::GrantCastPermission {
-            player,
-            cast_only,
-            subject: Box::new(SubjectRefAst::Anaphora(obj_trim.to_string())),
-            free,
-            duration: dur.to_string(),
-            count_limit: None,
-            alt_cost: None,
-        });
+        return Some(build_cast_perm(SubjectRefAst::Anaphora(
+            obj_trim.to_string(),
+        )));
     }
     let flt_candidate = obj_trim
         .strip_suffix(" from among them")
@@ -11062,24 +11226,7 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
         .or_else(|| obj_trim.strip_suffix(" from among the copies"))
         .unwrap_or(obj_trim);
     if let Ok(subj) = parse_subject_or_target(flt_candidate, vocab) {
-        if face_down_2_2 {
-            return Some(InstructionAst::CastFaceDown {
-                player,
-                subject: Box::new(subj),
-                power: 2,
-                toughness: 2,
-                without_paying_mana_cost: free,
-            });
-        }
-        return Some(InstructionAst::GrantCastPermission {
-            player,
-            cast_only,
-            subject: Box::new(subj),
-            free,
-            duration: dur.to_string(),
-            count_limit: None,
-            alt_cost: None,
-        });
+        return Some(build_cast_perm(subj));
     }
     None
 }
@@ -11602,11 +11749,36 @@ fn try_parse_modify_abilities(
                     duration: dur.clone(),
                 }]);
             }
-            let kw_target = rhs
+            let (kw_target, is_choice) = if let Some(rest_kw) = rhs
                 .strip_prefix("your choice of ")
                 .or_else(|| rhs.strip_prefix("Your choice of "))
-                .unwrap_or(rhs);
+            {
+                (rest_kw, true)
+            } else {
+                (rhs, false)
+            };
             if let Some(kws) = parse_keyword_list(kw_target, vocab) {
+                if is_choice && kws.len() >= 2 {
+                    let branches = kws
+                        .into_iter()
+                        .map(|kw| {
+                            vec![if is_gain {
+                                InstructionAst::GrantKeywords {
+                                    subject: Box::new(subj.clone()),
+                                    keywords: vec![kw],
+                                    duration: dur.clone(),
+                                }
+                            } else {
+                                InstructionAst::RemoveKeywords {
+                                    subject: Box::new(subj.clone()),
+                                    keywords: vec![kw],
+                                    duration: dur.clone(),
+                                }
+                            }]
+                        })
+                        .collect();
+                    return Some(vec![InstructionAst::Choice(branches)]);
+                }
                 return Some(vec![if is_gain {
                     InstructionAst::GrantKeywords {
                         subject: Box::new(subj),
@@ -12029,7 +12201,7 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
                 actor,
                 subject: Box::new(SubjectRefAst::Anaphora(after_fd.to_string())),
                 random: false,
-                face_down: false,
+                face_down,
                 into_pile: false,
             });
         }
@@ -12040,7 +12212,7 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
                 actor,
                 subject: Box::new(subj),
                 random: false,
-                face_down: false,
+                face_down,
                 into_pile: false,
             });
         }
@@ -12051,7 +12223,7 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
                 actor,
                 subject: Box::new(SubjectRefAst::Anaphora(who_hand.to_string())),
                 random: false,
-                face_down: false,
+                face_down,
                 into_pile: false,
             });
         }
@@ -12060,7 +12232,7 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
                 actor,
                 subject: Box::new(SubjectRefAst::Anaphora(after_fd.to_string())),
                 random: false,
-                face_down: false,
+                face_down,
                 into_pile: false,
             });
         }
@@ -12134,7 +12306,7 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
                 actor,
                 subject: Box::new(subj),
                 random,
-                face_down: false,
+                face_down,
                 into_pile: false,
             };
             return Some(match delayed {
@@ -14974,6 +15146,7 @@ fn try_parse_combat_and_animate(
     // "<subj1> blocks/block <subj2> [this combat|this turn] if able"
     // "you may have <subj1> block <subj2> [this combat|this turn] if able"
     // (Impetuous Devils, Monstrous Step, Tolsimir, Grappling Hook)
+    let is_optional_block = low.starts_with("you may have ");
     let forced_block_core = low
         .strip_prefix("you may have ")
         .or_else(|| low.strip_prefix("have "))
@@ -14990,11 +15163,15 @@ fn try_parse_combat_and_animate(
             parse_subject_or_target(a_raw, vocab),
         )
     {
-        return Some(InstructionAst::CombatRuleMod {
+        let mod_ins = InstructionAst::CombatRuleMod {
             subject: Box::new(blocker),
             rule: format!("must_block:{a_raw}"),
             duration: dur.clone(),
-        });
+        };
+        if is_optional_block {
+            return Some(InstructionAst::Optional(vec![mod_ins]));
+        }
+        return Some(mod_ins);
     }
     // CR 508 Attacking redirection / status assignment ("Those creatures are now attacking that player", Tahngarth)
     if let Some((subj_raw, who_raw)) = low
@@ -15469,12 +15646,21 @@ fn try_parse_combat_and_animate(
             .strip_suffix(" this turn do so")
             .or_else(|| rest.strip_suffix(" this combat do so"))
             .or_else(|| rest.strip_suffix(" do so"))
-        && parse_subject_or_target(who_part, vocab).is_ok()
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+        && let (Ok(blockers), Ok(subj)) = (
+            parse_subject_or_target(who_part, vocab),
+            parse_subject_or_target(subj_raw, vocab),
+        )
     {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "AllAbleBlock".to_string(),
+        if who_part.trim() == "all creatures" {
+            return Some(InstructionAst::CombatRuleMod {
+                subject: Box::new(subj),
+                rule: "AllAbleBlock".to_string(),
+                duration: dur.clone(),
+            });
+        }
+        return Some(InstructionAst::ForcedBlockByFilter {
+            blockers: Box::new(blockers),
+            target: Box::new(subj),
             duration: dur.clone(),
         });
     }
@@ -15752,24 +15938,51 @@ pub fn parse_static_or_replacement(
             ReplacementEffectAst::EntersPrepared,
         ));
     }
-    if let Some(rest) = low
+    if let Some((rest, enters_tapped)) = low
         .strip_prefix("you may have ~ enter as a copy of ")
-        .or_else(|| low.strip_prefix("you may have ~ enter the battlefield as a copy of "))
-        .or_else(|| low.strip_prefix("you may have ~ enter tapped as a copy of "))
-        .or_else(|| low.strip_prefix("you may have ~ enter the battlefield tapped as a copy of "))
-        .or_else(|| low.strip_prefix("as ~ enters, you may have it become a copy of "))
-        .or_else(|| low.strip_prefix("as ~ enters, you may have ~ become a copy of "))
+        .map(|r| (r, false))
+        .or_else(|| {
+            low.strip_prefix("you may have ~ enter the battlefield as a copy of ")
+                .map(|r| (r, false))
+        })
+        .or_else(|| {
+            low.strip_prefix("you may have ~ enter tapped as a copy of ")
+                .map(|r| (r, true))
+        })
+        .or_else(|| {
+            low.strip_prefix("you may have ~ enter the battlefield tapped as a copy of ")
+                .map(|r| (r, true))
+        })
+        .or_else(|| {
+            low.strip_prefix("as ~ enters, you may have it become a copy of ")
+                .map(|r| (r, false))
+        })
+        .or_else(|| {
+            low.strip_prefix("as ~ enters, you may have ~ become a copy of ")
+                .map(|r| (r, false))
+        })
     {
         let (flt_raw, exception) = match rest.split_once(", except ") {
             Some((f, e)) => (f, Some(e.trim().to_string())),
             None => (rest, None),
         };
-        let flt_nodur = flt_raw
-            .strip_suffix(" until end of turn")
-            .unwrap_or(flt_raw)
-            .trim();
+        let (flt_nodur, duration) = match flt_raw.strip_suffix(" until end of turn") {
+            Some(c) => (c.trim(), DurationAst::UntilEndOfTurn),
+            None => (flt_raw.trim(), DurationAst::Permanent),
+        };
         let flt_clean = flt_nodur.strip_prefix("any ").unwrap_or(flt_nodur);
         if let Ok(flt) = parse_object_filter(flt_clean, vocab) {
+            if enters_tapped || duration != DurationAst::Permanent {
+                return Ok(StaticOrReplacement::Replacement(
+                    ReplacementEffectAst::EntersAsCopyModified(Box::new(EntersAsCopyModifiedAst {
+                        optional: true,
+                        filter: Box::new(flt),
+                        exception,
+                        enters_tapped,
+                        duration,
+                    })),
+                ));
+            }
             return Ok(StaticOrReplacement::Replacement(
                 ReplacementEffectAst::EntersAsCopy {
                     optional: true,
@@ -15779,17 +15992,39 @@ pub fn parse_static_or_replacement(
             ));
         }
     }
-    if let Some(rest) = low
+    if let Some((rest, enters_tapped)) = low
         .strip_prefix("~ enters as a copy of ")
-        .or_else(|| low.strip_prefix("~ enters the battlefield as a copy of "))
-        .or_else(|| low.strip_prefix("~ enters tapped as a copy of "))
+        .map(|r| (r, false))
+        .or_else(|| {
+            low.strip_prefix("~ enters the battlefield as a copy of ")
+                .map(|r| (r, false))
+        })
+        .or_else(|| {
+            low.strip_prefix("~ enters tapped as a copy of ")
+                .map(|r| (r, true))
+        })
     {
         let (flt_raw, exception) = match rest.split_once(", except ") {
             Some((f, e)) => (f, Some(e.trim().to_string())),
             None => (rest, None),
         };
-        let flt_clean = flt_raw.strip_prefix("any ").unwrap_or(flt_raw);
+        let (flt_nodur, duration) = match flt_raw.strip_suffix(" until end of turn") {
+            Some(c) => (c.trim(), DurationAst::UntilEndOfTurn),
+            None => (flt_raw.trim(), DurationAst::Permanent),
+        };
+        let flt_clean = flt_nodur.strip_prefix("any ").unwrap_or(flt_nodur);
         if let Ok(flt) = parse_object_filter(flt_clean, vocab) {
+            if enters_tapped || duration != DurationAst::Permanent {
+                return Ok(StaticOrReplacement::Replacement(
+                    ReplacementEffectAst::EntersAsCopyModified(Box::new(EntersAsCopyModifiedAst {
+                        optional: false,
+                        filter: Box::new(flt),
+                        exception,
+                        enters_tapped,
+                        duration,
+                    })),
+                ));
+            }
             return Ok(StaticOrReplacement::Replacement(
                 ReplacementEffectAst::EntersAsCopy {
                     optional: false,
@@ -16176,18 +16411,26 @@ pub fn parse_static_or_replacement(
             },
         ));
     }
-    if low.starts_with("damage that would reduce your life total to less than ")
+    if let Some(after_fl) =
+        low.strip_prefix("damage that would reduce your life total to less than ")
         && low.ends_with(" instead")
     {
+        let floor_tok = after_fl
+            .split_once(" reduces")
+            .map_or(after_fl, |(f, _)| f)
+            .trim();
+        let instead_body = parse_value_expr(floor_tok, vocab).ok().map(|val| {
+            vec![InstructionAst::SetLifeTotal {
+                player: PlayerRefAst::You,
+                value: Box::new(val),
+            }]
+        });
         return Ok(StaticOrReplacement::Replacement(
             ReplacementEffectAst::EventInstead {
                 subject_or_event: "damage".to_string(),
                 would: "reduce_life_below_floor".to_string(),
                 instead: s.to_string(),
-                instead_body: Some(vec![InstructionAst::SetLifeTotal {
-                    player: PlayerRefAst::You,
-                    value: Box::new(ValueExprAst::Const(1)),
-                }]),
+                instead_body,
             },
         ));
     }
@@ -16231,7 +16474,7 @@ pub fn parse_static_or_replacement(
     }
     if let Some(after) = low.strip_prefix("if ")
         && let Some((subj_ev, rest)) = after.split_once(" would ")
-        && let Some((would, instead_raw)) = rest.split_once(", ")
+        && let Some((would, instead_raw)) = split_would_instead_clause(rest)
         && let Some(instead) = instead_raw
             .strip_suffix(" instead")
             .or_else(|| instead_raw.strip_prefix("instead "))
@@ -16324,14 +16567,23 @@ pub fn parse_static_or_replacement(
             },
         ));
     }
-    if let Some(after_oh) = low
-        .strip_prefix("you may reveal ~ from your opening hand. if you do, ")
-        .or_else(|| low.strip_prefix("you may exert ~ as it attacks. when you do, "))
+    if let Some(after_oh) = low.strip_prefix("you may reveal ~ from your opening hand. if you do, ")
     {
         let body_slice = &s[s.len() - after_oh.len()..];
         let (ins, fails) = parse_effect_body(body_slice, vocab);
         if fails.is_empty() && !ins.is_empty() {
-            return Ok(StaticOrReplacement::Static(StaticAbilityAst::FollowUp(ins)));
+            return Ok(StaticOrReplacement::Static(
+                StaticAbilityAst::OpeningHandRevealAction { body: ins },
+            ));
+        }
+    }
+    if let Some(after_ex) = low.strip_prefix("you may exert ~ as it attacks. when you do, ") {
+        let body_slice = &s[s.len() - after_ex.len()..];
+        let (ins, fails) = parse_effect_body(body_slice, vocab);
+        if fails.is_empty() && !ins.is_empty() {
+            return Ok(StaticOrReplacement::Static(
+                StaticAbilityAst::ExertOnAttackAction { body: ins },
+            ));
         }
     }
     if let Some((first_sent, same_tail)) = low.split_once(". the same is true for ")
@@ -16354,20 +16606,32 @@ pub fn parse_static_or_replacement(
         && let Ok(mut inner) =
             parse_static_or_replacement(&s["during your end step, ".len()..], vocab)
     {
-        attach_condition(&mut inner, ConditionAst::IsYourTurn);
+        attach_condition(
+            &mut inner,
+            ConditionAst::Marker(GameMarker::DuringStep {
+                player: PlayerRefAst::You,
+                step: TurnStepAst::EndStep,
+            }),
+        );
         return Ok(inner);
     }
 
     // "Once during each of your turns, <static>" / "Once each turn, <static>"
-    for opt_pref in ["once during each of your turns, ", "once each turn, "] {
-        if low.starts_with(opt_pref)
-            && let Ok(StaticOrReplacement::Static(inner)) =
-                parse_static_or_replacement(&s[opt_pref.len()..], vocab)
-        {
-            return Ok(StaticOrReplacement::Static(StaticAbilityAst::OncePerTurn(
-                Box::new(inner),
-            )));
-        }
+    if low.starts_with("once during each of your turns, ")
+        && let Ok(StaticOrReplacement::Static(inner)) =
+            parse_static_or_replacement(&s["once during each of your turns, ".len()..], vocab)
+    {
+        return Ok(StaticOrReplacement::Static(
+            StaticAbilityAst::OnceDuringYourTurn(Box::new(inner)),
+        ));
+    }
+    if low.starts_with("once each turn, ")
+        && let Ok(StaticOrReplacement::Static(inner)) =
+            parse_static_or_replacement(&s["once each turn, ".len()..], vocab)
+    {
+        return Ok(StaticOrReplacement::Static(StaticAbilityAst::OncePerTurn(
+            Box::new(inner),
+        )));
     }
 
     // "During your turn, <static>" / "During each opponent's turn, <static>" / "During turns other than yours, <static>"
@@ -17603,10 +17867,18 @@ pub fn parse_static_or_replacement(
                     (Some(true), None, Some(c), None)
                 } else if let Some(c) = tlow.strip_prefix("more to cast if ") {
                     (Some(false), None, Some(c), None)
-                } else if tlow == "less to cast during your turn"
-                    || tlow == "less to cast during your end step"
-                {
+                } else if tlow == "less to cast during your turn" {
                     (Some(true), None, None, Some(ConditionAst::IsYourTurn))
+                } else if tlow == "less to cast during your end step" {
+                    (
+                        Some(true),
+                        None,
+                        None,
+                        Some(ConditionAst::Marker(GameMarker::DuringStep {
+                            player: PlayerRefAst::You,
+                            step: TurnStepAst::EndStep,
+                        })),
+                    )
                 } else if tlow == "more to cast during your turn" {
                     (Some(false), None, None, Some(ConditionAst::IsYourTurn))
                 } else if tlow == "less to cast during opponents' turns"
@@ -17866,18 +18138,30 @@ pub fn parse_static_or_replacement(
                     },
                 ));
             }
-            if let Some((_, right_cast)) = rest.split_once(" land or cast ")
+            if let Some((left_land, right_cast)) = rest.split_once(" land or cast ")
                 && let Some((flt_raw, zone_rest)) = right_cast.split_once(" from ")
-                && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+                && let (Ok(land_flt), Ok(spell_flt)) = (
+                    parse_object_filter(&format!("{} land", left_land.trim()), vocab),
+                    parse_object_filter(flt_raw, vocab),
+                )
             {
-                return Ok(StaticOrReplacement::Static(
-                    StaticAbilityAst::PlayOrCastPermission {
-                        cast_only: false,
-                        filter: Box::new(flt),
-                        permission: format!("from {zone_rest}"),
-                        condition: None,
-                    },
-                ));
+                let perm = format!("from {zone_rest}");
+                return Ok(StaticOrReplacement::Static(StaticAbilityAst::Compound(
+                    vec![
+                        StaticAbilityAst::PlayOrCastPermission {
+                            cast_only: false,
+                            filter: Box::new(land_flt),
+                            permission: perm.clone(),
+                            condition: None,
+                        },
+                        StaticAbilityAst::PlayOrCastPermission {
+                            cast_only: true,
+                            filter: Box::new(spell_flt),
+                            permission: perm,
+                            condition: None,
+                        },
+                    ],
+                )));
             }
             if let Some((flt_raw, zone_rest)) = rest
                 .strip_prefix("lands and cast ")
@@ -18073,9 +18357,7 @@ pub fn parse_static_or_replacement(
         | "the chosen player's maximum hand size is four"
         | "enchanted creature has landwalk of the chosen type"
         | "you may spend white mana as though it were red mana"
-        | "creatures you control enter as a copy of ~"
         | "creatures played by your opponents enter tapped"
-        | "as ~ becomes attached to a creature, choose a color"
         | "all creatures with flying able to block ~ do so"
         | "double all damage equipped creature would deal"
         | "humans you control have each of the chosen abilities"
@@ -18509,9 +18791,10 @@ pub fn parse_static_or_replacement(
     }
 
     // "<player> can't cast <filter/~>" / "<player> can't play <filter>" (Gideon's Intervention, Rock Jockey, etc.)
-    if let Some((who_raw, flt_raw)) = low
+    if let Some((who_raw, flt_raw, is_cast_only)) = low
         .split_once(" can't cast ")
-        .or_else(|| low.split_once(" can't play "))
+        .map(|(w, f)| (w, f, true))
+        .or_else(|| low.split_once(" can't play ").map(|(w, f)| (w, f, false)))
         && (flt_raw == "~" || parse_object_filter(flt_raw, vocab).is_ok())
     {
         let flt = parse_object_filter(flt_raw, vocab).unwrap_or_default();
@@ -18521,14 +18804,21 @@ pub fn parse_static_or_replacement(
             other => parse_player_ref(other),
         };
         if let Some(player) = who_norm {
+            let rule = if flt_raw == "~" {
+                if is_cast_only {
+                    "CantCastSelf".to_string()
+                } else {
+                    "CantPlaySelf".to_string()
+                }
+            } else if is_cast_only {
+                "CantCast:filter".to_string()
+            } else {
+                "CantPlay".to_string()
+            };
             return Ok(StaticOrReplacement::Static(
                 StaticAbilityAst::RuleOrCombatRestriction {
                     subject: Some(Box::new(SubjectRefAst::Player(player))),
-                    rule: if flt_raw == "~" {
-                        "CantCastSelf".to_string()
-                    } else {
-                        "CantCastOrPlay".to_string()
-                    },
+                    rule,
                     filter: if flt_raw == "~" {
                         None
                     } else {
@@ -18805,13 +19095,7 @@ pub fn parse_static_or_replacement(
                 subject_or_event: "tap_for_mana".to_string(),
                 would: "produce_mana".to_string(),
                 instead: s.to_string(),
-                instead_body: Some(vec![InstructionAst::AddMana {
-                    player: PlayerRefAst::You,
-                    mana: crate::ast::ManaSpecAst::AnyColor {
-                        amount: Box::new(ValueExprAst::PriorResult),
-                        single_color: true,
-                    },
-                }]),
+                instead_body: None,
             },
         ));
     }
@@ -19104,17 +19388,25 @@ pub fn parse_static_or_replacement(
         }
     }
 
-    if low.starts_with("if a spell would deal damage to a permanent or player, prevent ") {
+    if let Some(after_sp) =
+        low.strip_prefix("if a spell would deal damage to a permanent or player, prevent ")
+    {
+        let instead_body = after_sp
+            .strip_suffix(" of that damage")
+            .and_then(|amt_raw| parse_value_expr(amt_raw.trim(), vocab).ok())
+            .map(|amount| {
+                vec![InstructionAst::PreventDamage {
+                    amount: Box::new(amount),
+                    target: Box::new(SubjectRefAst::AnyTarget),
+                    duration: DurationAst::Instant,
+                }]
+            });
         return Ok(StaticOrReplacement::Replacement(
             ReplacementEffectAst::EventInstead {
                 subject_or_event: "spell_damage".to_string(),
                 would: "deal_damage".to_string(),
                 instead: s.to_string(),
-                instead_body: Some(vec![InstructionAst::PreventDamage {
-                    amount: Box::new(ValueExprAst::Const(1)),
-                    target: Box::new(SubjectRefAst::AnyTarget),
-                    duration: DurationAst::Instant,
-                }]),
+                instead_body,
             },
         ));
     }
@@ -19893,20 +20185,32 @@ pub fn parse_static_or_replacement(
             },
         ));
     }
-    // 2. "<filter> enter(s) as a copy of <subj>" (Infinite Reflection)
+    // 2. "<filter> enter(s) as a copy of <subj>" (Essence of the Wild, Infinite Reflection)
     if let Some((subj_raw, copy_raw)) = low
         .split_once(" enter as a copy of ")
         .or_else(|| low.split_once(" enters as a copy of "))
-        && parse_subject_or_target(subj_raw.trim(), vocab).is_ok()
-        && let Ok(flt) = parse_object_filter(copy_raw.trim(), vocab)
+        && let Ok(affected) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Ok(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EntersAsCopy {
-                optional: false,
-                filter: Box::new(flt),
-                exception: None,
-            },
-        ));
+        if matches!(affected, SubjectRefAst::SelfObject)
+            && let Ok(flt) = parse_object_filter(copy_raw.trim(), vocab)
+        {
+            return Ok(StaticOrReplacement::Replacement(
+                ReplacementEffectAst::EntersAsCopy {
+                    optional: false,
+                    filter: Box::new(flt),
+                    exception: None,
+                },
+            ));
+        }
+        if let Ok(copy_of) = parse_subject_or_target(copy_raw.trim(), vocab) {
+            return Ok(StaticOrReplacement::Replacement(
+                ReplacementEffectAst::OthersEnterAsCopy {
+                    affected: Box::new(affected),
+                    copy_of: Box::new(copy_of),
+                    exception: None,
+                },
+            ));
+        }
     }
     // 3. "<filter> are goaded" / "<filter> are basic" (Baeloth Barrityl, Rootpath Purifier)
     for (suf, rule_name) in [
@@ -20599,13 +20903,28 @@ fn parse_wave17_effects(
         .split_once(" has ")
         .or_else(|| nd_low.split_once(" have "))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-        && (kws_raw.starts_with("enchant ") || parse_keyword_list(kws_raw.trim(), vocab).is_some())
     {
-        return Some(vec![InstructionAst::GrantKeywords {
-            subject: Box::new(subj),
-            keywords: vec![kws_raw.trim().to_string()],
-            duration: dur.clone(),
-        }]);
+        let kws_trim = kws_raw.trim();
+        let keywords_opt = if let Some(kws) = parse_keyword_list(kws_trim, vocab) {
+            Some(kws)
+        } else if kws_trim.starts_with("enchant ") {
+            Some(
+                kws_trim
+                    .split(" and ")
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        if let Some(keywords) = keywords_opt {
+            return Some(vec![InstructionAst::GrantKeywords {
+                subject: Box::new(subj),
+                keywords,
+                duration: dur.clone(),
+            }]);
+        }
     }
     if let Some((subj_raw, lw_raw)) = nd_low.split_once(" gains landwalk of ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
@@ -21793,24 +22112,37 @@ fn parse_wave_e3_effects(
         && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
     {
         let r = rest.trim();
-        let cleaned = if let Some((before_instead, _)) = r.split_once(" instead of ") {
-            before_instead.trim()
-        } else if let Some(b) = r.strip_suffix(" instead") {
-            b.trim()
-        } else if let Some(b) = r.strip_prefix("instead ") {
-            b.trim()
-        } else {
-            r
+        let (cleaned, instead_of) =
+            if let Some((before_instead, alt_part)) = r.split_once(" instead of ") {
+                (before_instead.trim(), Some(alt_part.trim().to_string()))
+            } else if let Some(b) = r.strip_suffix(" instead") {
+                (b.trim(), None)
+            } else if let Some(b) = r.strip_prefix("instead ") {
+                (b.trim(), None)
+            } else {
+                (r, None)
+            };
+        let (cleaned_only, has_only) = match cleaned.strip_prefix("only ") {
+            Some(c) => (c.trim(), true),
+            None => (cleaned, false),
         };
-        let cleaned_only = cleaned.strip_prefix("only ").unwrap_or(cleaned);
         if let Ok(body) = parse_atomic_effect(cleaned_only, vocab) {
+            let then_body = if instead_of.is_some() || has_only {
+                vec![InstructionAst::ReplaceEffectWith(Box::new(
+                    ReplaceEffectWithAst {
+                        body,
+                        instead_of,
+                        only: has_only,
+                    },
+                ))]
+            } else if cleaned != r {
+                vec![InstructionAst::ReplaceEffect(body)]
+            } else {
+                body
+            };
             return Some(vec![InstructionAst::IfCondition {
                 condition: Box::new(cond),
-                then_body: if cleaned != r {
-                    vec![InstructionAst::ReplaceEffect(body)]
-                } else {
-                    body
-                },
+                then_body,
             }]);
         }
     }
@@ -22212,8 +22544,26 @@ fn parse_wave_e4_effects(
         && !rest_raw.trim().is_empty()
         && let Ok(body) = parse_atomic_effect(rest_raw.trim(), vocab)
     {
-        let _ = dur_raw;
-        return Some(body);
+        let dlow = dur_raw.trim().to_ascii_lowercase();
+        let duration = if dlow == "until end of turn" {
+            DurationAst::UntilEndOfTurn
+        } else if dlow == "until end of combat" {
+            DurationAst::UntilEndOfCombat
+        } else if dlow == "until your next turn" {
+            DurationAst::UntilYourNextTurn
+        } else if dlow == "until the end of your next turn" {
+            DurationAst::UntilEndOfNextTurn
+        } else if dlow == "until your next end step" {
+            DurationAst::ForAsLongAs(Box::new(ConditionAst::Marker(GameMarker::UntilStep {
+                player: PlayerRefAst::You,
+                step: TurnStepAst::EndStep,
+            })))
+        } else {
+            DurationAst::ForAsLongAs(Box::new(ConditionAst::EventOccurredThisTurn {
+                event: dlow,
+            }))
+        };
+        return Some(vec![InstructionAst::ScopedDuration { duration, body }]);
     }
 
     // E4.14: Leading "If you do, <rest>" / "If they do, <rest>" / "If you don't, <rest>" / "If they don't, <rest>"
@@ -23225,12 +23575,19 @@ fn parse_wave17_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Static
             },
         ));
     }
-    // Wave E2: "As ~ becomes attached to a creature, <effect>" & "As ~ enters [or is turned face up], it becomes your choice of ..."
+    // Wave E2 / E11: "As ~ becomes attached to a creature, <effect>" -> attach-timing replacement
     if let Some(after_ab) = low.strip_prefix("as ~ becomes attached to a creature, ")
         && let Ok(body) = parse_atomic_effect(after_ab.trim(), vocab)
     {
+        let creature_flt = crate::ast::ObjectFilterAst {
+            any_types: crate::ast::CardTypeMask::CREATURE,
+            ..Default::default()
+        };
         return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::AsEntersAction(body),
+            ReplacementEffectAst::AsBecomesAttachedAction {
+                target_filter: Box::new(creature_flt),
+                body,
+            },
         ));
     }
     if low.starts_with("as ~ enters, it becomes your choice of ")
@@ -23622,6 +23979,33 @@ fn split_disjunctive_object_filters(raw: &str, vocab: &Vocabulary) -> Option<Vec
         if ok && out.len() >= 2 {
             return Some(out);
         }
+    }
+    None
+}
+
+/// Splits the post-`" would "` portion of an `If <subj> would <would>, <instead>` replacement
+/// without breaking on Oxford commas inside `<would>` (e.g. `"a graveyard, hand, or library, exile it instead"`).
+fn split_would_instead_clause(rest: &str) -> Option<(&str, &str)> {
+    let mut search_from = 0;
+    while let Some(rel_idx) = rest[search_from..].find(", ") {
+        let split_at = search_from + rel_idx;
+        let after = &rest[split_at + 2..];
+        let after_trim = after.trim_start();
+        // Skip Oxford-comma list continuations when a later ", " introduces the replacement clause.
+        let looks_like_list_item = after_trim.starts_with("or ")
+            || after_trim.starts_with("and ")
+            || (!after_trim.starts_with("instead")
+                && !after_trim.starts_with("you may instead")
+                && after_trim.contains(", ")
+                && rest[..split_at].contains(" into ")
+                && !after_trim
+                    .split_once(", ")
+                    .is_some_and(|(seg, _)| seg.contains(" instead")));
+        if looks_like_list_item && after_trim.contains(", ") {
+            search_from = split_at + 2;
+            continue;
+        }
+        return Some((&rest[..split_at], after));
     }
     None
 }
