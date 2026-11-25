@@ -281,6 +281,7 @@ pub struct NativeProgramSource {
     commander_inventory: Option<spellwake_content::Inventory>,
     catalogue: std::collections::BTreeMap<OracleId, spellwake_content::InventoryCard>,
     meld_results: std::collections::BTreeMap<OracleId, (OracleId, spellwake_content::CatalogFace)>,
+    printed_index: printed::PrintedCardIndex,
     vocabulary: Arc<CreatureTypeVocabulary>,
     vocabulary_input: Box<[u8]>,
     program_identity_bytes: Box<[u8]>,
@@ -389,11 +390,13 @@ impl NativeProgramSource {
         if encoded.len() > MAX_PROGRAM_IDENTITY_BYTES {
             return Err(NativeInitialError::Size);
         }
+        let printed_index = printed::PrintedCardIndex::build(&catalogue, &registry, &meld_results);
         Ok(Self {
             registry,
             commander_inventory,
             catalogue,
             meld_results,
+            printed_index,
             vocabulary: Arc::new(native),
             vocabulary_input: vocabulary.into(),
             names,

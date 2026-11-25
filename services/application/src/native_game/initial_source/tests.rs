@@ -1594,4 +1594,21 @@ fn keyword_pool_opens_a_game_with_real_lands_and_morph_and_foretell_cards() {
     let printed = source.printed_card(&effigy.program).unwrap().unwrap();
     assert_eq!(printed.characteristics().name, "Scorn Effigy");
     assert!(printed.characteristics().rules_text.contains("Foretell"));
+    // Standalone cards that also appear as a prepare sub-face (e.g. Emeritus of Conflict // Lightning Bolt)
+    // must still resolve unambiguously to their standalone oracle record during projection.
+    for standalone_name in ["Lightning Bolt", "Swords to Plowshares", "Sign in Blood"] {
+        if let Some((oid, _)) = source
+            .catalogue
+            .iter()
+            .find(|(_, card)| card.name == standalone_name)
+        {
+            let seeded = source
+                .registry
+                .seed(oid, CardId(99), SeatId(0), ObjectDestination::Hand)
+                .unwrap();
+            let resolved = source.printed_card(&seeded.program).unwrap().unwrap();
+            assert_eq!(resolved.oracle_id(), oid);
+            assert_eq!(resolved.characteristics().name, standalone_name);
+        }
+    }
 }
