@@ -1,16 +1,26 @@
 import {
+  useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactElement,
 } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useReducedMotion } from "motion/react";
 import type {
   PlayerObject,
   PlayerSnapshot,
 } from "@spellwake/application-contracts";
 import {
+  mountLiveMatchScene,
+  type LiveCardRim,
+  type LiveMatchSceneHandle,
+  type LiveSceneCard,
+  type ProjectedCardRect,
+} from "spellwake-renderer-benchmark/live-match-scene";
+import {
+  CARD_RATIO,
   layoutTable,
   type Placement,
   type TableView,
@@ -19,9 +29,6 @@ import type { CardMark } from "./combat";
 import * as s from "./match-table.css";
 
 const SLEEVE = `${import.meta.env.BASE_URL}cards/spellwake-sleeve-midnight.svg`;
-/** One curve and one base time for every card and camera move. */
-const EASE = [0.22, 1, 0.36, 1] as const;
-const TRAVEL = 0.56;
 
 export const cardName = (object: PlayerObject | null): string =>
   object?.identity.kind === "known"
@@ -44,55 +51,50 @@ function changedStats(object: PlayerObject): string | null {
   return `${power}/${toughness}`;
 }
 
-function Face({
-  placement,
-  faceOf,
-}: {
-  placement: Placement;
-  faceOf: (object: PlayerObject) => string | undefined;
-}): ReactElement {
-  const { object, kind } = placement;
-  if (kind === "back" || kind === "library" || !object)
-    return (
-      <img
-        className={kind === "library" ? `${s.face} ${s.pile}` : s.face}
-        src={SLEEVE}
-        alt=""
-        draggable={false}
-      />
-    );
-  const url = faceOf(object);
-  if (url)
-    return (
-      <img
-        className={s.face}
-        src={url}
-        alt=""
-        draggable={false}
-        loading="lazy"
-      />
-    );
-  // No picture for this printing: its printed text, on a plain frame.
-  const printed =
-    object.identity.kind === "known" ? object.identity.characteristics : null;
-  return (
-    <span className={s.textCard}>
-      <span className={s.textName}>{cardName(object)}</span>
-      <span className={s.textType}>{printed?.typeLine}</span>
-      <span className={s.textRules}>{printed?.rulesText}</span>
-      {printed?.printedPower != null && (
-        <span className={s.textStats}>
-          {printed.printedPower}/{printed.printedToughness}
-        </span>
-      )}
-    </span>
-  );
+function resolveRim(
+  placement: Placement,
+  marks: ReadonlyMap<string, CardMark> | undefined,
+  isOffered: ((object: PlayerObject) => boolean) | undefined,
+  isPlayable: ((object: PlayerObject) => boolean) | undefined,
+): LiveCardRim | null {
+  const object = placement.object;
+  if (!object) return null;
+  const mark = marks?.get(object.handle);
+  if (mark) return mark;
+  if (isOffered?.(object)) return "offered";
+  if (placement.zone === "hand" && isPlayable?.(object)) return "playable";
+  return null;
+}
+
+function rectsChanged(
+  prev: ReadonlyMap<string, ProjectedCardRect>,
+  next: ReadonlyMap<string, ProjectedCardRect>,
+): boolean {
+  if (prev.size !== next.size) return true;
+  for (const [key, rect] of next) {
+    const old = prev.get(key);
+    if (
+      !old ||
+      Math.abs(old.left - rect.left) > 0.5 ||
+      Math.abs(old.top - rect.top) > 0.5 ||
+      Math.abs(old.width - rect.width) > 0.5 ||
+      Math.abs(old.height - rect.height) > 0.5
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
- * The table for one camera view. Every card keeps its identity across views,
- * so changing the view moves the cards rather than redrawing them: that
- * travel is the camera. With reduced motion the cards are simply in place.
+ * The live Three.js 3D match tabletop.
+ *
+ * Every card, pressed Midnight sleeve, instanced library/graveyard stack, felt
+ * surface, shadow, hover lift, tap rotation, and glowing status rim renders on
+ * the WebGL2 canvas. Visually transparent accessible buttons track each 3D card's
+ * projected screen rectangle so keyboard/touch input, screen readers, combat
+ * lines, damage pills, and cast-target lines align pixel-accurately with the 3D
+ * meshes across all viewport sizes.
  */
 export function MatchTable({
   snapshot,
@@ -125,8 +127,27 @@ export function MatchTable({
   onPile: (pile: "library" | "graveyard", seatId: string) => void;
 }): ReactElement {
   const root = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sceneRef = useRef<LiveMatchSceneHandle | null>(null);
+  const projectedRef = useRef<ReadonlyMap<string, ProjectedCardRect>>(
+    new Map(),
+  );
+  const [projected, setProjected] = useState<
+    ReadonlyMap<string, ProjectedCardRect>
+  >(() => new Map());
   const [stage, setStage] = useState({ width: 0, height: 0 });
-  const reduced = useReducedMotion();
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const reduced = Boolean(useReducedMotion());
+
+  const handleProject = useCallback(
+    (next: ReadonlyMap<string, ProjectedCardRect>) => {
+      if (!rectsChanged(projectedRef.current, next)) return;
+      projectedRef.current = next;
+      setProjected(next);
+    },
+    [],
+  );
+
   useLayoutEffect(() => {
     const node = root.current;
     if (!node) return;
@@ -137,6 +158,24 @@ export function MatchTable({
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const controller = new AbortController();
+    const handle = mountLiveMatchScene(canvas, {
+      sleeveUrl: SLEEVE,
+      onProject: handleProject,
+      signal: controller.signal,
+    });
+    sceneRef.current = handle;
+    return () => {
+      controller.abort();
+      handle.dispose();
+      if (sceneRef.current === handle) sceneRef.current = null;
+    };
+  }, [handleProject]);
+
   const layout = useMemo(
     () =>
       stage.width > 0
@@ -144,18 +183,73 @@ export function MatchTable({
         : { placements: [], labels: [], tilted: view.kind === "seat" },
     [snapshot, view, stage, clearBottom],
   );
-  const transition = reduced
-    ? { duration: 0 }
-    : { duration: TRAVEL, ease: EASE };
+
+  const sceneCards = useMemo((): LiveSceneCard[] => {
+    return layout.placements.map((placement) => {
+      const { object, kind, zone } = placement;
+      const y =
+        placement.y +
+        (handTucked && zone === "hand" ? placement.width * CARD_RATIO * 0.3 : 0);
+      const printed =
+        object?.identity.kind === "known"
+          ? object.identity.characteristics
+          : null;
+      const faceUrl =
+        object && kind !== "back" && kind !== "library"
+          ? faceOf(object)
+          : undefined;
+      return {
+        key: placement.key,
+        kind,
+        zone,
+        x: placement.x,
+        y,
+        width: placement.width,
+        rotateDeg: placement.rotate,
+        order: placement.order,
+        count: placement.count,
+        faceUrl,
+        fallback: printed
+          ? {
+              name: printed.name,
+              typeLine: printed.typeLine,
+              rulesText: printed.rulesText,
+              stats:
+                printed.printedPower != null && printed.printedToughness != null
+                  ? `${printed.printedPower}/${printed.printedToughness}`
+                  : undefined,
+            }
+          : undefined,
+        rim: resolveRim(placement, marks, isOffered, isPlayable),
+      };
+    });
+  }, [layout.placements, handTucked, faceOf, marks, isOffered, isPlayable]);
+
+  useEffect(() => {
+    if (!sceneRef.current || stage.width <= 0 || stage.height <= 0) return;
+    sceneRef.current.update({
+      stage,
+      tilted: layout.tilted,
+      cards: sceneCards,
+      hoveredKey,
+      reducedMotion: reduced,
+    });
+  }, [stage, layout.tilted, sceneCards, hoveredKey, reduced]);
+
   const viewerSeat = snapshot.viewerSeatId;
 
-  const piece = (placement: Placement): ReactElement => {
+  const hitItem = (placement: Placement): ReactElement => {
     const { object, kind, zone } = placement;
-    const scale = placement.width / s.BASE_WIDTH;
-    // A tucked hand keeps only its top edge in view.
+    const rect = projected.get(placement.key);
+    const fallbackH = placement.width * CARD_RATIO;
     const y =
       placement.y +
-      (handTucked && zone === "hand" ? placement.width * 1.4 * 0.3 : 0);
+      (handTucked && zone === "hand" ? fallbackH * 0.3 : 0);
+    const left = rect ? rect.left : placement.x - placement.width / 2;
+    const top = rect ? rect.top : y - fallbackH / 2;
+    const width = rect ? rect.width : placement.width;
+    const height = rect ? rect.height : fallbackH;
+
     const name = cardName(object);
     const owner = seatNames.get(placement.seatId) ?? "Player";
     const mine = placement.seatId === viewerSeat;
@@ -175,61 +269,50 @@ export function MatchTable({
         ? object.counters.map((entry) => `${entry.count} ${entry.name}`)
         : [];
     const inert = kind === "back" && !object;
-    // On a small whole-table view a card is too small to press: it is shown, not offered.
+    // On a small whole-table view a card is too small to press: shown, not offered.
     const tooSmall = placement.width < 44;
+    const badgeText = [stats, ...counters].filter(Boolean).join(" · ");
+
     return (
-      <motion.div
+      <div
         key={placement.key}
-        className={s.piece}
+        className={s.hitAnchor}
         data-anchor={object ? `card:${object.handle}` : undefined}
-        style={{ zIndex: placement.order }}
-        initial={
-          reduced
-            ? false
-            : {
-                x: placement.x,
-                y: y + 26,
-                scale: scale * 0.94,
-                rotate: placement.rotate,
-                opacity: 0,
-              }
-        }
-        animate={{
-          x: placement.x,
-          y,
-          scale,
-          rotate: placement.rotate,
-          opacity: 1,
+        style={{
+          left,
+          top,
+          width,
+          height,
+          zIndex:
+            hoveredKey === placement.key
+              ? 500 + placement.order
+              : placement.zone === "hand"
+                ? 200 + placement.order
+                : placement.order,
         }}
-        exit={reduced ? { opacity: 0 } : { opacity: 0, scale: scale * 0.9 }}
-        transition={transition}
       >
         {tooSmall ? (
           <span
-            className={s.cardButton}
+            className={s.hitButton}
             role="img"
             aria-label={label}
             data-mark={object ? marks?.get(object.handle) : undefined}
           >
-            <Face placement={placement} faceOf={faceOf} />
             {(kind === "library" || kind === "graveyard") && (
               <span className={s.countBadge} aria-hidden="true">
                 {placement.count}
               </span>
             )}
-            {(stats || counters.length > 0) && (
-              <span
-                className={object?.tapped ? `${s.badge} ${s.upright}` : s.badge}
-                aria-hidden="true"
-              >
-                {[stats, ...counters].filter(Boolean).join(" · ")}
+            {badgeText && (
+              <span className={s.badge} aria-hidden="true">
+                {badgeText}
               </span>
             )}
           </span>
         ) : (
           <button
             type="button"
-            className={s.cardButton}
+            className={s.hitButton}
             data-zone={zone === "pile" ? "battlefield" : zone}
             data-playable={
               object && zone === "hand" && isPlayable?.(object)
@@ -240,6 +323,20 @@ export function MatchTable({
             data-mark={object ? marks?.get(object.handle) : undefined}
             aria-label={label}
             disabled={inert}
+            onPointerEnter={(event) => {
+              if (event.pointerType === "mouse") setHoveredKey(placement.key);
+            }}
+            onPointerLeave={() => {
+              setHoveredKey((current) =>
+                current === placement.key ? null : current,
+              );
+            }}
+            onFocus={() => setHoveredKey(placement.key)}
+            onBlur={() => {
+              setHoveredKey((current) =>
+                current === placement.key ? null : current,
+              );
+            }}
             onClick={() => {
               if (kind === "library" || kind === "graveyard")
                 onPile(kind, placement.seatId);
@@ -247,37 +344,28 @@ export function MatchTable({
                 onCard(object, zone === "hand" ? "hand" : "battlefield");
             }}
           >
-            <Face placement={placement} faceOf={faceOf} />
             {(kind === "library" || kind === "graveyard") && (
               <span className={s.countBadge} aria-hidden="true">
                 {placement.count}
               </span>
             )}
-            {(stats || counters.length > 0) && (
-              <span
-                className={object?.tapped ? `${s.badge} ${s.upright}` : s.badge}
-                aria-hidden="true"
-              >
-                {[stats, ...counters].filter(Boolean).join(" · ")}
+            {badgeText && (
+              <span className={s.badge} aria-hidden="true">
+                {badgeText}
               </span>
             )}
           </button>
         )}
-      </motion.div>
+      </div>
     );
   };
 
-  const board = layout.placements.filter(
-    (placement) => placement.zone !== "hand",
-  );
-  const hand = layout.placements.filter(
-    (placement) => placement.zone === "hand",
-  );
   return (
     <div
       ref={root}
       className={s.stage}
       data-match-table={view.kind}
+      data-renderer="three-webgl2"
       role="group"
       aria-label={
         view.kind === "overview"
@@ -287,32 +375,22 @@ export function MatchTable({
             : `${seatNames.get(view.seatId) ?? "Player"}’s board`
       }
     >
-      <div className={s.light} />
-      <motion.div
-        className={s.layer}
-        initial={false}
-        animate={{
-          rotateX: layout.tilted ? 16 : 0,
-          transformPerspective: 1500,
-        }}
-        transition={transition}
-      >
-        <AnimatePresence initial={false}>{board.map(piece)}</AnimatePresence>
+      <canvas
+        ref={canvasRef}
+        className={s.canvas}
+        aria-hidden="true"
+      />
+      <div className={s.hitLayer}>
+        {layout.placements.map(hitItem)}
         {layout.labels.map((label) => (
-          <motion.span
+          <span
             key={label.seatId}
             className={s.seatLabel}
             style={{ left: label.x, top: label.y }}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ ...transition, delay: reduced ? 0 : 0.2 }}
           >
             {seatNames.get(label.seatId) ?? "Player"}
-          </motion.span>
+          </span>
         ))}
-      </motion.div>
-      <div className={s.handLayer}>
-        <AnimatePresence initial={false}>{hand.map(piece)}</AnimatePresence>
       </div>
     </div>
   );

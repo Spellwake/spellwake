@@ -40,6 +40,47 @@ const PHASE_ORDER = [
   { phase: "ending", step: "end" },
 ] as const;
 
+/** Apply a preview land drop while keeping the viewer's handCount invariant in sync. */
+export function applyDemoPlayLand(
+  prev: PlayerSnapshot,
+  source: string,
+): PlayerSnapshot {
+  const nextObjs = prev.visibleObjects.map((o) =>
+    o.handle === source ? { ...o, zone: "zone-battlefield" } : o,
+  );
+  let removedFromHand = false;
+  const nextZones = prev.zones.map((z) => {
+    if (z.handle === "zone-hand-you" && z.visibility === "visible") {
+      const filtered = z.objects.filter((h) => h !== source);
+      removedFromHand = filtered.length !== z.objects.length;
+      return {
+        ...z,
+        objects: filtered,
+      };
+    }
+    if (z.handle === "zone-battlefield" && z.visibility === "visible") {
+      return { ...z, objects: [...z.objects, source] };
+    }
+    return z;
+  });
+  const nextPlayers = removedFromHand
+    ? prev.players.map((p) =>
+        p.seatId === VIEWER_SEAT
+          ? {
+              ...p,
+              handCount: String(Math.max(0, Number(p.handCount) - 1)),
+            }
+          : p,
+      )
+    : prev.players;
+  return {
+    ...prev,
+    players: nextPlayers,
+    visibleObjects: nextObjs,
+    zones: nextZones,
+  };
+}
+
 /** Local interactive preview match for unconfigured builds. */
 export function useDemoMatch(
   onLeave: () => void,
@@ -241,22 +282,7 @@ export function useDemoMatch(
           return asked ? { ...cast, decisions: [asked] } : cast;
         }
         if (action.kind === "play-land") {
-          const nextObjs = prev.visibleObjects.map((o) =>
-            o.handle === action.source ? { ...o, zone: "zone-battlefield" } : o,
-          );
-          const nextZones = prev.zones.map((z) => {
-            if (z.handle === "zone-hand-you" && z.visibility === "visible") {
-              return {
-                ...z,
-                objects: z.objects.filter((h) => h !== action.source),
-              };
-            }
-            if (z.handle === "zone-battlefield" && z.visibility === "visible") {
-              return { ...z, objects: [...z.objects, action.source] };
-            }
-            return z;
-          });
-          return { ...prev, visibleObjects: nextObjs, zones: nextZones };
+          return applyDemoPlayLand(prev, action.source);
         }
         if (action.kind === "activate-mana") {
           return {

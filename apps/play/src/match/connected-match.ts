@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { useAtomValue } from "jotai";
 import {
   identifierSchema,
   matchDetailSchema,
@@ -10,6 +11,7 @@ import {
 import { useAccount } from "../auth/AccountProvider";
 import { ownerBearer } from "../data/account";
 import { scryfallImage } from "../data/scryfall-images";
+import type { CastOffer } from "./cast-draft";
 import {
   gameResult,
   gameRow,
@@ -22,6 +24,7 @@ import {
   seriesStanding,
   type SeriesStanding,
 } from "./match-series";
+import { matchPreferences, readPreferences } from "./table-panels";
 import type {
   MatchActionCommand,
   MatchChatEntry,
@@ -597,6 +600,18 @@ export function useConnectedMatch(
     [owner, services, target?.matchId, chatQuery],
   );
 
+  const autoTap = readPreferences(useAtomValue(matchPreferences)).autoTap;
+  const castOffers = useMemo((): readonly CastOffer[] | undefined => {
+    if (!snapshot || snapshot.castOffers === undefined) return undefined;
+    return snapshot.castOffers.map((offer) => ({
+      source: offer.source,
+      targets: offer.targets ?? null,
+      cost: offer.cost,
+      payment: autoTap ? "automatic" : "paused",
+      paySources: offer.paySources ?? [],
+    }));
+  }, [snapshot, autoTap]);
+
   const sendAction = useCallback(
     async (action: MatchActionCommand) => {
       if (!owner || !services || !target || !snapshot || commandPending) return;
@@ -604,10 +619,74 @@ export function useConnectedMatch(
       setCommandError(null);
       try {
         const bearer = await ownerBearer(services, owner);
+        let current = snapshot;
+        let finalAction: MatchActionCommand = action;
+
+        // When casting a server-offered spell with payment: null, execute the
+        // server-authored mana-source taps first (never rolling back accepted taps),
+        // then submit the cast with the exact server-computed payment.
+        if (
+          (action.kind === "cast-untargeted" ||
+            action.kind === "cast-targeted") &&
+          action.payment === null
+        ) {
+          const offer = current.castOffers?.find(
+            (entry) => entry.source === action.source,
+          );
+          if (offer) {
+            for (const paySource of offer.paySources ?? []) {
+              const permanent = current.visibleObjects.find(
+                (obj) => obj.handle === paySource,
+              );
+              const manaAbility = permanent?.abilities.find(
+                (ab) => ab.kind === "mana",
+              );
+              if (!permanent || !manaAbility) continue;
+              const tapRes = await services.api.gameCommand(
+                bearer,
+                target.gameId,
+                {
+                  requestId: crypto.randomUUID(),
+                  basis: current.basis,
+                  action: {
+                    kind: "activate-mana",
+                    source: paySource,
+                    ability: manaAbility.handle,
+                  },
+                },
+              );
+              const refreshed = await services.api.gameView(
+                bearer,
+                target.gameId,
+                target.contextId,
+              );
+              if (refreshed.status === "success") {
+                current = refreshed.data;
+                setSnapshot(refreshed.data);
+              }
+              if (tapRes.status === "fail") {
+                const msg =
+                  Object.values(tapRes.data).find(
+                    (v) => typeof v === "string",
+                  ) ?? "Mana activation was not accepted.";
+                setCommandError(msg);
+                return;
+              }
+              if (tapRes.status === "error") {
+                setCommandError("Couldn’t reach the game server.");
+                return;
+              }
+            }
+            if (offer.payment) {
+              finalAction = { ...action, payment: offer.payment };
+            }
+          }
+        }
+
         const res = await services.api.gameCommand(bearer, target.gameId, {
           requestId: crypto.randomUUID(),
-          basis: snapshot.basis,
-          action,
+          basis: current.basis,
+          action: finalAction,
         });
         if (res.status === "fail") {
           const msg =
@@ -684,6 +763,7 @@ export function useConnectedMatch(
     snapshot,
     seatNames,
     artByPrintingId: artQueries,
+    ...(castOffers !== undefined ? { castOffers } : {}),
     connectionState,
     result,
     series,
