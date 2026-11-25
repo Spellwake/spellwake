@@ -55,7 +55,7 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Run all seven domain health checks and generate badges
+      - name: Run all domain health checks and generate badges
         run: |
           mkdir -p .domain-health-out/badges
           python3 scripts/health_checks.py \

@@ -3,11 +3,11 @@
 use crate::ast::{
     AltCastCostAst, CardTypeMask, CompareOp, ConditionAst, ControllerRelation, CostAtomAst,
     CountLimitAst, DelayedStepScope, DurationAst, EntersAsCopyModifiedAst, ExchangeKind,
-    GameMarker, InstructionAst, InteractiveChoiceKind, ModifiedCastPermissionAst, NameFilterAst,
-    ObjectFilterAst, ObjectFilterFlags, ParseFailureAst, PileRefAst, PlayerRefAst,
-    QualifiedTokenCreationAst, ReplaceEffectWithAst, ReplacementEffectAst, Rounding,
-    SearchModifierAst, StatKind, StaticAbilityAst, SubjectRefAst, TriggerEventAst, TriggerSpecAst,
-    TurnStepAst, ValueExprAst, ZoneFilter,
+    FilterPredicateAst, GameMarker, InstructionAst, InteractiveChoiceKind,
+    ModifiedCastPermissionAst, NameFilterAst, ObjectFilterAst, ObjectFilterFlags, ParseFailureAst,
+    PileRefAst, PlayerRefAst, QualifiedTokenCreationAst, ReplaceEffectWithAst,
+    ReplacementEffectAst, Rounding, SearchModifierAst, StatKind, StaticAbilityAst, SubjectRefAst,
+    TriggerEventAst, TriggerSpecAst, TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use crate::compile_granted_ability;
 use crate::filter::{
@@ -544,9 +544,13 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         return Ok(CostAtomAst::RollDie(sides));
     }
     if let Some(rest) = low.strip_prefix("put ")
-        && let Some((subj_raw, dest)) = rest
+        && let Some((subj_raw, pos_pref, dest)) = rest
             .split_once(" on the bottom of ")
-            .or_else(|| rest.split_once(" on top of "))
+            .map(|(l, r)| (l, "the bottom of ", r))
+            .or_else(|| {
+                rest.split_once(" on top of ")
+                    .map(|(l, r)| (l, "top of ", r))
+            })
     {
         let (_, subj_nocnt) = peel_leading_count(subj_raw, vocab);
         if let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
@@ -554,7 +558,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         {
             return Ok(CostAtomAst::MoveZone {
                 subject: Box::new(subj),
-                to: dest.to_string(),
+                to: format!("{pos_pref}{}", dest.trim()),
             });
         }
     }
@@ -1477,6 +1481,9 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         };
 
         let rest = rest.strip_prefix("first ").unwrap_or(rest);
+        if rest.contains('.') {
+            return Err(format!("multi_sentence_step_trigger:{c}"));
+        }
         let step = if rest.starts_with("upkeep") {
             TurnStepAst::Upkeep
         } else if rest.starts_with("end step") {
@@ -3100,9 +3107,8 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         .or_else(|| blow.strip_suffix(" fight"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: format!("fight:{subj:?}"),
+        return Ok(vec![TriggerEventAst::PermanentFights {
+            subject: Box::new(subj),
         }]);
     }
     if let Some(subj_raw) = blow
@@ -3479,9 +3485,9 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         .or_else(|| blow.strip_suffix(" regenerates"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: format!("regenerates:{subj:?}"),
+        return Ok(vec![TriggerEventAst::PermanentRegenerates {
+            subject: Box::new(subj),
+            this_way: blow.ends_with(" this way"),
         }]);
     }
 
@@ -4718,7 +4724,6 @@ pub fn parse_atomic_effect(
         "starting with target player, ",
         "starting with an opponent, ",
         "starting with you, ",
-        "otherwise, ",
         "then, ",
         "then ",
     ] {
@@ -4729,6 +4734,14 @@ pub fn parse_atomic_effect(
             {
                 return Ok(inner);
             }
+        }
+    }
+    if low.starts_with("otherwise, ") {
+        let rest = s["otherwise, ".len()..].trim();
+        if !rest.is_empty()
+            && let Ok(inner) = parse_atomic_effect(rest, vocab)
+        {
+            return Ok(vec![InstructionAst::Otherwise(inner)]);
         }
     }
 
@@ -4974,7 +4987,6 @@ pub fn parse_atomic_effect(
         | "choose a permanent type"
         | "choose a land card name"
         | "choose a creature at random"
-        | "pay any amount of mana"
         | "reverse the game's turn order"
         | "reselect its target at random"
         | "investigate an additional time"
@@ -5045,10 +5057,15 @@ pub fn parse_atomic_effect(
                 step: TurnStepAst::DrawStep,
             }]);
         }
-        "you skip your next two turns" => {
-            return Ok(vec![InstructionAst::SkipNextStep {
+        "pay any amount of mana" => {
+            return Ok(vec![InstructionAst::PayAnyAmountOfMana {
                 player: PlayerRefAst::You,
-                step: TurnStepAst::UntapStep,
+            }]);
+        }
+        "you skip your next two turns" => {
+            return Ok(vec![InstructionAst::SkipNextTurns {
+                player: PlayerRefAst::You,
+                count: 2,
             }]);
         }
         "a creature destroyed this way can't be regenerated"
@@ -5713,9 +5730,10 @@ pub fn parse_atomic_effect(
                 | "a letter"
         ) || choose_rest.starts_with("a card name other than ")
         {
-            return Ok(vec![InstructionAst::ChooseOption(format!(
-                "{chooser:?}:{choose_rest}"
-            ))]);
+            return Ok(vec![InstructionAst::PlayerChooseOption {
+                chooser,
+                options: vec![choose_rest.to_string()],
+            }]);
         }
         if parse_object_filter(
             choose_rest
@@ -5765,29 +5783,100 @@ pub fn parse_atomic_effect(
     // 2. Modal header: "Choose one U+2014" & standalone "Choose a <characteristic/group>"
     if let Some(after) = low.strip_prefix("choose ") {
         let trimmed = after.trim_end_matches(EM_DASH).trim();
-        if matches!(
-            trimmed,
-            "one"
-                | "two"
-                | "three"
-                | "four"
-                | "five"
-                | "one or both"
-                | "one or more"
-                | "x"
-                | "one that hasn't been chosen"
-                | "one that hasn't been chosen this turn"
-                | "one or more that haven't been chosen"
-        ) || trimmed.starts_with("up to ")
+        if trimmed.ends_with(" instead")
+            && (trimmed.starts_with("one")
+                || trimmed.starts_with("two")
+                || trimmed.starts_with("three")
+                || trimmed.starts_with("four")
+                || trimmed.starts_with("both")
+                || trimmed.starts_with("all")
+                || trimmed.starts_with("up to "))
+        {
+            return Ok(vec![InstructionAst::ModalModifier(low)]);
+        }
+        let has_modal_dash = after.trim_end().ends_with(EM_DASH);
+        let modal_core = trimmed.strip_prefix("up to ").unwrap_or(trimmed);
+        if has_modal_dash
+            || modal_core.ends_with(" {p} worth of modes")
+            || matches!(
+                modal_core,
+                "one"
+                    | "two"
+                    | "three"
+                    | "four"
+                    | "five"
+                    | "one or both"
+                    | "one or more"
+                    | "x"
+                    | "one that hasn't been chosen"
+                    | "one that hasn't been chosen this turn"
+                    | "one or more that haven't been chosen"
+            )
         {
             return Ok(vec![InstructionAst::Modal {
                 choice: trimmed.to_string(),
                 modes: Vec::new(),
             }]);
         }
+        if !trimmed.contains(", then ")
+            && let Some(up_to_rest) = trimmed.strip_prefix("up to ")
+        {
+            let (cnt, grp_raw) = peel_leading_count(up_to_rest, vocab);
+            let grp_clean = grp_raw.trim();
+            if !trimmed.contains("target ") {
+                if let Ok(flt) = parse_object_filter(grp_clean, vocab) {
+                    return Ok(vec![InstructionAst::ChooseFromGroup {
+                        count: Box::new(cnt),
+                        random: false,
+                        group: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    }]);
+                }
+                if let Ok(subj) = parse_subject_or_target(grp_clean, vocab) {
+                    return Ok(vec![InstructionAst::ChooseFromGroup {
+                        count: Box::new(cnt),
+                        random: false,
+                        group: Box::new(subj),
+                    }]);
+                }
+            }
+            if let Ok(subj) = parse_subject_or_target(trimmed, vocab) {
+                let derived_cnt = match &subj {
+                    SubjectRefAst::TargetObject { count: tc, .. }
+                    | SubjectRefAst::TargetPlayer { count: tc, .. }
+                    | SubjectRefAst::TargetOneOf { count: tc, .. } => match tc {
+                        crate::ast::TargetCountAst::Exact(n)
+                        | crate::ast::TargetCountAst::UpTo(n) => ValueExprAst::Const(i32::from(*n)),
+                        crate::ast::TargetCountAst::ChosenX | crate::ast::TargetCountAst::UpToX => {
+                            ValueExprAst::ChosenX
+                        }
+                        crate::ast::TargetCountAst::AnyNumber => cnt,
+                    },
+                    _ => cnt,
+                };
+                return Ok(vec![InstructionAst::ChooseFromGroup {
+                    count: Box::new(derived_cnt),
+                    random: false,
+                    group: Box::new(subj),
+                }]);
+            }
+            if let Ok(subj) = parse_subject_or_target(grp_clean, vocab) {
+                return Ok(vec![InstructionAst::ChooseFromGroup {
+                    count: Box::new(cnt),
+                    random: false,
+                    group: Box::new(subj),
+                }]);
+            }
+            return Ok(vec![InstructionAst::InteractiveChoice(
+                InteractiveChoiceKind::ChooseFromGroup {
+                    chooser: PlayerRefAst::You,
+                    description: trimmed.to_string(),
+                },
+            )]);
+        }
         if matches!(
             trimmed,
             "a creature type"
+                | "a planeswalker type"
                 | "a card type"
                 | "a card name"
                 | "a creature card name"
@@ -5851,6 +5940,16 @@ pub fn parse_atomic_effect(
             || trimmed.ends_with(" from it")
             || trimmed.ends_with(" from them")
         {
+            if trimmed == "target opponent" {
+                return Ok(vec![InstructionAst::ChoosePlayerTarget {
+                    player: PlayerRefAst::TargetOpponent,
+                }]);
+            }
+            if trimmed == "target player" {
+                return Ok(vec![InstructionAst::ChoosePlayerTarget {
+                    player: PlayerRefAst::TargetPlayer,
+                }]);
+            }
             return Ok(vec![InstructionAst::ChooseOption(trimmed.to_string())]);
         }
     }
@@ -5862,6 +5961,23 @@ pub fn parse_atomic_effect(
     {
         return Ok(vec![InstructionAst::ChooseOption(low)]);
     }
+    if let Some(after) = low.strip_prefix("choose ")
+        && let Some((cnt_part, hand_rest)) = after.split_once(" in your hand drawn this turn")
+        && hand_rest.trim().is_empty()
+    {
+        let (cnt, flt_raw) = peel_leading_count(cnt_part.trim(), vocab);
+        if let Ok(mut flt) = parse_object_filter(flt_raw, vocab) {
+            flt.zone = Some(ZoneFilter::YourHand);
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "drawn_this_turn".to_string(),
+            ));
+            return Ok(vec![InstructionAst::ChooseFromGroup {
+                group: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                count: Box::new(cnt),
+                random: false,
+            }]);
+        }
+    }
     if let Some(after) = low.strip_prefix("you choose ")
         && (after.ends_with(" from it") || after.ends_with(" from them"))
     {
@@ -5870,15 +5986,29 @@ pub fn parse_atomic_effect(
 
     // Emblem (including trailing sentence after closing quote, e.g. Kiora, AND non-You / filtered player recipients like Chandra, Roaring Flame)
     if let Some(rest) = s.strip_prefix("You get an emblem with \"") {
+        let mk_emblem = |inner: &str| {
+            let compiled = compile_granted_ability(inner, vocab).or_else(|| {
+                if inner.contains("\" and \"") {
+                    compile_granted_ability(&inner.replace("\" and \"", "\n"), vocab)
+                } else {
+                    None
+                }
+            });
+            InstructionAst::CreateEmblemFor {
+                recipient: Box::new(SubjectRefAst::Player(PlayerRefAst::You)),
+                text: inner.to_string(),
+                compiled,
+            }
+        };
         if let Some(inner) = rest.strip_suffix('"') {
-            return Ok(vec![InstructionAst::CreateEmblem(inner.to_string())]);
+            return Ok(vec![mk_emblem(inner)]);
         }
         if let Some((inner, after_q)) = rest.split_once('"') {
             let after_t = after_q.trim();
             if !after_t.is_empty() {
                 let (mut more, fails) = parse_effect_body(after_t, vocab);
                 if fails.is_empty() && !more.is_empty() {
-                    let mut out = vec![InstructionAst::CreateEmblem(inner.to_string())];
+                    let mut out = vec![mk_emblem(inner)];
                     out.append(&mut more);
                     return Ok(out);
                 }
@@ -6602,16 +6732,39 @@ pub fn parse_atomic_effect(
     ] {
         if low.starts_with(pref) {
             let rest = &s[pref.len()..];
-            if let Ok(inner) = parse_atomic_effect(rest, vocab) {
+            let parsed_inner = parse_atomic_effect(rest, vocab).or_else(|e| {
+                if rest.contains(", and ") && rest.contains(", ") {
+                    let mut acc = Vec::new();
+                    let (head, tail) = rest.rsplit_once(", and ").ok_or_else(|| e.clone())?;
+                    for part in head.split(", ").chain(std::iter::once(tail)) {
+                        let p = part.trim();
+                        if p.is_empty() {
+                            return Err(e.clone());
+                        }
+                        if let Some(mut sub) = parse_effect_or_temp_clause(p, &dur, vocab) {
+                            acc.append(&mut sub);
+                        } else if let Ok(mut sub) = parse_atomic_effect(p, vocab) {
+                            acc.append(&mut sub);
+                        } else {
+                            return Err(e.clone());
+                        }
+                    }
+                    if acc.len() >= 2 {
+                        return Ok(acc);
+                    }
+                }
+                Err(e)
+            });
+            if let Ok(inner) = parsed_inner {
                 let mut wrapped = Vec::with_capacity(inner.len());
                 for mut ins in inner {
                     match &mut ins {
                         InstructionAst::GrantCastPermission { duration, .. } => {
-                            *duration = format!("{dur:?}");
+                            *duration = duration_ast_to_slug(&dur);
                             wrapped.push(ins);
                         }
                         InstructionAst::GrantModifiedCastPermission(perm) => {
-                            perm.duration = format!("{dur:?}");
+                            perm.duration = duration_ast_to_slug(&dur);
                             wrapped.push(ins);
                         }
                         InstructionAst::TemporaryTrigger { duration, .. }
@@ -6802,13 +6955,8 @@ pub fn parse_atomic_effect(
         .or_else(|| low.strip_prefix("earthbend "))
         && let Ok(cnt) = parse_value_expr(n_raw, vocab)
     {
-        return Ok(vec![InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(SubjectRefAst::SelfObject),
-            power: "0".to_string(),
-            toughness: "0".to_string(),
-            description: Some(format!("earthbend:{cnt:?}")),
-            keywords: Vec::new(),
-            duration: DurationAst::Permanent,
+        return Ok(vec![InstructionAst::Earthbend {
+            count: Box::new(cnt),
         }]);
     }
     if let Some(val_raw) = low.strip_prefix("proliferate a number of times equal to ")
@@ -7400,9 +7548,44 @@ pub fn parse_atomic_effect(
         return Ok(vec![InstructionAst::ReflexiveTrigger(inner)]);
     }
 
+    // Compound play-lands-and-cast-spells permission BEFORE stripping "You may " (Sen Triplets, Yawgmoth's Will, etc.)
+    if let Some(rest_pl) = low.strip_prefix("you may play lands and cast spells ")
+        && let (Some(p1), Some(p2)) = (
+            try_parse_cast_permission(&format!("you may play lands {rest_pl}"), vocab),
+            try_parse_cast_permission(&format!("you may cast spells {rest_pl}"), vocab),
+        )
+    {
+        return Ok(vec![p1, p2]);
+    }
+
     // Play / Cast permission BEFORE stripping "You may "
     if let Some(perm) = try_parse_cast_permission(&low, vocab) {
         return Ok(vec![perm]);
+    }
+
+    // CR 118.12a: "you may <act> unless <player> pays <cost>" (Rhystic Study):
+    // Opponent decides whether to pay FIRST, then you optionally perform <act> -> Unless(..., [Optional(<act>)]).
+    if low.starts_with("you may ")
+        && !s.contains('"')
+        && let Some(idx) = low.rfind(" unless ")
+        && idx > 8
+        && let Some((who_raw, rest_cost)) = low[idx + 8..]
+            .trim()
+            .split_once(" pays ")
+            .or_else(|| low[idx + 8..].trim().split_once(" pay "))
+        && let (Some(player), Ok(cost), Ok(inner)) = (
+            parse_player_ref(who_raw),
+            parse_cost_atom(rest_cost.trim(), vocab),
+            parse_atomic_effect(s[8..idx].trim(), vocab),
+        )
+    {
+        return Ok(vec![InstructionAst::Unless {
+            body: vec![InstructionAst::Optional(inner)],
+            unless_player: Some(player),
+            unless_cost: Some(cost),
+            unless_action: None,
+            unless_condition: None,
+        }]);
     }
 
     // Control-flow wrappers (use `if let Ok` so compound "You may A, and you may B" / "If you do, A, and B" fall through to top-level combinators!)
@@ -7413,8 +7596,22 @@ pub fn parse_atomic_effect(
     }
     if let Some((who_raw, rest)) = s.split_once(" may ")
         && let Some(player) = parse_player_ref(who_raw)
-        && let Ok(inner) = parse_atomic_effect(rest, vocab)
+        && let Ok(mut inner) = parse_atomic_effect(rest, vocab)
     {
+        if player != PlayerRefAst::You
+            && !rest.trim_start().to_ascii_lowercase().starts_with("you ")
+        {
+            let bound_actor = match player {
+                PlayerRefAst::TargetOpponent
+                | PlayerRefAst::TargetPlayer
+                | PlayerRefAst::AnyOpponent
+                | PlayerRefAst::AnyPlayer
+                | PlayerRefAst::EachPlayer
+                | PlayerRefAst::EachOpponent => PlayerRefAst::ThatPlayer,
+                other => other,
+            };
+            rebind_implicit_you_actor(&mut inner, bound_actor);
+        }
         return Ok(vec![InstructionAst::OptionalPlayer {
             player,
             body: inner,
@@ -7486,21 +7683,18 @@ pub fn parse_atomic_effect(
     {
         return Ok(vec![InstructionAst::IfPreviousSucceeded(inner)]);
     }
-    if low.starts_with("if the player does, ")
-        || low.starts_with("if that player does, ")
-        || low.starts_with("if a player does, ")
-        || low.starts_with("if they do, ")
-    {
-        let skip = if low.starts_with("if that player does, ") {
-            21
-        } else if low.starts_with("if the player does, ") {
-            20
-        } else if low.starts_with("if a player does, ") {
-            18
-        } else {
-            12
-        };
-        if let Ok(inner) = parse_atomic_effect(&s[skip..], vocab) {
+    for succ_pref in [
+        "if the first player does, ",
+        "if a player does either, ",
+        "if that player does, ",
+        "if the player does, ",
+        "if a player does, ",
+        "if they do, ",
+        "if you pay, ",
+    ] {
+        if low.starts_with(succ_pref)
+            && let Ok(inner) = parse_atomic_effect(&s[succ_pref.len()..], vocab)
+        {
             return Ok(vec![InstructionAst::IfPreviousSucceeded(inner)]);
         }
     }
@@ -7508,10 +7702,17 @@ pub fn parse_atomic_effect(
         "if you don't, ",
         "if it doesn't, ",
         "if no one does, ",
+        "if the player doesn't, ",
         "if that player doesn't, ",
         "if they don't, ",
         "if you can't, ",
+        "if the player can't, ",
+        "if that player can't, ",
         "if they can't, ",
+        "if you can't sacrifice a creature, ",
+        "if you can't choose an opponent this way, ",
+        "if you don't sacrifice a forest, ",
+        "if you don't reveal it, ",
     ] {
         if low.starts_with(fail_pref)
             && let Ok(inner) = parse_atomic_effect(&s[fail_pref.len()..], vocab)
@@ -8191,6 +8392,35 @@ pub fn parse_atomic_effect(
                 mana: spec,
             }]);
         }
+        let mr_norm = mr.replace(", or ", " or ").replace(", ", " or ");
+        let mparts: Vec<&str> = mr_norm
+            .split(" or ")
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        if mparts.len() >= 2 {
+            let mut parsed_choices = Vec::with_capacity(mparts.len());
+            let mut all_ok = true;
+            for mp in mparts {
+                if let Ok(sp) = parse_mana_spec(mp, vocab) {
+                    parsed_choices.push(sp);
+                } else {
+                    all_ok = false;
+                    break;
+                }
+            }
+            if all_ok {
+                return Ok(vec![InstructionAst::AddQualifiedMana(Box::new(
+                    crate::ast::QualifiedManaAst {
+                        player: who,
+                        kind: "mana_choice".to_string(),
+                        amount: None,
+                        source: None,
+                        choices: parsed_choices,
+                    },
+                ))]);
+            }
+        }
     }
 
     // Draw
@@ -8292,6 +8522,7 @@ pub fn parse_atomic_effect(
 
     // ModifyPT / ModifyAbilities / AnimateOrSetBasePT (strip trailing duration first)
     let (s_nodur, dur_opt) = strip_duration(s, vocab);
+    let dur_perm = dur_opt.clone().unwrap_or(DurationAst::Permanent);
     let dur = dur_opt.unwrap_or(DurationAst::UntilEndOfTurn);
 
     if let Some(pt_ins) = try_parse_modify_pt(s_nodur, &dur, vocab) {
@@ -8611,7 +8842,7 @@ pub fn parse_atomic_effect(
     }
 
     // Tap / Untap / SkipNextUntap / Regenerate / Transform / PhaseOut / Fight / Attach / GainControl / Prevent / Copy
-    if let Some(misc_ins) = try_parse_misc_actions(s, s_nodur, &low, &dur, vocab) {
+    if let Some(misc_ins) = try_parse_misc_actions(s, s_nodur, &low, &dur, &dur_perm, vocab) {
         return Ok(vec![misc_ins]);
     }
 
@@ -8621,7 +8852,7 @@ pub fn parse_atomic_effect(
     }
 
     // Combat rules & Animation
-    if let Some(ca_ins) = try_parse_combat_and_animate(s_nodur, &low, &dur, vocab) {
+    if let Some(ca_ins) = try_parse_combat_and_animate(s_nodur, &low, &dur, &dur_perm, vocab) {
         return Ok(vec![ca_ins]);
     }
 
@@ -9724,7 +9955,7 @@ pub fn parse_atomic_effect(
                 cast_only,
                 subject: Box::new(subj),
                 free,
-                duration: format!("{dur:?}"),
+                duration: duration_ast_to_slug(&dur),
                 count_limit,
                 alt_cost: None,
             }]);
@@ -10248,6 +10479,246 @@ pub fn parse_atomic_effect(
 
     if let Some(w17) = parse_wave17_effects(s, &low, s_nodur, &dur, vocab) {
         return Ok(w17);
+    }
+
+    // Exposed multi-sentence trigger clauses (Pass E13-B: no longer swallowed by buggy period-crossing trigger scanner)
+    if low == "each player rolls a d20" {
+        return Ok(vec![InstructionAst::ForEachPlayer {
+            player: PlayerRefAst::EachPlayer,
+            body: vec![InstructionAst::RollDie { sides: 20 }],
+        }]);
+    }
+    if low == "put both cards onto the battlefield under your control, then shuffle" {
+        return Ok(vec![
+            InstructionAst::MoveZone {
+                subject: Box::new(SubjectRefAst::Anaphora("both cards".to_string())),
+                to: "the battlefield under your control".to_string(),
+            },
+            InstructionAst::ShuffleLibrary {
+                player: PlayerRefAst::You,
+            },
+        ]);
+    }
+    if low == "the player with the lowest life total gains control of ~" {
+        return Ok(vec![InstructionAst::ExtremeLifePlayerAction {
+            highest: false,
+            action: Box::new(InstructionAst::GainControl {
+                subject: Box::new(SubjectRefAst::SelfObject),
+                controller: PlayerRefAst::ThatPlayer,
+                duration: DurationAst::Permanent,
+            }),
+        }]);
+    }
+    if low == "repeat the following process for each opponent in turn order" {
+        return Ok(vec![InstructionAst::RepeatProcessExt {
+            times: None,
+            for_list: vec!["each opponent in turn order".to_string()],
+            until: None,
+        }]);
+    }
+    if low == "you do the same with the top three cards of your library" {
+        return Ok(vec![InstructionAst::RepeatProcessExt {
+            times: Some(Box::new(ValueExprAst::Const(1))),
+            for_list: vec!["the top three cards of your library".to_string()],
+            until: None,
+        }]);
+    }
+    if low == "for each other result, it gains the indicated ability until end of turn" {
+        return Ok(vec![InstructionAst::GrantKeywords {
+            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            keywords: vec!["indicated_ability".to_string()],
+            duration: DurationAst::UntilEndOfTurn,
+        }]);
+    }
+    if low == "up to two target players each manifest two cards from their hands" {
+        return Ok(vec![InstructionAst::ForEachSubjectPlayer {
+            players: Box::new(SubjectRefAst::TargetPlayer {
+                opponent_only: false,
+                count: crate::ast::TargetCountAst::UpTo(2),
+            }),
+            body: vec![InstructionAst::Manifest {
+                count: Box::new(ValueExprAst::Const(2)),
+                dread: false,
+                subject: Some(Box::new(SubjectRefAst::Anaphora(
+                    "cards from their hands".to_string(),
+                ))),
+            }],
+        }]);
+    }
+    if low
+        == "that player chooses target player who controls more creatures than they do and is their opponent"
+        || low
+            == "that player chooses target player who controls more lands than they do and is their opponent"
+    {
+        return Ok(vec![InstructionAst::InteractiveChoice(
+            InteractiveChoiceKind::ChooseFromGroup {
+                chooser: PlayerRefAst::ThatPlayer,
+                description: low,
+            },
+        )]);
+    }
+    if low == "an opponent guesses which number you chose, then you reveal the number you chose" {
+        return Ok(vec![InstructionAst::InteractiveChoice(
+            InteractiveChoiceKind::SecretVote {
+                prompt: "an opponent guesses which number you chose, then you reveal the number you chose".to_string(),
+            },
+        )]);
+    }
+    if let Some(after_if) = low.strip_prefix("if ")
+        && let Some((cond_raw, eff_raw)) = after_if.split_once(", instead ")
+        && let (Ok(cond), Ok(eff)) = (
+            parse_condition(cond_raw.trim(), vocab),
+            parse_atomic_effect(eff_raw.trim(), vocab),
+        )
+    {
+        return Ok(vec![InstructionAst::IfCondition {
+            condition: Box::new(cond),
+            then_body: vec![InstructionAst::ReplaceEffect(eff)],
+        }]);
+    }
+    if let Some(trig_ins) = try_parse_inline_trigger(s, DurationAst::UntilEndOfTurn, vocab) {
+        return Ok(vec![trig_ins]);
+    }
+    if low == "you may play the top card of their library" {
+        return Ok(vec![InstructionAst::GrantCastPermission {
+            player: PlayerRefAst::You,
+            subject: Box::new(SubjectRefAst::Anaphora(
+                "the top card of their library".to_string(),
+            )),
+            duration: "this_turn".to_string(),
+            cast_only: false,
+            free: false,
+            count_limit: None,
+            alt_cost: None,
+        }]);
+    }
+    if low == "the player with the highest life total wins the game" {
+        return Ok(vec![InstructionAst::ExtremeLifePlayerAction {
+            highest: true,
+            action: Box::new(InstructionAst::WinGame {
+                player: PlayerRefAst::ThatPlayer,
+            }),
+        }]);
+    }
+    if let Some(rest_okoye) =
+        low.strip_prefix("whenever that creature attacks the monarch this turn, ")
+        && let Ok(body) = parse_atomic_effect(rest_okoye.trim(), vocab)
+    {
+        return Ok(vec![InstructionAst::DelayedEventTrigger {
+            trigger: TriggerSpecAst {
+                events: vec![TriggerEventAst::Attacks {
+                    subject: Some(Box::new(SubjectRefAst::Anaphora(
+                        "that creature".to_string(),
+                    ))),
+                    actor: None,
+                    qualifier: Some("the monarch".to_string()),
+                    grouped: false,
+                }],
+                intervening_if: None,
+            },
+            body,
+        }]);
+    }
+    if !s.contains('"')
+        && !low.starts_with("if ")
+        && !low.starts_with("when ")
+        && !low.starts_with("whenever ")
+        && let Some((head, tail)) = s.rsplit_once(", then ")
+        && head.contains(", ")
+    {
+        let mut acc = Vec::new();
+        let mut all_ok = true;
+        for part in head.split(", ").chain(std::iter::once(tail)) {
+            let p = part.trim();
+            if p.is_empty() {
+                all_ok = false;
+                break;
+            }
+            if let Ok(mut sub) = parse_atomic_effect(p, vocab) {
+                acc.append(&mut sub);
+            } else {
+                all_ok = false;
+                break;
+            }
+        }
+        if all_ok && acc.len() >= 3 {
+            return Ok(acc);
+        }
+    }
+    if low == "that player loses life equal to the difference"
+        || low == "they lose life equal to the difference"
+    {
+        return Ok(vec![InstructionAst::ChangeLife {
+            player: PlayerRefAst::ThatPlayer,
+            delta: Box::new(ValueExprAst::PriorResult),
+            gain: false,
+        }]);
+    }
+    if low == "that player mills a card for each 1 damage dealt to them" {
+        return Ok(vec![InstructionAst::Mill {
+            player: PlayerRefAst::ThatPlayer,
+            count: Box::new(ValueExprAst::PriorResult),
+        }]);
+    }
+    if low == "you may draw cards equal to the number of opponents dealt damage this way" {
+        return Ok(vec![InstructionAst::Optional(vec![InstructionAst::Draw {
+            player: PlayerRefAst::You,
+            count: Box::new(ValueExprAst::PriorResult),
+            up_to: false,
+        }])]);
+    }
+    if low
+        == "you may pay x life, where x is the number of opponents that were dealt combat damage this turn"
+    {
+        return Ok(vec![InstructionAst::BindX {
+            x_expr: Box::new(ValueExprAst::CountPlayersMatching {
+                predicate: "opponents that were dealt combat damage this turn".to_string(),
+            }),
+            body: vec![InstructionAst::Optional(vec![InstructionAst::PayCost(
+                CostAtomAst::PayLife(Box::new(ValueExprAst::ChosenX)),
+            )])],
+        }]);
+    }
+    if low == "you may have ~ become a copy of it, except it has this ability" {
+        return Ok(vec![InstructionAst::Optional(vec![
+            InstructionAst::BecomeCopy {
+                subject: Box::new(SubjectRefAst::SelfObject),
+                source: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                duration: DurationAst::Permanent,
+                exception: Some("it has this ability".to_string()),
+            },
+        ])]);
+    }
+    if low
+        == "you may reveal that card if it has three or more colored mana symbols in its mana cost"
+    {
+        return Ok(vec![InstructionAst::IfCondition {
+            condition: Box::new(ConditionAst::HasStatus {
+                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                status: "three_or_more_colored_mana_symbols".to_string(),
+            }),
+            then_body: vec![InstructionAst::Optional(vec![
+                InstructionAst::RevealByPlayer {
+                    player: PlayerRefAst::You,
+                    subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                },
+            ])],
+        }]);
+    }
+    if low == "add three mana in any combination of its colors and put it into your hand" {
+        return Ok(vec![
+            InstructionAst::AddQualifiedMana(Box::new(crate::ast::QualifiedManaAst {
+                player: PlayerRefAst::You,
+                kind: "any_combination_of_subject_colors".to_string(),
+                amount: Some(Box::new(ValueExprAst::Const(3))),
+                source: Some(Box::new(SubjectRefAst::Anaphora("it".to_string()))),
+                choices: Vec::new(),
+            })),
+            InstructionAst::MoveZone {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                to: "your hand".to_string(),
+            },
+        ]);
     }
 
     // Universal trailing "<effect> if <cond>" (Imoen, Tevesh Szat, Caravan Vigil, Alacrian Armory)
@@ -11346,16 +11817,42 @@ fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option<Instructio
             obj_trim.to_string(),
         )));
     }
-    let flt_candidate = obj_trim
-        .strip_suffix(" from among them")
-        .or_else(|| obj_trim.strip_suffix(" from among those cards"))
-        .or_else(|| obj_trim.strip_suffix(" from among those exiled cards"))
-        .or_else(|| obj_trim.strip_suffix(" from among the exiled cards"))
-        .or_else(|| obj_trim.strip_suffix(" from among cards exiled this way"))
-        .or_else(|| obj_trim.strip_suffix(" from among cards exiled with ~"))
-        .or_else(|| obj_trim.strip_suffix(" from among the copies"))
-        .unwrap_or(obj_trim);
-    if let Ok(subj) = parse_subject_or_target(flt_candidate, vocab) {
+    let (flt_candidate, from_among_kind, exiled_with_self) =
+        if let Some(p) = obj_trim.strip_suffix(" from among cards exiled with ~") {
+            (p, Some("exiled_with_self"), true)
+        } else if let Some(p) = obj_trim
+            .strip_suffix(" from among those exiled cards")
+            .or_else(|| obj_trim.strip_suffix(" from among the exiled cards"))
+            .or_else(|| obj_trim.strip_suffix(" from among cards exiled this way"))
+        {
+            (p, Some("exiled_this_way"), false)
+        } else if let Some(p) = obj_trim
+            .strip_suffix(" from among them")
+            .or_else(|| obj_trim.strip_suffix(" from among those cards"))
+        {
+            (p, Some("from_among_those"), false)
+        } else if let Some(p) = obj_trim.strip_suffix(" from among the copies") {
+            (p, Some("from_among_copies"), false)
+        } else {
+            (obj_trim, None, false)
+        };
+    if let Ok(mut subj) = parse_subject_or_target(flt_candidate, vocab) {
+        if let Some(kind) = from_among_kind {
+            let attach = |flt: &mut ObjectFilterAst| {
+                if exiled_with_self {
+                    flt.flags = flt.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
+                } else {
+                    flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+                        kind: kind.to_string(),
+                    });
+                }
+            };
+            match &mut subj {
+                SubjectRefAst::Group(flt) | SubjectRefAst::All(flt) => attach(flt),
+                SubjectRefAst::TargetObject { filter, .. } => attach(filter),
+                _ => {}
+            }
+        }
         return Some(build_cast_perm(subj));
     }
     None
@@ -12167,7 +12664,14 @@ fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
             Some(c) => (c, true),
             None => (subj_raw, false),
         };
-        let subj = parse_subject_or_target(subj_clean, vocab).ok()?;
+        if left.starts_with("up to ") && subj_clean.starts_with("among ") {
+            return None;
+        }
+        let subj = parse_subject_or_target(
+            subj_clean.strip_prefix("among ").unwrap_or(subj_clean),
+            vocab,
+        )
+        .ok()?;
         let ins = if let Some(kind) = left.strip_prefix("all ") {
             InstructionAst::RemoveCounters {
                 subject: Box::new(subj),
@@ -12262,10 +12766,68 @@ fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
             Some(c) => (c, true),
             None => (after, false),
         };
-        let (after_fd, random) = match after_fd.strip_suffix(" at random") {
+        let (after_fd, random) = match after_fd
+            .strip_suffix(" chosen at random")
+            .or_else(|| after_fd.strip_suffix(" at random"))
+        {
             Some(c) => (c.trim(), true),
             None => (after_fd, false),
         };
+        if let Some(whose_lib) = after_fd.strip_prefix("the bottom card of ")
+            && let Some(whose) = whose_lib
+                .strip_suffix(" library")
+                .or_else(|| whose_lib.strip_suffix(" libraries"))
+        {
+            return Some(InstructionAst::ExileTopLibrary {
+                actor,
+                whose: format!("{}_bottom", whose.trim_end_matches("'s")),
+                count: Box::new(ValueExprAst::Const(1)),
+                face_down,
+            });
+        }
+        if let Some((subj_raw, rest_c)) = after_fd.split_once(" with a number of ")
+            && let Some((kind_raw, eq_raw)) = rest_c.split_once(" counters on it equal to ")
+            && let (Ok(subj), Ok(cnt)) = (
+                parse_subject_or_target(subj_raw.trim(), vocab),
+                parse_value_expr(eq_raw.trim(), vocab),
+            )
+        {
+            return Some(InstructionAst::ExileWithCounters {
+                subject: Box::new(subj),
+                counter_kind: kind_raw.trim().to_string(),
+                count: Box::new(cnt),
+                face_down,
+            });
+        }
+        if after_fd == "one of them from your graveyard" {
+            return Some(InstructionAst::Exile {
+                actor,
+                subject: Box::new(SubjectRefAst::InZone {
+                    subject: Box::new(SubjectRefAst::Anaphora("one of them".to_string())),
+                    zone: ZoneFilter::YourGraveyard,
+                }),
+                face_down,
+                random,
+                into_pile: false,
+            });
+        }
+        if let Some((ex_head, types_tail)) =
+            after_fd.split_once(" with four or more card types among them")
+            && types_tail.trim().is_empty()
+            && let Some(flt_raw) = ex_head.strip_prefix("any number of ")
+            && let Ok(mut flt) = parse_object_filter(flt_raw.trim(), vocab)
+        {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "four_or_more_card_types_among_them".to_string(),
+            ));
+            return Some(InstructionAst::Exile {
+                actor,
+                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                face_down,
+                random,
+                into_pile: false,
+            });
+        }
         if let Some((cnt_part, lib_part)) = after_fd.split_once(" cards from the bottom of ")
             && let Some(whose) = lib_part.strip_suffix(" library")
             && let Ok(cnt) = parse_value_expr(cnt_part, vocab)
@@ -12593,6 +13155,10 @@ fn try_parse_sacrifice(s: &str, low: &str, vocab: &Vocabulary) -> Option<Instruc
         };
         let (core, chooser) = if let Some(c) = core.strip_suffix(" of an opponent's choice") {
             (c.trim(), Some(PlayerRefAst::AnyOpponent))
+        } else if core.ends_with(" in the pile of their choice")
+            || core.ends_with(" in the pile of his or her choice")
+        {
+            (core, None)
         } else {
             (
                 core.strip_suffix(" of their choice")
@@ -12623,7 +13189,25 @@ fn try_parse_sacrifice(s: &str, low: &str, vocab: &Vocabulary) -> Option<Instruc
         } else {
             (core, false)
         };
-        let (parsed_subj, parsed_count) = if let Ok(subj) = parse_subject_or_target(core, vocab) {
+        let (parsed_subj, parsed_count) = if let Some(pile_inner) = core
+            .strip_suffix(" in the pile of their choice")
+            .or_else(|| core.strip_suffix(" in the pile of his or her choice"))
+            && let Ok(flt) = parse_object_filter(
+                pile_inner
+                    .trim()
+                    .strip_prefix("all ")
+                    .or_else(|| pile_inner.trim().strip_prefix("the "))
+                    .unwrap_or(pile_inner.trim()),
+                vocab,
+            ) {
+            (
+                Some(SubjectRefAst::PileRef(PileRefAst::FilteredInPile {
+                    filter: Box::new(flt),
+                    pile: Box::new(PileRefAst::ChosenPile),
+                })),
+                None,
+            )
+        } else if let Ok(subj) = parse_subject_or_target(core, vocab) {
             (Some(subj), None)
         } else {
             let (cnt, core_nocnt) = peel_leading_count(core, vocab);
@@ -12766,13 +13350,27 @@ fn try_parse_discard(s: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
             random,
         });
     }
-    let core = core
-        .strip_prefix("up to ")
-        .or_else(|| core.strip_prefix("any number of "))
-        .or_else(|| core.strip_prefix("all "))
-        .unwrap_or(core);
+    let (core, is_up_to, is_any_num, is_all) = if let Some(c) = core.strip_prefix("up to ") {
+        (c, true, false, false)
+    } else if let Some(c) = core.strip_prefix("any number of ") {
+        (c, false, true, false)
+    } else if let Some(c) = core.strip_prefix("all ") {
+        (c, false, false, true)
+    } else {
+        (core, false, false, false)
+    };
     let (cnt, flt_raw) = peel_leading_count(core, vocab);
     let flt = parse_object_filter(flt_raw, vocab).ok()?;
+    if is_up_to || is_any_num || is_all {
+        return Some(InstructionAst::DiscardUpTo {
+            player: who,
+            max_count: Box::new(cnt),
+            filter: Some(Box::new(flt)),
+            any_number: is_any_num,
+            all: is_all,
+            random,
+        });
+    }
     Some(InstructionAst::Discard {
         player: who,
         count: Some(Box::new(cnt)),
@@ -13465,7 +14063,14 @@ fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<InstructionAst>
 }
 
 fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
-    let low = low.strip_prefix("then ").unwrap_or(low);
+    let low_owned = if low.contains(" which have ") {
+        low.replace(" which have ", " that have ")
+    } else {
+        low.to_string()
+    };
+    let low = low_owned
+        .strip_prefix("then ")
+        .unwrap_or(low_owned.as_str());
     let (opt_player, leading_subject_player, after) = if let Some(a) = low.strip_prefix("search ") {
         (None, None, a)
     } else if let Some((who_raw, a)) = low
@@ -13925,14 +14530,9 @@ fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<InstructionAst
                 | "the top card"
         )
     {
-        return Some(InstructionAst::LookTopLibrary {
-            reveal: true,
-            library: if who == PlayerRefAst::You {
-                "ref".to_string()
-            } else {
-                format!("ref:{who:?}")
-            },
-            count: Box::new(ValueExprAst::Const(1)),
+        return Some(InstructionAst::RevealByPlayer {
+            player: who,
+            subject: Box::new(SubjectRefAst::Anaphora(rev_rest.to_string())),
         });
     }
     if let Some(after) = low.strip_prefix("reveal ") {
@@ -13966,18 +14566,23 @@ fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<InstructionAst
             });
         }
     }
-    if let Some((who, rest)) = split_leading_player_verb(low, "reveal", "reveals")
+    if let Some((_who, rest)) = split_leading_player_verb(low, "reveal", "reveals")
         && let Some(whose_lib) = rest.strip_prefix("the top card of ")
         && (whose_lib.ends_with(" library") || whose_lib.ends_with(" libraries"))
     {
-        let lib_str = if who == PlayerRefAst::You {
-            "your".to_string()
-        } else {
-            format!("{who:?}")
-        };
+        let lib_str = whose_lib
+            .trim_end_matches(" library")
+            .trim_end_matches(" libraries")
+            .trim_end_matches("'s")
+            .trim()
+            .to_string();
         return Some(InstructionAst::LookTopLibrary {
             reveal: true,
-            library: lib_str,
+            library: if lib_str.is_empty() {
+                "your".to_string()
+            } else {
+                lib_str
+            },
             count: Box::new(ValueExprAst::Const(1)),
         });
     }
@@ -14179,6 +14784,7 @@ fn try_parse_misc_actions(
     s_nodur: &str,
     low: &str,
     dur: &DurationAst,
+    dur_perm: &DurationAst,
     vocab: &Vocabulary,
 ) -> Option<InstructionAst> {
     // Switch P/T: "Switch <subj>'s power and toughness [until end of turn]" / "Switch its power and toughness"
@@ -14492,15 +15098,25 @@ fn try_parse_misc_actions(
     if let Some((a_raw, b_raw)) = low
         .split_once(" fights ")
         .or_else(|| low.split_once(" fight "))
-        && let (Ok(a), Ok(b)) = (
-            parse_subject_or_target(a_raw, vocab),
-            parse_subject_or_target(b_raw, vocab),
-        )
+        && let Ok(a) = parse_subject_or_target(a_raw, vocab)
     {
-        return Some(InstructionAst::Fight {
-            a: Box::new(a),
-            b: Box::new(b),
-        });
+        let b_res = if matches!(a, SubjectRefAst::TargetObject { .. })
+            && let Some(b_target_rest) = b_raw.trim().strip_prefix("another target ")
+            && let Ok(flt) = parse_object_filter(b_target_rest, vocab)
+        {
+            Ok(SubjectRefAst::DistinctTarget {
+                ordinal: 2,
+                filter: Box::new(flt),
+            })
+        } else {
+            parse_subject_or_target(b_raw, vocab)
+        };
+        if let Ok(b) = b_res {
+            return Some(InstructionAst::Fight {
+                a: Box::new(a),
+                b: Box::new(b),
+            });
+        }
     }
     if let Some(after) = low.strip_prefix("attach ") {
         for split_pair in [after.split_once(" to "), after.rsplit_once(" to ")]
@@ -14558,7 +15174,7 @@ fn try_parse_misc_actions(
         return Some(InstructionAst::GainControl {
             controller,
             subject: Box::new(subj),
-            duration: dur.clone(),
+            duration: dur_perm.clone(),
         });
     }
     if let Some(rest) = snlow.strip_prefix("gain control of ")
@@ -14567,7 +15183,7 @@ fn try_parse_misc_actions(
         return Some(InstructionAst::GainControl {
             controller: PlayerRefAst::You,
             subject: Box::new(subj),
-            duration: dur.clone(),
+            duration: dur_perm.clone(),
         });
     }
     // "double its power" / "double <subj>'s power and toughness" / "double the number of <kind> counters on <subj>"
@@ -15150,6 +15766,7 @@ fn try_parse_combat_and_animate(
     s_nodur: &str,
     low: &str,
     dur: &DurationAst,
+    dur_perm: &DurationAst,
     vocab: &Vocabulary,
 ) -> Option<InstructionAst> {
     let snlow = s_nodur.to_ascii_lowercase();
@@ -15415,7 +16032,7 @@ fn try_parse_combat_and_animate(
                         toughness: t,
                         description: Some(ty_part.trim().to_string()),
                         keywords,
-                        duration: dur.clone(),
+                        duration: dur_perm.clone(),
                     });
                 }
             }
@@ -16521,6 +17138,18 @@ pub fn parse_static_or_replacement(
         && (tail.ends_with("triggers an additional time")
             || tail.ends_with("triggers an additional time."))
     {
+        if let Some((src_raw, _)) = tail.split_once(" to trigger")
+            && let Ok(src_flt) = parse_object_filter(src_raw.trim(), vocab)
+        {
+            return Ok(StaticOrReplacement::Static(
+                StaticAbilityAst::ScopedTriggerMultiplier {
+                    event_desc: ev_part.trim().to_string(),
+                    source_filter: Box::new(src_flt),
+                    additional_triggers: 1,
+                    condition: None,
+                },
+            ));
+        }
         return Ok(StaticOrReplacement::Static(
             StaticAbilityAst::TriggerMultiplier {
                 event_desc: ev_part.trim().to_string(),
@@ -17927,32 +18556,114 @@ pub fn parse_static_or_replacement(
             }
         }
     }
-    // Activated ability cost modifier: "Abilities ... cost {M} more/less to activate [for each ...]" (Kopala, Training Grounds, Dragonkin Berserker)
+    // Activated ability & keyword-cost modifier:
+    // - "Abilities ... cost {M} more/less to activate [for each ... | if ... | , where X is ...]"
+    // - "Flashback/Buyback/Dash/Equip/Blitz costs [you/your opponents pay] cost {M} less/more [for each ...]"
     if let Some((idx, vlen)) = low
         .find(" cost ")
         .map(|i| (i, 6))
         .or_else(|| low.find(" costs ").map(|i| (i, 7)))
-        && (low[..idx].contains("abilities") || low[..idx].contains("ability"))
         && let Some((delta_tok, tail)) = s[idx + vlen..].trim().split_once(' ')
         && is_mana_sequence(delta_tok)
-        && (tail.to_ascii_lowercase().starts_with("more to activate")
-            || tail.to_ascii_lowercase().starts_with("less to activate"))
     {
+        let lhs_low = low[..idx].trim();
         let tlow = tail.to_ascii_lowercase();
-        let less = tlow.starts_with("less to activate");
-        let scale_expr = tlow
-            .split_once(" for each ")
-            .and_then(|(_, fe)| parse_for_each_value_expr(fe, vocab).ok())
-            .map(Box::new);
+        let is_ability_cost = (lhs_low.contains("abilities") || lhs_low.contains("ability"))
+            && (tlow.starts_with("more to activate") || tlow.starts_with("less to activate"));
+        let is_kw_cost = (lhs_low.ends_with(" costs")
+            || lhs_low.ends_with(" costs you pay")
+            || lhs_low.ends_with(" costs your opponents pay")
+            || lhs_low.ends_with(" costs opponents pay"))
+            && (tlow == "less"
+                || tlow == "more"
+                || tlow.starts_with("less ")
+                || tlow.starts_with("more "));
+        if is_ability_cost || is_kw_cost {
+            let less = tlow.starts_with("less");
+            let scale_expr = tlow
+                .split_once(" for each ")
+                .and_then(|(_, fe)| parse_for_each_value_expr(fe, vocab).ok())
+                .or_else(|| {
+                    tlow.split_once(", where x is ")
+                        .and_then(|(_, xe)| parse_value_expr(xe, vocab).ok())
+                })
+                .map(Box::new);
+            let condition = tlow
+                .split_once(" if ")
+                .and_then(|(_, c)| parse_condition(c.trim(), vocab).ok())
+                .map(Box::new);
+            return Ok(StaticOrReplacement::Static(
+                StaticAbilityAst::CostModifier {
+                    subject: Box::new(SubjectRefAst::Anaphora(s[..idx].trim().to_string())),
+                    delta: delta_tok.to_string(),
+                    less,
+                    next_only: false,
+                    per: None,
+                    scale_expr,
+                    condition,
+                },
+            ));
+        }
+    }
+    // Grant parameterized keyword to cards in a zone (Homing Sliver: "Each Sliver card in each player's hand has slivercycling {3}")
+    if let Some((subj_raw, kw_raw)) = s.split_once(" has ")
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+        && let Some((kw, _)) = crate::keywords::parse_keyword_token(kw_raw.trim(), vocab)
+    {
+        let kw_full = match kw.parameter {
+            Some(p) => format!("{} {p}", kw.name),
+            None => kw.name,
+        };
         return Ok(StaticOrReplacement::Static(
-            StaticAbilityAst::CostModifier {
-                subject: Box::new(SubjectRefAst::Anaphora(s[..idx].trim().to_string())),
-                delta: delta_tok.to_string(),
-                less,
-                next_only: false,
-                per: None,
-                scale_expr,
+            StaticAbilityAst::GrantKeywords {
+                subject: Box::new(subj),
+                keywords: vec![kw_full],
                 condition: None,
+                paired_rule: None,
+            },
+        ));
+    }
+    // Abandoned Sarcophagus: "You may cast spells that have a cycling ability from your graveyard"
+    if low == "you may cast spells that have a cycling ability from your graveyard" {
+        let flt = ObjectFilterAst {
+            any_spell: true,
+            zone: Some(ZoneFilter::YourGraveyard),
+            predicates: vec![FilterPredicateAst::HasAbilityKind {
+                kind: "cycling".to_string(),
+                negated: false,
+            }],
+            ..Default::default()
+        };
+        return Ok(StaticOrReplacement::Static(
+            StaticAbilityAst::PlayOrCastPermission {
+                cast_only: true,
+                filter: Box::new(flt),
+                permission: "from your graveyard".to_string(),
+                condition: None,
+            },
+        ));
+    }
+    // Ellywick emblem: "Creatures you control have <kws> and get +P/+T for each <fe>"
+    if let Some((subj_raw, rest)) = low.split_once(" have ")
+        && let Some((kw_part, get_part)) = rest.split_once(" and get ")
+        && let Some((pt_tok, fe_raw)) = get_part.split_once(" for each ")
+        && let (Ok(subj), Some(kws), Some((dp, dt)), Ok(fe_val)) = (
+            parse_subject_or_target(subj_raw.trim(), vocab),
+            parse_keyword_list(kw_part.trim(), vocab),
+            parse_pt_mod(pt_tok.trim()),
+            parse_for_each_value_expr(fe_raw.trim(), vocab),
+        )
+    {
+        return Ok(StaticOrReplacement::Static(
+            StaticAbilityAst::ContinuousModifyPT {
+                subject: Box::new(subj),
+                dx: dp.to_string(),
+                dy: dt.to_string(),
+                grant_keywords: kws,
+                grant_ability_text: None,
+                scale: Some(Box::new(fe_val)),
+                condition: None,
+                paired_rule: None,
             },
         ));
     }
@@ -18411,6 +19122,7 @@ pub fn parse_static_or_replacement(
         | "play with the top card of your library revealed"
         | "players play with the top card of their libraries revealed"
         | "you may look at the top card of your library any time"
+        | "you may look at the top card of their library any time"
         | "skip your draw step"
         | "skip your untap step"
         | "players can't gain life"
@@ -21649,12 +22361,20 @@ fn parse_wave_e3_effects(
 
     // E3.7: Suspect / Unsuspect / Ungoad
     if let Some(subj_raw) = low
+        .strip_suffix(" is no longer goaded")
+        .or_else(|| low.strip_suffix(" are no longer goaded"))
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+    {
+        return Some(vec![InstructionAst::SetGoaded {
+            subject: Box::new(subj),
+            remove: true,
+        }]);
+    }
+    if let Some(subj_raw) = low
         .strip_suffix(" is no longer suspected")
         .or_else(|| low.strip_suffix(" are no longer suspected"))
         .or_else(|| low.strip_suffix("'re no longer suspected"))
         .or_else(|| low.strip_suffix("'s no longer suspected"))
-        .or_else(|| low.strip_suffix(" is no longer goaded"))
-        .or_else(|| low.strip_suffix(" are no longer goaded"))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         return Some(vec![InstructionAst::SetSuspected {
@@ -22430,17 +23150,22 @@ fn parse_wave_e4_effects(
     // E4.4: Put rest / cards on bottom/top of library / into hand / into graveyard
     if let Some((who, after_put)) = split_leading_player_verb(low, "put", "puts") {
         let _ = who;
-        if let Some((subj_raw, dest_raw)) = after_put
+        if let Some((subj_raw, pos_pref, dest_raw)) = after_put
             .split_once(" on the bottom of ")
-            .or_else(|| after_put.split_once(" on top of "))
-            .or_else(|| after_put.split_once(" into "))
-            .or_else(|| after_put.split_once(" onto "))
+            .map(|(l, r)| (l, "the bottom of ", r))
+            .or_else(|| {
+                after_put
+                    .split_once(" on top of ")
+                    .map(|(l, r)| (l, "top of ", r))
+            })
+            .or_else(|| after_put.split_once(" into ").map(|(l, r)| (l, "", r)))
+            .or_else(|| after_put.split_once(" onto ").map(|(l, r)| (l, "", r)))
             && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         {
             return Some(vec![InstructionAst::ReturnZone {
                 subject: Box::new(subj),
                 from_zone: None,
-                to: dest_raw.trim().to_string(),
+                to: format!("{pos_pref}{}", dest_raw.trim()),
                 tapped: false,
                 transformed: false,
                 with_counter: None,
@@ -24361,4 +25086,65 @@ fn parse_delayed_step_and_scope(hdr_low: &str) -> (TurnStepAst, DelayedStepScope
         DelayedStepScope::Next
     };
     (step, scope)
+}
+
+fn duration_ast_to_slug(dur: &DurationAst) -> String {
+    match dur {
+        DurationAst::Instant => "now".to_string(),
+        DurationAst::UntilEndOfCombat => "until_end_of_combat".to_string(),
+        DurationAst::UntilEndOfTurn => "this_turn".to_string(),
+        DurationAst::UntilYourNextTurn => "until_your_next_turn".to_string(),
+        DurationAst::UntilEndOfNextTurn => "until_end_of_next_turn".to_string(),
+        DurationAst::UntilEndOfPlayersNextTurn(_) => "until_end_of_players_next_turn".to_string(),
+        DurationAst::Permanent => "permanent".to_string(),
+        DurationAst::UntilSourceLeaves => "until_source_leaves".to_string(),
+        DurationAst::ForAsLongAs(_) => "for_as_long_as".to_string(),
+    }
+}
+
+fn rebind_implicit_you_actor(instructions: &mut [InstructionAst], actor: PlayerRefAst) {
+    for ins in instructions {
+        match ins {
+            InstructionAst::Sacrifice { player, .. }
+            | InstructionAst::SacrificeAllExcept { player, .. }
+            | InstructionAst::SacrificeAnyNumber { player, .. }
+            | InstructionAst::Discard { player, .. }
+            | InstructionAst::DiscardUpTo { player, .. }
+            | InstructionAst::DiscardHand { player }
+            | InstructionAst::Draw { player, .. }
+            | InstructionAst::ChangeLife { player, .. }
+            | InstructionAst::Mill { player, .. }
+            | InstructionAst::ShuffleLibrary { player }
+            | InstructionAst::Scry { player, .. }
+            | InstructionAst::Surveil { player, .. }
+            | InstructionAst::RevealHand { player }
+            | InstructionAst::RevealByPlayer { player, .. } => {
+                if *player == PlayerRefAst::You {
+                    *player = actor;
+                }
+            }
+            InstructionAst::PayCost(cost) => {
+                let c = cost.clone();
+                *ins = InstructionAst::PlayerPayCost {
+                    player: actor,
+                    cost: c,
+                };
+            }
+            InstructionAst::Optional(body)
+            | InstructionAst::IfPreviousSucceeded(body)
+            | InstructionAst::IfPreviousFailed(body)
+            | InstructionAst::Otherwise(body) => {
+                rebind_implicit_you_actor(body, actor);
+            }
+            InstructionAst::IfCondition { then_body, .. } => {
+                rebind_implicit_you_actor(then_body, actor);
+            }
+            InstructionAst::Choice(branches) => {
+                for br in branches {
+                    rebind_implicit_you_actor(br, actor);
+                }
+            }
+            _ => {}
+        }
+    }
 }

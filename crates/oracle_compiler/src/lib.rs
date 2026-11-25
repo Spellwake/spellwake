@@ -5,6 +5,7 @@
 //! into strongly-typed, `serde`-serializable ASTs ready for thin lowering into `spellwake-engine`.
 
 pub mod ast;
+pub mod audit;
 pub mod clauses;
 pub mod filter;
 pub mod keywords;
@@ -471,7 +472,53 @@ pub fn compile_face_with_options(
             continue;
         }
 
-        // Modal bullet line (or bulleted die-roll band such as "• 2 — menace")
+        // Modal bullet line (bullet OR Bloomburrow pawprint modes "{P} <em-dash> ...", "{P}{P} <em-dash> ...", "{P}{P}{P} <em-dash> ...")
+        let pawprint_bullet: Option<(&str, &str)> = if modal_target != ModalTarget::None
+            && norm.starts_with("{P}")
+            && let Some((paw_lhs, paw_rhs)) = norm.split_once(preprocess::EM_DASH)
+        {
+            let pl = paw_lhs.trim();
+            if !pl.is_empty() && pl.replace("{P}", "").is_empty() {
+                Some((pl, paw_rhs.trim()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some((paw_label, paw_body)) = pawprint_bullet {
+            let (ins, fails) = parse_effect_body(paw_body, vocab);
+            out.failures.extend(fails);
+            let mode_ast = ModalModeAst {
+                body: ins,
+                label: Some(paw_label.to_string()),
+                granted: None,
+            };
+            match modal_target {
+                ModalTarget::Spell => {
+                    if let Some(modes) = find_last_modal_modes_mut(&mut out.spell_effects) {
+                        modes.push(mode_ast);
+                    }
+                }
+                ModalTarget::LastAbility => {
+                    if let Some(ab) = out.abilities.last_mut() {
+                        match ab {
+                            AbilityAst::Activated { body, .. }
+                            | AbilityAst::Triggered { body, .. }
+                            | AbilityAst::Loyalty { body, .. }
+                            | AbilityAst::SagaChapter { body, .. } => {
+                                if let Some(modes) = find_last_modal_modes_mut(body) {
+                                    modes.push(mode_ast);
+                                }
+                            }
+                            AbilityAst::ClassLevel { .. } => {}
+                        }
+                    }
+                }
+                ModalTarget::LastReplacement | ModalTarget::None => {}
+            }
+            continue;
+        }
         if let Some(bullet_body) = norm.strip_prefix(BULLET) {
             if modal_target == ModalTarget::None
                 && let Some((roll, payload)) = parse_die_roll_band(bullet_body.trim())
@@ -725,7 +772,15 @@ pub fn compile_face_with_options(
         }
 
         // Keyword line
-        if let Some((kws, k_statics)) = try_parse_keyword_line(body_for_parse, vocab) {
+        let spell_action_kw = is_spell && {
+            let bl = body_for_parse.to_ascii_lowercase();
+            bl.starts_with("earthbend ")
+                || bl.starts_with("airbend ")
+                || bl.starts_with("waterbend ")
+        };
+        if !spell_action_kw
+            && let Some((kws, k_statics)) = try_parse_keyword_line(body_for_parse, vocab)
+        {
             match para_section {
                 ActiveSection::Base => {
                     out.keywords.extend(kws);
@@ -785,6 +840,10 @@ pub fn compile_face_with_options(
                 while i < bytes.len() {
                     match bytes[i] {
                         b'"' => in_quotes = !in_quotes,
+                        b'.' if !in_quotes => {
+                            // Never scan trigger-header commas past the end of sentence 1 (fixes Sylvan Library).
+                            break;
+                        }
                         b',' if !in_quotes => {
                             let numeric_comma = i > 0
                                 && i + 1 < bytes.len()
@@ -1303,6 +1362,48 @@ pub fn compile_face_with_options(
         }
     }
 
+    fn normalize_standalone_choose_one(ins: &mut [InstructionAst]) {
+        for op in ins.iter_mut() {
+            match op {
+                InstructionAst::Modal { choice, modes } if modes.is_empty() && choice == "one" => {
+                    *op = InstructionAst::ChooseFromGroup {
+                        count: Box::new(ast::ValueExprAst::Const(1)),
+                        random: false,
+                        group: Box::new(ast::SubjectRefAst::Anaphora("one of them".to_string())),
+                    };
+                }
+                InstructionAst::Optional(inner)
+                | InstructionAst::OptionalPlayer { body: inner, .. }
+                | InstructionAst::IfCondition {
+                    then_body: inner, ..
+                }
+                | InstructionAst::IfPreviousSucceeded(inner)
+                | InstructionAst::IfPreviousFailed(inner)
+                | InstructionAst::Otherwise(inner)
+                | InstructionAst::ForEachPlayer { body: inner, .. }
+                | InstructionAst::ForEachObject { body: inner, .. }
+                | InstructionAst::ForEachCount { body: inner, .. }
+                | InstructionAst::DelayedTrigger { body: inner, .. }
+                | InstructionAst::DelayedEventTrigger { body: inner, .. }
+                | InstructionAst::ReflexiveTrigger(inner)
+                | InstructionAst::ScopedDuration { body: inner, .. }
+                | InstructionAst::ScopedDurationText { body: inner, .. } => {
+                    normalize_standalone_choose_one(inner);
+                }
+                _ => {}
+            }
+        }
+    }
+    normalize_standalone_choose_one(&mut out.spell_effects);
+    for ab in &mut out.abilities {
+        match ab {
+            AbilityAst::Activated { body, .. }
+            | AbilityAst::Triggered { body, .. }
+            | AbilityAst::Loyalty { body, .. }
+            | AbilityAst::SagaChapter { body, .. } => normalize_standalone_choose_one(body),
+            AbilityAst::ClassLevel { .. } => {}
+        }
+    }
     if !options.allow_tabletop_honor_system && face_uses_honor_system(&out) {
         // Guard: reject any ManualTabletop* AST nodes that slipped through on non-Un cards.
         out.failures.push(ParseFailureAst {

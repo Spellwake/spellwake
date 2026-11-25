@@ -18,15 +18,19 @@ pub fn try_parse_keyword_line(
     if low.starts_with("enchant ") {
         return None;
     }
-    if low.starts_with("protection from ")
-        || low.starts_with("hexproof from ")
-        || low.starts_with("partner with ")
-        || low.starts_with("firebending ")
-        || low.starts_with("teamwork ")
-        || low == "trample over planeswalkers"
-        || low == "mayhem"
-        || low == "vanishing"
-        || low == "modular\u{2014}sunburst"
+    let trailing_comma_is_keyword = line
+        .rsplit_once(", ")
+        .is_some_and(|(_, tail)| parse_keyword_token(tail.trim(), vocab).is_some());
+    if !trailing_comma_is_keyword
+        && (low.starts_with("protection from ")
+            || low.starts_with("hexproof from ")
+            || low.starts_with("partner with ")
+            || low.starts_with("firebending ")
+            || low.starts_with("teamwork ")
+            || low == "trample over planeswalkers"
+            || low == "mayhem"
+            || low == "vanishing"
+            || low == "modular\u{2014}sunburst")
     {
         if let Some((kw, st)) = parse_keyword_token(line, vocab) {
             return Some((vec![kw], st.into_iter().collect()));
@@ -40,11 +44,20 @@ pub fn try_parse_keyword_line(
             Vec::new(),
         ));
     }
-    if low.starts_with("equip ")
-        && line.contains('{')
-        && let Some((kw, st)) = parse_keyword_token(line, vocab)
-    {
-        return Some((vec![kw], st.into_iter().collect()));
+    if low.starts_with("equip ") && line.contains('{') {
+        if let Some((equip_head, rest)) = line.split_once(". ")
+            && rest.to_ascii_lowercase().starts_with("this ability costs ")
+            && let Some((kw, st)) = parse_keyword_token(equip_head.trim(), vocab)
+            && let Ok(crate::clauses::StaticOrReplacement::Static(cost_mod)) =
+                crate::clauses::parse_static_or_replacement(rest.trim(), vocab)
+        {
+            let mut statics: Vec<StaticAbilityAst> = st.into_iter().collect();
+            statics.push(cost_mod);
+            return Some((vec![kw], statics));
+        }
+        if let Some((kw, st)) = parse_keyword_token(line, vocab) {
+            return Some((vec![kw], st.into_iter().collect()));
+        }
     }
 
     // Em-dash parameterized keywords often contain commas in their cost
@@ -112,8 +125,8 @@ pub fn parse_keyword_token(
         ));
     }
 
-    // Landwalk family (including Un-card denimwalk)
-    if low.ends_with("walk") && low.split_whitespace().count() <= 3 {
+    // Landwalk family (including Un-card denimwalk, excluding Planeswalk action)
+    if low.ends_with("walk") && low != "planeswalk" && low.split_whitespace().count() <= 3 {
         return Some((
             KeywordAst {
                 name: "landwalk".to_string(),
@@ -168,11 +181,29 @@ pub fn parse_keyword_token(
         }
     }
 
-    // Typecycling / Cycling
+    // Typecycling / Cycling (never hijack static rules like Fluctuator / Tectonic Reformation / Gavi / Abandoned Sarcophagus)
     if let Some(idx) = low.find("cycling") {
         let after = t[idx + 7..].trim().trim_start_matches(EM_DASH).trim();
-        if !after.is_empty() {
-            let sub = low[..idx].trim();
+        let after_low = after.to_ascii_lowercase();
+        let sub = low[..idx].trim();
+        let valid_sub = sub.is_empty()
+            || (sub.split_whitespace().count() <= 2
+                && !sub.contains("has")
+                && !sub.contains("pay")
+                && !sub.contains("cast")
+                && !sub.contains("card")
+                && !sub.contains("you")
+                && !sub.contains("have")
+                && !sub.contains("that"));
+        let valid_param = !after.is_empty()
+            && !after_low.starts_with("abilities ")
+            && !after_low.starts_with("costs ")
+            && !after_low.starts_with("cost ")
+            && !after_low.starts_with("triggers ")
+            && !after_low.contains(" cost ")
+            && !after_low.contains(" costs ")
+            && !after_low.contains(" you activate");
+        if valid_sub && valid_param {
             return Some((
                 KeywordAst {
                     name: if sub.is_empty() {
@@ -287,7 +318,15 @@ pub fn parse_keyword_token(
             && (after.starts_with(' ') || after.starts_with(EM_DASH))
         {
             let param = t[kw_name.len()..].trim().trim_start_matches(EM_DASH).trim();
-            if !param.is_empty() {
+            let plow = param.to_ascii_lowercase();
+            let looks_like_static_rule = plow.starts_with("costs ")
+                || plow.starts_with("cost ")
+                || plow.starts_with("abilities ")
+                || plow.starts_with("ability ")
+                || plow.starts_with("triggers ")
+                || plow.starts_with("spells ")
+                || plow.starts_with("cards ");
+            if !param.is_empty() && !looks_like_static_rule {
                 return Some((
                     KeywordAst {
                         name: (*kw_name).to_string(),
@@ -347,7 +386,13 @@ pub fn parse_keyword_token(
             && after.starts_with(' ')
         {
             let param = t[kw_name.len()..].trim();
-            if !param.is_empty() {
+            let plow = param.to_ascii_lowercase();
+            let looks_like_static_rule = plow.starts_with("costs ")
+                || plow.starts_with("cost ")
+                || plow.starts_with("abilities ")
+                || plow.starts_with("ability ")
+                || plow.starts_with("triggers ");
+            if !param.is_empty() && !looks_like_static_rule {
                 return Some((
                     KeywordAst {
                         name: (*kw_name).to_string(),
