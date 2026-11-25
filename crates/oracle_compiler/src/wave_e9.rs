@@ -15,7 +15,7 @@ use crate::ast::{
 use crate::clauses::{parse_atomic_effect, parse_cost_atom};
 use crate::filter::{
     parse_condition, parse_keyword_list, parse_object_filter, parse_player_ref,
-    parse_subject_or_target, parse_token_creation, parse_value_expr,
+    parse_subject_or_target, parse_token_creation_rich, parse_value_expr,
 };
 use crate::vocab::{Vocabulary, parse_number_word};
 
@@ -183,13 +183,13 @@ fn parse_extra_turns_steps_and_mana_e9(
     {
         return Some(vec![
             InstructionAst::LoseUnspentMana { player },
-            InstructionAst::AddMana {
+            InstructionAst::AddQualifiedMana(Box::new(crate::ast::QualifiedManaAst {
                 player: PlayerRefAst::You,
-                mana: ManaSpecAst::AnyColor {
-                    amount: Box::new(ValueExprAst::PriorResult),
-                    single_color: false,
-                },
-            },
+                kind: "mana_lost_this_way".to_string(),
+                amount: Some(Box::new(ValueExprAst::PriorResult)),
+                source: Some(Box::new(SubjectRefAst::Player(player))),
+                choices: Vec::new(),
+            })),
         ]);
     }
 
@@ -215,13 +215,13 @@ fn parse_extra_turns_steps_and_mana_e9(
         && let Some(amt_raw) = after.strip_suffix(" mana of that type")
         && let Ok(amount) = parse_value_expr(amt_raw.trim(), vocab)
     {
-        let ins = InstructionAst::AddMana {
+        let ins = InstructionAst::AddQualifiedMana(Box::new(crate::ast::QualifiedManaAst {
             player: PlayerRefAst::You,
-            mana: ManaSpecAst::AnyColor {
-                amount: Box::new(amount),
-                single_color: true,
-            },
-        };
+            kind: "mana_of_that_type".to_string(),
+            amount: Some(Box::new(amount)),
+            source: None,
+            choices: Vec::new(),
+        }));
         return Some(if no_instead.len() != low.len() {
             vec![InstructionAst::ReplaceEffect(vec![ins])]
         } else {
@@ -236,29 +236,48 @@ fn parse_extra_turns_steps_and_mana_e9(
         .and_then(|r| r.strip_suffix("'s mana cost"))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AddMana {
-            player: PlayerRefAst::You,
-            mana: ManaSpecAst::AnyColorAmong {
-                source: Box::new(subj),
+        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+            crate::ast::QualifiedManaAst {
+                player: PlayerRefAst::You,
+                kind: "equal_to_mana_cost".to_string(),
+                amount: None,
+                source: Some(Box::new(subj)),
+                choices: Vec::new(),
             },
-        }]);
+        ))]);
     }
-    if low == "add one mana of either of the circled colors"
-        || low == "add one mana of ~'s last noted type"
-    {
-        return Some(vec![InstructionAst::AddMana {
-            player: PlayerRefAst::You,
-            mana: ManaSpecAst::ChosenColor,
-        }]);
+    if low == "add one mana of either of the circled colors" {
+        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+            crate::ast::QualifiedManaAst {
+                player: PlayerRefAst::You,
+                kind: "circled_colors".to_string(),
+                amount: Some(Box::new(ValueExprAst::Const(1))),
+                source: Some(Box::new(SubjectRefAst::SelfObject)),
+                choices: Vec::new(),
+            },
+        ))]);
+    }
+    if low == "add one mana of ~'s last noted type" {
+        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+            crate::ast::QualifiedManaAst {
+                player: PlayerRefAst::You,
+                kind: "last_noted_type".to_string(),
+                amount: Some(Box::new(ValueExprAst::Const(1))),
+                source: Some(Box::new(SubjectRefAst::SelfObject)),
+                choices: Vec::new(),
+            },
+        ))]);
     }
     if low == "add ~'s last noted type and amount of mana" {
-        return Some(vec![InstructionAst::AddMana {
-            player: PlayerRefAst::You,
-            mana: ManaSpecAst::AnyColor {
-                amount: Box::new(ValueExprAst::PriorResult),
-                single_color: false,
+        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+            crate::ast::QualifiedManaAst {
+                player: PlayerRefAst::You,
+                kind: "last_noted_type_and_amount".to_string(),
+                amount: None,
+                source: Some(Box::new(SubjectRefAst::SelfObject)),
+                choices: Vec::new(),
             },
-        }]);
+        ))]);
     }
 
     // 10. Temporary mana color replacement ("spells and abilities you control that would add colored mana instead add that much <color> mana") (False Dawn)
@@ -350,11 +369,14 @@ fn parse_cast_copy_and_zone_actions_e9(
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::GrantKeywords {
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                keywords: vec!["flash".to_string()],
-                condition: None,
-                paired_rule: None,
+            static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                filter: Box::new(flt.clone()),
+                effect: Box::new(StaticAbilityAst::GrantKeywords {
+                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    keywords: vec!["flash".to_string()],
+                    condition: None,
+                    paired_rule: None,
+                }),
             }),
             duration: DurationAst::UntilEndOfTurn,
         }]);
@@ -370,18 +392,32 @@ fn parse_cast_copy_and_zone_actions_e9(
         )
         && let Some(kws) = parse_keyword_list(kw_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::GrantKeywords {
-                subject: Box::new(SubjectRefAst::Compound(vec![
-                    SubjectRefAst::Group(Box::new(f1)),
-                    SubjectRefAst::Group(Box::new(f2)),
-                ])),
-                keywords: kws,
-                condition: None,
-                paired_rule: None,
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+        return Some(vec![
+            InstructionAst::TemporaryStatic {
+                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                    filter: Box::new(f1.clone()),
+                    effect: Box::new(StaticAbilityAst::GrantKeywords {
+                        subject: Box::new(SubjectRefAst::Group(Box::new(f1))),
+                        keywords: kws.clone(),
+                        condition: None,
+                        paired_rule: None,
+                    }),
+                }),
+                duration: DurationAst::UntilEndOfTurn,
+            },
+            InstructionAst::TemporaryStatic {
+                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                    filter: Box::new(f2.clone()),
+                    effect: Box::new(StaticAbilityAst::GrantKeywords {
+                        subject: Box::new(SubjectRefAst::Group(Box::new(f2))),
+                        keywords: kws,
+                        condition: None,
+                        paired_rule: None,
+                    }),
+                }),
+                duration: DurationAst::UntilEndOfTurn,
+            },
+        ]);
     }
 
     // 3. Free / alt-cost / outside-the-game / exiled / milled cast permissions
@@ -400,7 +436,7 @@ fn parse_cast_copy_and_zone_actions_e9(
             subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
             free: true,
             duration: "now".to_string(),
-            count_limit: None,
+            count_limit: Some(CountLimitAst::AnyNumber),
             alt_cost: None,
         }]);
     }
@@ -433,16 +469,16 @@ fn parse_cast_copy_and_zone_actions_e9(
         }
         if let Some(after_up) = after.strip_prefix("up to ")
             && let Some((cnt_raw, tail)) = after_up.split_once(" spells from among ")
-            && tail.ends_with(" without paying their mana costs")
+            && let Some(pool_raw) = tail.strip_suffix(" without paying their mana costs")
             && let Ok(cnt) = parse_value_expr(cnt_raw.trim(), vocab)
         {
+            let subj = parse_subject_or_target(pool_raw.trim(), vocab)
+                .unwrap_or_else(|_| SubjectRefAst::Anaphora(pool_raw.trim().to_string()));
             return Some(vec![InstructionAst::Optional(vec![
                 InstructionAst::GrantCastPermission {
                     player: PlayerRefAst::You,
                     cast_only: true,
-                    subject: Box::new(SubjectRefAst::Anaphora(
-                        "other cards exiled this way".to_string(),
-                    )),
+                    subject: Box::new(subj),
                     free: true,
                     duration: "now".to_string(),
                     count_limit: Some(CountLimitAst::UpTo(Box::new(cnt))),
@@ -517,29 +553,46 @@ fn parse_cast_copy_and_zone_actions_e9(
         .split_once(" manifests the top card of ")
         .or_else(|| low.split_once(" manifest the top card of "))
         && let Some(whose_raw) = rest.strip_suffix(" library")
-        && parse_player_ref(who_raw.trim()).is_some()
+        && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(vec![InstructionAst::Manifest {
+        let subject = Some(Box::new(SubjectRefAst::Anaphora(format!(
+            "top card of {} library",
+            whose_raw.trim()
+        ))));
+        if player == PlayerRefAst::You {
+            return Some(vec![InstructionAst::Manifest {
+                count: Box::new(ValueExprAst::Const(1)),
+                dread: false,
+                subject,
+            }]);
+        }
+        return Some(vec![InstructionAst::ManifestByPlayer {
+            player,
             count: Box::new(ValueExprAst::Const(1)),
             dread: false,
-            subject: Some(Box::new(SubjectRefAst::Anaphora(format!(
-                "top card of {} library",
-                whose_raw.trim()
-            )))),
+            subject,
         }]);
     }
     if let Some((who_raw, rest)) = low
         .split_once(" cloaks the top card of ")
         .or_else(|| low.split_once(" cloak the top card of "))
         && let Some(whose_raw) = rest.strip_suffix(" library")
-        && parse_player_ref(who_raw.trim()).is_some()
+        && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(vec![InstructionAst::Cloak {
+        let subject = Some(Box::new(SubjectRefAst::Anaphora(format!(
+            "top card of {} library",
+            whose_raw.trim()
+        ))));
+        if player == PlayerRefAst::You {
+            return Some(vec![InstructionAst::Cloak {
+                count: Box::new(ValueExprAst::Const(1)),
+                subject,
+            }]);
+        }
+        return Some(vec![InstructionAst::CloakByPlayer {
+            player,
             count: Box::new(ValueExprAst::Const(1)),
-            subject: Some(Box::new(SubjectRefAst::Anaphora(format!(
-                "top card of {} library",
-                whose_raw.trim()
-            )))),
+            subject,
         }]);
     }
 
@@ -1009,10 +1062,38 @@ fn parse_damage_counters_tokens_and_stats_e9(
         }
     }
 
+    let build_tok_ins = |controller: PlayerRefAst, rich: crate::filter::RichTokenCreationAst| {
+        if rich.is_plain() {
+            InstructionAst::CreateToken {
+                controller,
+                token: rich.token,
+            }
+        } else {
+            InstructionAst::CreateQualifiedToken(Box::new(crate::ast::QualifiedTokenCreationAst {
+                controller,
+                token: rich.token,
+                blocking: rich.blocking,
+                dynamic_power: rich.dynamic_power.map(Box::new),
+                dynamic_toughness: rich.dynamic_toughness.map(Box::new),
+                dynamic_pt_text: rich.dynamic_pt_text,
+                chosen_color: rich.chosen_color,
+                chosen_type: rich.chosen_type,
+                attacking_target: rich.attacking_target.map(Box::new),
+            }))
+        }
+    };
     // 8. "remove all of them from it and create that many <token>" (Lightning Coils)
     if let Some(tok_raw) = low.strip_prefix("remove all of them from it and create that many ")
-        && let Ok(spec) = parse_token_creation(&format!("1 {tok_raw}"), vocab)
+        && let Ok(mut rich) = parse_token_creation_rich(&format!("1 {tok_raw}"), vocab)
     {
+        match &mut rich.token {
+            TokenSpecAst::Creature { count, .. }
+            | TokenSpecAst::Predefined { count, .. }
+            | TokenSpecAst::Copy { count, .. } => {
+                **count = ValueExprAst::PriorResult;
+            }
+            TokenSpecAst::Role { .. } => {}
+        }
         return Some(vec![
             InstructionAst::RemoveCounters {
                 subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
@@ -1020,10 +1101,7 @@ fn parse_damage_counters_tokens_and_stats_e9(
                 all: true,
                 count: None,
             },
-            InstructionAst::CreateToken {
-                controller: PlayerRefAst::You,
-                token: spec,
-            },
+            build_tok_ins(PlayerRefAst::You, rich),
         ]);
     }
 
@@ -1032,24 +1110,26 @@ fn parse_damage_counters_tokens_and_stats_e9(
         && let Some(player) = parse_player_ref(who_raw.trim())
         && let Some((sub_raw, tok_raw)) = rest.split_once(' ')
         && let Some(sub_n) = parse_number_word(sub_raw.trim())
-        && let Ok(mut spec) = parse_token_creation(&format!("1 {tok_raw}"), vocab)
+        && let Ok(mut rich) = parse_token_creation_rich(&format!("1 {tok_raw}"), vocab)
     {
         let expr = ValueExprAst::Sub(
             Box::new(ValueExprAst::ChosenX),
             Box::new(ValueExprAst::Const(sub_n)),
         );
-        if let TokenSpecAst::Creature { ref mut count, .. } = spec {
-            **count = expr;
+        match &mut rich.token {
+            TokenSpecAst::Creature { count, .. }
+            | TokenSpecAst::Predefined { count, .. }
+            | TokenSpecAst::Copy { count, .. } => {
+                **count = expr;
+            }
+            TokenSpecAst::Role { .. } => {}
         }
-        return Some(vec![InstructionAst::CreateToken {
-            controller: player,
-            token: spec,
-        }]);
+        return Some(vec![build_tok_ins(player, rich)]);
     }
 
     // 10. "create that token and a <predefined> token" (Mr. House) / characteristic tokens (Genku, Outlaws' Merriment) / copy attached (Stangg)
     if let Some(tok_raw) = low.strip_prefix("create that token and ")
-        && let Ok(second_tok) = parse_token_creation(tok_raw.trim(), vocab)
+        && let Ok(second_tok) = parse_token_creation_rich(tok_raw.trim(), vocab)
     {
         return Some(vec![
             InstructionAst::CreateToken {
@@ -1060,10 +1140,7 @@ fn parse_damage_counters_tokens_and_stats_e9(
                     tapped: false,
                 },
             },
-            InstructionAst::CreateToken {
-                controller: PlayerRefAst::You,
-                token: second_tok,
-            },
+            build_tok_ins(PlayerRefAst::You, second_tok),
         ]);
     }
     if low.starts_with("create a ") && low.ends_with(" creature token with those characteristics") {
@@ -1276,8 +1353,13 @@ fn parse_control_piles_choices_and_combat_e9(
     // 3. Structured choices (Cultural Exchange, Foreboding Steamboat, Celestial Judgment, Dack Fayden, Necrotic Plague, Tragic Arrogance)
     if let Some(after) = low.strip_prefix("choose the same number of ")
         && let Some((flt_raw, _)) = after.split_once(" another target player controls")
-        && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
+        && let Ok(mut flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
+        flt.controller = Some(ControllerRelation::TargetPlayer);
+        flt.predicates
+            .push(crate::ast::FilterPredicateAst::StateQualification(
+                "another_target_player_controls".to_string(),
+            ));
         return Some(vec![InstructionAst::ChooseFromGroup {
             count: Box::new(ValueExprAst::PriorResult),
             random: false,
@@ -1285,7 +1367,7 @@ fn parse_control_piles_choices_and_combat_e9(
         }]);
     }
     if let Some((who_raw, rest)) = low.split_once(" chooses ")
-        && parse_player_ref(who_raw.trim()).is_some()
+        && let Some(chooser) = parse_player_ref(who_raw.trim())
     {
         if let Some((cnt_raw, flt_raw)) = rest.split_once(' ')
             && let (Some(n), Ok(flt)) = (
@@ -1293,7 +1375,15 @@ fn parse_control_piles_choices_and_combat_e9(
                 parse_object_filter(flt_raw.trim(), vocab),
             )
         {
-            return Some(vec![InstructionAst::ChooseFromGroup {
+            if chooser == PlayerRefAst::You {
+                return Some(vec![InstructionAst::ChooseFromGroup {
+                    count: Box::new(ValueExprAst::Const(n)),
+                    random: false,
+                    group: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                }]);
+            }
+            return Some(vec![InstructionAst::PlayerChooseFromGroup {
+                chooser,
                 count: Box::new(ValueExprAst::Const(n)),
                 random: false,
                 group: Box::new(SubjectRefAst::Group(Box::new(flt))),
@@ -1302,13 +1392,22 @@ fn parse_control_piles_choices_and_combat_e9(
         if let Some(flt_raw) = rest.strip_prefix("target ")
             && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
         {
-            return Some(vec![InstructionAst::ChooseFromGroup {
+            let group = Box::new(SubjectRefAst::TargetObject {
+                filter: Box::new(flt),
+                count: TargetCountAst::Exact(1),
+            });
+            if chooser == PlayerRefAst::You {
+                return Some(vec![InstructionAst::ChooseFromGroup {
+                    count: Box::new(ValueExprAst::Const(1)),
+                    random: false,
+                    group,
+                }]);
+            }
+            return Some(vec![InstructionAst::PlayerChooseFromGroup {
+                chooser,
                 count: Box::new(ValueExprAst::Const(1)),
                 random: false,
-                group: Box::new(SubjectRefAst::TargetObject {
-                    filter: Box::new(flt),
-                    count: TargetCountAst::Exact(1),
-                }),
+                group,
             }]);
         }
     }
@@ -1357,9 +1456,11 @@ fn parse_control_piles_choices_and_combat_e9(
         )
         && let Ok(pile_count) = u8::try_from(n)
     {
-        let _ = flt_raw;
-        return Some(vec![InstructionAst::SeparateIntoPiles {
+        let subj = parse_subject_or_target(flt_raw.trim(), vocab)
+            .unwrap_or_else(|_| SubjectRefAst::Anaphora(flt_raw.trim().to_string()));
+        return Some(vec![InstructionAst::SeparateFilteredIntoPiles {
             chooser,
+            subject: Box::new(subj),
             pile_count,
             face_down_piles: 0,
         }]);
@@ -1432,14 +1533,9 @@ fn parse_control_piles_choices_and_combat_e9(
         return Some(vec![InstructionAst::CombatRuleMod {
             subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
             rule: "goaded".to_string(),
-            duration: DurationAst::ForAsLongAs(Box::new(ConditionAst::ControlsCount {
+            duration: DurationAst::ForAsLongAs(Box::new(ConditionAst::SubjectControlledBy {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
                 player: PlayerRefAst::ThatPlayer,
-                filter: Box::new(ObjectFilterAst {
-                    any_permanent: true,
-                    ..Default::default()
-                }),
-                op: CompareOp::Ge,
-                value: 1,
             })),
         }]);
     }
@@ -1509,30 +1605,38 @@ fn parse_genuine_restrictions_and_repeats_e9(
     // 1. Unbounded optional repeat process ("<player> may repeat this process as many times as they choose") (Trade Secrets)
     if let Some((who_raw, _)) =
         low.split_once(" may repeat this process as many times as they choose")
-        && parse_player_ref(who_raw.trim()).is_some()
+        && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(vec![InstructionAst::Optional(vec![
-            InstructionAst::RepeatProcess {
+        if player == PlayerRefAst::You {
+            return Some(vec![InstructionAst::Optional(vec![
+                InstructionAst::RepeatProcess {
+                    condition: None,
+                    max_times: None,
+                    any_number: true,
+                },
+            ])]);
+        }
+        return Some(vec![InstructionAst::OptionalPlayer {
+            player,
+            body: vec![InstructionAst::PlayerRepeatProcess {
+                player,
                 condition: None,
                 max_times: None,
                 any_number: true,
-            },
-        ])]);
+            }],
+        }]);
     }
 
     // 2. Temporary player/permanent prohibition statics (Call for Aid, Jared Carthalion, Conduit of Worlds, Shaman's Trance, Sen Triplets)
     if let Some((who_raw, rest)) = low.split_once(" can't sacrifice ")
         && let Some(subj_raw) = rest.strip_suffix(" this turn")
-        && parse_player_ref(who_raw.trim()).is_some()
+        && let Some(player) = parse_player_ref(who_raw.trim())
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "cant_sacrifice".to_string(),
-                filter: None,
-                condition: None,
-            }),
+        return Some(vec![InstructionAst::TemporaryPlayerRestriction {
+            player,
+            subject: Some(Box::new(subj)),
+            rule: "cant_sacrifice".to_string(),
             duration: DurationAst::UntilEndOfTurn,
         }]);
     }
@@ -1591,13 +1695,10 @@ fn parse_genuine_restrictions_and_repeats_e9(
                 }),
                 duration: DurationAst::UntilEndOfTurn,
             },
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::LookOrRevealRule {
-                    rule: "play_with_hand_revealed".to_string(),
-                    filter: None,
-                    follow_up: Vec::new(),
-                    condition: None,
-                }),
+            InstructionAst::TemporaryPlayerRestriction {
+                player,
+                subject: None,
+                rule: "play_with_hand_revealed".to_string(),
                 duration: DurationAst::UntilEndOfTurn,
             },
         ]);
