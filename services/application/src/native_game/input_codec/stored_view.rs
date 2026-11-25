@@ -553,6 +553,7 @@ mod retained_tests {
             zones: vec![],
             stack: vec![],
             decisions: vec![],
+            cast_offers: None,
             through_event_sequence: 9.into(),
         };
         let value = json!({

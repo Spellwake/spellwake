@@ -36,6 +36,12 @@ pub struct CastableSpell {
     pub source: PlayerHandle,
     pub untargeted: bool,
     pub legal_targets: Vec<PlayerTarget>,
+    /// Printed mana cost text, empty when free.
+    pub cost_text: String,
+    /// Mana-source object handles an automatic payment plan would tap.
+    pub pay_sources: Vec<PlayerHandle>,
+    /// Exact `PlayerPayment` required after tapping `pay_sources`.
+    pub payment: Option<PlayerPayment>,
 }
 
 /// Verified legal priority affordances computed on the exact current `NativeScope`.
@@ -258,11 +264,31 @@ pub fn probe_priority_affordances(
             .filter(|&i| i > 0)
             .map(|i| candidate_targets[i - 1].clone())
             .collect();
+        let cost_text = match &object.identity {
+            PlayerObjectIdentity::Known {
+                characteristics, ..
+            } => characteristics.mana_cost.clone().unwrap_or_default(),
+            PlayerObjectIdentity::Concealed {} => String::new(),
+        };
+        let pay_sources: Vec<PlayerHandle> = taps
+            .iter()
+            .filter_map(|tap| match tap {
+                PlayerAction::ActivateMana { source, .. } => Some(source.clone()),
+                _ => None,
+            })
+            .collect();
         out.castable_hand.push(object.handle.clone());
         out.castable_spells.push(CastableSpell {
             source: object.handle.clone(),
             untargeted,
             legal_targets,
+            cost_text,
+            pay_sources,
+            payment: if payment.spend.is_empty() {
+                None
+            } else {
+                Some(payment)
+            },
         });
     }
 

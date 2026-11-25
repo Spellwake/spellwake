@@ -15,6 +15,7 @@ import {
   PLAYER_ITEMS,
   playerManaColorSchema,
   playerManaSpendSchema,
+  playerPaymentSchema,
   playerRestrictedManaSpendSchema,
   playerTargetSchema,
   playerObjectTargetSchema,
@@ -435,6 +436,18 @@ export const playerStackEntrySchema = z.strictObject({
   modes: z.array(z.number().int().min(0).max(255)).max(255).optional(),
   visibleContributors: z.array(playerHandleSchema).max(PLAYER_ITEMS).optional(),
 });
+export const playerCastOfferSchema = z.strictObject({
+  source: playerHandleSchema,
+  targets: z.array(playerTargetSchema).max(PLAYER_ITEMS).optional(),
+  cost: playerDisplayTextSchema(256).default(""),
+  paySources: z
+    .array(playerHandleSchema)
+    .max(PLAYER_ITEMS)
+    .refine((xs) => uniquePlayerValues(xs, (x) => x))
+    .optional(),
+  payment: playerPaymentSchema.optional(),
+});
+export type PlayerCastOffer = z.infer<typeof playerCastOfferSchema>;
 export const playerSnapshotSchema = z.strictObject({
   basis: playerBasisSchema,
   viewerSeatId: identifierSchema,
@@ -444,6 +457,7 @@ export const playerSnapshotSchema = z.strictObject({
   zones: z.array(playerZoneSchema).max(22),
   stack: z.array(playerStackEntrySchema).max(PLAYER_ITEMS),
   decisions: z.array(playerDecisionSchema).max(PLAYER_ITEMS),
+  castOffers: z.array(playerCastOfferSchema).max(PLAYER_ITEMS).optional(),
   throughEventSequence: amountSchema,
 });
 export type PlayerSnapshot = z.infer<typeof playerSnapshotSchema>;
@@ -695,6 +709,20 @@ export function validPlayerSnapshot(
       !entry.targets.every((t) => playerTargetIn(t, objects, stack, f.roster))
     )
       return false;
+  if (v.castOffers !== undefined) {
+    if (!uniquePlayerValues(v.castOffers, (offer) => offer.source))
+      return false;
+    for (const offer of v.castOffers) {
+      if (
+        !objects.has(offer.source) ||
+        !(offer.paySources ?? []).every((handle) => objects.has(handle)) ||
+        !(offer.targets ?? []).every((t) =>
+          playerTargetIn(t, objects, stack, f.roster),
+        )
+      )
+        return false;
+    }
+  }
   if (!uniquePlayerValues(v.decisions, (x) => x.decision)) return false;
   return v.decisions.every(
     (d: PlayerDecision) =>

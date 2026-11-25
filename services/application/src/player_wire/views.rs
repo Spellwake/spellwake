@@ -701,6 +701,30 @@ pub struct PlayerProjectionFacts<'a> {
         Option<&'a spellwake_contracts::creature_types::CreatureTypeVocabulary>,
     pub ability_bindings: &'a [PlayerAbilityBinding],
 }
+/// Server-authored legal cast offer for a card in the viewer's hand.
+/// Never inferred client-side from card text or mana counting.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerCastOffer {
+    /// Opaque object handle in the viewer's hand that may be cast now.
+    pub source: PlayerHandle,
+    /// Verified legal targets for a targeted cast, or `None` for an untargeted cast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<PlayerTarget>>,
+    /// Printed mana cost string (such as `"{1}{R}"`), empty when free.
+    #[serde(default)]
+    pub cost: String,
+    /// Untapped mana-source handles an automatic payment plan would tap.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pay_sources: Vec<PlayerHandle>,
+    /// Exact `PlayerPayment` required when casting after tapping `pay_sources`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::provider_json::optional_object"
+    )]
+    pub payment: Option<PlayerPayment>,
+}
 /// Complete bounded seat-safe snapshot, never a private checkpoint or replay archive.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -721,6 +745,11 @@ pub struct PlayerSnapshot {
     pub stack: Vec<PlayerStackEntry>,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub decisions: Vec<PlayerDecision>,
+    /// Server-authored legal cast offers for the viewer while holding priority.
+    /// `Some(offers)` means the server authoritatively probed legal casts for this
+    /// priority window (possibly empty); `None` means no priority cast probe applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cast_offers: Option<Vec<PlayerCastOffer>>,
     pub through_event_sequence: Amount,
 }
 impl PlayerSnapshot {
@@ -1071,6 +1100,31 @@ impl PlayerSnapshot {
                 || !d.references_in(&objects, &stack, f.roster)
             {
                 return false;
+            }
+        }
+        if let Some(cast_offers) = &self.cast_offers {
+            if !list(cast_offers) || !unique(cast_offers.iter().map(|offer| &offer.source)) {
+                return false;
+            }
+            for offer in cast_offers {
+                if !objects.contains(&offer.source)
+                    || !display_text(&offer.cost, 256)
+                    || !list(&offer.pay_sources)
+                    || !unique(offer.pay_sources.iter())
+                    || !offer
+                        .pay_sources
+                        .iter()
+                        .all(|handle| objects.contains(handle))
+                    || !offer.payment.as_ref().is_none_or(PlayerPayment::valid)
+                    || !offer.targets.as_ref().is_none_or(|targets| {
+                        list(targets)
+                            && targets
+                                .iter()
+                                .all(|t| target_in(t, &objects, &stack, f.roster))
+                    })
+                {
+                    return false;
+                }
             }
         }
         true
