@@ -1237,7 +1237,7 @@ pub(super) fn body(
                                 KeywordAbility::Trample,
                                 KeywordAbility::Haste,
                             ]),
-                            granted_trigger: Some(Box::new(grant)),
+                            granted_triggers: vec![grant],
                             ..Default::default()
                         }),
                         ResolvedPartSpec::SetPT(PowerToughness {
@@ -1387,7 +1387,7 @@ pub(super) fn body(
             ResolvedPartSpec::Color(ColorOperation::Set([color].into())),
             ResolvedPartSpec::Abilities(AbilityChange {
                 granted_keywords: keywords,
-                granted_trigger: Some(Box::new(grant)),
+                granted_triggers: vec![grant],
                 ..Default::default()
             }),
             ResolvedPartSpec::SetPT(PowerToughness {

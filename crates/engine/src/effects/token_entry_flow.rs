@@ -102,6 +102,14 @@ impl EffectWindow {
                 }
                 crate::program::SubtypeFilter::Land(k) => program.land_subtypes.contains(&k),
                 crate::program::SubtypeFilter::NotLand(k) => !program.land_subtypes.contains(&k),
+                crate::program::SubtypeFilter::AnyLandMask(mask) => program
+                    .land_subtypes
+                    .iter()
+                    .any(|lt| (mask & lt.bit()) != 0),
+                crate::program::SubtypeFilter::NotLandMask(mask) => program
+                    .land_subtypes
+                    .iter()
+                    .all(|lt| (mask & lt.bit()) == 0),
                 crate::program::SubtypeFilter::Artifact(k) => {
                     program.artifact_subtypes.contains(&k)
                 }
@@ -239,10 +247,10 @@ impl EffectWindow {
         loop {
             let mut changed = false;
             for (idx, active) in self.temporary_rules.iter().enumerate() {
-                if active.consumed || applied_temp.contains(&idx) {
+                if applied_temp.contains(&idx) {
                     continue;
                 }
-                if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                if let Some(ab) = self.active_temporary_static(active, current)
                     && let crate::characteristics::StaticContinuousAbility::Modifier {
                         rule:
                             crate::characteristics::StaticModifierRule::StealCreatedTokens {
@@ -250,7 +258,7 @@ impl EffectWindow {
                                 token_filter,
                             },
                         ..
-                    } = ab.as_ref()
+                    } = ab
                     && self.token_player_relation_matches(*affected, active.controller, creator)?
                     && token_filter.as_deref().is_none_or(|filter| {
                         token_program
@@ -420,13 +428,10 @@ impl EffectWindow {
             Ok(())
         };
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule else {
+            let Some(ability) = self.active_temporary_static(active, current) else {
                 continue;
             };
-            apply_rule(ability.as_ref(), active.controller, true)?;
+            apply_rule(ability, active.controller, true)?;
         }
         for source in current
             .objects
@@ -541,11 +546,8 @@ impl EffectWindow {
             Ok(())
         };
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule {
-                collect_bonus(ab.as_ref(), active.controller)?;
+            if let Some(ab) = self.active_temporary_static(active, current) {
+                collect_bonus(ab, active.controller)?;
             }
         }
         for source in current
@@ -646,6 +648,21 @@ impl EffectWindow {
                         .into(),
                     );
                 }
+                Some(crate::token::TokenSize::AtCreationPair { power, toughness }) => {
+                    let power_val = self.resolve_value_expr(controller, power)?;
+                    let toughness_val = self.resolve_value_expr(controller, toughness)?;
+                    let crate::program::ProgramKind::Permanent(permanent) = &mut definition.kind
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    permanent.printed_pt = Some(
+                        crate::characteristics::PowerToughness {
+                            power: power_val,
+                            toughness: toughness_val,
+                        }
+                        .into(),
+                    );
+                }
                 Some(crate::token::TokenSize::AbilitySourceCounters(kind)) => {
                     use crate::characteristics::{
                         DefiningPart, DefiningParts, NumericExpression, StaticAbilityId,
@@ -737,20 +754,61 @@ impl EffectWindow {
             .ok_or(EffectError::WrongPhase)?
             .controller();
         let current = self.evaluated_characteristics()?;
+        let current_inst = self.current_instruction()?;
         let enters_attacking = mobilize
             || matches!(
-                self.current_instruction()?,
+                current_inst,
                 Instruction::CreateAttackingTokens { .. }
                     | Instruction::CreateTokenCopy {
                         attacking: true,
                         ..
                     }
+                    | Instruction::CreateTokenCopyExt {
+                        enters_attacking: true,
+                        ..
+                    }
             );
+        let defender_scope = match current_inst {
+            Instruction::CreateAttackingTokens { defender_scope, .. }
+            | Instruction::CreateTokenCopyExt {
+                enters_attacking: true,
+                defender_scope,
+                ..
+            } => *defender_scope,
+            _ => crate::token::AttackingDefenderScope::AnyLegal,
+        };
         let defenders = if enters_attacking
             && self.window.active_participant() == Some(controller)
             && self.combat.is_some()
         {
-            self.attack_destinations(controller, &current)?
+            let mut all = self.attack_destinations(controller, &current)?;
+            match defender_scope {
+                crate::token::AttackingDefenderScope::AnyLegal => {}
+                crate::token::AttackingDefenderScope::Player(role) => {
+                    if let Ok(seat) = self.resolving_player(role) {
+                        all.retain(|target, _| *target == TargetRef::Player(seat));
+                    } else {
+                        all.clear();
+                    }
+                }
+                crate::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(role) => {
+                    if let Ok(seat) = self.resolving_player(role) {
+                        all.retain(|target, &mut def_seat| {
+                            def_seat == seat
+                                && match target {
+                                    TargetRef::Player(_) => true,
+                                    TargetRef::Object(obj) => current
+                                        .get(*obj)
+                                        .is_some_and(|perm| perm.has_type(CardType::Planeswalker)),
+                                    TargetRef::Stack(_) => false,
+                                }
+                        });
+                    } else {
+                        all.clear();
+                    }
+                }
+            }
+            all
         } else {
             BTreeMap::new()
         };

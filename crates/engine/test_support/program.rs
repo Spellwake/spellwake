@@ -2393,7 +2393,7 @@ pub fn combat_keyword(keyword: &CombatTriggerKeyword) -> Value {
 fn ability_change(
     granted_toxic: Option<RulesInteger>,
     granted_combat_keywords: Vec<CombatKeywordWire>,
-    granted_abilities: (bool, Option<Box<TriggeredAbility>>),
+    granted_abilities: (bool, Vec<TriggeredAbility>),
     granted_exalted: u16,
     removal: Option<AbilityRemovalWire>,
     keywords: Vec<String>,
@@ -2404,7 +2404,7 @@ fn ability_change(
         granted_keywords: keyword_set(keywords)?,
         suppressed_keywords: keyword_set(suppressed)?,
         grants_unblockable: granted_abilities.0,
-        granted_trigger: granted_abilities.1,
+        granted_triggers: granted_abilities.1,
         granted_exalted,
         granted_toxic,
         granted_combat_keywords: granted_combat_keywords
@@ -2515,6 +2515,7 @@ enum BlockingRestrictionWire {
     CannotAttackOrBlock {},
     CannotBlock {},
     CannotBeBlockedIfPowerOrToughnessAtMostOne {},
+    MustAttackEachCombatIfAble {},
 }
 impl BlockingRestrictionWire {
     fn native(self, vocabulary: &CreatureTypeVocabulary) -> Result<BlockingRestriction, String> {
@@ -2550,6 +2551,7 @@ impl BlockingRestrictionWire {
             Self::CannotBeBlockedIfPowerOrToughnessAtMostOne {} => {
                 BlockingRestriction::CannotBeBlockedIfPowerOrToughnessAtMostOne
             }
+            Self::MustAttackEachCombatIfAble {} => BlockingRestriction::MustAttackEachCombatIfAble,
         })
     }
 }
@@ -2642,6 +2644,9 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
         }
         BlockingRestriction::MustBlockEachCombatIfAble => {
             json!({"tag":"MustBlockEachCombatIfAble"})
+        }
+        BlockingRestriction::MustAttackEachCombatIfAble => {
+            json!({"tag":"MustAttackEachCombatIfAble"})
         }
         BlockingRestriction::CannotBlockSource => json!({"tag":"CannotBlockSource"}),
         BlockingRestriction::CannotBlockObject(id) => {
@@ -2749,6 +2754,8 @@ enum PartWire<T, N> {
         grants_unblockable: bool,
         #[serde(default)]
         granted_trigger: Option<Box<Trigger>>,
+        #[serde(default)]
+        granted_triggers: Vec<Trigger>,
     },
 }
 impl PartWire<InstructionOperand, RulesInteger> {
@@ -2811,24 +2818,29 @@ impl PartWire<InstructionOperand, RulesInteger> {
                 granted_keywords,
                 suppressed_keywords,
                 granted_trigger,
+                granted_triggers,
                 grants_unblockable,
                 granted_exalted,
                 granted_toxic,
                 granted_combat_keywords,
-            } => ResolvedPartSpec::Abilities(ability_change(
-                granted_toxic,
-                granted_combat_keywords,
-                (
-                    grants_unblockable,
-                    granted_trigger
-                        .map(|value| value.native(vocabulary).map(Box::new))
-                        .transpose()?,
-                ),
-                granted_exalted,
-                removal,
-                granted_keywords,
-                suppressed_keywords,
-            )?),
+            } => {
+                let mut triggers = granted_trigger
+                    .into_iter()
+                    .map(|value| value.native(vocabulary))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for trigger in granted_triggers {
+                    triggers.push(trigger.native(vocabulary)?);
+                }
+                ResolvedPartSpec::Abilities(ability_change(
+                    granted_toxic,
+                    granted_combat_keywords,
+                    (grants_unblockable, triggers),
+                    granted_exalted,
+                    removal,
+                    granted_keywords,
+                    suppressed_keywords,
+                )?)
+            }
         })
     }
 }
@@ -2896,24 +2908,29 @@ impl PartWire<StaticOperand, Expression> {
                 granted_keywords,
                 suppressed_keywords,
                 granted_trigger,
+                granted_triggers,
                 grants_unblockable,
                 granted_exalted,
                 granted_toxic,
                 granted_combat_keywords,
-            } => StaticPart::Abilities(ability_change(
-                granted_toxic,
-                granted_combat_keywords,
-                (
-                    grants_unblockable,
-                    granted_trigger
-                        .map(|value| value.native(vocabulary).map(Box::new))
-                        .transpose()?,
-                ),
-                granted_exalted,
-                removal,
-                granted_keywords,
-                suppressed_keywords,
-            )?),
+            } => {
+                let mut triggers = granted_trigger
+                    .into_iter()
+                    .map(|value| value.native(vocabulary))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for trigger in granted_triggers {
+                    triggers.push(trigger.native(vocabulary)?);
+                }
+                StaticPart::Abilities(ability_change(
+                    granted_toxic,
+                    granted_combat_keywords,
+                    (grants_unblockable, triggers),
+                    granted_exalted,
+                    removal,
+                    granted_keywords,
+                    suppressed_keywords,
+                )?)
+            }
         })
     }
 }
@@ -6487,6 +6504,9 @@ fn effect_group_wire(group: spellwake_engine::program::EffectSubject) -> Value {
         }
         EffectSubject::CreatedTokens => json!("CreatedTokens"),
         EffectSubject::LastMoved => json!("LastMoved"),
+        EffectSubject::TargetAndSameNameMatching(filter) => {
+            json!({"target_and_same_name_matching": permanent_group_wire(filter)})
+        }
     }
 }
 fn permanent_group(
@@ -7917,6 +7937,7 @@ pub fn decode_for_owner(
                 })
                 .transpose()?,
             cost: casting_cost.native()?,
+            uncastable_mana_cost: false,
             body: body.native(vocabulary)?,
         }),
     };
@@ -8630,9 +8651,8 @@ fn ability_part(value: &AbilityChange) -> Value {
         AbilityRemoval::BandsWithOther => "BandsWithOther",
     });
     let mut projected = json!({"tag":"Abilities","removal":removal,"granted_keywords":keywords(&value.granted_keywords)});
-    if let Some(trigger) = &value.granted_trigger {
-        projected["granted_trigger"] =
-            triggered_abilities(std::slice::from_ref(trigger))[0].clone();
+    if !value.granted_triggers.is_empty() {
+        projected["granted_triggers"] = triggered_abilities(&value.granted_triggers);
     }
     if value.grants_unblockable {
         projected["grants_unblockable"] = json!(true);
@@ -8726,6 +8746,9 @@ pub fn parts_spec(value: &ResolvedPartsSpec) -> Value {
                 ResolvedPartSpec::CannotBeTargetedByColors(colors) => {
                     json!({"tag":"CannotBeTargetedByColors","colors":format!("{colors:?}")})
                 }
+                ResolvedPartSpec::CannotBeTargetedBySpellsOfColors(colors) => {
+                    json!({"tag":"CannotBeTargetedBySpellsOfColors","colors":format!("{colors:?}")})
+                }
                 ResolvedPartSpec::MustBlockSubject(subject) => {
                     json!({"tag":"MustBlockSubject","subject":format!("{subject:?}")})
                 }
@@ -8791,6 +8814,12 @@ pub fn resolved_parts(value: &ResolvedParts) -> Value {
                 }
                 ResolvedPart::CannotBeTargetedByColors(colors) => {
                     json!({"tag":"CannotBeTargetedByColors","colors":format!("{colors:?}")})
+                }
+                ResolvedPart::CannotBeTargetedBySpellsOfColors(colors) => {
+                    json!({"tag":"CannotBeTargetedBySpellsOfColors","colors":format!("{colors:?}")})
+                }
+                ResolvedPart::GrantRestriction(restriction) => {
+                    json!({"tag":"GrantRestriction","restriction":format!("{restriction:?}")})
                 }
             })
             .collect::<Vec<_>>()
@@ -9186,8 +9215,19 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 } => {
                     json!({"tag":"ExileMatching","id":id.0,"filter":format!("{filter:?}"),"linked_to_source":linked_to_source,"free":free,"any_color":any_color})
                 }
-                CastPermissionRule::GrantSpellKeyword { matching, keyword } => {
-                    json!({"tag":"GrantSpellKeyword","id":id.0,"matching":format!("{matching:?}"),"keyword":format!("{keyword:?}")})
+                CastPermissionRule::GrantSpellKeyword {
+                    any_player,
+                    matching,
+                    keyword,
+                } => {
+                    json!({"tag":"GrantSpellKeyword","id":id.0,"any_player":any_player,"matching":format!("{matching:?}"),"keyword":format!("{keyword:?}")})
+                }
+                CastPermissionRule::GrantSpellCascade {
+                    any_player,
+                    matching,
+                    count,
+                } => {
+                    json!({"tag":"GrantSpellCascade","id":id.0,"any_player":any_player,"matching":format!("{matching:?}"),"count":count})
                 }
                 CastPermissionRule::PlayLibraryTopFiltered {
                     lands_allowed,
@@ -9291,11 +9331,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 SpellCostModifier::FirstSpellRule {
                     filter,
                     own_turn_only,
+                    each_player,
                     free,
                     pay_life_mv,
                     discount,
                 } => {
-                    json!({"tag":"FirstSpellRule","id":id.0,"filter":format!("{filter:?}"),"own_turn_only":own_turn_only,"free":free,"pay_life_mv":pay_life_mv,"discount":discount})
+                    json!({"tag":"FirstSpellRule","id":id.0,"filter":format!("{filter:?}"),"own_turn_only":own_turn_only,"each_player":each_player,"free":free,"pay_life_mv":pay_life_mv,"discount":discount})
                 }
                 SpellCostModifier::AlternativeForMatching {
                     filter,
@@ -9824,6 +9865,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticPart::GrantMana(output) => {
                     json!({"tag":"GrantMana","output":format!("{output:?}")})
                 }
+                StaticPart::GrantRestriction(restriction) => {
+                    json!({"tag":"GrantRestriction","restriction":format!("{restriction:?}")})
+                }
     }).collect::<Vec<_>>();
     json!({"tag":"Battlefield","id":id.0,"selector":selector(target),"parts":parts})
 }
@@ -10225,6 +10269,9 @@ fn token_creation(creation: &TokenCreation) -> Value {
     if let Some(size) = &creation.base_size {
         row["base_size"] = match size {
             TokenSize::AtCreation(amount) => instruction_amount(amount),
+            TokenSize::AtCreationPair { power, toughness } => {
+                json!({"tag":"AtCreationPair","power":instruction_amount(power),"toughness":instruction_amount(toughness)})
+            }
             TokenSize::AbilitySourceCounters(kind) => {
                 json!({"tag":"LiveAbilitySourceCounters","kind":format!("{kind:?}")})
             }
@@ -10539,8 +10586,16 @@ pub fn body(value: &ExecutableBody) -> Value {
                 json!({"op":"TemptWithTokens","creation":token_creation(creation)}),
             Instruction::TemptWithTokens { creation, phase } =>
                 json!({"op":"TemptWithTokens","creation":token_creation(creation),"phase":format!("{phase:?}")}),
-            Instruction::CreateAttackingTokens { creations } =>
-                json!({"op":"CreateAttackingTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()}),
+            Instruction::CreateAttackingTokens {
+                creations,
+                defender_scope,
+            } => {
+                if *defender_scope == spellwake_engine::token::AttackingDefenderScope::AnyLegal {
+                    json!({"op":"CreateAttackingTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()})
+                } else {
+                    json!({"op":"CreateAttackingTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>(),"defender_scope":format!("{defender_scope:?}")})
+                }
+            }
             Instruction::CreateTokens { creations } =>
                 json!({"op":"CreateTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()}),
             Instruction::DrainTargetAndGain(amount) => json!({"op":"DrainTargetAndGain","amount":instruction_amount(amount)}),
@@ -10592,6 +10647,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                 json!({"op":"DoublePowerToughness","target_self":target_self,"power":power,"toughness":toughness,"duration":duration(*dur)})
             }
             Instruction::AdditionalCombat {untap}=>match untap {
+                spellwake_engine::program::CombatUntapGroup::None=>json!({"op":"ExtraCombatNone"}),
                 spellwake_engine::program::CombatUntapGroup::ControlledCreatures=>json!({"op":"ExtraCombatControlled"}),
                 spellwake_engine::program::CombatUntapGroup::AttackersIfSourceAttacksHighestLife=>json!({"op":"ExtraCombatHighestLife"}),
                 spellwake_engine::program::CombatUntapGroup::SourceAndControlledSubtype(subtype)=>json!({"op":"ExtraCombatSubtype","subtype":projection::creature_type_id(*subtype)}),
@@ -11535,7 +11591,12 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::MoveGraveyardGroupOwned { players, filter, destination } => json!({"op":"MoveGraveyardGroupOwned","players":format!("{players:?}"),"filter":format!("{filter:?}"),"destination":format!("{destination:?}")}),
             Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
             Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}")}),
-            Instruction::CreateTokenCopyExt { source, count, recipients, enters_tapped, enters_attacking, haste, sacrifice_at_end_step, exile_at_end_step, nonlegendary, extra_types, extra_subtypes, extra_keywords, override_pt, extra_colors } => json!({"op":"CreateTokenCopyExt","source":format!("{source:?}"),"count":instruction_amount(count),"recipients":format!("{recipients:?}"),"enters_tapped":enters_tapped,"enters_attacking":enters_attacking,"haste":haste,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"nonlegendary":nonlegendary,"extra_types":format!("{extra_types:?}"),"extra_subtypes":format!("{extra_subtypes:?}"),"extra_keywords":format!("{extra_keywords:?}"),"override_pt":format!("{override_pt:?}"),"extra_colors":format!("{extra_colors:?}")}),
+            Instruction::CreateTokenCopyExt { source, count, recipients, enters_tapped, enters_attacking, haste, sacrifice_at_end_step, exile_at_end_step, nonlegendary, extra_types, extra_subtypes, extra_keywords, override_pt, extra_colors, defender_scope } => json!({"op":"CreateTokenCopyExt","source":format!("{source:?}"),"count":instruction_amount(count),"recipients":format!("{recipients:?}"),"enters_tapped":enters_tapped,"enters_attacking":enters_attacking,"haste":haste,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"nonlegendary":nonlegendary,"extra_types":format!("{extra_types:?}"),"extra_subtypes":format!("{extra_subtypes:?}"),"extra_keywords":format!("{extra_keywords:?}"),"override_pt":format!("{override_pt:?}"),"extra_colors":format!("{extra_colors:?}"),"defender_scope":format!("{defender_scope:?}")}),
+            Instruction::MoveCounters { from, to, kind, all, any_number, amount } => json!({"op":"MoveCounters","from":format!("{from:?}"),"to":format!("{to:?}"),"kind":format!("{kind:?}"),"all":all,"any_number":any_number,"amount":amount.as_ref().map(instruction_amount)}),
+            Instruction::ExileSubjectUntilSourceLeaves { subject } => json!({"op":"ExileSubjectUntilSourceLeaves","subject":effect_group_wire(**subject)}),
+            Instruction::ReturnCardsExiledWithLinkExt { group, under_controller_control, tapped } => json!({"op":"ReturnCardsExiledWithLinkExt","group":format!("{group:?}"),"under_controller_control":under_controller_control,"tapped":tapped}),
+            Instruction::DrawGame => json!({"op":"DrawGame"}),
+            Instruction::TurnFaceUpSubject { subject } => json!({"op":"TurnFaceUpSubject","subject":effect_group_wire(**subject)}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});
@@ -13274,6 +13335,9 @@ fn mana_output_view(output: &ManaOutput) -> Value {
             TriggeredManaRule::LandTappedSameType => json!({"tag":"LandTappedSameType"}),
             TriggeredManaRule::PermanentTappedForColorless => {
                 json!({"tag":"PermanentTappedForColorless"})
+            }
+            TriggeredManaRule::LandTappedChosenColor { controller_only } => {
+                json!({"tag":"LandTappedChosenColor","controller_only":controller_only})
             }
         },
         ManaOutput::CounterBased(kind) => match kind {

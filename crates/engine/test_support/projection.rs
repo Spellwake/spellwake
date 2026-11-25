@@ -1845,8 +1845,17 @@ fn appearance(value: &SupportedAppearance) -> Value {
         projected["toxic_value"] = json!(amount);
     }
     if !value.granted_triggers.is_empty() {
-        projected["granted_triggers"] = json!(value.granted_triggers.iter().map(|(grant, ability)|
-            json!({"grant":effect_instance(*grant),"ability":program::triggered_abilities(std::slice::from_ref(ability))[0]})).collect::<Vec<_>>());
+        projected["granted_triggers"] = json!(
+            value
+                .granted_triggers
+                .iter()
+                .flat_map(|(grant, abilities)| {
+                    abilities.iter().map(move |ability| {
+                        json!({"grant":effect_instance(*grant),"ability":program::triggered_abilities(std::slice::from_ref(ability))[0]})
+                    })
+                })
+                .collect::<Vec<_>>()
+        );
     }
     if !value.granted_combat_keywords.is_empty() {
         projected["granted_combat_keywords"] =
@@ -2351,8 +2360,17 @@ pub(crate) fn current_characteristics(value: &ObjectCharacteristics) -> Value {
         projected["toxic_value"] = json!(amount);
     }
     if !value.granted_triggers.is_empty() {
-        projected["granted_triggers"] = json!(value.granted_triggers.iter().map(|(grant, ability)|
-            json!({"grant":effect_instance(*grant),"ability":program::triggered_abilities(std::slice::from_ref(ability))[0]})).collect::<Vec<_>>());
+        projected["granted_triggers"] = json!(
+            value
+                .granted_triggers
+                .iter()
+                .flat_map(|(grant, abilities)| {
+                    abilities.iter().map(move |ability| {
+                        json!({"grant":effect_instance(*grant),"ability":program::triggered_abilities(std::slice::from_ref(ability))[0]})
+                    })
+                })
+                .collect::<Vec<_>>()
+        );
     }
     if !value.granted_combat_keywords.is_empty() {
         projected["granted_combat_keywords"] =
@@ -3903,6 +3921,15 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             ..
         } => {
             json!({"tag":"WardTargeted","object":opaque(object),"entry":opaque(entry),"controller":controller.0})
+        }
+        RulesOccurrence::PlayerTargeted {
+            player,
+            entry,
+            controller,
+            spell,
+            instant_or_sorcery,
+        } => {
+            json!({"tag":"PlayerTargeted","player":player.0,"entry":opaque(entry),"controller":controller.0,"spell":spell,"instant_or_sorcery":instant_or_sorcery})
         }
         RulesOccurrence::RegenerationShieldCreated {
             object,

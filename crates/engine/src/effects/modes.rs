@@ -347,12 +347,33 @@ impl EffectWindow {
         let mut targets = Vec::new();
         let mut old_to_new = Vec::with_capacity(body.instructions.len() + 1);
         let mut outer_indices = Vec::new();
+        let mut first_target_controller: Option<SeatId> = None;
         for op in &body.instructions {
             old_to_new.push(base_offset + instructions.len());
             if let Instruction::FixedTargetClause(clause) = op {
                 let target = *choices.next().ok_or(EffectError::TargetRequired)?;
-                if !legal(clause, target) {
+                let mut bound_clause = (**clause).clone();
+                if let BodyTarget::FilteredPermanent(filter) = &mut bound_clause.target
+                    && filter.uses_first_target_controller()
+                {
+                    let seat = first_target_controller.ok_or(EffectError::IllegalTarget)?;
+                    *filter = filter.bind_first_target_controller(seat);
+                }
+                if !legal(&bound_clause, target) {
                     return Err(EffectError::IllegalTarget);
+                }
+                if first_target_controller.is_none() {
+                    first_target_controller = match target {
+                        TargetRef::Player(seat) => Some(seat),
+                        TargetRef::Object(id) => self
+                            .evaluated_characteristics()
+                            .ok()
+                            .and_then(|ev| ev.get(id).and_then(|p| p.controller))
+                            .or_else(|| {
+                                self.window.cards().get(id).and_then(GameObject::controller)
+                            }),
+                        _ => None,
+                    };
                 }
                 let local_ord =
                     u32::try_from(targets.len()).map_err(|_| EffectError::InvalidCastResource)?;
@@ -379,7 +400,7 @@ impl EffectWindow {
                 } else {
                     let shift =
                         isize::try_from(start).map_err(|_| EffectError::InconsistentProgram)?;
-                    for mut cloned in clause.instructions.iter().cloned() {
+                    for mut cloned in bound_clause.instructions.iter().cloned() {
                         cloned.shift_jumps(shift, 0);
                         instructions.push(cloned);
                     }
@@ -395,7 +416,7 @@ impl EffectWindow {
                     extra_targets: vec![],
                     start,
                     end: base_offset + instructions.len(),
-                    target: Some((id, clause.target)),
+                    target: Some((id, bound_clause.target)),
                 });
             } else {
                 outer_indices.push(instructions.len());

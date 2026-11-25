@@ -2952,6 +2952,255 @@ impl EffectWindow {
                     }
                     Ok(i64::from(best.is_some_and(|(_, ours)| ours)).into())
                 }
+                PlayerStatExpr::PlayerHasMostLife { player, allow_tie } => {
+                    let seat = if *player == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*player, cursor)?
+                    };
+                    if !self.window.participants().contains(&seat) {
+                        return Ok(0.into());
+                    }
+                    let Some(own_life) = self.life.get(seat) else {
+                        return Ok(0.into());
+                    };
+                    let is_most = self
+                        .window
+                        .participants()
+                        .iter()
+                        .copied()
+                        .filter(|&other| other != seat)
+                        .filter_map(|other| self.life.get(other))
+                        .all(|other_life| {
+                            if *allow_tie {
+                                own_life >= other_life
+                            } else {
+                                own_life > other_life
+                            }
+                        });
+                    Ok(i64::from(is_most).into())
+                }
+                PlayerStatExpr::PlayerControlsMost {
+                    player,
+                    zone,
+                    filter,
+                    allow_tie,
+                } => {
+                    let seat = if *player == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*player, cursor)?
+                    };
+                    if !self.window.participants().contains(&seat) {
+                        return Ok(0.into());
+                    }
+                    let ability_source = resolve_ability_source();
+                    let evaluated = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    let count_for = |target_seat: SeatId| -> usize {
+                        match *zone {
+                            ValueZone::Battlefield => {
+                                let scoped = filter.of_player(target_seat);
+                                evaluated
+                                    .objects
+                                    .values()
+                                    .filter(|o| {
+                                        o.zone == ObjectZone::Battlefield
+                                            && self.matches_object_filter(
+                                                scoped,
+                                                o,
+                                                controller,
+                                                ability_source,
+                                                &excluded,
+                                                &evaluated,
+                                            )
+                                    })
+                                    .count()
+                            }
+                            ValueZone::Graveyard(_) => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    o.zone == ObjectZone::Graveyard(target_seat)
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
+                            ValueZone::Hand(_) => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    o.zone == ObjectZone::Hand(target_seat)
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
+                            ValueZone::Library(_) => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    o.zone == ObjectZone::Library(target_seat)
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
+                            ValueZone::Exile(_) => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    o.zone == ObjectZone::Exile
+                                        && o.owner == target_seat
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
+                            ValueZone::AllGraveyards => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    matches!(o.zone, ObjectZone::Graveyard(_))
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
+                        }
+                    };
+                    let own = count_for(seat);
+                    let is_most = self
+                        .window
+                        .participants()
+                        .iter()
+                        .copied()
+                        .filter(|&other| other != seat)
+                        .all(|other| {
+                            let other_count = count_for(other);
+                            if *allow_tie {
+                                own >= other_count
+                            } else {
+                                own > other_count
+                            }
+                        });
+                    Ok(i64::from(is_most).into())
+                }
+                PlayerStatExpr::IsInStep { step, player } => {
+                    let step_ok = self.current_step == Some(*step);
+                    let player_ok = match *player {
+                        None => true,
+                        Some(role) => {
+                            let seat = if role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(role, cursor)?
+                            };
+                            seat == self.window.active_player()
+                        }
+                    };
+                    Ok(i64::from(step_ok && player_ok).into())
+                }
+                PlayerStatExpr::IsInPhase { phase, player } => {
+                    use crate::program::PhaseCheck;
+                    use crate::turn::Step;
+                    let phase_ok = self.current_step.is_some_and(|step| match phase {
+                        PhaseCheck::Beginning => {
+                            matches!(step, Step::Untap | Step::Upkeep | Step::Draw)
+                        }
+                        PhaseCheck::Main => {
+                            matches!(step, Step::PrecombatMain | Step::PostcombatMain)
+                        }
+                        PhaseCheck::Combat => matches!(
+                            step,
+                            Step::BeginningCombat
+                                | Step::DeclareAttackers
+                                | Step::DeclareBlockers
+                                | Step::CombatDamage
+                                | Step::EndCombat
+                        ),
+                        PhaseCheck::Ending => matches!(step, Step::End | Step::Cleanup),
+                    });
+                    let player_ok = match *player {
+                        None => true,
+                        Some(role) => {
+                            let seat = if role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(role, cursor)?
+                            };
+                            seat == self.window.active_player()
+                        }
+                    };
+                    Ok(i64::from(phase_ok && player_ok).into())
+                }
+                PlayerStatExpr::AttackedMatchingThisTurn { players, filter } => {
+                    let seats = match *players {
+                        crate::program::AffectedPlayers::One(role) => {
+                            vec![if role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(role, cursor)?
+                            }]
+                        }
+                        crate::program::AffectedPlayers::EachPlayer => {
+                            self.window.participants().to_vec()
+                        }
+                        crate::program::AffectedPlayers::EachOtherPlayer => self
+                            .window
+                            .participants()
+                            .iter()
+                            .copied()
+                            .filter(|&p| p != controller)
+                            .collect(),
+                        crate::program::AffectedPlayers::EachOpponent => self
+                            .combat_rules
+                            .opponents(self.window.participants(), controller)?,
+                    };
+                    let opp_vec = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    let mut count = 0usize;
+                    for seat in seats {
+                        if let Some(records) =
+                            self.characteristics.attacked_records_this_turn.get(&seat)
+                        {
+                            count += records
+                                .iter()
+                                .filter(|rec| {
+                                    matches_zone_move_record(**filter, rec, controller, &opp_vec)
+                                })
+                                .count();
+                        }
+                    }
+                    Ok(RulesInteger::from_usize(count))
+                }
             },
             ValueExpr::ObjectMatches { subject, filter } => {
                 let (clause_a, _) = filter.clauses();

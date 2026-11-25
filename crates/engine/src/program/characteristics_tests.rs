@@ -315,7 +315,7 @@ fn keyword_components_round_trip_and_reject_unknown_duplicate_or_omitted_fields(
             granted_exalted: 0,
             granted_toxic: None,
             grants_unblockable: false,
-            granted_trigger: None,
+            granted_triggers: vec![],
             granted_combat_keywords: vec![],
             granted_keywords: BTreeSet::from([Haste]),
             suppressed_activations: None,

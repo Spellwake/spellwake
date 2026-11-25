@@ -113,6 +113,11 @@ impl EffectWindow {
                                                 .is_some_and(|list| list.contains(&obj.id()))
                                     })
                             }
+                            crate::program::SourceZoneFilter::LastMoved => self
+                                .resolution_cursor()
+                                .is_some_and(|cursor| {
+                                    cursor.results.last_moved_objects.contains(&obj.id())
+                                }),
                         };
                         zone_ok
                             && evaluated.get(obj.id()).is_some_and(|view| {

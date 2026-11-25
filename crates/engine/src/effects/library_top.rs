@@ -994,7 +994,12 @@ impl EffectWindow {
             | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
+            | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::MoveCounters { .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+            | Instruction::DrawGame
+            | Instruction::TurnFaceUpSubject { .. } => return Ok(false),
         };
         let controller = self
             .window
@@ -1489,9 +1494,7 @@ impl EffectWindow {
             }
         }
         for active in &self.temporary_rules {
-            if !active.consumed
-                && let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
-            {
+            if let Some(ab) = self.active_temporary_static(active, &evaluated) {
                 check_rule(
                     active.controller,
                     ab,
