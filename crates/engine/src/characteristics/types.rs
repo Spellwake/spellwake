@@ -897,6 +897,7 @@ pub struct PermanentSelector {
     /// Ignore enchantments that currently have the Aura subtype.
     pub exclude_auras: bool,
     pub artifact_subtype: Option<crate::program::ArtifactSubtype>,
+    pub planeswalker_subtype: Option<crate::program::PlaneswalkerSubtype>,
     pub matches_source_entry_type: bool,
     pub controller_type_threshold: Option<(CardType, std::num::NonZeroU16)>,
     /// Additional condition on the source and its evaluated controller.
@@ -960,6 +961,7 @@ impl Default for PermanentSelector {
             minimum_plus_one_counters: 0,
             any_counter: false,
             artifact_subtype: None,
+            planeswalker_subtype: None,
             matches_source_entry_type: false,
             controller_type_threshold: None,
             equipped_by_at_least: 0,
@@ -2200,6 +2202,18 @@ pub struct ObjectCharacteristics {
     pub blocking_restrictions: Vec<BlockingRestriction>,
     /// Currently has the granted static ability that this creature cannot be blocked.
     pub granted_unblockable: bool,
+    /// Active static restriction prevents sacrificing this permanent.
+    pub cannot_be_sacrificed: bool,
+    /// Active static restriction prevents untapping this permanent.
+    pub cannot_be_untapped: bool,
+    /// Active static restriction lets controller activate tap/untap abilities as though this creature had haste.
+    pub activate_as_though_haste: bool,
+    /// Active static restriction prevents Aura spells from targeting this permanent.
+    pub cannot_be_targeted_by_auras: bool,
+    /// Active static restriction prevents spells or abilities of any color in this mask from targeting this permanent.
+    pub cannot_be_targeted_by_colors: crate::program::ColorMask,
+    /// Seats that may target this permanent as though it did not have hexproof.
+    pub hexproof_ignored_by: BTreeSet<SeatId>,
     /// Sum of surviving printed and granted toxic values (CR 702.164b).
     pub toxic_value: Option<RulesInteger>,
     /// Surviving grants keyed by the exact continuous effect, independent of printed definitions.
@@ -2613,8 +2627,11 @@ impl EvaluatedCharacteristics {
         })
     }
 
-    /// Whether an active Equipment prohibits sacrificing this permanent.
+    /// Whether an active static restriction or Equipment prohibits sacrificing this permanent.
     pub fn sacrifice_prohibited(&self, object: ObjectId) -> bool {
+        if self.get(object).is_some_and(|p| p.cannot_be_sacrificed) {
+            return true;
+        }
         self.get(object).is_some_and(ObjectCharacteristics::is_creature)
             && self.objects.values().any(|equipment| {
                 equipment.zone == ObjectZone::Battlefield

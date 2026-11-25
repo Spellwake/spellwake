@@ -97,6 +97,10 @@ pub enum CastPermissionRule {
     },
     /// Continuously reveal top library card publicly or privately to controller.
     SeeLibraryTop { public: bool },
+    /// Every player plays with the top card of their library revealed (Field of Dreams, Lantern of Insight).
+    AllPlayersRevealLibraryTop,
+    /// Players play with their hands revealed (`opponents_only`: Telepathy; false: Revelation / Wandering Eye).
+    RevealHands { opponents_only: bool },
     /// Play qualifying cards from the top of controller's library.
     PlayLibraryTop(LibraryTopPermission),
     /// Play qualifying cards matching an orthogonal object filter from the top of controller's library.
@@ -119,10 +123,16 @@ pub enum CastPermissionRule {
     },
     /// Additional land plays available to controller each turn.
     AdditionalLandPlays(NonZeroU8),
+    /// Additional land plays available to each player on their turn (Rites of Flourishing, Ghirapur Orrery).
+    AllPlayersAdditionalLandPlays(NonZeroU8),
     /// Controlled spells with any listed card type cannot be countered.
     ControllerSpellsCannotBeCountered(BTreeSet<CardType>),
     /// Controlled spells matching `SpellFilter` cannot be countered.
     ControllerSpellsCannotBeCounteredFiltered(Box<SpellFilter>),
+    /// Spells matching `SpellFilter` cast by any player cannot be countered (Leyline of Lifeforce, Gaea's Herald).
+    AllSpellsCannotBeCounteredFiltered(Box<SpellFilter>),
+    /// Controller may look at face-down cards exiled with this source permanent (Bane Alley Broker, Grimoire Thief).
+    LookAtSourceExiledCards,
     /// Cast qualifying spells (and optionally play lands) matching `filter` from controller's graveyard.
     GraveyardMatching {
         lands_allowed: bool,
@@ -327,6 +337,8 @@ pub enum StaticDrawRule {
     OpponentsCannotDraw,
     NoMaximumHandSize,
     AllPlayersNoMaximumHandSize,
+    /// Controller's maximum hand size is reduced/set to this value (Null Profusion, Recycle).
+    MaxHandSize(u8),
 }
 
 /// Static untap-step modification rule.
@@ -394,6 +406,28 @@ pub enum StaticRestriction {
     ProhibitEntering(Box<PermanentSelector>),
     /// Controller may cast this spell as though it had flash; if cast any time a sorcery couldn't be cast, sacrifice it at the beginning of the next cleanup step.
     FlashSacrificeAtCleanup,
+    /// Permanents matching `selector` can be targeted by the source controller as though they didn't have hexproof (Glaring Spotlight, Shadowspear).
+    IgnoreOpponentsHexproof(Box<PermanentSelector>),
+    /// Controller may activate abilities of matching creatures as though those creatures had haste (Thousand-Year Elixir, Tyvar).
+    ActivateAbilitiesAsThoughHaste(Box<PermanentSelector>),
+    /// Activated abilities of matching permanents can't be activated unless they're mana abilities (Faith's Fetters, Damping Matrix).
+    PreventMatchingNonManaActivations(Box<PermanentSelector>),
+    /// Cards in graveyards can't be the targets of spells or abilities (Ground Seal, Silent Gravestone).
+    PreventGraveyardTargeting,
+    /// Matching permanents can't be sacrificed (Hithlain Rope, Alexios, Assault Suit).
+    CannotBeSacrificed(Box<PermanentSelector>),
+    /// Matching permanents can't become untapped by untap steps or effects (Blossombind, Frozen in Ice).
+    CannotBeUntapped(Box<PermanentSelector>),
+    /// Matching permanents can't be the targets of Aura spells and/or spells or abilities of the specified colors (Bartel Runeaxe, Raiding Party).
+    CantBeTargetedBy {
+        selector: Box<PermanentSelector>,
+        auras_only: bool,
+        colors: crate::program::ColorMask,
+    },
+    /// Source controller can't cast more than one spell each turn (Moderation).
+    ControllerOneSpellPerTurn,
+    /// Opponents of source controller can't cast spells during combat (Marisi).
+    OpponentsCantCastDuringCombat,
 }
 
 /// Static battlefield replacement, doubling, mana retention, or structural modifier.
@@ -680,10 +714,13 @@ impl StaticContinuousAbility {
                     | CastPermissionRule::ColorlessHandSpellsHaveCascade { .. }
                     | CastPermissionRule::ControllerSpellsCannotBeCountered(_)
                     | CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(_)
+                    | CastPermissionRule::AllSpellsCannotBeCounteredFiltered(_)
             ),
             Self::DrawRule { rule, .. } => matches!(
                 rule,
-                StaticDrawRule::NoMaximumHandSize | StaticDrawRule::AllPlayersNoMaximumHandSize
+                StaticDrawRule::NoMaximumHandSize
+                    | StaticDrawRule::AllPlayersNoMaximumHandSize
+                    | StaticDrawRule::MaxHandSize(_)
             ),
             Self::Restriction { rule, .. } => !matches!(
                 rule,
@@ -710,11 +747,16 @@ impl StaticContinuousAbility {
                         | CastPermissionRule::SubtypeSpellsHaveReplicate(_)
                         | CastPermissionRule::GraveyardSubtypeEncore(_)
                         | CastPermissionRule::SeeLibraryTop { .. }
+                        | CastPermissionRule::AllPlayersRevealLibraryTop
+                        | CastPermissionRule::RevealHands { .. }
                         | CastPermissionRule::PlayLibraryTop(_)
                         | CastPermissionRule::PlayLibraryTopMatching { .. }
                         | CastPermissionRule::AdditionalLandPlays(_)
+                        | CastPermissionRule::AllPlayersAdditionalLandPlays(_)
                         | CastPermissionRule::ControllerSpellsCannotBeCountered(_)
                         | CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(_)
+                        | CastPermissionRule::AllSpellsCannotBeCounteredFiltered(_)
+                        | CastPermissionRule::LookAtSourceExiledCards
                         | CastPermissionRule::GraveyardMatching { .. }
                         | CastPermissionRule::GraveyardSelfConditional { .. }
                         | CastPermissionRule::ExileMatching { .. },
@@ -725,6 +767,7 @@ impl StaticContinuousAbility {
                 | Self::DrawRule {
                     rule: StaticDrawRule::NoMaximumHandSize
                         | StaticDrawRule::AllPlayersNoMaximumHandSize
+                        | StaticDrawRule::MaxHandSize(_)
                         | StaticDrawRule::OpponentsAtMostOne
                         | StaticDrawRule::SkipControllerDrawStep
                         | StaticDrawRule::ModifyDraw { .. }
@@ -745,6 +788,15 @@ impl StaticContinuousAbility {
                         | StaticRestriction::PlayersCannotGainLife
                         | StaticRestriction::OthersEnterTapped(_)
                         | StaticRestriction::PreventMatchingActivations(_)
+                        | StaticRestriction::PreventMatchingNonManaActivations(_)
+                        | StaticRestriction::IgnoreOpponentsHexproof(_)
+                        | StaticRestriction::ActivateAbilitiesAsThoughHaste(_)
+                        | StaticRestriction::PreventGraveyardTargeting
+                        | StaticRestriction::CannotBeSacrificed(_)
+                        | StaticRestriction::CannotBeUntapped(_)
+                        | StaticRestriction::CantBeTargetedBy { .. }
+                        | StaticRestriction::ControllerOneSpellPerTurn
+                        | StaticRestriction::OpponentsCantCastDuringCombat
                         | StaticRestriction::RestrictOpponentsDuringOwnTurn
                         | StaticRestriction::RestrictGraveyardAndLibrary
                         | StaticRestriction::ControllerHasHexproof
@@ -810,7 +862,8 @@ impl StaticContinuousAbility {
                 CastPermissionRule::Flash { matching, .. } => {
                     matching.rewrite_creature_type(change.from, change.to);
                 }
-                CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(matching) => {
+                CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(matching)
+                | CastPermissionRule::AllSpellsCannotBeCounteredFiltered(matching) => {
                     matching.rewrite_creature_type(change.from, change.to);
                 }
                 CastPermissionRule::PlayLibraryTopMatching { filter, .. }
@@ -883,6 +936,26 @@ impl StaticContinuousAbility {
                 StaticRestriction::ProhibitCasting { filter, .. } => {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
+                StaticRestriction::OthersEnterTapped(sel)
+                | StaticRestriction::PreventMatchingActivations(sel)
+                | StaticRestriction::PreventMatchingNonManaActivations(sel)
+                | StaticRestriction::IgnoreOpponentsHexproof(sel)
+                | StaticRestriction::ActivateAbilitiesAsThoughHaste(sel)
+                | StaticRestriction::CannotBeSacrificed(sel)
+                | StaticRestriction::CannotBeUntapped(sel)
+                | StaticRestriction::CantBeTargetedBy { selector: sel, .. }
+                | StaticRestriction::EnterUntapped(sel)
+                | StaticRestriction::ProhibitEntering(sel) => {
+                    if let Some(st) = &mut sel.creature_subtype {
+                        word(st);
+                    }
+                    if let Some(st) = &mut sel.forbidden_creature_subtype {
+                        word(st);
+                    }
+                    if sel.any_creature_subtypes.remove(&change.from) {
+                        sel.any_creature_subtypes.insert(change.to);
+                    }
+                }
                 _ => {}
             },
             Self::Modifier { rule, .. } => match rule {
@@ -943,7 +1016,8 @@ impl StaticContinuousAbility {
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
                 }
-                CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(matching) => {
+                CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(matching)
+                | CastPermissionRule::AllSpellsCannotBeCounteredFiltered(matching) => {
                     return matching
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
@@ -971,11 +1045,15 @@ impl StaticContinuousAbility {
                     return Ok(());
                 }
                 CastPermissionRule::SeeLibraryTop { .. }
+                | CastPermissionRule::AllPlayersRevealLibraryTop
+                | CastPermissionRule::RevealHands { .. }
                 | CastPermissionRule::PlayLibraryTop(_)
                 | CastPermissionRule::GraveyardCreatureCast
                 | CastPermissionRule::GraveyardLandPlay
                 | CastPermissionRule::ColorlessHandSpellsHaveCascade { .. }
-                | CastPermissionRule::AdditionalLandPlays(_) => return Ok(()),
+                | CastPermissionRule::AdditionalLandPlays(_)
+                | CastPermissionRule::AllPlayersAdditionalLandPlays(_)
+                | CastPermissionRule::LookAtSourceExiledCards => return Ok(()),
             },
             Self::DamageRule { rule, .. } => {
                 match rule {
@@ -1112,6 +1190,12 @@ impl StaticContinuousAbility {
                 }
                 StaticRestriction::OthersEnterTapped(selector)
                 | StaticRestriction::PreventMatchingActivations(selector)
+                | StaticRestriction::PreventMatchingNonManaActivations(selector)
+                | StaticRestriction::IgnoreOpponentsHexproof(selector)
+                | StaticRestriction::ActivateAbilitiesAsThoughHaste(selector)
+                | StaticRestriction::CannotBeSacrificed(selector)
+                | StaticRestriction::CannotBeUntapped(selector)
+                | StaticRestriction::CantBeTargetedBy { selector, .. }
                 | StaticRestriction::EnterUntapped(selector)
                 | StaticRestriction::ProhibitEntering(selector) => {
                     return selector.validate(vocabulary);

@@ -9,6 +9,19 @@ pub(super) struct ProtectionSource {
     pub is_creature: bool,
     pub controller: Option<SeatId>,
     pub is_ability: bool,
+    pub is_aura: bool,
+}
+impl ProtectionSource {
+    pub(super) fn with_controller(mut self, controller: SeatId) -> Self {
+        self.controller = Some(controller);
+        self
+    }
+
+    pub(super) fn with_ability_controller(mut self, controller: SeatId) -> Self {
+        self.controller = Some(controller);
+        self.is_ability = true;
+        self
+    }
 }
 impl From<&ObjectCharacteristics> for ProtectionSource {
     fn from(source: &ObjectCharacteristics) -> Self {
@@ -19,6 +32,10 @@ impl From<&ObjectCharacteristics> for ProtectionSource {
             is_creature: source.is_creature(),
             controller: source.controller,
             is_ability: false,
+            is_aura: matches!(
+                source.attachment_kind,
+                Some(crate::attachment::AttachmentKind::Aura(_))
+            ),
         }
     }
 }
@@ -31,6 +48,7 @@ impl From<&CopiableSpellTraits> for ProtectionSource {
             is_creature: source.card_types.contains(&CardType::Creature),
             controller: None,
             is_ability: false,
+            is_aura: false,
         }
     }
 }
@@ -47,6 +65,10 @@ impl From<&Program> for ProtectionSource {
             is_creature: source.has_type(CardType::Creature),
             controller: None,
             is_ability: false,
+            is_aura: matches!(
+                source.permanent().and_then(|p| p.attachment),
+                Some(crate::attachment::AttachmentKind::Aura(_))
+            ),
         }
     }
 }
@@ -131,22 +153,34 @@ impl EffectWindow {
     ) -> bool {
         match target {
             TargetRef::Object(id) => current.get(id).is_some_and(|object| {
+                let hexproof_ignored = source
+                    .controller
+                    .is_some_and(|ctrl| object.hexproof_ignored_by.contains(&ctrl));
+                let restricted_by_static =
+                    (object.cannot_be_targeted_by_auras && source.is_aura && !source.is_ability)
+                        || (!object.cannot_be_targeted_by_colors.is_empty()
+                            && object
+                                .cannot_be_targeted_by_colors
+                                .matches_any(&source.colors));
                 object.zone == ObjectZone::Battlefield
-                    && (object.protected_from_source(
-                        &source.colors,
-                        &source.card_types,
-                        &source.creature_subtypes,
-                        source.is_creature,
-                        source.controller,
-                    ) || (source
-                        .controller
-                        .is_some_and(|ctrl| object.controller.is_some_and(|owner| owner != ctrl))
-                        && object.hexproof_from_source(
+                    && (restricted_by_static
+                        || object.protected_from_source(
                             &source.colors,
                             &source.card_types,
                             &source.creature_subtypes,
-                            source.is_ability,
-                        )))
+                            source.is_creature,
+                            source.controller,
+                        )
+                        || (!hexproof_ignored
+                            && source.controller.is_some_and(|ctrl| {
+                                object.controller.is_some_and(|owner| owner != ctrl)
+                            })
+                            && object.hexproof_from_source(
+                                &source.colors,
+                                &source.card_types,
+                                &source.creature_subtypes,
+                                source.is_ability,
+                            )))
             }),
             TargetRef::Player(player) => current
                 .player_protection_colors(player)
@@ -174,6 +208,7 @@ impl EffectWindow {
                                 is_creature: source.was_creature,
                                 controller: None,
                                 is_ability: true,
+                                is_aura: false,
                             })
                     })
                     .or_else(|| {
@@ -229,6 +264,7 @@ impl EffectWindow {
                         is_creature: source.was_creature,
                         controller: None,
                         is_ability: false,
+                        is_aura: false,
                     })
             })
             .unwrap_or_else(|| ProtectionSource {
@@ -238,6 +274,7 @@ impl EffectWindow {
                 is_creature: source.types.contains(&CardType::Creature),
                 controller: source.object.controller(),
                 is_ability: false,
+                is_aura: false,
             })
     }
 

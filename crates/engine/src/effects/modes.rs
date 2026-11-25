@@ -136,7 +136,7 @@ impl EffectWindow {
             |_, body, target| {
                 !Self::protected_target(
                     target,
-                    &super::protection::ProtectionSource::from(source),
+                    &super::protection::ProtectionSource::from(source).with_controller(actor),
                     current,
                 ) && self.legal_body_target_in(body, target, actor, current)
             },
@@ -456,7 +456,7 @@ impl EffectWindow {
             |clause, target| {
                 !Self::protected_target(
                     target,
-                    &super::protection::ProtectionSource::from(source),
+                    &super::protection::ProtectionSource::from(source).with_controller(actor),
                     current,
                 ) && self.legal_body_target_in(clause, target, actor, current)
             },

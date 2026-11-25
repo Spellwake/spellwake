@@ -668,10 +668,20 @@ impl EffectWindow {
                             ..
                         }
                     )
-                }) || (object.attached_to == Some(TargetRef::Player(actor))
+                }) || (object.controller == Some(actor)
                     && object.has_battlefield_rule(|rule| {
-                        matches!(rule, crate::characteristics::StaticContinuousAbility::Restriction { rule: crate::characteristics::StaticRestriction::EnchantedPlayerCastLimit, .. })
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::ControllerOneSpellPerTurn,
+                                ..
+                            }
+                        )
                     }))
+                    || (object.attached_to == Some(TargetRef::Player(actor))
+                        && object.has_battlefield_rule(|rule| {
+                            matches!(rule, crate::characteristics::StaticContinuousAbility::Restriction { rule: crate::characteristics::StaticRestriction::EnchantedPlayerCastLimit, .. })
+                        }))
             }) || self.temporary_rules.iter().any(|active| {
                 matches!(
                     &active.rule,
@@ -683,10 +693,48 @@ impl EffectWindow {
                                 ..
                             }
                         )
+                        || (active.controller == actor
+                            && matches!(
+                                ab.as_ref(),
+                                crate::characteristics::StaticContinuousAbility::Restriction {
+                                    rule: crate::characteristics::StaticRestriction::ControllerOneSpellPerTurn,
+                                    ..
+                                }
+                            ))
                 )
             }))
         {
             return Err(EffectError::SpellCastLimitReached);
+        }
+        if turn.is_some_and(|t| t.position().step.phase() == crate::turn::Phase::Combat)
+            && (current.objects.values().any(|object| {
+                object.zone == ObjectZone::Battlefield
+                    && object.controller.is_some_and(|ctrl| ctrl != actor)
+                    && object.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::OpponentsCantCastDuringCombat,
+                                ..
+                            }
+                        )
+                    })
+            }) || self.temporary_rules.iter().any(|active| {
+                active.controller != actor
+                    && matches!(
+                        &active.rule,
+                        crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                            if matches!(
+                                ab.as_ref(),
+                                crate::characteristics::StaticContinuousAbility::Restriction {
+                                    rule: crate::characteristics::StaticRestriction::OpponentsCantCastDuringCombat,
+                                    ..
+                                }
+                            )
+                    )
+            }))
+        {
+            return Err(EffectError::OpponentActionProhibited);
         }
         let current_spell = current.get(spell).ok_or(EffectError::InconsistentProgram)?;
         self.check_chosen_name_cast_restriction(current_spell, &current)?;
@@ -1191,7 +1239,7 @@ impl EffectWindow {
             for (index, &chosen) in payment.permanent_targets.iter().enumerate() {
                 if Self::protected_target(
                     chosen,
-                    &protection::ProtectionSource::from(current_spell),
+                    &protection::ProtectionSource::from(current_spell).with_controller(actor),
                     &current,
                 ) || !self.legal_dependent_target(dependent, primary, chosen, &current)
                 {
@@ -1224,7 +1272,7 @@ impl EffectWindow {
             for (ordinal, &chosen) in payment.permanent_targets.iter().enumerate() {
                 if Self::protected_target(
                     chosen,
-                    &protection::ProtectionSource::from(current_spell),
+                    &protection::ProtectionSource::from(current_spell).with_controller(actor),
                     &current,
                 ) || !self.legal_target_kind_in(target_contract, chosen, actor, &current)
                 {
@@ -1304,7 +1352,7 @@ impl EffectWindow {
             (_, Some(target)) => {
                 if Self::protected_target(
                     target,
-                    &protection::ProtectionSource::from(current_spell),
+                    &protection::ProtectionSource::from(current_spell).with_controller(actor),
                     &current,
                 ) {
                     return Err(EffectError::IllegalTarget);

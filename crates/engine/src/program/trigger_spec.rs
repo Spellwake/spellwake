@@ -53,7 +53,11 @@ pub enum TriggerFromZone {
 /// Cast-origin requirement on an entering permanent trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CastEntryKind {
-    Cast { from_hand: bool },
+    Cast {
+        from_hand: bool,
+    },
+    /// Entered the battlefield without being cast (for example, reanimated, blinked, put onto battlefield, or token).
+    NotCast,
     Kicked,
     Evoked,
 }

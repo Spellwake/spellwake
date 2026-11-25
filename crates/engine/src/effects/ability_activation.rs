@@ -304,7 +304,7 @@ impl EffectWindow {
                         && target == TargetRef::Object(source))
                         && !Self::protected_target(
                             target,
-                            &protection::ProtectionSource::from(current),
+                            &protection::ProtectionSource::from(current).with_ability_controller(actor),
                             &evaluated,
                         )
                         && legal_target
@@ -389,6 +389,9 @@ impl EffectWindow {
                     if let crate::characteristics::StaticContinuousAbility::Restriction {
                         rule:
                             crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                                selector,
+                            )
+                            | crate::characteristics::StaticRestriction::PreventMatchingNonManaActivations(
                                 selector,
                             ),
                         ..
@@ -890,7 +893,7 @@ impl EffectWindow {
                     }) {return Err(EffectError::IllegalTarget);}
                     if !(min..=max).contains(&targets.len()) || targets.iter().any(|target|
                         (matches!(selected.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source()) && *target == TargetRef::Object(source)) ||
-                        Self::protected_target(*target,&protection::ProtectionSource::from(current),&evaluated)
+                        Self::protected_target(*target,&protection::ProtectionSource::from(current).with_ability_controller(actor),&evaluated)
                         || if bound_target == selected.body.target {
                             !self.legal_body_target_in(&selected.body, *target, actor, &evaluated)
                         } else {
@@ -974,7 +977,7 @@ impl EffectWindow {
                 && target == TargetRef::Object(source))
                 || Self::protected_target(
                     target,
-                    &protection::ProtectionSource::from(current),
+                    &protection::ProtectionSource::from(current).with_ability_controller(actor),
                     &evaluated,
                 )
                 || !legal_target

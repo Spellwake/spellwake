@@ -817,6 +817,28 @@ pub(super) fn lower_static(
                     vocabulary,
                 );
             }
+            if (filter.any_card
+                || is_unrestricted_filter(filter)
+                || (filter.any_types == AstCardTypeMask::LAND
+                    && filter_only_has(
+                        filter,
+                        FilterAllow {
+                            types: true,
+                            ..FilterAllow::NONE
+                        },
+                    )))
+                && let Some(n) = parse_all_players_additional_land_plays(&p_low)
+            {
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::AllPlayersAdditionalLandPlays(n),
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                );
+            }
             if matches!(
                 p_low.as_str(),
                 "you may look at the top card of your library any time"
@@ -921,6 +943,27 @@ pub(super) fn lower_static(
                         vocabulary,
                     );
                 }
+            }
+            if !*cast_only
+                && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+                && (filter.any_card || is_unrestricted_filter(filter))
+                && let Some(flt_raw) = p_low
+                    .strip_prefix("you may play lands and cast ")
+                    .and_then(|rest| rest.strip_suffix(" from the top of your library"))
+                && let Some(obj) = parse_library_top_cast_filter(flt_raw.trim(), vocabulary)
+            {
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::PlayLibraryTopMatching {
+                            lands_allowed: true,
+                            filter: Box::new(obj),
+                        },
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                );
             }
             if matches!(
                 p_low.as_str(),
@@ -1332,6 +1375,28 @@ pub(super) fn lower_static(
                                     id: ids.static_id(),
                                     permission:
                                         CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(
+                                            Box::new(sf),
+                                        ),
+                                },
+                            );
+                        }
+                    }
+                    (_, Some(f))
+                        if !is_spell
+                            && f.controller.is_none()
+                            && f.owner.is_none()
+                            && f.zone.is_none()
+                            && (f.any_spell || !f.any_permanent) =>
+                    {
+                        if let Ok(sf) = lower_spell_filter(f, vocabulary)
+                            && spell_filter_supported_by_matches_characteristics(&sf)
+                        {
+                            return push_static_ability(
+                                program,
+                                StaticContinuousAbility::CastPermission {
+                                    id: ids.static_id(),
+                                    permission:
+                                        CastPermissionRule::AllSpellsCannotBeCounteredFiltered(
                                             Box::new(sf),
                                         ),
                                 },
@@ -1809,16 +1874,54 @@ pub(super) fn lower_static(
                     vocabulary,
                 );
             }
+            if rule == "NonManaActivatedAbilitiesCantBeActivated"
+                && subject.is_none()
+                && let Some(flt) = filter.as_deref()
+            {
+                let selector = lower_filter_to_permanent_selector(flt, vocabulary)?;
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::PreventMatchingNonManaActivations(Box::new(
+                            selector,
+                        )),
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                );
+            }
+            if rule == "ActivateAbilitiesAsThoughHaste"
+                && (subject.is_none() || filter.is_none())
+                && let Some(flt) = filter.as_deref().or(match subject.as_deref() {
+                    Some(
+                        SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f),
+                    ) => Some(f),
+                    _ => None,
+                })
+                && flt.controller == Some(ControllerRelation::You)
+            {
+                let selector = lower_filter_to_permanent_selector(flt, vocabulary)?;
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ActivateAbilitiesAsThoughHaste(Box::new(selector)),
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                );
+            }
             if rule.eq_ignore_ascii_case("entertriggerssuppressed") {
                 let creature_only_or_none = filter.as_deref().is_none_or(|f| {
                     f.any_types == AstCardTypeMask::CREATURE
-                        && f.forbidden_types.is_empty()
-                        && f.subtypes.is_empty()
-                        && f.any_colors.is_empty()
-                        && f.forbidden_colors.is_empty()
-                        && f.controller.is_none()
-                        && f.stat_bounds.is_empty()
-                        && f.flags.is_empty()
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                types: true,
+                                ..FilterAllow::NONE
+                            },
+                        )
                 });
                 if creature_only_or_none {
                     return push_conditional_static(
@@ -1947,8 +2050,187 @@ pub(super) fn lower_static(
                 }
                 return Ok(());
             }
+            let rule_low_trimmed = rule.trim().to_ascii_lowercase();
+            if let Some(target_src) = rule_low_trimmed.strip_prefix("cantbetargetof:") {
+                let ts = target_src.trim().trim_end_matches('.').trim();
+                let ts_nodur = ts.strip_suffix(" this turn").unwrap_or(ts).trim();
+                if ts == "spells or abilities"
+                    && let Some(
+                        SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f),
+                    ) = subject.as_deref()
+                    && matches!(
+                        f.zone,
+                        Some(ZoneFilter::AllGraveyards | ZoneFilter::AnyGraveyard)
+                    )
+                    && !f.any_permanent
+                    && !f.any_spell
+                    && filter_only_has(
+                        f,
+                        FilterAllow {
+                            zone: true,
+                            ..FilterAllow::NONE
+                        },
+                    )
+                {
+                    return push_conditional_static(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::PreventGraveyardTargeting,
+                        },
+                        condition.as_deref(),
+                        vocabulary,
+                    );
+                }
+                if matches!(
+                    subject.as_deref(),
+                    Some(SubjectRefAst::Player(PlayerRefAst::You))
+                ) {
+                    if ts == "spells or abilities your opponents control" {
+                        return push_conditional_static(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerHasHexproof,
+                            },
+                            condition.as_deref(),
+                            vocabulary,
+                        );
+                    }
+                    if ts == "spells or abilities" {
+                        return push_conditional_static(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerHasShroud,
+                            },
+                            condition.as_deref(),
+                            vocabulary,
+                        );
+                    }
+                }
+                if ts == "aura spells" {
+                    let selectors = match subject.as_deref() {
+                        Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                        None => vec![PermanentSelector {
+                            controller: ControllerSelector::SourceItself,
+                            ..PermanentSelector::default()
+                        }],
+                    };
+                    for selector in selectors {
+                        push_conditional_static(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::CantBeTargetedBy {
+                                    selector: Box::new(selector),
+                                    auras_only: true,
+                                    colors: ColorMask::EMPTY,
+                                },
+                            },
+                            condition.as_deref(),
+                            vocabulary,
+                        )?;
+                    }
+                    return Ok(());
+                }
+                if let Some(colors) = parse_cant_be_targeted_by_color_mask(ts) {
+                    let selectors = match subject.as_deref() {
+                        Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                        None => vec![PermanentSelector {
+                            controller: ControllerSelector::SourceItself,
+                            ..PermanentSelector::default()
+                        }],
+                    };
+                    for selector in selectors {
+                        push_conditional_static(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::CantBeTargetedBy {
+                                    selector: Box::new(selector),
+                                    auras_only: false,
+                                    colors,
+                                },
+                            },
+                            condition.as_deref(),
+                            vocabulary,
+                        )?;
+                    }
+                    return Ok(());
+                }
+                let (granted_kws, opponents_anchored) = if ts_nodur == "spells or abilities" {
+                    (Some(BTreeSet::from([KeywordAbility::Shroud])), false)
+                } else if ts_nodur == "spells or abilities your opponents control" {
+                    (Some(BTreeSet::from([KeywordAbility::Hexproof])), true)
+                } else if let Some(qual_raw) =
+                    ts_nodur.strip_suffix(" spells or abilities your opponents control")
+                {
+                    (
+                        parse_hexproof_from_qualities(qual_raw.trim(), vocabulary).map(|quals| {
+                            quals
+                                .into_iter()
+                                .map(KeywordAbility::HexproofFrom)
+                                .collect()
+                        }),
+                        true,
+                    )
+                } else {
+                    (None, false)
+                };
+                if let Some(kws) = granted_kws {
+                    let selectors = match subject.as_deref() {
+                        Some(s) => lower_permanent_selectors_with_context(
+                            s,
+                            condition.as_deref(),
+                            vocabulary,
+                        )?,
+                        None => vec![PermanentSelector {
+                            controller: ControllerSelector::SourceItself,
+                            ..PermanentSelector::default()
+                        }],
+                    };
+                    let all_source_controlled = !opponents_anchored
+                        || selectors
+                            .iter()
+                            .all(|sel| selector_guaranteed_source_controller(sel, program));
+                    if all_source_controlled {
+                        for mut selector in selectors {
+                            if let Some(cond) = condition {
+                                apply_selector_condition(&mut selector, cond, vocabulary)?;
+                            }
+                            push_static_ability(
+                                program,
+                                StaticContinuousAbility::Battlefield {
+                                    id: ids.static_id(),
+                                    selector,
+                                    parts: StaticParts(vec![StaticPart::Abilities(
+                                        AbilityChange {
+                                            granted_keywords: kws.clone(),
+                                            ..AbilityChange::default()
+                                        },
+                                    )]),
+                                },
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                }
+            }
             if filter.is_some() {
                 return Err("oracle:unsupported-rule-restriction");
+            }
+            if matches!(
+                rule_low_trimmed.as_str(),
+                "loses all other abilities" | "lose all other abilities"
+            ) {
+                return lower_loses_all_other_abilities(
+                    subject.as_deref(),
+                    condition.as_deref(),
+                    program,
+                    vocabulary,
+                    ids,
+                );
             }
             let cond_sc = match condition.as_deref() {
                 Some(cond) => Some(
@@ -2021,69 +2303,6 @@ pub(super) fn lower_static(
                         parts: DefiningParts(vec![DefiningPart::CommanderChosenColor(None)]),
                     },
                 );
-            }
-            if let Some(target_src) = r_low.strip_prefix("cantbetargetof:") {
-                let ts = target_src.trim();
-                if ts == "spells or abilities your opponents control"
-                    && matches!(
-                        subject.as_deref(),
-                        Some(SubjectRefAst::Player(PlayerRefAst::You))
-                    )
-                {
-                    return push_static_ability(
-                        program,
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerHasHexproof,
-                        },
-                    );
-                }
-                let granted_kws: Option<BTreeSet<KeywordAbility>> = if ts == "spells or abilities" {
-                    Some(BTreeSet::from([KeywordAbility::Shroud]))
-                } else if ts == "spells or abilities your opponents control" {
-                    Some(BTreeSet::from([KeywordAbility::Hexproof]))
-                } else if let Some(qual_raw) =
-                    ts.strip_suffix(" spells or abilities your opponents control")
-                {
-                    parse_hexproof_from_qualities(qual_raw.trim(), vocabulary).map(|quals| {
-                        quals
-                            .into_iter()
-                            .map(KeywordAbility::HexproofFrom)
-                            .collect()
-                    })
-                } else {
-                    None
-                };
-                if let Some(kws) = granted_kws {
-                    let selectors = match subject.as_deref() {
-                        Some(s) => lower_permanent_selectors_with_context(
-                            s,
-                            condition.as_deref(),
-                            vocabulary,
-                        )?,
-                        None => vec![PermanentSelector {
-                            controller: ControllerSelector::SourceItself,
-                            ..PermanentSelector::default()
-                        }],
-                    };
-                    for mut selector in selectors {
-                        if let Some(cond) = condition {
-                            apply_selector_condition(&mut selector, cond, vocabulary)?;
-                        }
-                        push_static_ability(
-                            program,
-                            StaticContinuousAbility::Battlefield {
-                                id: ids.static_id(),
-                                selector,
-                                parts: StaticParts(vec![StaticPart::Abilities(AbilityChange {
-                                    granted_keywords: kws.clone(),
-                                    ..AbilityChange::default()
-                                })]),
-                            },
-                        )?;
-                    }
-                    return Ok(());
-                }
             }
             if r_low == "becomesdayonenterifneither" {
                 return push_static_ability(
@@ -2298,17 +2517,178 @@ pub(super) fn lower_static(
                 program.cannot_be_countered = true;
                 return Ok(());
             }
-            if r_low == "activatedabilitiescantbeactivated"
+            if (r_low == "activatedabilitiescantbeactivated" || r_low == "cantactivateabilities")
                 && let Some(subj) = subject.as_deref()
             {
-                let selector = lower_permanent_selector(subj, vocabulary)?;
-                return push_static_ability(
-                    program,
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::PreventMatchingActivations(Box::new(selector)),
-                    },
-                );
+                let selectors = lower_permanent_selectors(subj, vocabulary)?;
+                for selector in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::PreventMatchingActivations(Box::new(selector)),
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
+            if let Some(lock_raw) = r_low.strip_prefix("abilitytimingorlock:").or_else(|| {
+                (r_low
+                    == "its activated abilities can't be activated unless they're mana abilities"
+                    || r_low == "its activated abilities can't be activated")
+                    .then_some(r_low.as_str())
+            }) {
+                let lock = lock_raw.trim().trim_end_matches('.').trim();
+                let lock_kind: Option<(bool, bool)> = match lock {
+                    "its activated abilities can't be activated" => Some((false, true)),
+                    "their activated abilities can't be activated" => Some((false, false)),
+                    "its activated abilities can't be activated unless they're mana abilities" => {
+                        Some((true, true))
+                    }
+                    "their activated abilities can't be activated unless they're mana abilities" => {
+                        Some((true, false))
+                    }
+                    _ => None,
+                };
+                if let Some((non_mana_only, is_singular_its)) = lock_kind {
+                    let is_perm_attachment = is_permanent_attachment_program(program);
+                    let selectors = match subject.as_deref() {
+                        Some(SubjectRefAst::Anaphora(pron))
+                            if pron.eq_ignore_ascii_case("it")
+                                && is_singular_its
+                                && is_perm_attachment =>
+                        {
+                            vec![PermanentSelector {
+                                attached_to_source: true,
+                                ..PermanentSelector::default()
+                            }]
+                        }
+                        None if is_singular_its && is_perm_attachment => {
+                            vec![PermanentSelector {
+                                attached_to_source: true,
+                                ..PermanentSelector::default()
+                            }]
+                        }
+                        Some(subj) if !matches!(subj, SubjectRefAst::Anaphora(_)) => {
+                            lower_permanent_selectors(subj, vocabulary)?
+                        }
+                        _ => return Err("oracle:unsupported-rule-restriction"),
+                    };
+                    for selector in selectors {
+                        let restriction = if non_mana_only {
+                            StaticRestriction::PreventMatchingNonManaActivations(Box::new(selector))
+                        } else {
+                            StaticRestriction::PreventMatchingActivations(Box::new(selector))
+                        };
+                        push_static_ability(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: restriction,
+                            },
+                        )?;
+                    }
+                    return Ok(());
+                }
+            }
+            if let Some(as_though) = r_low.strip_prefix("as_though:") {
+                let at = as_though.trim().trim_end_matches('.').trim();
+                if matches!(
+                    at,
+                    "spells and abilities you control as though they didn't have hexproof"
+                        | "spells and abilities you control as though it didn't have hexproof"
+                ) && let Some(subj) = subject.as_deref()
+                {
+                    let selectors = lower_permanent_selectors(subj, vocabulary)?;
+                    for selector in selectors {
+                        push_static_ability(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::IgnoreOpponentsHexproof(Box::new(
+                                    selector,
+                                )),
+                            },
+                        )?;
+                    }
+                    return Ok(());
+                }
+            }
+            if r_low == "can't become untapped" {
+                let selectors = match subject.as_deref() {
+                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    None => vec![PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        ..PermanentSelector::default()
+                    }],
+                };
+                for selector in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::CannotBeUntapped(Box::new(selector)),
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
+            if r_low == "can't be sacrificed" || r_low == "cant_be_sacrificed" {
+                let selectors = match subject.as_deref() {
+                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    None => vec![PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        ..PermanentSelector::default()
+                    }],
+                };
+                for selector in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::CannotBeSacrificed(Box::new(selector)),
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
+            if matches!(
+                r_low.as_str(),
+                "can't have counters put on it"
+                    | "can't have counters placed on it"
+                    | "can't have counters put on them"
+                    | "can't have counters placed on them"
+            ) {
+                let selectors = match subject.as_deref() {
+                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    None => vec![PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        ..PermanentSelector::default()
+                    }],
+                };
+                for selector in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::PreventCounters {
+                                selector: Some(Box::new(selector)),
+                                players: None,
+                                counter_kind: None,
+                            },
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
+            if matches!(
+                r_low.as_str(),
+                "is goaded" | "is also goaded" | "permanents_are_goaded"
+            ) && matches!(subject.as_deref(), Some(SubjectRefAst::AttachedHost(_)))
+                && is_permanent_attachment_program(program)
+            {
+                push_attack_requirement(program, AttackRequirement::EnchantedCreatureIsGoaded);
+                return Ok(());
             }
             if r_low == "can't attack or block, and its activated abilities can't be activated"
                 && let Some(subj) = subject.as_deref()
@@ -2352,6 +2732,53 @@ pub(super) fn lower_static(
                     },
                 );
             }
+            if r_low == "players play with the top card of their libraries revealed"
+                && subject.is_none()
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::AllPlayersRevealLibraryTop,
+                    },
+                );
+            }
+            if r_low == "players play with their hands revealed" && subject.is_none() {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::RevealHands {
+                            opponents_only: false,
+                        },
+                    },
+                );
+            }
+            if r_low == "your opponents play with their hands revealed" && subject.is_none() {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::RevealHands {
+                            opponents_only: true,
+                        },
+                    },
+                );
+            }
+            if matches!(
+                r_low.as_str(),
+                "you may look at cards exiled with ~"
+                    | "you may look at face-down cards exiled with ~"
+            ) && subject.is_none()
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::LookAtSourceExiledCards,
+                    },
+                );
+            }
             if !is_spell
                 && r_low
                     == "once during each of your turns, you may cast an enchantment spell by paying life equal to its mana value rather than paying its mana cost"
@@ -2375,6 +2802,17 @@ pub(super) fn lower_static(
                     },
                 );
             }
+            if subject.is_none()
+                && let Some(n) = parse_all_players_additional_land_plays(&r_low)
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::AllPlayersAdditionalLandPlays(n),
+                    },
+                );
+            }
             if r_low == "you have no maximum hand size" {
                 return push_static_ability(
                     program,
@@ -2384,12 +2822,49 @@ pub(super) fn lower_static(
                     },
                 );
             }
-            if r_low == "each player can't cast more than one spell each turn" {
+            if subject.is_none()
+                && let Some(hand_raw) = r_low.strip_prefix("maxhandsize:")
+                && let Some(num_raw) = hand_raw
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim()
+                    .strip_prefix("your maximum hand size is ")
+                && let Some(limit) = parse_nonneg_u8_word(num_raw.trim())
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::DrawRule {
+                        id: ids.static_id(),
+                        rule: StaticDrawRule::MaxHandSize(limit),
+                    },
+                );
+            }
+            if r_low == "each player can't cast more than one spell each turn"
+                || r_low == "players can't cast more than one spell each turn"
+            {
                 return push_static_ability(
                     program,
                     StaticContinuousAbility::Restriction {
                         id: ids.static_id(),
                         rule: StaticRestriction::OneSpellPerTurn,
+                    },
+                );
+            }
+            if r_low == "you can't cast more than one spell each turn" && subject.is_none() {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerOneSpellPerTurn,
+                    },
+                );
+            }
+            if r_low == "your opponents can't cast spells during combat" && subject.is_none() {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::OpponentsCantCastDuringCombat,
                     },
                 );
             }
@@ -2694,6 +3169,52 @@ pub(super) fn lower_static(
                     _ => return Err("oracle:unsupported-attack-req"),
                 };
                 push_attack_requirement(program, req);
+                return Ok(());
+            }
+            if rule == "AttacksOrBlocksEachCombatIfAble"
+                || r_low == "attacks or blocks each combat if able"
+                || r_low == "attack or block each combat if able"
+            {
+                let req = match subject.as_deref() {
+                    Some(SubjectRefAst::SelfObject) | None => AttackRequirement::SourceAttacks,
+                    Some(SubjectRefAst::AttachedHost(_)) => {
+                        AttackRequirement::AttachedCreatureAttacks
+                    }
+                    Some(
+                        SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f),
+                    ) if f.any_types == AstCardTypeMask::CREATURE
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                types: true,
+                                ..FilterAllow::NONE
+                            },
+                        ) =>
+                    {
+                        AttackRequirement::AllCreaturesAttack
+                    }
+                    _ => return Err("oracle:unsupported-attack-req"),
+                };
+                let selectors = match subject.as_deref() {
+                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    None => vec![PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        ..PermanentSelector::default()
+                    }],
+                };
+                push_attack_requirement(program, req);
+                for selector in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Battlefield {
+                            id: ids.static_id(),
+                            selector,
+                            parts: StaticParts(vec![StaticPart::BlockingRestriction(
+                                BlockingRestriction::MustBlockEachCombatIfAble,
+                            )]),
+                        },
+                    )?;
+                }
                 return Ok(());
             }
             Err("oracle:unsupported-rule-restriction")
@@ -3705,6 +4226,47 @@ fn lower_paired_static(
                             parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::remove(
                                 AbilityRemoval::All,
                             ))]),
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
+            if filter.is_none()
+                && condition.is_none()
+                && matches!(
+                    rule.trim().to_ascii_lowercase().as_str(),
+                    "is goaded" | "is also goaded" | "permanents_are_goaded"
+                )
+                && outer_selectors.len() == 1
+                && outer_selectors[0]
+                    == (PermanentSelector {
+                        attached_to_source: true,
+                        ..PermanentSelector::default()
+                    })
+                && is_permanent_attachment_program(program)
+            {
+                push_attack_requirement(program, AttackRequirement::EnchantedCreatureIsGoaded);
+                return Ok(());
+            }
+            if filter.is_none()
+                && condition.is_none()
+                && outer_selectors.iter().all(|s| s.source_condition.is_none())
+                && (rule.eq_ignore_ascii_case("can't become untapped")
+                    || rule.eq_ignore_ascii_case("can't be sacrificed")
+                    || rule.eq_ignore_ascii_case("cant_be_sacrificed"))
+            {
+                let is_untap_lock = rule.eq_ignore_ascii_case("can't become untapped");
+                for sel in outer_selectors {
+                    let restriction = if is_untap_lock {
+                        StaticRestriction::CannotBeUntapped(Box::new(sel.clone()))
+                    } else {
+                        StaticRestriction::CannotBeSacrificed(Box::new(sel.clone()))
+                    };
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: restriction,
                         },
                     )?;
                 }
@@ -4842,6 +5404,20 @@ pub(super) fn lower_rule_blocking_restriction(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<BlockingRestriction> {
     if let Some(flt) = filter {
+        let norm_rule = strip_combat_duration(rule);
+        if (flt.any_types.is_empty() || flt.any_types == AstCardTypeMask::CREATURE)
+            && filter_only_has(
+                flt,
+                FilterAllow {
+                    types: true,
+                    ..FilterAllow::NONE
+                },
+            )
+            && let Some(BlockingRestriction::CanBlockAnyNumber) =
+                lower_blocking_restriction(&norm_rule)
+        {
+            return Some(BlockingRestriction::CanBlockAnyNumber);
+        }
         if rule == "CanBlockOnly"
             && flt.required_keywords == ["flying"]
             && flt.any_types == AstCardTypeMask::CREATURE
@@ -5635,6 +6211,8 @@ pub(super) fn lower_blocking_restriction(rule: &str) -> Option<BlockingRestricti
         "can't block" | "cant_block" | "cantblock" => Some(BlockingRestriction::CannotBlock),
         "can't attack" | "cant_attack" | "cantattack" => Some(BlockingRestriction::CannotAttack),
         "can't attack or block"
+        | "cant_attack:or block"
+        | "cant_attack:or block,"
         | "cant_attack_or_block"
         | "cantattackorblock"
         | "cantattackorblockif"
@@ -5660,6 +6238,12 @@ pub(super) fn lower_blocking_restriction(rule: &str) -> Option<BlockingRestricti
         }
         "can block any number of creatures"
         | "can block any number of creatures each combat"
+        | "can_block:any number of creatures"
+        | "can_block:any number of creatures each combat"
+        | "it can block any number of creatures"
+        | "it can block any number of creatures each combat"
+        | "that creature can block any number of creatures"
+        | "that creature can block any number of creatures each combat"
         | "can_block_any_number"
         | "canblockanynumber" => Some(BlockingRestriction::CanBlockAnyNumber),
         "can attack as though they didn't have defender"
@@ -6246,25 +6830,31 @@ pub(super) fn lower_numeric_expr(
     match expr {
         ValueExprAst::Const(n) => Ok(NumericExpression::Literal(i64::from(*n).into())),
         ValueExprAst::Count(f) => {
-            if f.zone == Some(ZoneFilter::YourGraveyard) {
+            if f.zone == Some(ZoneFilter::YourGraveyard)
+                && filter_only_has(
+                    f,
+                    FilterAllow {
+                        types: true,
+                        zone: true,
+                        ..FilterAllow::NONE
+                    },
+                )
+            {
                 let types = lower_card_type_mask(f.any_types)?;
-                if !f.forbidden_types.is_empty()
-                    || !f.subtypes.is_empty()
-                    || !f.any_colors.is_empty()
-                    || f.color_arity.is_some()
-                {
-                    return Err("oracle:complex-graveyard-numeric-count");
-                }
                 return Ok(NumericExpression::ZoneCount {
                     zone: StaticZone::OwnGraveyard,
                     types,
                 });
             }
             if f.zone == Some(ZoneFilter::YourHand)
-                && f.forbidden_types.is_empty()
-                && f.subtypes.is_empty()
-                && f.any_colors.is_empty()
-                && f.color_arity.is_none()
+                && filter_only_has(
+                    f,
+                    FilterAllow {
+                        types: true,
+                        zone: true,
+                        ..FilterAllow::NONE
+                    },
+                )
             {
                 let types = lower_card_type_mask(f.any_types)?;
                 return Ok(NumericExpression::ZoneCount {
@@ -6272,8 +6862,21 @@ pub(super) fn lower_numeric_expr(
                     types,
                 });
             }
-            let selector = lower_filter_to_permanent_selector(f, vocabulary)?;
-            Ok(NumericExpression::count(selector))
+            if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                && let Ok(selector) = lower_filter_to_permanent_selector(f, vocabulary)
+            {
+                return Ok(NumericExpression::count(selector));
+            }
+            if let Ok(ve) = lower_value_expr(expr, vocabulary)
+                && ve.is_world_evaluable()
+            {
+                return Ok(NumericExpression::Eval(Box::new(ve)));
+            }
+            if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) {
+                let selector = lower_filter_to_permanent_selector(f, vocabulary)?;
+                return Ok(NumericExpression::count(selector));
+            }
+            Err("oracle:unsupported-numeric-expr")
         }
         ValueExprAst::Add(a, b) => {
             if let (
@@ -6306,6 +6909,11 @@ pub(super) fn lower_numeric_expr(
                     offset: offset.plus(&i64::from(*k).into()),
                 });
             }
+            if let Ok(ve) = lower_value_expr(expr, vocabulary)
+                && ve.is_world_evaluable()
+            {
+                return Ok(NumericExpression::Eval(Box::new(ve)));
+            }
             Err("oracle:unsupported-numeric-expr")
         }
         ValueExprAst::Sub(a, b) => {
@@ -6323,6 +6931,11 @@ pub(super) fn lower_numeric_expr(
                     multiplier,
                     offset: offset.minus(&i64::from(*k).into()),
                 });
+            }
+            if let Ok(ve) = lower_value_expr(expr, vocabulary)
+                && ve.is_world_evaluable()
+            {
+                return Ok(NumericExpression::Eval(Box::new(ve)));
             }
             Err("oracle:unsupported-numeric-expr")
         }
@@ -6358,6 +6971,11 @@ pub(super) fn lower_numeric_expr(
                     multiplier: multiplier.times(&k_ri),
                     offset: offset.times(&k_ri),
                 });
+            }
+            if let Ok(ve) = lower_value_expr(expr, vocabulary)
+                && ve.is_world_evaluable()
+            {
+                return Ok(NumericExpression::Eval(Box::new(ve)));
             }
             Err("oracle:unsupported-numeric-expr")
         }
@@ -6405,4 +7023,287 @@ pub(super) fn lower_numeric_expr(
             }
         }
     }
+}
+
+fn is_permanent_attachment_program(program: &Program) -> bool {
+    matches!(
+        program.permanent().and_then(|p| p.attachment),
+        Some(AttachmentKind::Equipment | AttachmentKind::Fortification)
+    ) || matches!(
+        program.permanent().and_then(|p| p.attachment),
+        Some(AttachmentKind::Aura(r)) if !matches!(r, EnchantRestriction::Player)
+    )
+}
+
+fn selector_guaranteed_source_controller(selector: &PermanentSelector, program: &Program) -> bool {
+    if matches!(
+        selector.controller,
+        ControllerSelector::SourceItself
+            | ControllerSelector::SelfAtMaxSpeed
+            | ControllerSelector::SourcePair
+            | ControllerSelector::SourceController
+    ) {
+        return true;
+    }
+    if selector.attached_to_source {
+        return match program.permanent().and_then(|p| p.attachment) {
+            Some(AttachmentKind::Aura(EnchantRestriction::CreatureYouControl)) => true,
+            Some(AttachmentKind::Aura(EnchantRestriction::Matching(ObjectFilter::Clause(c)))) => {
+                c.controller == ControllerFilter::You
+            }
+            Some(AttachmentKind::Aura(EnchantRestriction::Matching(ObjectFilter::Either(
+                a,
+                b,
+            )))) => a.controller == ControllerFilter::You && b.controller == ControllerFilter::You,
+            _ => false,
+        };
+    }
+    false
+}
+
+fn parse_nonneg_u8_word(raw: &str) -> Option<u8> {
+    let trimmed = raw.trim();
+    if trimmed == "zero" {
+        return Some(0);
+    }
+    trimmed.parse::<u8>().ok().or_else(|| {
+        spellwake_oracle_compiler::vocab::parse_number_word(trimmed)
+            .and_then(|v| u8::try_from(v).ok())
+    })
+}
+
+fn parse_all_players_additional_land_plays(raw: &str) -> Option<NonZeroU8> {
+    let trimmed = raw.trim().trim_end_matches('.').trim();
+    let rest = trimmed.strip_prefix("each player may play ")?;
+    let body = rest
+        .strip_suffix(" on each of their turns")
+        .or_else(|| rest.strip_suffix(" during each of their turns"))?
+        .trim();
+    let count_raw = body
+        .strip_suffix(" additional lands")
+        .or_else(|| body.strip_suffix(" additional land"))?
+        .trim();
+    let count = if count_raw == "an" {
+        1
+    } else {
+        parse_nonneg_u8_word(count_raw)?
+    };
+    NonZeroU8::new(count)
+}
+
+fn parse_color_word_mask(raw: &str) -> Option<ColorMask> {
+    let mut mask = ColorMask::EMPTY;
+    for part in raw.split(" or ") {
+        let color = parse_color_word(part.trim())?;
+        mask = mask.with(color);
+    }
+    (!mask.is_empty()).then_some(mask)
+}
+
+fn parse_cant_be_targeted_by_color_mask(ts: &str) -> Option<ColorMask> {
+    let (lhs_raw, rhs_raw) = ts.split_once(" spells or abilities from ")?;
+    let rhs_colors_raw = rhs_raw.strip_suffix(" sources")?.trim();
+    let lhs_mask = parse_color_word_mask(lhs_raw.trim())?;
+    let rhs_mask = parse_color_word_mask(rhs_colors_raw)?;
+    (!lhs_mask.is_empty() && lhs_mask == rhs_mask).then_some(lhs_mask)
+}
+
+fn spell_filter_supported_by_matches_characteristics(sf: &SpellFilter) -> bool {
+    use spellwake_engine::program::{SpellCastZoneFilter, SpellSpecialFilter, SpellTargetShape};
+    if sf.cast_zone != SpellCastZoneFilter::Any
+        || sf.target_shape != SpellTargetShape::Any
+        || sf.ordinal_this_turn.is_some()
+    {
+        return false;
+    }
+    match sf.special {
+        SpellSpecialFilter::AuraOrEquipment | SpellSpecialFilter::ChosenEntryCreatureType => {
+            return sf.object == ObjectFilter::any();
+        }
+        SpellSpecialFilter::None => {}
+        SpellSpecialFilter::AboveExperience | SpellSpecialFilter::CopyableInstruction => {
+            return false;
+        }
+    }
+    let clause_ok = |c: ObjectClause| {
+        c.required_supertypes.is_empty()
+            && c.forbidden_supertypes.is_empty()
+            && matches!(
+                c.subtypes,
+                SubtypeFilter::Any
+                    | SubtypeFilter::Has(_)
+                    | SubtypeFilter::Lacks(_)
+                    | SubtypeFilter::Enchantment(_)
+                    | SubtypeFilter::Spell(_)
+                    | SubtypeFilter::Artifact(_)
+                    | SubtypeFilter::Planeswalker(_)
+            )
+            && c.controller == ControllerFilter::Any
+            && c.source_relation == SourceRelation::Any
+            && c.combat == CombatFilter::Any
+            && matches!(c.power, PowerFilter::Any | PowerFilter::AtLeast(_))
+            && c.toughness == ToughnessFilter::Any
+            && c.mana_value == ManaValueFilter::Any
+            && c.keyword.is_none()
+            && c.forbidden_keyword.is_none()
+            && c.tapped.is_none()
+            && c.token.is_none()
+            && (c.flags == ObjectFilterFlags::EMPTY || c.flags == ObjectFilterFlags::HISTORIC)
+    };
+    match sf.object {
+        ObjectFilter::Clause(c) => clause_ok(c),
+        ObjectFilter::Either(a, b) => clause_ok(a) && clause_ok(b),
+    }
+}
+
+fn parse_library_top_cast_filter(
+    raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ObjectFilter> {
+    let trimmed = raw.trim().trim_end_matches('.').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let try_single = |text: &str| -> Option<ObjectFilter> {
+        let parsed =
+            spellwake_oracle_compiler::filter::parse_object_filter(text, &compiler_vocab).ok()?;
+        if parsed.zone.is_some() || parsed.controller.is_some() || parsed.owner.is_some() {
+            return None;
+        }
+        let lowered = lower_object_filter(&parsed, vocabulary).ok()?;
+        let clause_ok = |c: ObjectClause| {
+            c.controller == ControllerFilter::Any && c.source_relation == SourceRelation::Any
+        };
+        let ok = match lowered {
+            ObjectFilter::Clause(c) => clause_ok(c),
+            ObjectFilter::Either(a, b) => clause_ok(a) && clause_ok(b),
+        };
+        ok.then_some(lowered)
+    };
+    if let Some(obj) = try_single(trimmed) {
+        return Some(obj);
+    }
+    if let Some(stem) = trimmed.strip_suffix(" spells")
+        && let Some((lhs, rhs)) = stem.split_once(" and ")
+        && !lhs.contains(',')
+        && !rhs.contains(',')
+        && !rhs.contains(" and ")
+    {
+        let lhs_obj = try_single(&format!("{} spells", lhs.trim()))?;
+        let rhs_obj = try_single(&format!("{} spells", rhs.trim()))?;
+        if let (ObjectFilter::Clause(a), ObjectFilter::Clause(b)) = (lhs_obj, rhs_obj) {
+            return Some(ObjectFilter::Either(a, b));
+        }
+    }
+    None
+}
+
+fn lower_loses_all_other_abilities(
+    subject: Option<&SubjectRefAst>,
+    condition: Option<&ConditionAst>,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    let mut selectors = match subject {
+        Some(s) => lower_permanent_selectors_with_context(s, condition, vocabulary)?,
+        None => vec![PermanentSelector {
+            controller: ControllerSelector::SourceItself,
+            ..PermanentSelector::default()
+        }],
+    };
+    for sel in &mut selectors {
+        if let Some(cond) = condition {
+            apply_selector_condition(sel, cond, vocabulary)?;
+        }
+    }
+    // Verify before mutating so any rejected selector leaves `program` untouched.
+    let mut merge_flags: Vec<bool> = Vec::with_capacity(selectors.len());
+    for sel in &selectors {
+        let mut abilities_part_count = 0usize;
+        let mut can_merge_in_place = false;
+        for ab in program
+            .continuous
+            .iter()
+            .chain(program.additional_battlefield_abilities.iter())
+        {
+            if let StaticContinuousAbility::Battlefield {
+                id,
+                selector: existing_sel,
+                parts,
+            } = ab
+                && existing_sel == sel
+            {
+                for part in &parts.0 {
+                    match part {
+                        StaticPart::GrantTrigger(_)
+                        | StaticPart::GrantActivated(_)
+                        | StaticPart::GrantActivatedRestricted { .. }
+                        | StaticPart::GrantAnyColorMana
+                        | StaticPart::GrantFixedColorMana(_)
+                        | StaticPart::GrantMana(_)
+                        | StaticPart::GrantSubtypeProtection { .. }
+                        | StaticPart::GrantProtectionChosenColor
+                        | StaticPart::GrantProtectionChosenPlayer
+                        | StaticPart::InheritCounteredCreatureAbilities
+                        | StaticPart::InheritExiledCreatureAbilities => {
+                            return Err("oracle:unsupported-rule-restriction");
+                        }
+                        StaticPart::Abilities(change) => {
+                            abilities_part_count += 1;
+                            if condition.is_none()
+                                && !program.static_conditions.contains_key(id)
+                                && matches!(change.removal, None | Some(AbilityRemoval::All))
+                            {
+                                can_merge_in_place = true;
+                            } else {
+                                return Err("oracle:unsupported-rule-restriction");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if abilities_part_count > 1 {
+            return Err("oracle:unsupported-rule-restriction");
+        }
+        merge_flags.push(abilities_part_count == 1 && can_merge_in_place);
+    }
+    for (sel, merge_in_place) in selectors.into_iter().zip(merge_flags) {
+        if merge_in_place {
+            for ab in program
+                .continuous
+                .iter_mut()
+                .chain(program.additional_battlefield_abilities.iter_mut())
+            {
+                if let StaticContinuousAbility::Battlefield {
+                    selector: existing_sel,
+                    parts,
+                    ..
+                } = ab
+                    && existing_sel == &sel
+                {
+                    for part in &mut parts.0 {
+                        if let StaticPart::Abilities(change) = part {
+                            change.removal = Some(AbilityRemoval::All);
+                        }
+                    }
+                }
+            }
+        } else {
+            push_static_ability(
+                program,
+                StaticContinuousAbility::Battlefield {
+                    id: ids.static_id(),
+                    selector: sel,
+                    parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::remove(
+                        AbilityRemoval::All,
+                    ))]),
+                },
+            )?;
+        }
+    }
+    Ok(())
 }

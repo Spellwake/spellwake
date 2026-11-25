@@ -9086,6 +9086,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 CastPermissionRule::SeeLibraryTop { public } => {
                     json!({"tag":"SeeLibraryTop","id":id.0,"public":public})
                 }
+                CastPermissionRule::AllPlayersRevealLibraryTop => {
+                    json!({"tag":"AllPlayersRevealLibraryTop","id":id.0})
+                }
+                CastPermissionRule::RevealHands { opponents_only } => {
+                    json!({"tag":"RevealHands","id":id.0,"opponents_only":opponents_only})
+                }
                 CastPermissionRule::PlayLibraryTop(matching) => {
                     json!({"tag":"PlayLibraryTop","id":id.0,"matching":format!("{matching:?}")})
                 }
@@ -9107,6 +9113,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 CastPermissionRule::AdditionalLandPlays(count) => {
                     json!({"tag":"AdditionalLandPlays","id":id.0,"count":count})
                 }
+                CastPermissionRule::AllPlayersAdditionalLandPlays(count) => {
+                    json!({"tag":"AllPlayersAdditionalLandPlays","id":id.0,"count":count})
+                }
                 CastPermissionRule::ControllerSpellsCannotBeCountered(types) => {
                     json!({"tag":"ControllerSpellsCannotBeCountered","id":id.0,"types":types.iter().map(|kind|format!("{kind:?}")).collect::<Vec<_>>()})
                 }
@@ -9121,6 +9130,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(filter) => {
                     json!({"tag":"ControllerSpellsCannotBeCounteredFiltered","id":id.0,"filter":format!("{filter:?}")})
+                }
+                CastPermissionRule::AllSpellsCannotBeCounteredFiltered(filter) => {
+                    json!({"tag":"AllSpellsCannotBeCounteredFiltered","id":id.0,"filter":format!("{filter:?}")})
+                }
+                CastPermissionRule::LookAtSourceExiledCards => {
+                    json!({"tag":"LookAtSourceExiledCards","id":id.0})
                 }
                 CastPermissionRule::GraveyardMatching {
                     lands_allowed,
@@ -9335,6 +9350,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticDrawRule::AllPlayersNoMaximumHandSize => {
                     json!({"tag":"AllPlayersNoMaximumHandSize","id":id.0})
                 }
+                StaticDrawRule::MaxHandSize(limit) => {
+                    json!({"tag":"MaxHandSize","id":id.0,"limit":limit})
+                }
             };
         }
         StaticContinuousAbility::UntapRule { id, rule } => {
@@ -9443,6 +9461,37 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                     counter_kind,
                 } => {
                     json!({"tag":"PreventCounters","id":id.0,"selector":format!("{selector:?}"),"players":format!("{players:?}"),"counter_kind":format!("{counter_kind:?}")})
+                }
+                StaticRestriction::IgnoreOpponentsHexproof(selector) => {
+                    json!({"tag":"IgnoreOpponentsHexproof","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::ActivateAbilitiesAsThoughHaste(selector) => {
+                    json!({"tag":"ActivateAbilitiesAsThoughHaste","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::PreventMatchingNonManaActivations(selector) => {
+                    json!({"tag":"PreventMatchingNonManaActivations","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::PreventGraveyardTargeting => {
+                    json!({"tag":"PreventGraveyardTargeting","id":id.0})
+                }
+                StaticRestriction::CannotBeSacrificed(selector) => {
+                    json!({"tag":"CannotBeSacrificed","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::CannotBeUntapped(selector) => {
+                    json!({"tag":"CannotBeUntapped","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::CantBeTargetedBy {
+                    selector,
+                    auras_only,
+                    colors,
+                } => {
+                    json!({"tag":"CantBeTargetedBy","id":id.0,"selector":format!("{selector:?}"),"auras_only":auras_only,"colors":format!("{colors:?}")})
+                }
+                StaticRestriction::ControllerOneSpellPerTurn => {
+                    json!({"tag":"ControllerOneSpellPerTurn","id":id.0})
+                }
+                StaticRestriction::OpponentsCantCastDuringCombat => {
+                    json!({"tag":"OpponentsCantCastDuringCombat","id":id.0})
                 }
             };
         }

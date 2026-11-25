@@ -301,6 +301,12 @@ pub(crate) fn evaluate(
             granted_combat_keywords: BTreeMap::new(),
             blocking_restrictions: Vec::new(),
             granted_unblockable: false,
+            cannot_be_sacrificed: false,
+            cannot_be_untapped: false,
+            activate_as_though_haste: false,
+            cannot_be_targeted_by_auras: false,
+            cannot_be_targeted_by_colors: crate::program::ColorMask::EMPTY,
+            hexproof_ignored_by: BTreeSet::new(),
             power_toughness,
         };
         if matches!(
@@ -677,6 +683,131 @@ pub(crate) fn evaluate(
             o.abilities
                 .additional_battlefield_abilities
                 .retain(|id| *id != static_id);
+        }
+    }
+    // Stamp selector-driven static restriction flags after conditional statics are resolved.
+    {
+        use crate::characteristics::StaticRestriction;
+        enum RestrictionFlag {
+            IgnoreHexproof(SeatId),
+            ActivateAsHaste,
+            CannotBeSacrificed,
+            CannotBeUntapped,
+            CantBeTargetedBy {
+                auras_only: bool,
+                colors: crate::program::ColorMask,
+            },
+        }
+        let mut stamped: Vec<(ObjectId, RestrictionFlag)> = Vec::new();
+        let collect_restriction =
+            |source_id: ObjectId,
+             ctrl: SeatId,
+             rule: &StaticRestriction,
+             stamped: &mut Vec<(ObjectId, RestrictionFlag)>| {
+                let (selector, kind) = match rule {
+                    StaticRestriction::IgnoreOpponentsHexproof(sel) => {
+                        (sel.as_ref(), RestrictionFlag::IgnoreHexproof(ctrl))
+                    }
+                    StaticRestriction::ActivateAbilitiesAsThoughHaste(sel) => {
+                        (sel.as_ref(), RestrictionFlag::ActivateAsHaste)
+                    }
+                    StaticRestriction::CannotBeSacrificed(sel) => {
+                        (sel.as_ref(), RestrictionFlag::CannotBeSacrificed)
+                    }
+                    StaticRestriction::CannotBeUntapped(sel) => {
+                        (sel.as_ref(), RestrictionFlag::CannotBeUntapped)
+                    }
+                    StaticRestriction::CantBeTargetedBy {
+                        selector: sel,
+                        auras_only,
+                        colors,
+                    } => (
+                        sel.as_ref(),
+                        RestrictionFlag::CantBeTargetedBy {
+                            auras_only: *auras_only,
+                            colors: *colors,
+                        },
+                    ),
+                    _ => return,
+                };
+                let affected = select_affected(
+                    selector,
+                    source_id,
+                    ctrl,
+                    &objects,
+                    &battlefield,
+                    world.name_rules,
+                    world.combat,
+                );
+                for target_id in affected {
+                    let flag = match kind {
+                        RestrictionFlag::IgnoreHexproof(s) => RestrictionFlag::IgnoreHexproof(s),
+                        RestrictionFlag::ActivateAsHaste => RestrictionFlag::ActivateAsHaste,
+                        RestrictionFlag::CannotBeSacrificed => RestrictionFlag::CannotBeSacrificed,
+                        RestrictionFlag::CannotBeUntapped => RestrictionFlag::CannotBeUntapped,
+                        RestrictionFlag::CantBeTargetedBy { auras_only, colors } => {
+                            RestrictionFlag::CantBeTargetedBy { auras_only, colors }
+                        }
+                    };
+                    stamped.push((target_id, flag));
+                }
+            };
+        for source in objects.values() {
+            if source.zone != ObjectZone::Battlefield {
+                continue;
+            }
+            let Some(ctrl) = source.controller else {
+                continue;
+            };
+            for ability in source
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&source.printed_text.additional_battlefield_abilities)
+            {
+                let active = source.abilities.continuous == Some(ability.id())
+                    || source
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability.id());
+                if !active {
+                    continue;
+                }
+                if let StaticContinuousAbility::Restriction { rule, .. } = ability {
+                    collect_restriction(source.object, ctrl, rule, &mut stamped);
+                }
+            }
+        }
+        for temp in world.state.temporary_statics.values() {
+            if let StaticContinuousAbility::Restriction { rule, .. } = &temp.ability {
+                let src_id = temp.source_object.unwrap_or(ObjectId::SENTINEL);
+                collect_restriction(src_id, temp.controller, rule, &mut stamped);
+            }
+        }
+        for (target_id, flag) in stamped {
+            if let Some(target) = objects.get_mut(&target_id) {
+                match flag {
+                    RestrictionFlag::IgnoreHexproof(seat) => {
+                        target.hexproof_ignored_by.insert(seat);
+                    }
+                    RestrictionFlag::ActivateAsHaste => {
+                        target.activate_as_though_haste = true;
+                    }
+                    RestrictionFlag::CannotBeSacrificed => {
+                        target.cannot_be_sacrificed = true;
+                    }
+                    RestrictionFlag::CannotBeUntapped => {
+                        target.cannot_be_untapped = true;
+                    }
+                    RestrictionFlag::CantBeTargetedBy { auras_only, colors } => {
+                        if auras_only {
+                            target.cannot_be_targeted_by_auras = true;
+                        }
+                        target.cannot_be_targeted_by_colors =
+                            target.cannot_be_targeted_by_colors.union(colors);
+                    }
+                }
+            }
         }
     }
     // CR 701.60a: A suspected creature has menace and "This creature can't block."
@@ -1058,6 +1189,9 @@ fn select_affected(
                 && selector
                     .artifact_subtype
                     .is_none_or(|kind| object.current_artifact_subtypes.contains(&kind))
+                && selector
+                    .planeswalker_subtype
+                    .is_none_or(|kind| object.current_planeswalker_subtypes.contains(&kind))
                 && selector.combat_role.is_none_or(|role| match role {
                     CombatSelector::Attacking => object.attacking,
                     CombatSelector::Blocking => object.blocking,

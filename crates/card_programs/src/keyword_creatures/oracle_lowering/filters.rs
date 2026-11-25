@@ -328,12 +328,18 @@ pub(super) fn lower_filter_to_permanent_selector(
             sel.any_creature_subtypes.insert(ct);
         }
     } else if let Some(st) = f.subtypes.first() {
-        if let Some(ct) = vocabulary.resolve_label(st) {
+        if f.any_types == AstCardTypeMask::PLANESWALKER
+            && let Some(pw) = parse_planeswalker_subtype(st)
+        {
+            sel.planeswalker_subtype = Some(pw);
+        } else if let Some(ct) = vocabulary.resolve_label(st) {
             sel.creature_subtype = Some(ct);
         } else if let Some(lt) = parse_land_subtype(st) {
             sel.land_subtype = Some(lt);
         } else if let Some(at) = ArtifactSubtype::from_wire_label(st) {
             sel.artifact_subtype = Some(at);
+        } else if let Some(pw) = parse_planeswalker_subtype(st) {
+            sel.planeswalker_subtype = Some(pw);
         } else {
             return Err("oracle:selector-unknown-subtype");
         }
@@ -873,14 +879,288 @@ pub(super) fn apply_selector_condition(
             sel.sole_controlled_creature = true;
             Ok(())
         }
+        ConditionAst::MatchesFilter { subject, filter }
+            if is_pronoun_anaphora(subject)
+                && sel.controller != ControllerSelector::SourceItself
+                && !sel.attached_to_source
+                && !sel.forbidden_types.contains(&CardType::Creature)
+                && filter.any_types == AstCardTypeMask::CREATURE
+                && !filter.any_permanent
+                && !filter.any_card
+                && !filter.any_spell
+                && filter_only_has(
+                    filter,
+                    FilterAllow {
+                        types: true,
+                        ..FilterAllow::NONE
+                    },
+                ) =>
+        {
+            sel.required_types.insert(CardType::Creature);
+            Ok(())
+        }
+        ConditionAst::CounterCompare {
+            subject,
+            counter_kind,
+            op: op @ (CompareOp::Ge | CompareOp::Gt),
+            value,
+        } if is_pronoun_anaphora(subject)
+            && sel.controller != ControllerSelector::SourceItself
+            && !sel.attached_to_source =>
+        {
+            let min_val = if *op == CompareOp::Gt {
+                value.saturating_add(1)
+            } else {
+                *value
+            };
+            if min_val == 0 {
+                return Err("oracle:unsupported-static-cond");
+            }
+            match counter_kind.trim().to_ascii_lowercase().as_str() {
+                "+1/+1" => {
+                    if min_val == 1 {
+                        sel.plus_one_counter = true;
+                    } else {
+                        sel.minimum_plus_one_counters = sel.minimum_plus_one_counters.max(min_val);
+                    }
+                    Ok(())
+                }
+                "-1/-1" if min_val == 1 => {
+                    sel.minus_one_counter = true;
+                    Ok(())
+                }
+                "" | "any" | "a" | "one or more" if min_val == 1 => {
+                    sel.any_counter = true;
+                    Ok(())
+                }
+                _ => Err("oracle:unsupported-static-cond"),
+            }
+        }
         other => {
-            if let Some(sc) = lower_static_source_condition(other, vocabulary) {
-                sel.source_condition = Some(sc);
+            if let Some(sc) = lower_selector_source_condition(sel, other, vocabulary) {
+                sel.source_condition = Some(match sel.source_condition.take() {
+                    Some(prev) => StaticSourceCondition::And(Box::new(prev), Box::new(sc)),
+                    None => sc,
+                });
                 Ok(())
             } else {
                 Err("oracle:unsupported-static-cond")
             }
         }
+    }
+}
+
+fn is_pronoun_anaphora(subject: &SubjectRefAst) -> bool {
+    matches!(
+        subject,
+        SubjectRefAst::Anaphora(raw)
+            if matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "it" | "he" | "she" | "him" | "her"
+            )
+    )
+}
+
+fn lower_compare_op(op: CompareOp) -> Comparison {
+    match op {
+        CompareOp::Lt => Comparison::Less,
+        CompareOp::Le => Comparison::LessOrEqual,
+        CompareOp::Eq => Comparison::Equal,
+        CompareOp::Ge => Comparison::GreaterOrEqual,
+        CompareOp::Gt => Comparison::Greater,
+    }
+}
+
+fn lower_selector_value_expr(
+    sel: &PermanentSelector,
+    expr: &ValueExprAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ValueExpr> {
+    match expr {
+        ValueExprAst::ObjectStat { subject, stat } if is_pronoun_anaphora(subject) => {
+            let obj_ref = if sel.controller == ControllerSelector::SourceItself {
+                ValueObjectRef::AbilitySource
+            } else if sel.attached_to_source {
+                ValueObjectRef::AttachedHost
+            } else {
+                return None;
+            };
+            Some(ValueExpr::object_stat(obj_ref, lower_stat_kind(*stat)))
+        }
+        ValueExprAst::CounterCount {
+            subject,
+            counter_kind,
+        } if is_pronoun_anaphora(subject) => {
+            let subj_ref = if sel.controller == ControllerSelector::SourceItself {
+                spellwake_engine::program::CounterSubjectRef::AbilitySource
+            } else if sel.attached_to_source {
+                spellwake_engine::program::CounterSubjectRef::AttachedHost
+            } else {
+                return None;
+            };
+            let ck_low = counter_kind.trim().to_ascii_lowercase();
+            let kind = if matches!(ck_low.as_str(), "" | "any" | "a" | "one or more") {
+                None
+            } else {
+                Some(parse_counter_kind(&ck_low).filter(|k| k.is_permanent())?)
+            };
+            Some(ValueExpr::counters(subj_ref, kind))
+        }
+        other => {
+            let lowered = lower_value_expr(other, vocabulary).ok()?;
+            lowered.is_world_evaluable().then_some(lowered)
+        }
+    }
+}
+
+fn lower_selector_source_condition(
+    sel: &PermanentSelector,
+    cond: &ConditionAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<StaticSourceCondition> {
+    match cond {
+        ConditionAst::Not(inner) => {
+            if matches!(inner.as_ref(), ConditionAst::IsYourTurn) {
+                return Some(StaticSourceCondition::OpponentsTurn);
+            }
+            Some(StaticSourceCondition::Not(Box::new(
+                lower_selector_source_condition(sel, inner, vocabulary)?,
+            )))
+        }
+        ConditionAst::And(a, b) => Some(StaticSourceCondition::And(
+            Box::new(lower_selector_source_condition(sel, a, vocabulary)?),
+            Box::new(lower_selector_source_condition(sel, b, vocabulary)?),
+        )),
+        ConditionAst::Or(a, b) => Some(StaticSourceCondition::Or(
+            Box::new(lower_selector_source_condition(sel, a, vocabulary)?),
+            Box::new(lower_selector_source_condition(sel, b, vocabulary)?),
+        )),
+        ConditionAst::CounterCompare {
+            subject,
+            counter_kind,
+            op,
+            value,
+        } if is_pronoun_anaphora(subject) => {
+            let ck_low = counter_kind.trim().to_ascii_lowercase();
+            let kind = if matches!(ck_low.as_str(), "" | "any" | "a" | "one or more") {
+                None
+            } else {
+                Some(parse_counter_kind(&ck_low).filter(|k| k.is_permanent())?)
+            };
+            if sel.controller == ControllerSelector::SourceItself {
+                if matches!(op, CompareOp::Ge | CompareOp::Gt) {
+                    let min_val = if *op == CompareOp::Gt {
+                        value.saturating_add(1)
+                    } else {
+                        *value
+                    };
+                    if min_val >= 1 {
+                        return Some(match kind {
+                            None => StaticSourceCondition::SourceAnyCounterAtLeast(min_val),
+                            Some(k) => StaticSourceCondition::SourceCounterAtLeast {
+                                kind: k,
+                                minimum: min_val,
+                            },
+                        });
+                    }
+                }
+                Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::counters(
+                        spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                        kind,
+                    ),
+                    comparison: lower_compare_op(*op),
+                    right: ValueExpr::literal(i64::from(*value)),
+                })))
+            } else if sel.attached_to_source {
+                Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::counters(
+                        spellwake_engine::program::CounterSubjectRef::AttachedHost,
+                        kind,
+                    ),
+                    comparison: lower_compare_op(*op),
+                    right: ValueExpr::literal(i64::from(*value)),
+                })))
+            } else {
+                None
+            }
+        }
+        ConditionAst::Marker(GameMarker::SubjectEnteredThisTurn(subj))
+            if is_pronoun_anaphora(subj) && sel.controller == ControllerSelector::SourceItself =>
+        {
+            Some(StaticSourceCondition::SourceEnteredThisTurn)
+        }
+        ConditionAst::Marker(GameMarker::AttackedThisTurn { subject })
+            if is_pronoun_anaphora(subject)
+                && sel.controller == ControllerSelector::SourceItself =>
+        {
+            Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::SourceState(SourceStateExpr::AttackedThisTurn),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1_i64),
+            })))
+        }
+        ConditionAst::MatchesFilter { subject, filter }
+            if (matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                || is_pronoun_anaphora(subject))
+                && sel.controller == ControllerSelector::SourceItself
+                && filter.controller.is_none()
+                && filter.owner.is_none()
+                && filter.zone.is_none()
+                && !filter.any_spell =>
+        {
+            let obj = lower_object_filter(filter, vocabulary).ok()?;
+            let rc = ResolutionCondition {
+                left: ValueExpr::object_matches(MatchObjectRef::AbilitySource, obj),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1_i64),
+            };
+            rc.is_world_evaluable()
+                .then(|| StaticSourceCondition::Eval(Box::new(rc)))
+        }
+        ConditionAst::StatCompare {
+            subject,
+            stat,
+            op,
+            value,
+        } if is_pronoun_anaphora(subject) => {
+            let obj_ref = if sel.controller == ControllerSelector::SourceItself {
+                ValueObjectRef::AbilitySource
+            } else if sel.attached_to_source {
+                ValueObjectRef::AttachedHost
+            } else {
+                return None;
+            };
+            Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::object_stat(obj_ref, lower_stat_kind(*stat)),
+                comparison: lower_compare_op(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            })))
+        }
+        ConditionAst::Compare { lhs, op, rhs }
+            if matches!(
+                lhs.as_ref(),
+                ValueExprAst::ObjectStat { subject, .. }
+                    | ValueExprAst::CounterCount { subject, .. }
+                    if is_pronoun_anaphora(subject)
+            ) || matches!(
+                rhs.as_ref(),
+                ValueExprAst::ObjectStat { subject, .. }
+                    | ValueExprAst::CounterCount { subject, .. }
+                    if is_pronoun_anaphora(subject)
+            ) =>
+        {
+            let left = lower_selector_value_expr(sel, lhs, vocabulary)?;
+            let right = lower_selector_value_expr(sel, rhs, vocabulary)?;
+            let rc = ResolutionCondition {
+                left,
+                comparison: lower_compare_op(*op),
+                right,
+            };
+            rc.is_world_evaluable()
+                .then(|| StaticSourceCondition::Eval(Box::new(rc)))
+        }
+        other => lower_static_source_condition(other, vocabulary),
     }
 }
 
@@ -938,6 +1218,14 @@ fn try_specialized_static_source_condition(
             player: PlayerRefAst::You,
             min_amount: 1,
         } => Some(StaticSourceCondition::ControllerLostLifeThisTurn),
+        ConditionAst::LostLifeThisTurn {
+            player: PlayerRefAst::AnyPlayer,
+            min_amount,
+        } if *min_amount >= 1 => Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::MaxPlayerLifeLostThisTurn),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(i64::from(*min_amount)),
+        }))),
         ConditionAst::AttackedThisTurn => Some(StaticSourceCondition::ControllerAttackedThisTurn),
         ConditionAst::EnteredUnderYourControlThisTurn {
             filter,
@@ -967,6 +1255,28 @@ fn try_specialized_static_source_condition(
             player: PlayerRefAst::You,
             filter,
         } if filter.is_empty() => Some(StaticSourceCondition::ControllerCastSpellsThisTurn(1)),
+        ConditionAst::CastSpellThisTurn {
+            player: PlayerRefAst::You,
+            filter,
+        } if filter.any_spell
+            && !filter.any_permanent
+            && !filter.any_card
+            && (filter.flags.0 & !AstFilterFlags::LKI_PAST_TENSE.0)
+                == AstFilterFlags::EXCLUDE_SELF.0
+            && filter_only_has(
+                filter,
+                FilterAllow {
+                    flags: true,
+                    ..FilterAllow::NONE
+                },
+            ) =>
+        {
+            Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::OtherSpellsCastThisTurn),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1_i64),
+            })))
+        }
         ConditionAst::PlayerActionThisTurn {
             player: PlayerRefAst::You,
             action,
@@ -1050,7 +1360,43 @@ fn try_specialized_static_source_condition(
                         or_tied: true,
                     })
                 }
-                _ => None,
+                _ => {
+                    if let Some(rest) = low
+                        .strip_prefix("there is exactly ")
+                        .or_else(|| low.strip_prefix("there are exactly "))
+                        && let Some(before_on) = rest.strip_suffix(" on ~")
+                        && let Some(before_cnt) = before_on
+                            .strip_suffix(" counters")
+                            .or_else(|| before_on.strip_suffix(" counter"))
+                        && let Some((n_tok, kind_raw)) = before_cnt.split_once(' ')
+                    {
+                        let count = match n_tok {
+                            "zero" => Some(0_i64),
+                            "one" => Some(1_i64),
+                            "two" => Some(2_i64),
+                            "three" => Some(3_i64),
+                            "four" => Some(4_i64),
+                            "five" => Some(5_i64),
+                            _ => n_tok.parse::<i64>().ok().filter(|&n| n >= 0),
+                        };
+                        if let Some(n) = count
+                            && let Some(kind) =
+                                parse_counter_kind(kind_raw.trim()).filter(|k| k.is_permanent())
+                        {
+                            return Some(StaticSourceCondition::Eval(Box::new(
+                                ResolutionCondition {
+                                    left: ValueExpr::counters(
+                                        spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                                        Some(kind),
+                                    ),
+                                    comparison: Comparison::Equal,
+                                    right: ValueExpr::literal(n),
+                                },
+                            )));
+                        }
+                    }
+                    None
+                }
             }
         }
         ConditionAst::IsYourTurn => Some(StaticSourceCondition::ControllersTurn),
@@ -1068,6 +1414,15 @@ fn try_specialized_static_source_condition(
         {
             Some(StaticSourceCondition::SourceEnteredThisTurn)
         }
+        ConditionAst::Marker(GameMarker::AttackedThisTurn { subject })
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+        {
+            Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::SourceState(SourceStateExpr::AttackedThisTurn),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1_i64),
+            })))
+        }
         ConditionAst::HasStatus { subject, status }
             if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
         {
@@ -1076,6 +1431,12 @@ fn try_specialized_static_source_condition(
                 "untapped" => Some(StaticSourceCondition::SourceIsUntapped),
                 "equipped" => Some(StaticSourceCondition::SourceIsEquipped),
                 "enchanted" => Some(StaticSourceCondition::SourceIsEnchanted),
+                "attached:a creature" => Some(StaticSourceCondition::AttachedHostMatches(
+                    Box::new(PermanentSelector {
+                        required_types: BTreeSet::from([CardType::Creature]),
+                        ..PermanentSelector::default()
+                    }),
+                )),
                 _ => None,
             }
         }
@@ -2189,7 +2550,11 @@ pub(super) fn lower_object_filter(
 
     // Positive subtypes
     let resolve_single_subtype = |st: &str| -> Option<SubtypeFilter> {
-        if st.eq_ignore_ascii_case("aura") {
+        if f.any_types == AstCardTypeMask::PLANESWALKER
+            && let Some(pw) = parse_planeswalker_subtype(st)
+        {
+            Some(SubtypeFilter::Planeswalker(pw))
+        } else if st.eq_ignore_ascii_case("aura") {
             Some(SubtypeFilter::Aura)
         } else if let Some(ct) = vocabulary.resolve_label(st) {
             Some(SubtypeFilter::Has(ct))
@@ -2206,7 +2571,7 @@ pub(super) fn lower_object_filter(
                 "adventure" => Some(SubtypeFilter::Spell(SpellSubtype::Adventure)),
                 "trap" => Some(SubtypeFilter::Spell(SpellSubtype::Trap)),
                 "omen" => Some(SubtypeFilter::Spell(SpellSubtype::Omen)),
-                _ => None,
+                _ => parse_planeswalker_subtype(st).map(SubtypeFilter::Planeswalker),
             }
         }
     };
@@ -3352,6 +3717,16 @@ pub(super) fn parse_look_top_pick_filter(
             None
         }
     }
+}
+
+fn parse_planeswalker_subtype(label: &str) -> Option<PlaneswalkerSubtype> {
+    let trimmed = label.trim();
+    PlaneswalkerSubtype::from_label(trimmed).or_else(|| {
+        PlaneswalkerSubtype::ALL
+            .iter()
+            .copied()
+            .find(|pw| pw.label().eq_ignore_ascii_case(trimmed))
+    })
 }
 
 pub(super) fn parse_counter_kind(raw: &str) -> Option<CounterKind> {

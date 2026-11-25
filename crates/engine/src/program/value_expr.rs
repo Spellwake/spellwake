@@ -285,6 +285,10 @@ pub enum PlayerStatExpr {
     DiceRolledThisTurn,
     /// Total mana value of other spells the controller cast this turn.
     OtherSpellsCastManaValueThisTurn,
+    /// Number of other spells the controller cast this turn (excluding the source if on the stack).
+    OtherSpellsCastThisTurn,
+    /// Maximum life lost by any single player this turn (0 if no player lost life).
+    MaxPlayerLifeLostThisTurn,
 }
 
 /// Subject tested by [`ValueExpr::ObjectMatches`] (evaluates to `1` if matched, `0` otherwise).
@@ -370,6 +374,8 @@ pub enum EventValueKind {
     WinningVoteOption,
     /// Count of nonland cards discarded during the most recent `Instruction::Connive`.
     LastNonlandDiscarded,
+    /// Total mana spent to cast the spell that caused this triggered ability to trigger.
+    TriggeringSpellManaSpent,
 }
 
 /// Composable numeric expression unifying effect amounts and resolution-condition operands.
@@ -932,6 +938,7 @@ impl ValueExpr {
                     | EventValueKind::EvidenceCollected
                     | EventValueKind::PaidAlternative
                     | EventValueKind::KickerCount(_)
+                    | EventValueKind::TriggeringSpellManaSpent
             ),
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.is_trigger_world_evaluable()
@@ -1818,7 +1825,9 @@ impl ValueExpr {
                 | PlayerStatExpr::CardsEnteredGraveyardThisTurn
                 | PlayerStatExpr::CountersPlacedOnCreaturesThisTurn
                 | PlayerStatExpr::DiceRolledThisTurn
-                | PlayerStatExpr::OtherSpellsCastManaValueThisTurn => Ok(()),
+                | PlayerStatExpr::OtherSpellsCastManaValueThisTurn
+                | PlayerStatExpr::OtherSpellsCastThisTurn
+                | PlayerStatExpr::MaxPlayerLifeLostThisTurn => Ok(()),
                 PlayerStatExpr::PlayerLife(role)
                 | PlayerStatExpr::PlayerHandSize(role)
                 | PlayerStatExpr::PlayerLibrarySize(role)
@@ -2054,7 +2063,8 @@ impl ValueExpr {
                 | EventValueKind::ChosenOptionIndex
                 | EventValueKind::VoteCount(_)
                 | EventValueKind::WinningVoteOption
-                | EventValueKind::LastNonlandDiscarded => Ok(()),
+                | EventValueKind::LastNonlandDiscarded
+                | EventValueKind::TriggeringSpellManaSpent => Ok(()),
             },
         }
     }
@@ -2290,7 +2300,8 @@ impl ValueExpr {
                 | EventValueKind::ChosenOptionIndex
                 | EventValueKind::VoteCount(_)
                 | EventValueKind::WinningVoteOption
-                | EventValueKind::LastNonlandDiscarded => Ok(()),
+                | EventValueKind::LastNonlandDiscarded
+                | EventValueKind::TriggeringSpellManaSpent => Ok(()),
             },
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.validate_condition(context, vocabulary)

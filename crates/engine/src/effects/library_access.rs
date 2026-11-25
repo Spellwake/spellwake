@@ -48,7 +48,7 @@ impl EffectWindow {
         for source in evaluated
             .objects
             .values()
-            .filter(|p| p.zone == ObjectZone::Battlefield && p.controller == Some(owner))
+            .filter(|p| p.zone == ObjectZone::Battlefield)
         {
             for ability in source
                 .printed_text
@@ -67,14 +67,21 @@ impl EffectWindow {
                 match ability {
                     crate::characteristics::StaticContinuousAbility::CastPermission {
                         permission:
+                            crate::characteristics::CastPermissionRule::AllPlayersRevealLibraryTop,
+                        ..
+                    } => access.visible = true,
+                    crate::characteristics::StaticContinuousAbility::CastPermission {
+                        permission:
                             crate::characteristics::CastPermissionRule::SeeLibraryTop { public },
                         ..
-                    } => access.visible |= *public || viewer == owner,
+                    } if source.controller == Some(owner) => {
+                        access.visible |= *public || viewer == owner;
+                    }
                     crate::characteristics::StaticContinuousAbility::CastPermission {
                         permission:
                             crate::characteristics::CastPermissionRule::PlayLibraryTop(matching),
                         ..
-                    } if viewer == owner => {
+                    } if source.controller == Some(owner) && viewer == owner => {
                         access.playable |= match matching {
                             LibraryTopPermission::All => true,
                             LibraryTopPermission::Land => card.has_type(CardType::Land),
@@ -104,7 +111,7 @@ impl EffectWindow {
                                 filter,
                             },
                         ..
-                    } if viewer == owner => {
+                    } if source.controller == Some(owner) && viewer == owner => {
                         let excluded = BTreeSet::new();
                         access.playable |= (*lands_allowed && card.has_type(CardType::Land))
                             || self.matches_object_filter(
@@ -121,6 +128,32 @@ impl EffectWindow {
             }
         }
         access
+    }
+
+    /// True if `owner`'s hand is continuously revealed to `viewer` under an active static effect
+    /// (for example Telepathy, Revelation, Wandering Eye).
+    pub fn hand_revealed_to(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        owner: SeatId,
+        viewer: SeatId,
+    ) -> bool {
+        if owner == viewer {
+            return true;
+        }
+        evaluated.objects.values().any(|source| {
+            source.zone == ObjectZone::Battlefield
+                && source.has_battlefield_rule(|rule| match rule {
+                    crate::characteristics::StaticContinuousAbility::CastPermission {
+                        permission:
+                            crate::characteristics::CastPermissionRule::RevealHands {
+                                opponents_only,
+                            },
+                        ..
+                    } => !opponents_only || source.controller.is_some_and(|ctrl| ctrl != owner),
+                    _ => false,
+                })
+        })
     }
 
     pub(super) fn library_play_permitted(

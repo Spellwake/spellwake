@@ -1952,6 +1952,16 @@ impl EffectWindow {
                     .entry(cast.controller())
                     .or_default();
                 *count = (*count + 1).min(2);
+                if let Some(stack_entry) = self
+                    .window
+                    .entries()
+                    .iter()
+                    .find(|e| e.id() == cast.entry())
+                {
+                    self.characteristics
+                        .cast_summaries
+                        .insert(cast.spell().object.id(), stack_entry.cast_summary().clone());
+                }
             }
         }
         for event in &values {

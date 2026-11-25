@@ -1311,6 +1311,10 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                         0.into()
                     }
                 }),
+            EventValueKind::TriggeringSpellManaSpent => ctx
+                .trigger_subject
+                .and_then(|id| ctx.state.cast_summaries.get(&id))
+                .map_or_else(|| 0.into(), |s| s.total_mana.clone()),
             _ => 0.into(),
         },
         ValueExpr::PlayerStat(stat) => match stat {
@@ -1827,6 +1831,25 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     .map_or(0u32, |n| u32::try_from(n).unwrap_or(u32::MAX));
                 i64::from(total.saturating_sub(own_mv)).into()
             }
+            PlayerStatExpr::OtherSpellsCastThisTurn => {
+                let total = ctx
+                    .state
+                    .spells_cast_this_turn
+                    .get(&ctx.controller)
+                    .copied()
+                    .unwrap_or(0);
+                let self_on_stack = u16::from(ctx.objects.get(&ctx.source).is_some_and(|o| {
+                    o.zone == ObjectZone::Stack && o.controller == Some(ctx.controller)
+                }));
+                i64::from(total.saturating_sub(self_on_stack)).into()
+            }
+            PlayerStatExpr::MaxPlayerLifeLostThisTurn => ctx
+                .state
+                .life_lost_this_turn
+                .values()
+                .max()
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
         },
     }
 }

@@ -2287,6 +2287,26 @@ impl EffectWindow {
                         .map_or(0u32, |n| u32::try_from(n).unwrap_or(u32::MAX));
                     Ok(i64::from(total.saturating_sub(own_mv)).into())
                 }
+                PlayerStatExpr::OtherSpellsCastThisTurn => {
+                    let total = self
+                        .characteristics
+                        .spells_cast_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0);
+                    let self_on_stack = u16::from(self.window.resolving().is_some_and(|entry| {
+                        entry.controller() == controller
+                            && matches!(entry.kind(), StackKind::CardSpell(_))
+                    }));
+                    Ok(i64::from(total.saturating_sub(self_on_stack)).into())
+                }
+                PlayerStatExpr::MaxPlayerLifeLostThisTurn => Ok(self
+                    .characteristics
+                    .life_lost_this_turn
+                    .values()
+                    .max()
+                    .cloned()
+                    .unwrap_or_else(|| 0.into())),
             },
             ValueExpr::ObjectMatches { subject, filter } => {
                 let (clause_a, _) = filter.clauses();
@@ -2633,6 +2653,28 @@ impl EffectWindow {
                         }
                         _ => 0.into(),
                     };
+                    Ok(val)
+                }
+                EventValueKind::TriggeringSpellManaSpent => {
+                    let val = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        .and_then(|t| t.causes.members().first())
+                        .and_then(|cause| match &cause.related {
+                            crate::occurrence::TriggerRelated::SpellCast(cast) => {
+                                Some(cast.total_mana_spent().clone())
+                            }
+                            crate::occurrence::TriggerRelated::ZoneChange { before, after } => self
+                                .characteristics
+                                .cast_summaries
+                                .get(&after.object.id())
+                                .or_else(|| {
+                                    self.characteristics.cast_summaries.get(&before.object.id())
+                                })
+                                .map(|s| s.total_mana.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| 0.into());
                     Ok(val)
                 }
                 EventValueKind::MatchedOccurrences => {

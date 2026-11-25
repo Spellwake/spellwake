@@ -8674,8 +8674,26 @@ impl EffectWindow {
                     .get(id)
                     .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
             {
+                let before = self.rules_snapshot(None)?;
                 self.skip_next_controller_untap.insert(id);
                 self.characteristics.exerted_objects_this_turn.insert(id);
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::KeywordActionPerformed {
+                                player: entry.controller(),
+                                action: crate::program::PlayerTriggerAction::Exerted,
+                            },
+                        ])
+                    },
+                )?;
                 true
             } else {
                 false

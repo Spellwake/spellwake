@@ -329,6 +329,8 @@ pub enum SubtypeFilter {
     Artifact(ArtifactSubtype),
     /// Object has this enchantment subtype (for example Saga, Curse).
     Enchantment(EnchantmentSubtype),
+    /// Object has this planeswalker subtype (for example Jace, Chandra, Vraska).
+    Planeswalker(super::PlaneswalkerSubtype),
     /// Object has this spell subtype (for example Arcane, Lesson, Adventure, Trap, Omen).
     Spell(super::SpellSubtype),
     /// Object is an Aura enchantment.
@@ -358,6 +360,7 @@ impl SubtypeFilter {
             | Self::NotLand(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
+            | Self::Planeswalker(_)
             | Self::Spell(_)
             | Self::Aura => {}
         }
@@ -391,6 +394,7 @@ impl SubtypeFilter {
             | Self::NotLand(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
+            | Self::Planeswalker(_)
             | Self::Aura
             | Self::Spell(_) => Ok(()),
         }
@@ -933,6 +937,12 @@ impl ObjectClause {
     }
 
     #[must_use]
+    pub const fn with_planeswalker_subtype(mut self, kind: super::PlaneswalkerSubtype) -> Self {
+        self.subtypes = SubtypeFilter::Planeswalker(kind);
+        self
+    }
+
+    #[must_use]
     pub const fn aura(mut self) -> Self {
         self.subtypes = SubtypeFilter::Aura;
         self
@@ -1109,6 +1119,7 @@ impl ObjectClause {
             SubtypeFilter::NotLand(kind) => !p.current_land_subtypes.contains(&kind),
             SubtypeFilter::Artifact(kind) => p.current_artifact_subtypes.contains(&kind),
             SubtypeFilter::Enchantment(kind) => p.current_enchantment_subtypes.contains(&kind),
+            SubtypeFilter::Planeswalker(kind) => p.current_planeswalker_subtypes.contains(&kind),
             SubtypeFilter::Spell(kind) => p.current_spell_subtypes.contains(&kind),
             SubtypeFilter::Aura => {
                 matches!(
@@ -1579,6 +1590,17 @@ impl ObjectFilter {
             Self::Either(a, b) => Self::Either(
                 a.with_enchantment_subtype(kind),
                 b.with_enchantment_subtype(kind),
+            ),
+        }
+    }
+
+    #[must_use]
+    pub const fn with_planeswalker_subtype(self, kind: super::PlaneswalkerSubtype) -> Self {
+        match self {
+            Self::Clause(a) => Self::Clause(a.with_planeswalker_subtype(kind)),
+            Self::Either(a, b) => Self::Either(
+                a.with_planeswalker_subtype(kind),
+                b.with_planeswalker_subtype(kind),
             ),
         }
     }
@@ -2331,6 +2353,7 @@ impl ObjectFilter {
                 SubtypeFilter::NotLand(kind) => !spell.land_subtypes.contains(&kind),
                 SubtypeFilter::Artifact(kind) => spell.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => spell.enchantment_subtypes.contains(&kind),
+                SubtypeFilter::Planeswalker(kind) => spell.planeswalker_subtypes.contains(&kind),
                 SubtypeFilter::Spell(kind) => spell.spell_subtypes.contains(&kind),
                 SubtypeFilter::Aura => {
                     spell.types.contains(&CardType::Enchantment)
@@ -2471,6 +2494,7 @@ impl ObjectFilter {
                 SubtypeFilter::NotLand(kind) => !object.land_subtypes.contains(&kind),
                 SubtypeFilter::Artifact(kind) => object.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => object.enchantment_subtypes.contains(&kind),
+                SubtypeFilter::Planeswalker(kind) => object.planeswalker_subtypes.contains(&kind),
                 SubtypeFilter::Spell(kind) => object.spell_subtypes.contains(&kind),
                 SubtypeFilter::Aura => false,
                 SubtypeFilter::ExceptChosenSlot(_)

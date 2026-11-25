@@ -2005,35 +2005,69 @@ pub(super) fn match_trigger_event(
                 }
             }
             if let Some(origin) = cast_origin {
-                if let RulesOccurrence::ZoneChange(change) = value
-                    && change.after.object.id() == source.object.id()
-                    && change.after.object.zone() == ObjectZone::Battlefield
-                {
-                    let ok = match *origin {
-                        CastEntryKind::Cast { from_hand } => {
-                            change.before.cast_origin.is_some_and(|(caster, hand)| {
-                                caster == controller && (!from_hand || hand)
-                            })
+                match (origin, value) {
+                    (
+                        CastEntryKind::NotCast,
+                        RulesOccurrence::TokenCreated {
+                            creator,
+                            after: created,
+                            ..
+                        },
+                    ) => {
+                        if subject.matches_appearance(source, controller, created) {
+                            members.push(TriggerCauseMember {
+                                occurrence: occurrence.id,
+                                related_player: created.object.controller().or(Some(controller)),
+                                related: TriggerRelated::TokenCreated {
+                                    creator: *creator,
+                                    after: (**created).clone(),
+                                },
+                            });
                         }
-                        CastEntryKind::Kicked => {
-                            change.before.object.zone() == ObjectZone::Stack
-                                && after.characteristics.kicked.contains(&source.object.id())
-                        }
-                        CastEntryKind::Evoked => {
-                            change.before.object.zone() == ObjectZone::Stack
-                                && after.characteristics.evoked.contains(&source.object.id())
-                        }
-                    };
-                    if ok {
-                        members.push(TriggerCauseMember {
-                            occurrence: occurrence.id,
-                            related_player: Some(controller),
-                            related: TriggerRelated::ZoneChange {
-                                before: change.before.clone(),
-                                after: change.after.clone(),
-                            },
-                        });
                     }
+                    (_, RulesOccurrence::ZoneChange(change))
+                        if change.after.object.zone() == ObjectZone::Battlefield
+                            && subject.matches_appearance(source, controller, &change.after) =>
+                    {
+                        let is_self = *subject == ObjectFilter::self_object();
+                        let ok = match *origin {
+                            CastEntryKind::Cast { from_hand } => {
+                                change.before.cast_origin.is_some_and(|(caster, hand)| {
+                                    (!is_self || caster == controller) && (!from_hand || hand)
+                                })
+                            }
+                            CastEntryKind::NotCast => change.before.cast_origin.is_none(),
+                            CastEntryKind::Kicked => {
+                                change.before.object.zone() == ObjectZone::Stack
+                                    && after
+                                        .characteristics
+                                        .kicked
+                                        .contains(&change.after.object.id())
+                            }
+                            CastEntryKind::Evoked => {
+                                change.before.object.zone() == ObjectZone::Stack
+                                    && after
+                                        .characteristics
+                                        .evoked
+                                        .contains(&change.after.object.id())
+                            }
+                        };
+                        if ok {
+                            members.push(TriggerCauseMember {
+                                occurrence: occurrence.id,
+                                related_player: change
+                                    .after
+                                    .object
+                                    .controller()
+                                    .or(Some(controller)),
+                                related: TriggerRelated::ZoneChange {
+                                    before: change.before.clone(),
+                                    after: change.after.clone(),
+                                },
+                            });
+                        }
+                    }
+                    _ => {}
                 }
                 return Ok(());
             }

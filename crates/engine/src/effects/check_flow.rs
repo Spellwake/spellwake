@@ -215,10 +215,6 @@ impl EffectWindow {
         }
     }
     fn cleanup_discard_count(&self, cards_in_hand: usize) -> Result<usize, EffectError> {
-        let excess = cards_in_hand.saturating_sub(7);
-        if excess == 0 {
-            return Ok(0);
-        }
         let active = self.window.active_player();
         let emblem = self.characteristics.emblems.values().any(|emblem| {
             emblem.controller == active
@@ -242,18 +238,15 @@ impl EffectWindow {
                     }
             )
         });
+        let evaluated = self.evaluated_characteristics()?;
         let no_limit = emblem
             || temp_no_limit
             || self
                 .characteristics
                 .no_max_hand_size_players
                 .contains(&active)
-            || self
-                .evaluated_characteristics()?
-                .objects
-                .values()
-                .any(|object| {
-                    object.zone == ObjectZone::Battlefield
+            || evaluated.objects.values().any(|object| {
+                object.zone == ObjectZone::Battlefield
                     && object.has_battlefield_rule(|rule| match rule {
                         crate::characteristics::StaticContinuousAbility::DrawRule {
                             rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
@@ -266,8 +259,43 @@ impl EffectWindow {
                         } => true,
                         _ => false,
                     })
-                });
-        Ok(if no_limit { 0 } else { excess })
+            });
+        if no_limit {
+            return Ok(0);
+        }
+        // CR 402.2: If multiple effects modify maximum hand size, the one with the latest timestamp wins.
+        let mut best_limit: Option<(crate::characteristics::CharacteristicTimestamp, usize)> = None;
+        for object in evaluated.objects.values() {
+            if object.zone != ObjectZone::Battlefield || object.controller != Some(active) {
+                continue;
+            }
+            for ability in object
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&object.printed_text.additional_battlefield_abilities)
+            {
+                let is_active = object.abilities.continuous == Some(ability.id())
+                    || object
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability.id());
+                if !is_active {
+                    continue;
+                }
+                if let crate::characteristics::StaticContinuousAbility::DrawRule {
+                    rule: crate::characteristics::StaticDrawRule::MaxHandSize(limit),
+                    ..
+                } = ability
+                    && let Some(ts) = self.characteristics.object_timestamp(object.object)
+                    && best_limit.is_none_or(|(prev_ts, _)| ts >= prev_ts)
+                {
+                    best_limit = Some((ts, usize::from(*limit)));
+                }
+            }
+        }
+        let max_hand_size = best_limit.map_or(7, |(_, limit)| limit);
+        Ok(cards_in_hand.saturating_sub(max_hand_size))
     }
     fn cleanup_hand(&self) -> Vec<ObjectId> {
         let active = self.window.active_player();

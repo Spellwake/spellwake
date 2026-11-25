@@ -440,6 +440,12 @@ impl EffectWindow {
         let evaluated = next.evaluated_characteristics()?;
         let mut excluded = BTreeSet::new();
         for source in evaluated.objects.values() {
+            if source.zone == ObjectZone::Battlefield
+                && source.controller == Some(active)
+                && source.cannot_be_untapped
+            {
+                excluded.insert(source.object);
+            }
             if source.controller == Some(active)
                 && source.has_battlefield_rule(|rule| {
                     matches!(
@@ -660,9 +666,13 @@ impl EffectWindow {
         entry: StackEntryId,
         objects: &[ObjectId],
     ) -> Result<Vec<RulesOccurrence>, EffectError> {
+        let evaluated = self.evaluated_characteristics()?;
         let mut untapping = Vec::with_capacity(objects.len());
         let mut stun_occurrences = Vec::new();
         for &id in objects {
+            if evaluated.get(id).is_some_and(|obj| obj.cannot_be_untapped) {
+                continue;
+            }
             if self.window.cards().get(id).and_then(GameObject::tapped) == Some(true)
                 && self.counters_of_kind(id, CounterKind::Stun).is_positive()
             {

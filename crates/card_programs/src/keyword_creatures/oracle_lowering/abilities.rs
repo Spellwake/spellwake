@@ -2498,6 +2498,10 @@ pub(super) fn lower_trigger_spec(
                 });
                 consumed_if = true;
             }
+            ConditionAst::Marker(GameMarker::HasNotPlayedOrCast) => {
+                *origin = Some(CastEntryKind::NotCast);
+                consumed_if = true;
+            }
             _ => {}
         }
     }
@@ -5969,6 +5973,14 @@ fn try_lower_specialized_trigger_condition(
         } if *min_amount > 0 => Some(TriggerCondition::OpponentLostLifeAtLeast(
             u8::try_from(*min_amount).ok()?,
         )),
+        ConditionAst::LostLifeThisTurn {
+            player: PlayerRefAst::AnyPlayer,
+            min_amount,
+        } if *min_amount > 0 => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::MaxPlayerLifeLostThisTurn),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(i64::from(*min_amount)),
+        }))),
         ConditionAst::AttackedThisTurn => Some(TriggerCondition::ControllerAttackedThisTurn),
         ConditionAst::EnteredUnderYourControlThisTurn {
             filter,
@@ -6096,8 +6108,13 @@ pub(super) fn lower_trigger_condition(
         )),
         other => {
             let mut tmp_builder = BodyBuilder::new();
-            let rc = lower_resolution_condition(other, &mut tmp_builder, vocabulary, true, None)
-                .map_err(|_| "oracle:unsupported-trigger-condition")?;
+            let mut rc =
+                lower_resolution_condition(other, &mut tmp_builder, vocabulary, true, None)
+                    .map_err(|_| "oracle:unsupported-trigger-condition")?;
+            if tmp_builder.target == BodyTarget::None {
+                rewrite_value_expr_anaphora(&mut rc.left, ValueObjectRef::TriggerSubject);
+                rewrite_value_expr_anaphora(&mut rc.right, ValueObjectRef::TriggerSubject);
+            }
             if tmp_builder.target == BodyTarget::None && rc.is_trigger_world_evaluable() {
                 Ok(TriggerCondition::Eval(Box::new(rc)))
             } else {

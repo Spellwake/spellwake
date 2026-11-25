@@ -937,8 +937,17 @@ fn lower_event_instead_replacement(
             },
         ));
     }
-    if is_permanent && (would_norm == "special_replacement" || subj_low == "damage_source") {
-        let full = instead_raw.as_str();
+    if is_permanent
+        && (would_norm == "special_replacement"
+            || subj_low == "damage_source"
+            || subj_low == "spell_damage")
+    {
+        let full_norm = instead_raw
+            .replace("this creature", "~")
+            .replace("this permanent", "~")
+            .replace("this artifact", "~")
+            .replace("this enchantment", "~");
+        let full = full_norm.as_str();
         if full
             == "prevent all noncombat damage that would be dealt to you and other permanents you control"
         {
@@ -1026,6 +1035,10 @@ fn lower_event_instead_replacement(
             "if damage would be dealt to ~, prevent that damage. remove a +1/+1 counter from ~"
                 | "if damage would be dealt to ~, prevent that damage and remove a +1/+1 counter from ~"
                 | "if damage would be dealt to ~, prevent that damage and remove a +1/+1 counter from it"
+                | "if ~ would be dealt damage, prevent that damage. remove a +1/+1 counter from ~"
+                | "if ~ would be dealt damage, prevent that damage. remove a +1/+1 counter from it"
+                | "if ~ would be dealt damage, prevent that damage and remove a +1/+1 counter from ~"
+                | "if ~ would be dealt damage, prevent that damage and remove a +1/+1 counter from it"
         ) {
             return Some(push_static_ability(
                 program,
@@ -1041,6 +1054,8 @@ fn lower_event_instead_replacement(
                 | "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage and remove a +1/+1 counter from ~"
                 | "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage. remove a +1/+1 counter from it"
                 | "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage. remove a +1/+1 counter from ~"
+                | "if ~ would be dealt damage while it has a +1/+1 counter on it, prevent that damage and remove a +1/+1 counter from it"
+                | "if ~ would be dealt damage while it has a +1/+1 counter on it, prevent that damage and remove a +1/+1 counter from ~"
         ) {
             return Some(push_static_ability(
                 program,
@@ -1054,6 +1069,8 @@ fn lower_event_instead_replacement(
             full,
             "if damage would be dealt to ~, prevent that damage and remove that many +1/+1 counters from ~"
                 | "if damage would be dealt to ~, prevent that damage and remove that many +1/+1 counters from it"
+                | "if ~ would be dealt damage, prevent that damage and remove that many +1/+1 counters from ~"
+                | "if ~ would be dealt damage, prevent that damage and remove that many +1/+1 counters from it"
         ) {
             return Some(push_static_ability(
                 program,
@@ -1116,20 +1133,25 @@ fn lower_event_instead_replacement(
         if let Some(after_if) = full.strip_prefix("if ")
             && let Some((s_part, rest)) = after_if.split_once(" would ")
             && let Some((w_part, i_part)) = rest.split_once(", ")
-            && let Some(rule) = parse_modify_damage_event(
+            && let Some(rules) = parse_modify_damage_events(
                 s_part.trim(),
                 w_part.trim(),
                 i_part.trim().trim_end_matches(" instead").trim(),
                 vocabulary,
             )
         {
-            return Some(push_static_ability(
-                program,
-                StaticContinuousAbility::DamageRule {
-                    id: ids.static_id(),
-                    rule,
-                },
-            ));
+            for rule in rules {
+                if let Err(err) = push_static_ability(
+                    program,
+                    StaticContinuousAbility::DamageRule {
+                        id: ids.static_id(),
+                        rule,
+                    },
+                ) {
+                    return Some(Err(err));
+                }
+            }
+            return Some(Ok(()));
         }
     }
 
@@ -2816,14 +2838,20 @@ fn lower_event_instead_replacement(
             },
         ));
     }
-    if let Some(rule) = parse_modify_damage_event(&subj_low, would_norm, instead_norm, vocabulary) {
-        return Some(push_static_ability(
-            program,
-            StaticContinuousAbility::DamageRule {
-                id: ids.static_id(),
-                rule,
-            },
-        ));
+    if let Some(rules) = parse_modify_damage_events(&subj_low, would_norm, instead_norm, vocabulary)
+    {
+        for rule in rules {
+            if let Err(err) = push_static_ability(
+                program,
+                StaticContinuousAbility::DamageRule {
+                    id: ids.static_id(),
+                    rule,
+                },
+            ) {
+                return Some(Err(err));
+            }
+        }
+        return Some(Ok(()));
     }
     if let Some(rule) = parse_redirect_damage_event(&subj_low, would_norm, instead_norm, vocabulary)
     {
@@ -2868,8 +2896,18 @@ fn lower_world_resolution_condition(
     cond_raw: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ResolutionCondition> {
+    let trimmed = cond_raw.trim();
+    if trimmed == "your library has no cards in it" {
+        return Some(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerLibrarySize(
+                ResolvingPlayer::Controller,
+            )),
+            comparison: Comparison::Equal,
+            right: ValueExpr::literal(0),
+        });
+    }
     let cond_ast = spellwake_oracle_compiler::filter::parse_condition(
-        cond_raw.trim(),
+        trimmed,
         &cached_compiler_vocab(vocabulary),
     )
     .ok()?;
@@ -3291,6 +3329,11 @@ fn parse_static_damage_recipient(
         "a permanent you control" => Some(StaticDamageRecipient::MatchingPermanent(
             ObjectFilter::permanent().controlled(),
         )),
+        "another permanent you control" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::permanent()
+                .controlled()
+                .other_than_ability_source(),
+        )),
         "a permanent an opponent controls" => Some(StaticDamageRecipient::MatchingPermanent(
             ObjectFilter::permanent().opposing(),
         )),
@@ -3307,7 +3350,9 @@ fn parse_static_damage_recipient(
             ObjectFilter::planeswalker(),
         )),
         "a player" => Some(StaticDamageRecipient::Players),
-        "~" | "this creature" | "this permanent" => Some(StaticDamageRecipient::SelfObject),
+        "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment" => {
+            Some(StaticDamageRecipient::SelfObject)
+        }
         "enchanted creature" | "equipped creature" | "enchanted permanent" => {
             Some(StaticDamageRecipient::AttachedHost)
         }
@@ -3806,20 +3851,12 @@ fn lower_event_replacement_ability(
             .strip_prefix("draw a card while ")
             .or_else(|| would_norm.strip_prefix("draw a card if "))
         {
-            if cond_raw.trim() == "your library has no cards in it" {
-                None
-            } else {
-                lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (true, Some(rc)))
-            }
+            lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (true, Some(rc)))
         } else if let Some(cond_raw) = would_norm
             .strip_prefix("draw one or more cards while ")
             .or_else(|| would_norm.strip_prefix("draw one or more cards if "))
         {
-            if cond_raw.trim() == "your library has no cards in it" {
-                None
-            } else {
-                lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (false, Some(rc)))
-            }
+            lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (false, Some(rc)))
         } else {
             None
         };
@@ -3942,7 +3979,7 @@ fn lower_inline_replacement_body(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Option<(bool, ExecutableBody)> {
-    let (optional, action_str) = if let Some(rest) = instead_raw
+    let (optional, action_raw) = if let Some(rest) = instead_raw
         .strip_prefix("you may instead ")
         .or_else(|| instead_raw.strip_prefix("that player may instead "))
         .or_else(|| instead_raw.strip_prefix("they may instead "))
@@ -3958,6 +3995,13 @@ fn lower_inline_replacement_body(
     } else {
         (false, instead_norm)
     };
+    let action_owned = action_raw
+        .replace("this creature", "~")
+        .replace("this permanent", "~")
+        .replace("this artifact", "~")
+        .replace("this enchantment", "~")
+        .replace(" instead. ", ". ");
+    let action_str = action_owned.trim();
     if action_str.is_empty()
         || action_str.contains("instead")
         || matches!(
@@ -3977,9 +4021,44 @@ fn lower_inline_replacement_body(
     if !fails.is_empty() || ins.is_empty() {
         return None;
     }
-    let body = lower_effect_body(&ins, vocabulary, ids, false, true).ok()?;
+    let mut body = lower_effect_body(&ins, vocabulary, ids, false, true).ok()?;
     if body.target != BodyTarget::None {
         return None;
+    }
+    for op in &mut body.instructions {
+        match op {
+            Instruction::ExileLibraryTop { player, amount } => {
+                *op = Instruction::ExileTopPlay {
+                    count: ValueExpr::literal(i64::from(*amount)),
+                    library_owner: AffectedPlayers::One(*player),
+                    duration: spellwake_engine::program::ImpulsePlayDuration::ThisTurn,
+                    cast_only: false,
+                    free: false,
+                    any_color: false,
+                    face_down: false,
+                    grant_play: false,
+                };
+            }
+            Instruction::ExileTopForPlay {
+                until_next_from_source,
+            } => {
+                *op = Instruction::ExileTopPlay {
+                    count: ValueExpr::literal(1),
+                    library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
+                    duration: if *until_next_from_source {
+                        spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource
+                    } else {
+                        spellwake_engine::program::ImpulsePlayDuration::ThisTurn
+                    },
+                    cast_only: false,
+                    free: false,
+                    any_color: false,
+                    face_down: false,
+                    grant_play: true,
+                };
+            }
+            _ => {}
+        }
     }
     Some((optional, body))
 }
@@ -4175,7 +4254,7 @@ fn parse_damage_source_filter(
             )),
             PlayerRelation::Controller,
         ),
-        "~" | "this creature" | "this permanent" => (
+        "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment" => (
             Some(ObjectFilter::self_object()),
             PlayerRelation::AnyParticipant,
         ),
@@ -4197,7 +4276,13 @@ fn parse_damage_source_filter(
                 &cached_compiler_vocab(vocabulary),
             ) {
                 if ast_f.any_spell && ast_f.any_types.is_empty() {
-                    return None;
+                    if (ast_f.forbidden_types.0 & AstCardTypeMask::INSTANT.0) != 0
+                        && (ast_f.forbidden_types.0 & AstCardTypeMask::SORCERY.0) != 0
+                    {
+                        return None;
+                    }
+                    ast_f.any_types =
+                        AstCardTypeMask(AstCardTypeMask::INSTANT.0 | AstCardTypeMask::SORCERY.0);
                 }
                 let ctrl_rel = match ast_f.controller.take() {
                     Some(ControllerRelation::You) => PlayerRelation::Controller,
@@ -4228,6 +4313,34 @@ fn parse_damage_source_filter(
         );
     }
     Some((source, source_controller))
+}
+
+fn parse_modify_damage_events(
+    subj_low: &str,
+    would_norm: &str,
+    instead_norm: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Vec<StaticDamageRule>> {
+    if let Some(rule) = parse_modify_damage_event(subj_low, would_norm, instead_norm, vocabulary) {
+        return Some(vec![rule]);
+    }
+    if let Some((prefix, other_recipient)) = would_norm.split_once(" to you or ") {
+        let w_you = format!("{prefix} to you");
+        let w_other = format!("{prefix} to {other_recipient}");
+        if let (Some(r_you), Some(r_other)) = (
+            parse_modify_damage_event(subj_low, &w_you, instead_norm, vocabulary),
+            parse_modify_damage_event(subj_low, &w_other, instead_norm, vocabulary),
+        ) && matches!(
+            r_other,
+            StaticDamageRule::ModifyDamage {
+                recipient: StaticDamageRecipient::MatchingPermanent(_),
+                ..
+            }
+        ) {
+            return Some(vec![r_you, r_other]);
+        }
+    }
+    None
 }
 
 pub(super) fn parse_modify_damage_event(
@@ -4392,10 +4505,22 @@ pub(super) fn parse_modify_damage_event(
     ) {
         StaticDamageOp::PreventAll
     } else if let Some(n) = instead_norm
-        .strip_prefix("prevent ")
+        .strip_prefix("prevent all but ")
         .and_then(|r| r.strip_suffix(" of that damage"))
         .and_then(parse_small_num)
         && n > 0
+    {
+        StaticDamageOp::CapAt(n)
+    } else if let Some(rest) = instead_norm.strip_prefix("prevent ")
+        && let Some((n_tok, tail)) = rest.split_once(' ')
+        && let Some(n) = parse_small_num(n_tok)
+        && n > 0
+        && (tail == "of that damage"
+            || tail
+                .strip_prefix("damage that spell would deal")
+                .or_else(|| tail.strip_prefix("damage that source would deal"))
+                .or_else(|| tail.strip_prefix("damage it would deal"))
+                .is_some_and(|t| target_suffix_ok(t.trim())))
     {
         StaticDamageOp::PreventUpTo(n)
     } else if let Some(rest) = after_deals.and_then(|s| s.strip_prefix("that much damage minus "))

@@ -40,6 +40,51 @@ impl EffectWindow {
             .ok_or(EffectError::InconsistentProgram)?;
         self.check_opponents_turn_restriction(actor, &evaluated, Some(current))?;
         Self::check_artifact_activation_restriction(&evaluated, current)?;
+        if evaluated.objects.values().any(|permanent| {
+            if permanent.zone != ObjectZone::Battlefield {
+                return false;
+            }
+            let Some(perm_ctrl) = permanent.controller else {
+                return false;
+            };
+            permanent
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&permanent.printed_text.additional_battlefield_abilities)
+                .any(|effect| {
+                    let active = permanent.abilities.continuous == Some(effect.id())
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&effect.id());
+                    if !active {
+                        return false;
+                    }
+                    if let crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                                selector,
+                            ),
+                        ..
+                    } = effect
+                    {
+                        crate::characteristics::selector_matches_permanent(
+                            self.window.cards(),
+                            &evaluated,
+                            permanent.object,
+                            perm_ctrl,
+                            selector,
+                            source,
+                            &self.name_rules,
+                        )
+                    } else {
+                        false
+                    }
+                })
+        }) {
+            return Err(EffectError::ManaActivationConditionNotMet);
+        }
         if current.abilities.mana.is_empty()
             && current.intrinsic_mana.is_empty()
             && current.granted_any_color_mana.is_empty()

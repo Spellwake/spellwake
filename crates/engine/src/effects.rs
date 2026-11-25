@@ -2939,11 +2939,10 @@ impl EffectWindow {
             return Ok(true);
         }
         Ok(evaluated.objects.values().any(|source| {
-            if source.zone != ObjectZone::Battlefield
-                || source.controller != Some(entry.controller())
-            {
+            if source.zone != ObjectZone::Battlefield {
                 return false;
             }
+            let same_controller = source.controller == Some(entry.controller());
             source
                 .printed_text
                 .continuous
@@ -2965,10 +2964,51 @@ impl EffectWindow {
                                     matching,
                                 ),
                             ..
-                        } => !matching.is_disjoint(&types),
+                        } if same_controller => !matching.is_disjoint(&types),
                         crate::characteristics::StaticContinuousAbility::CastPermission {
                             permission:
                                 crate::characteristics::CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(
+                                    filter,
+                                ),
+                            ..
+                        } if same_controller => match entry.kind() {
+                            StackKind::CardSpell(obj) => {
+                                evaluated.get(*obj).is_some_and(|view| {
+                                    let aura_or_equip = view.has_type(CardType::Enchantment)
+                                        && self
+                                            .copiable_program(*obj)
+                                            .and_then(Program::permanent)
+                                            .is_some_and(|p| {
+                                                matches!(
+                                                    p.attachment,
+                                                    Some(crate::attachment::AttachmentKind::Aura(_))
+                                                )
+                                            })
+                                        || view.has_type(CardType::Artifact)
+                                            && self
+                                                .copiable_program(*obj)
+                                                .and_then(Program::permanent)
+                                                .is_some_and(|p| {
+                                                    matches!(
+                                                        p.attachment,
+                                                        Some(
+                                                            crate::attachment::AttachmentKind::Equipment
+                                                        )
+                                                    )
+                                                });
+                                    filter.matches_characteristics(
+                                        view,
+                                        aura_or_equip,
+                                        source.entry_creature_type,
+                                    )
+                                })
+                            }
+                            StackKind::SpellCopy { .. } => filter.matches_card_types(&types),
+                            _ => false,
+                        },
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            permission:
+                                crate::characteristics::CastPermissionRule::AllSpellsCannotBeCounteredFiltered(
                                     filter,
                                 ),
                             ..
@@ -3014,7 +3054,7 @@ impl EffectWindow {
                                     ..
                                 },
                             ..
-                        } => cast_value
+                        } if same_controller => cast_value
                             .as_ref()
                             .is_some_and(|value| value >= &i64::from(minimum.get()).into()),
                         _ => false,
@@ -3423,11 +3463,39 @@ impl EffectWindow {
     }
     /// The player entitled to inspect this exact face-down exile incarnation, if any.
     pub fn face_down_exile_viewer(&self, object: ObjectId) -> Option<SeatId> {
-        self.face_down_exile.get(&object).copied().filter(|_| {
-            self.window
-                .cards()
-                .get(object)
-                .is_some_and(|card| card.zone() == ObjectZone::Exile)
+        if !self
+            .window
+            .cards()
+            .get(object)
+            .is_some_and(|card| card.zone() == ObjectZone::Exile)
+        {
+            return None;
+        }
+        if let Some(&viewer) = self.face_down_exile.get(&object) {
+            return Some(viewer);
+        }
+        self.evaluated_characteristics().ok().and_then(|evaluated| {
+            evaluated.objects.values().find_map(|source| {
+                let linked = self
+                    .linked_exiles
+                    .get(&source.object)
+                    .is_some_and(|ids| ids.contains(&object))
+                    || source.imprinted_cards.contains(&object);
+                (source.zone == ObjectZone::Battlefield
+                    && linked
+                    && source.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::CastPermission {
+                                permission:
+                                    crate::characteristics::CastPermissionRule::LookAtSourceExiledCards,
+                                ..
+                            }
+                        )
+                    }))
+                    .then_some(source.controller)
+                    .flatten()
+            })
         })
     }
 
@@ -4264,6 +4332,7 @@ impl EffectWindow {
         if current.is_creature()
             && card.has_continuous_control_since_turn_start() != Some(true)
             && !current.has_keyword(KeywordAbility::Haste)
+            && !current.activate_as_though_haste
         {
             return Err(EffectError::CreatureTapRestricted);
         }
@@ -5395,17 +5464,38 @@ impl EffectWindow {
         if cant_play_land {
             return Ok(0.into());
         }
-        let extra = current.objects.values().filter_map(|permanent| {
-            if permanent.zone != ObjectZone::Battlefield || permanent.controller != Some(actor) {
-                return None;
-            }
-            match &permanent.printed_text.continuous {
-                Some(StaticContinuousAbility::CastPermission {
-                    id,
-                    permission: CastPermissionRule::AdditionalLandPlays(count),
-                }) if permanent.abilities.continuous == Some(*id) => Some(count.get()),
-                _ => None,
-            }
+        let extra = current.objects.values().flat_map(|permanent| {
+            let is_battlefield = permanent.zone == ObjectZone::Battlefield;
+            let is_actor = permanent.controller == Some(actor);
+            permanent
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&permanent.printed_text.additional_battlefield_abilities)
+                .filter_map(move |ability| {
+                    if !is_battlefield {
+                        return None;
+                    }
+                    let active = permanent.abilities.continuous == Some(ability.id())
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id());
+                    if !active {
+                        return None;
+                    }
+                    match ability {
+                        StaticContinuousAbility::CastPermission {
+                            permission: CastPermissionRule::AdditionalLandPlays(count),
+                            ..
+                        } if is_actor => Some(count.get()),
+                        StaticContinuousAbility::CastPermission {
+                            permission: CastPermissionRule::AllPlayersAdditionalLandPlays(count),
+                            ..
+                        } => Some(count.get()),
+                        _ => None,
+                    }
+                })
         });
         let temp_extra: u32 = self
             .temporary_rules
@@ -8466,11 +8556,33 @@ impl EffectWindow {
             && permanent.zone == ObjectZone::Battlefield
             && (permanent.has_keyword(KeywordAbility::Shroud)
                 || (permanent.has_keyword(KeywordAbility::Hexproof)
+                    && !permanent.hexproof_ignored_by.contains(&controller)
                     && permanent
                         .controller
                         .is_some_and(|owner| owner != controller)))
         {
             // Every other player is an opponent in the admitted free-for-all policy.
+            return false;
+        }
+        if let TargetRef::Object(id) = target
+            && self
+                .window
+                .cards()
+                .get(id)
+                .is_some_and(|object| matches!(object.zone(), ObjectZone::Graveyard(_)))
+            && evaluated.objects.values().any(|permanent| {
+                permanent.zone == ObjectZone::Battlefield
+                    && permanent.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::PreventGraveyardTargeting,
+                                ..
+                            }
+                        )
+                    })
+            })
+        {
             return false;
         }
         match kind {
