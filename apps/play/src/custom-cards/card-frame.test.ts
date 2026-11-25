@@ -109,6 +109,33 @@ describe("unified 300-DPI SVG card frame engine", () => {
     expect(triggerSvg).toContain("Triggered ability");
     expect(triggerSvg).toContain("Aetherblade Vanguard");
 
+    const fullCardArtTrigger = renderCardFrameSvg({
+      kind: "stack_trigger",
+      name: "Soul Warden",
+      typeLabel: "Triggered ability",
+      effect: "Gain 1 life.",
+      artUrl: "https://example.invalid/soul-warden-card.jpg",
+      artSourceKind: "full_card",
+      illustrated: true,
+      frameAccent: "W",
+    });
+    expect(fullCardArtTrigger).toContain("https://example.invalid/soul-warden-card.jpg");
+    expect(fullCardArtTrigger).toContain("width=\"1158.2\"");
+
+    const longMultiParagraphTrigger = renderCardFrameSvg({
+      kind: "stack_trigger",
+      name: "Omnath, Locus of Creation and Storms",
+      typeLabel: "Triggered ability",
+      effect: "First line of effect.\nSecond line with {W}{U}{R}{G} mana.",
+      artUrl: "https://example.invalid/art.jpg",
+      illustrated: true,
+      frameAccent: "gold",
+    });
+    expect(longMultiParagraphTrigger).toContain("font-size=\"38\"");
+    expect(longMultiParagraphTrigger).toContain("First line of effect.");
+    expect(longMultiParagraphTrigger).toContain("Second line with");
+    expect(longMultiParagraphTrigger).toContain("<svg x=");
+
     // XML escapes untrusted angle brackets so no injection is possible.
     const xssSvg = renderCardFrameSvg({
       kind: "card_face",

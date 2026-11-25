@@ -477,7 +477,8 @@ export function MatchStack({
                   controller: "Morgan",
                   portrait: <img src={portrait(2)} alt="" />,
                   name: "Soul Warden",
-                  art: <img src={warden} alt="" />,
+                  artUrl: warden,
+                  frameAccent: "W" as const,
                   typeLabel: "Triggered ability",
                   effect: "Gain 1 life.",
                 }
