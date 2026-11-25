@@ -1,98 +1,98 @@
 {
   "patreon": {
     "schemaVersion": 1,
-    "label": "Patreon",
-    "message": "local verified (141 tests)",
+    "label": "health-patreon",
+    "message": "pass \u00b7 141",
     "color": "green",
     "isError": false
   },
   "patreon-live": {
     "schemaVersion": 1,
-    "label": "Patreon live",
-    "message": "unknown (needs hosted creds)",
+    "label": "health-patreon-live",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "stripe": {
     "schemaVersion": 1,
-    "label": "Stripe",
-    "message": "local verified (42 tests)",
+    "label": "health-stripe",
+    "message": "pass \u00b7 42",
     "color": "green",
     "isError": false
   },
   "stripe-live": {
     "schemaVersion": 1,
-    "label": "Stripe live",
-    "message": "unknown (needs hosted creds)",
+    "label": "health-stripe-live",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "ai": {
     "schemaVersion": 1,
-    "label": "AI",
-    "message": "local verified (35 tests)",
+    "label": "health-ai",
+    "message": "pass \u00b7 35",
     "color": "green",
     "isError": false
   },
   "ai-live": {
     "schemaVersion": 1,
-    "label": "AI live",
-    "message": "unknown (needs hosted creds)",
+    "label": "health-ai-live",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "matchmaking": {
     "schemaVersion": 1,
-    "label": "Matchmaking",
-    "message": "local verified (51 tests)",
+    "label": "health-matchmaking",
+    "message": "pass \u00b7 51",
     "color": "green",
     "isError": false
   },
   "matchmaking-live": {
     "schemaVersion": 1,
-    "label": "Matchmaking live",
-    "message": "unknown (needs hosted creds)",
+    "label": "health-matchmaking-live",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "predictions": {
     "schemaVersion": 1,
-    "label": "Predictions",
-    "message": "local verified (89 tests)",
+    "label": "health-predictions",
+    "message": "pass \u00b7 89",
     "color": "green",
     "isError": false
   },
   "predictions-live": {
     "schemaVersion": 1,
-    "label": "Predictions live",
-    "message": "unknown (needs hosted creds)",
+    "label": "health-predictions-live",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "market": {
     "schemaVersion": 1,
-    "label": "Market",
-    "message": "local verified (104 tests)",
+    "label": "health-market",
+    "message": "pass \u00b7 104",
     "color": "green",
     "isError": false
   },
   "market-live": {
     "schemaVersion": 1,
-    "label": "Market live",
-    "message": "unknown (needs hosted creds)",
+    "label": "health-market-live",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "pet-cosmetics": {
     "schemaVersion": 1,
-    "label": "Pet cosmetics",
-    "message": "unknown (unqualified)",
+    "label": "health-pet-cosmetics",
+    "message": "unknown",
     "color": "lightgrey",
     "isError": false
   },
   "pet-cosmetics-live": {
     "schemaVersion": 1,
-    "label": "Pet cosmetics live",
+    "label": "health-pet-cosmetics-live",
     "message": "unknown",
     "color": "lightgrey",
     "isError": false
