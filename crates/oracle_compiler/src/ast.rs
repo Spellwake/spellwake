@@ -2900,6 +2900,43 @@ pub enum InstructionAst {
         left: Box<SubjectRefAst>,
         right: Box<SubjectRefAst>,
     },
+    /// CR 701.37 meld paired cards into their combined back face (`Vanille, Cheerful l'Cie`, `Gisela`, `Urza`).
+    Meld {
+        subject: Box<SubjectRefAst>,
+        into_name: String,
+    },
+    /// Double each type of unspent mana in a player's mana pool (`Doubling Cube`).
+    DoubleUnspentMana {
+        player: PlayerRefAst,
+    },
+    /// Redistribute life totals among any number of players (`Reverse the Sands`).
+    RedistributeLifeTotals {
+        player: PlayerRefAst,
+    },
+    /// Reselect targets or attacked player for a spell, copy, or attacking creature (`Chef's Kiss`, `Capricopian`).
+    ReselectTargets {
+        subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        random: bool,
+    },
+    /// Roll multiple dice with drop-lowest/highest or store-on-source semantics (`Berserker's Frenzy`, `Centaur of Attention`).
+    RollDiceAndKeep {
+        count: Box<ValueExprAst>,
+        sides: u16,
+        #[serde(default)]
+        drop_lowest: u8,
+        #[serde(default)]
+        store_on_self: bool,
+    },
+    /// Modify the number of creatures a blocker may block or an opponent may block with (`Yare`, `Mirri, Weatherlight Duelist`).
+    ChangeBlockerLimit {
+        subject: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_blockers: Option<Box<ValueExprAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_blockers: Option<u8>,
+        duration: DurationAst,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,

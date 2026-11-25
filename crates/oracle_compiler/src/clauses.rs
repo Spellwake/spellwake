@@ -21648,44 +21648,14 @@ fn parse_wave_e3_effects(
         }]);
     }
 
-    // E3.20: Generalized AbilityRestriction / Cant / Combat / Control / Mana effects
-    const E3_EFFECT_EXACTS: &[&str] = &[
-        "only ~'s owner may activate this ability",
-        "you can't activate this ability during combat",
-        "this ability can't be copied and x can't be 0",
-        "you can't become the monarch this turn",
-        "you can't sacrifice those creatures this turn",
-        "other players can't play lands or cast spells from their graveyards this turn",
-        "only creatures can be enchanted this way",
-        "this effect can't reduce their speed below 1",
-        "you can't cast additional spells this turn",
-        "it can't be blocked that combat",
-        "~ must be blocked each combat this turn if able",
-        "you control that player until ~ finishes resolving",
-        "the player plays that card if able",
-        "redistribute any number of players' life totals",
-        "add one mana of ~'s last noted type",
-        "add ~'s last noted type and amount of mana",
-        "add one mana of either of the circled colors",
-        "add mana equal to enchanted permanent's mana cost",
-        "pay its suspend cost rather than its mana cost",
-        "each of those tokens fights a different one of those creatures",
-        "create a creature token with those characteristics",
-        "create a red and white creature token with those characteristics",
-        "cast the copies if able without paying their mana costs",
-        "any other player may pay that spell's mana cost",
-        "have it block an attacking creature of your choice",
-        "reorder your graveyard at random",
-        "each player gains control of the creature they chose",
-        "those players exchange control of those creatures",
-        "you and target opponent each gain control of all creatures the other controls until end of turn",
-    ];
-    if E3_EFFECT_EXACTS.contains(&low)
-        || (low.starts_with("creatures it was blocking that ") && low.contains(" become unblocked"))
-    {
-        return Some(vec![InstructionAst::AbilityRestriction {
-            restriction: s.to_string(),
-            condition: None,
+    // E3.20: Blocking creature becomes unblocked
+    if low.starts_with("creatures it was blocking that ") && low.contains(" become unblocked") {
+        return Some(vec![InstructionAst::CombatRuleMod {
+            subject: Box::new(SubjectRefAst::Anaphora(
+                "creatures it was blocking".to_string(),
+            )),
+            rule: s.to_string(),
+            duration: DurationAst::UntilEndOfCombat,
         }]);
     }
 
@@ -21845,145 +21815,6 @@ fn parse_wave_e4_effects(
 ) -> Option<Vec<InstructionAst>> {
     let nd_low = s_nodur.to_ascii_lowercase();
     let cur_depth = PARSE_DEPTH.with(std::cell::Cell::get);
-
-    // E4.1: Exact fast-path lossless effect clauses (no recursion)
-    const E4_EFFECT_EXACTS: &[&str] = &[
-        "only you may activate this ability",
-        "the new creature type can't be wall",
-        "the new targets can't be you or a permanent you control",
-        "this ability still resolves if its target becomes illegal",
-        "x can't be greater than the number of players in the game",
-        "during that turn, power-up abilities can't be activated",
-        "any player may activate this ability but only during their draw step",
-        "roll two d20 and ignore the lower roll",
-        "roll five six-sided dice and store those results on it",
-        "double the amount of each type of unspent mana you have",
-        "its foretell cost is its mana cost reduced by {2}",
-        "the flashback cost is equal to that card's mana cost",
-        "you get an additional upkeep step after this step",
-        "there is an additional end step after this step",
-        "you may cast it as though it had flash",
-        "they each have flying and \"~ can't be enchanted.\"",
-        "you each put the card you revealed into your hand",
-        "then they each put the card they revealed into their hand",
-        "their owners shuffle those cards into their libraries",
-        "only creatures in the chosen piles can block this turn",
-        "each one then blocks all creatures the other was blocking",
-        "you get half x rad counters, rounded up",
-        "put the rest back in any order",
-        "the token enters with half that many +1/+1 counters on it, rounded down",
-        "choose the same number of creatures another target player controls",
-        "the player skips each instance of the chosen step or phase this turn",
-        "target opponent guesses whether a card with that name is in your hand",
-        "you control target opponent during their next combat phase",
-        "after that turn, that player takes an extra turn",
-        "that player takes an extra turn",
-        "take two extra turns after this one",
-        "target player takes two extra turns after this one",
-        "target player skips all combat phases of their next turn",
-        "each player starting with you may pay any amount of mana",
-        "each opponent gains control of the permanent for which they were chosen",
-        "each player gains control of each permanent for which they were chosen",
-        "it's goaded for as long as they control it",
-        "~ gains that ability until your next upkeep",
-        "each creature gets twice -x/-x until end of turn",
-        "all permanents other than ~ that weren't chosen this way phase out",
-        "that opponent may repeat this process as many times as they choose",
-        "you may cast your commander from the command zone without paying its mana cost",
-        "you may cast equipment spells this way without paying their mana costs",
-        "you may cast that card by discarding a card rather than paying its mana cost",
-        "cast any number of eldrazi spells from among cards you own outside the game without paying their mana costs",
-        "you may cast a spell from your hand without paying its mana cost if it has the same name as a spell that was cast this turn",
-        "you may cast up to two spells from among the other cards exiled this way without paying their mana costs",
-        "the next creature card you play this turn can be played as though it had flash",
-        "the next instant spell and the next sorcery spell you cast this turn each have cascade",
-        "this turn, that player can't cast spells or activate abilities and plays with their hand revealed",
-        "target creature becomes an enchantment and loses all abilities until a player casts a creature spell",
-        "target creature you cast this turn has base power and toughness 0/1 until your next upkeep",
-        "you may attach any number of auras and equipment you control to target permanent or player",
-        "reselect the targets at random for the spell and the copy",
-        "you may reselect which player ~ is attacking",
-        "turn a pile of your choice face up",
-        "look at the cards in each pile",
-        "shuffle that pile and put it back on top of your library",
-        "meld them into ragnarok, divine deliverance",
-        "choose x cards in your hand and discard the rest",
-        "each blocking creature is sacrificed by its controller",
-        "each blocked creature is sacrificed by its controller",
-        "it enters with an additional +1/+1 counter on it",
-        "creatures they control can't attack jaces you control this turn",
-        "they put it on the bottom",
-        "that player loses all unspent mana and you add the mana lost this way",
-        "shuffle and put the last cards you looked at this way on top in any order",
-        "each player chooses one of their piles at random and sacrifices those permanents",
-        "its controller cloaks the top card of their library",
-        "exchange the text boxes of those creatures",
-        "exile each permanent unless it's colorless or it's only the color its controller chose",
-        "reveal a card that's exactly two colors from among them and put it into your hand",
-        "each player creates a 2/2 green bear creature token for each card they revealed this way",
-        "exile a creature card they revealed this way until ~ leaves the battlefield",
-        "choose a creature with that power",
-        "create a token that's a copy of it attached to ~ twin",
-        "return up to one card of that type from your graveyard to the battlefield",
-        "you may cast a card that player milled this way without paying its mana cost",
-        "one of their piles is chosen by one of their opponents of their choice",
-        "choose a permanent owned by the voter and gain control of it",
-        "choose a different opponent",
-        "copy the next loyalty ability you activate this turn when you activate it",
-        "you copy that spell once plus an additional time for each opponent who copied the spell this way",
-        "remove all of them from it and create that many 3/1 red elemental creature tokens with haste",
-        "each opponent creates x minus one 2/2 white samurai creature tokens with vigilance",
-        "create a tapped treasure token for each even result",
-        "they draw a card if none of those creatures attacked you",
-        "each land played this way enters tapped",
-        "ragavan enters tapped and attacking",
-        "each card exiled this way that doesn't have suspend gains suspend",
-        "cards exiled this way that don't have suspend gain suspend",
-        "unlock a locked door of up to one target room you control",
-        "unlock a locked door of a room you control",
-        "each opponent can't block with more than one creature this combat",
-        "that creature can block up to two additional creatures this turn",
-        "that player adds one mana of any color they choose",
-        "that player adds two mana of any one color they choose",
-        "its controller manifests the top card of their library",
-        "you manifest the top card of that player's library",
-        "each player gains control of each land they own that you control",
-        "each player separates all nontoken lands they control into two piles",
-        "each opponent separates the creatures they control into two piles",
-        "each player chooses two nontoken, non-vehicle creatures they control",
-        "its controller chooses target creature one of their opponents controls",
-        "that creature's controller chooses a creature that ~ could enchant",
-        "you may search your library for exactly two cards not named ~ that have different names",
-        "you may search your hand and/or library for a card with a name noted as you drafted cards named ~",
-        "search your library and graveyard for a card named forest, a card named brambleweft behemoth, and a card named nissa, genesis mage",
-        "return from your graveyard to the battlefield any number of target creature cards that each have a different mana value x or less",
-        "return a creature card from your graveyard to the battlefield with a number of +1/+1 counters on it equal to that result",
-        "return to their owners' hands all creatures your opponents control with toughness less than the exploited creature's toughness",
-        "target spell's controller exiles it with x delay counters on it",
-        "~ deals double that damage instead",
-        "prevent the next 2 damage instead",
-        "prevent the next 6 damage this way instead",
-        "add three mana of that type instead",
-        "create that token and a treasure token",
-        "scry a number of cards equal to the result",
-        "take an extra turn after this one for each coin that comes up heads",
-        "you may activate loyalty abilities of jace planeswalkers you control on any player's turn any time you could cast an instant",
-        "you may play the card you own exiled this way and each other card exiled this way with lesser mana value than it without paying their mana costs",
-        "target creature you control has that base power and toughness, becomes that creature type, and gains that ability",
-        "spells and abilities you control that would add colored mana instead add that much white mana",
-        "it loses all land types and abilities and has \"{t}: add {c}.\"",
-        "put it onto the stack as a copy of the original spell",
-        "you may remove up to three stun counters from among all permanents",
-        "~ deals 1 damage to any target, 2 damage to another target, and 3 damage to a third target",
-        "choose a creature you control that has ...",
-        "you choose from among the permanents that player controls an artifact, a creature, an enchantment, and a planeswalker",
-    ];
-    if E4_EFFECT_EXACTS.contains(&low) {
-        return Some(vec![InstructionAst::AbilityRestriction {
-            restriction: s.to_string(),
-            condition: None,
-        }]);
-    }
 
     // E4.2: Snow / non-snow & basic land type changes ("Target nonsnow [basic] land/permanent becomes snow", "Target snow permanent isn't snow", "X target lands become Forests")
     if let Some((subj_raw, rhs)) = nd_low
@@ -22627,11 +22458,14 @@ fn parse_wave_e5_effects(
         }
     }
 
-    // Run compositional Wave E7 and Wave E8 parsers (zero StructuredRule catch-alls).
+    // Run compositional Wave E7, E8, and E9 parsers (zero StructuredRule or literal exact tables).
     if let Some(body) = crate::wave_e7::parse_wave_e7_effects(s, low, s_nodur, dur, vocab) {
         return Some(body);
     }
     if let Some(body) = crate::wave_e8::parse_wave_e8_effects(s, low, s_nodur, dur, vocab) {
+        return Some(body);
+    }
+    if let Some(body) = crate::wave_e9::parse_wave_e9_effects(s, low, s_nodur, dur, vocab) {
         return Some(body);
     }
 

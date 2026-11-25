@@ -13,6 +13,7 @@ pub mod vocab;
 pub mod wave_e6;
 pub mod wave_e7;
 pub mod wave_e8;
+pub mod wave_e9;
 
 use std::error::Error;
 use std::fmt;
@@ -3515,5 +3516,207 @@ mod tests {
             galactus_json.contains("\"Exact\":\"Silver Surfer, ~'s Herald\""),
             "Galactus must keep comma inside singular legendary card name intact: {galactus_json}"
         );
+    }
+
+    #[test]
+    fn pass_e9_zero_literal_effect_tables() {
+        let members: Vec<String> = [
+            "Elemental",
+            "Samurai",
+            "Wizard",
+            "Human",
+            "Eldrazi",
+            "Spider",
+            "Hero",
+            "Cat",
+            "Warrior",
+            "Spirit",
+            "Doctor",
+            "Goblin",
+            "Vampire",
+            "Zombie",
+            "Horror",
+            "Dragon",
+            "Angel",
+            "Beast",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e9",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. Unseen future cards proving compositional generalization from Wave E9 primitives
+        let unseen: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "Arcane Tripler",
+                "Sorcery",
+                "Target player takes three extra turns after this one.",
+                &["\"ExtraTurn\""],
+            ),
+            (
+                "Scaled Flame Volley",
+                "Sorcery",
+                "Scaled Flame Volley deals 2 damage to any target, 3 damage to another target, and 4 damage to a third target.",
+                &[
+                    "\"AnyTarget\"",
+                    "\"DistinctTarget\"",
+                    "\"ordinal\":2",
+                    "\"ordinal\":3",
+                ],
+            ),
+            (
+                "Vault Unlocker",
+                "Instant",
+                "Unlock a locked door of up to one target Room you control.",
+                &["\"UnlockDoor\""],
+            ),
+            (
+                "Blocker Fortress",
+                "Instant",
+                "Target creature can block up to three additional creatures this turn.",
+                &["\"ChangeBlockerLimit\"", "\"extra_blockers\":{\"Const\":3}"],
+            ),
+            (
+                "Mana Doubler Ring",
+                "Artifact",
+                "{4}, {T}: Double the amount of each type of unspent mana you have.",
+                &["\"DoubleUnspentMana\""],
+            ),
+            (
+                "Advantage Roll",
+                "Sorcery",
+                "Roll three d12 and ignore the lower roll.",
+                &["\"RollDiceAndKeep\"", "\"sides\":12", "\"drop_lowest\":1"],
+            ),
+            (
+                "Counter Scrubber",
+                "Sorcery",
+                "You may remove up to four shield counters from among all permanents.",
+                &["\"RemoveCounters\"", "\"counter_kind\":\"shield\""],
+            ),
+        ];
+
+        for (name, tl, ot, expected) in unseen {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Unseen E9 card {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(!json.contains("\"StructuredRule\""), "{name}: {json}");
+            assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
+            assert!(
+                !json.contains("\"AbilityRestriction\""),
+                "{name} should not emit opaque AbilityRestriction: {json}"
+            );
+            for tok in *expected {
+                assert!(json.contains(tok), "{name} missing {tok}: {json}");
+            }
+        }
+
+        // 2. Former E3_EFFECT_EXACTS & E4_EFFECT_EXACTS staples now emit typed AST nodes
+        let staples: &[(&str, &str, &str, &str)] = &[
+            (
+                "Time Stretch",
+                "Sorcery",
+                "Target player takes two extra turns after this one.",
+                "\"ExtraTurn\"",
+            ),
+            (
+                "Cone of Flame",
+                "Sorcery",
+                "Cone of Flame deals 1 damage to any target, 2 damage to another target, and 3 damage to a third target.",
+                "\"DistinctTarget\"",
+            ),
+            (
+                "Spectral Searchlight",
+                "Artifact",
+                "{T}: Choose a player. That player adds one mana of any color they choose.",
+                "\"AddMana\"",
+            ),
+            (
+                "Stadium Vendors",
+                "Creature \u{2014} Goblin",
+                "At the beginning of your postcombat main phase, choose a player. That player adds two mana of any one color they choose.",
+                "\"single_color\":true",
+            ),
+            (
+                "Doubling Cube",
+                "Artifact",
+                "{3}, {T}: Double the amount of each type of unspent mana you have.",
+                "\"DoubleUnspentMana\"",
+            ),
+            (
+                "Reverse the Sands",
+                "Sorcery",
+                "Redistribute any number of players' life totals.",
+                "\"RedistributeLifeTotals\"",
+            ),
+            (
+                "Exchange of Words",
+                "Enchantment",
+                "When Exchange of Words enters, exile target creature and another target creature. For as long as Exchange of Words remains on the battlefield, exchange the text boxes of those creatures.",
+                "\"ExchangeTextBoxes\"",
+            ),
+            (
+                "Primal Prayers",
+                "Enchantment",
+                "You may cast creature spells with mana value 3 or less by paying {E} rather than paying their mana costs. If you cast a spell this way, you may cast it as though it had flash.",
+                "\"flash\"",
+            ),
+            (
+                "Disciple of Caelus Nin",
+                "Creature \u{2014} Human Wizard",
+                "When Disciple of Caelus Nin enters, each player chooses a permanent they control. All permanents other than Disciple of Caelus Nin that weren't chosen this way phase out.",
+                "\"PhaseOut\"",
+            ),
+            (
+                "Sensational Spider-Man",
+                "Legendary Creature \u{2014} Spider Human Hero",
+                "Whenever Sensational Spider-Man attacks, tap target creature defending player controls and put a stun counter on it. Then you may remove up to three stun counters from among all permanents.",
+                "\"RemoveCounters\"",
+            ),
+            (
+                "Mirri, Weatherlight Duelist",
+                "Legendary Creature \u{2014} Cat Warrior",
+                "Whenever Mirri, Weatherlight Duelist attacks, choose up to one target creature defending player controls. That creature can't block this combat, and each opponent can't block with more than one creature this combat.",
+                "\"ChangeBlockerLimit\"",
+            ),
+            (
+                "Search for Survivors",
+                "Sorcery",
+                "Reorder your graveyard at random.",
+                "\"ReorderZone\"",
+            ),
+        ];
+
+        for (name, tl, ot, expected) in staples {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Former E3/E4 exact staple {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(!json.contains("\"StructuredRule\""), "{name}: {json}");
+            assert!(!json.contains("\"GameStateFlag\""), "{name}: {json}");
+            assert!(json.contains(expected), "{name} missing {expected}: {json}");
+        }
     }
 }

@@ -932,7 +932,11 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that one of your opponents controls") {
+        if let Some(prefix) = s
+            .strip_suffix(" that one of your opponents controls")
+            .or_else(|| s.strip_suffix(" one of their opponents controls"))
+            .or_else(|| s.strip_suffix(" one of your opponents controls"))
+        {
             flt.controller = Some(ControllerRelation::Opponent);
             s = prefix.trim().to_string();
             continue;
@@ -1240,6 +1244,10 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " not chosen by any player this way",
+                PriorActionRefKind::ChosenThisWay { negated: true },
+            ),
+            (
+                " that weren't chosen this way",
                 PriorActionRefKind::ChosenThisWay { negated: true },
             ),
             (
