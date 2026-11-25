@@ -2341,7 +2341,7 @@ BEGIN
       ) THEN
         SELECT count(*) INTO official_count FROM app.deck_entry WHERE revision_id = selected.id;
         SELECT count(*) INTO custom_count FROM app.deck_custom_entry WHERE revision_id = selected.id;
-        SELECT entry_count, total_quantity INTO total_count, total_quantity FROM app.deck_revision_card_totals(selected.id);
+        SELECT totals.entry_count, totals.total_quantity INTO total_count, total_quantity FROM app.deck_revision_card_totals(selected.id) AS totals;
         IF EXISTS (
           SELECT 1 FROM app.deck_entry e WHERE e.revision_id = selected.id AND (
             (SELECT count(*) FROM app.release_card_program p JOIN app.card_definition_revision b ON b.id = p.definition_revision_id WHERE p.release_id = p_release AND b.definition_id = e.definition_id) > 1
@@ -2484,7 +2484,7 @@ BEGIN
 
   SELECT count(*) INTO official_count FROM app.deck_entry WHERE revision_id = selected.id;
   SELECT count(*) INTO custom_count FROM app.deck_custom_entry WHERE revision_id = selected.id;
-  SELECT entry_count, total_quantity INTO total_count, total_quantity FROM app.deck_revision_card_totals(selected.id);
+  SELECT totals.entry_count, totals.total_quantity INTO total_count, total_quantity FROM app.deck_revision_card_totals(selected.id) AS totals;
   IF total_count NOT BETWEEN 1 AND 1000 OR total_quantity > 1000 THEN RETURN unavailable; END IF;
   IF custom_count > 0 AND (NOT m.allow_custom_cards OR m.mode <> 'open' OR m.competitive) THEN RETURN unavailable; END IF;
 
@@ -2641,7 +2641,7 @@ BEGIN
            EXCEPT SELECT custom_card_revision_id, sum(quantity) FROM app.deck_custom_entry WHERE revision_id = selected GROUP BY custom_card_revision_id)) THEN
       RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'reserved native deck source is inconsistent';
     END IF;
-    SELECT entry_count, total_quantity INTO total_entries, total_quantity FROM app.deck_revision_card_totals(selected);
+    SELECT totals.entry_count, totals.total_quantity INTO total_entries, total_quantity FROM app.deck_revision_card_totals(selected) AS totals;
     IF total_entries NOT BETWEEN 1 AND 1000 OR total_quantity > 1000 THEN RETURN unavailable; END IF;
     IF EXISTS (
       SELECT 1 FROM app.deck_entry e WHERE e.revision_id = selected AND (
@@ -2757,7 +2757,7 @@ BEGIN
     SELECT * INTO revision FROM app.deck_revision WHERE id = (item->>'revisionId')::uuid FOR SHARE;
     SELECT * INTO library FROM app.deck WHERE id = revision.deck_id FOR SHARE;
     has_custom := revision.id IS NOT NULL AND app.deck_revision_has_custom_cards(revision.id);
-    SELECT entry_count INTO tot_entries FROM app.deck_revision_card_totals(revision.id);
+    SELECT totals.entry_count INTO tot_entries FROM app.deck_revision_card_totals(revision.id) AS totals;
 
     IF revision.id IS NULL OR revision.sealed_at IS NULL OR library.id IS NULL
        OR library.mode <> source_match.mode OR library.format_id <> source_match.format_id
@@ -3658,6 +3658,125 @@ BEGIN
     RETURN NULL;
   END IF;
   RETURN retirement;
+END $$;
+
+CREATE OR REPLACE FUNCTION app.guard_retired_minimization() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+  actors uuid[] := '{}'::uuid[];
+  bindings uuid[] := '{}'::uuid[];
+  rooms uuid[] := '{}'::uuid[];
+  custom_cards uuid[] := '{}'::uuid[];
+  custom_revisions uuid[] := '{}'::uuid[];
+  a app.account;
+  additional uuid[];
+  source_principal text;
+BEGIN
+  IF TG_OP = 'DELETE' AND TG_TABLE_NAME IN ('profile', 'notification', 'friendship') THEN RETURN NULL; END IF;
+  IF TG_TABLE_NAME = 'account' THEN
+    IF TG_OP <> 'DELETE' THEN actors := array_append(actors, NEW.id); END IF;
+    IF TG_OP <> 'INSERT' THEN actors := array_append(actors, OLD.id); END IF;
+  ELSIF TG_TABLE_NAME IN ('profile', 'deck', 'purchase', 'cosmetic_grant', 'patreon_membership', 'rank', 'queue_entry', 'command_receipt', 'custom_card') THEN
+    IF TG_OP <> 'DELETE' THEN actors := array_append(actors, NEW.account_id); END IF;
+    IF TG_OP <> 'INSERT' THEN actors := array_append(actors, OLD.account_id); END IF;
+    IF TG_TABLE_NAME = 'command_receipt' THEN
+      IF TG_OP <> 'DELETE' AND NEW.scope IN ('account_resource_cleanup_v1', 'account_resource_ack_v1') THEN source_principal := NEW.principal_key;
+      ELSIF TG_OP <> 'INSERT' AND OLD.scope IN ('account_resource_cleanup_v1', 'account_resource_ack_v1') THEN source_principal := OLD.principal_key; END IF;
+      IF source_principal IS NOT NULL THEN
+        IF source_principal !~ '^account-resources:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+          RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'resource source principal is malformed';
+        END IF;
+        actors := array_append(actors, substr(source_principal, length('account-resources:') + 1)::uuid);
+      END IF;
+    END IF;
+  ELSIF TG_TABLE_NAME = 'custom_card_revision' THEN
+    IF TG_OP <> 'DELETE' THEN custom_cards := array_append(custom_cards, NEW.custom_card_id); END IF;
+    IF TG_OP <> 'INSERT' THEN custom_cards := array_append(custom_cards, OLD.custom_card_id); END IF;
+  ELSIF TG_TABLE_NAME = 'custom_card_revision_art' THEN
+    IF TG_OP <> 'DELETE' THEN custom_revisions := array_append(custom_revisions, NEW.revision_id); END IF;
+    IF TG_OP <> 'INSERT' THEN custom_revisions := array_append(custom_revisions, OLD.revision_id); END IF;
+  ELSIF TG_TABLE_NAME = 'notification' THEN
+    IF TG_OP <> 'DELETE' THEN actors := array_append(actors, NEW.recipient_id); END IF;
+    IF TG_OP <> 'INSERT' THEN actors := array_append(actors, OLD.recipient_id); END IF;
+  ELSIF TG_TABLE_NAME = 'friendship' THEN
+    IF TG_OP <> 'DELETE' THEN actors := actors || ARRAY[NEW.account_low_id, NEW.account_high_id]; END IF;
+    IF TG_OP <> 'INSERT' THEN actors := actors || ARRAY[OLD.account_low_id, OLD.account_high_id]; END IF;
+  ELSIF TG_TABLE_NAME = 'controller_grant' THEN
+    IF TG_OP <> 'DELETE' THEN bindings := array_append(bindings, NEW.binding_id); END IF;
+    IF TG_OP <> 'INSERT' THEN bindings := array_append(bindings, OLD.binding_id); END IF;
+  ELSIF TG_TABLE_NAME = 'ai_runner_binding' THEN
+    IF TG_OP <> 'DELETE' THEN bindings := array_append(bindings, NEW.id); END IF;
+    IF TG_OP <> 'INSERT' THEN bindings := array_append(bindings, OLD.id); END IF;
+  ELSIF TG_TABLE_NAME = 'room' THEN
+    IF TG_OP <> 'DELETE' THEN actors := array_append(actors, NEW.host_id); END IF;
+    IF TG_OP <> 'INSERT' THEN actors := array_append(actors, OLD.host_id); END IF;
+  ELSIF TG_TABLE_NAME IN ('room_slot', 'match_seat') THEN
+    IF TG_OP <> 'DELETE' THEN actors := actors || ARRAY[NEW.account_id, NEW.sponsor_id]; END IF;
+    IF TG_OP <> 'INSERT' THEN actors := actors || ARRAY[OLD.account_id, OLD.sponsor_id]; END IF;
+    IF TG_TABLE_NAME = 'room_slot' THEN
+      IF TG_OP <> 'DELETE' THEN rooms := array_append(rooms, NEW.room_id); END IF;
+      IF TG_OP <> 'INSERT' THEN rooms := array_append(rooms, OLD.room_id); END IF;
+    ELSE
+      SELECT COALESCE(array_agg(room_id), '{}'::uuid[]) INTO rooms
+      FROM app.match
+      WHERE id IN (CASE WHEN TG_OP <> 'DELETE' THEN NEW.match_id END, CASE WHEN TG_OP <> 'INSERT' THEN OLD.match_id END);
+    END IF;
+  END IF;
+
+  SELECT COALESCE(array_agg(DISTINCT account_id ORDER BY account_id), '{}'::uuid[]) INTO additional
+  FROM (
+    SELECT slot.sponsor_id AS account_id
+    FROM app.ai_runner_binding b
+    JOIN app.room_slot slot ON slot.id = b.room_slot_id
+    WHERE b.id = ANY(bindings)
+    UNION
+    SELECT room.host_id
+    FROM app.room room
+    WHERE room.id = ANY(rooms)
+       OR EXISTS (
+         SELECT 1 FROM app.ai_runner_binding b
+         JOIN app.room_slot slot ON slot.id = b.room_slot_id
+         WHERE b.id = ANY(bindings) AND slot.room_id = room.id
+       )
+    UNION
+    SELECT c.account_id
+    FROM app.custom_card c
+    WHERE c.id = ANY(custom_cards)
+    UNION
+    SELECT c.account_id
+    FROM app.custom_card_revision cr
+    JOIN app.custom_card c ON c.id = cr.custom_card_id
+    WHERE cr.id = ANY(custom_revisions)
+  ) ids;
+  actors := actors || additional;
+
+  FOR a IN SELECT * FROM app.account WHERE id = ANY(actors) ORDER BY id FOR KEY SHARE LOOP
+    IF a.state = 'deleted' AND EXISTS (
+      SELECT 1 FROM app.command_receipt source
+      WHERE source.account_id = a.id
+        AND source.principal_key = 'human:' || a.id::text
+        AND source.scope = 'account_retirement_v1'
+        AND source.request_ref = a.id::text
+        AND source.normalized_source->>'version' IN ('account-minimization-v2', 'account-minimization-v3')
+    ) THEN
+      IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'minimized source changes require read committed retry';
+      END IF;
+      IF (app.read_account_retirement_proof(a.id, a.retirement_operation_id)).id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'retired personal rows and credential work set must retain exact minimization proof';
+      END IF;
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END $$;
+
+DO $$ DECLARE table_name text; BEGIN
+  FOREACH table_name IN ARRAY ARRAY['custom_card', 'custom_card_revision', 'custom_card_revision_art'] LOOP
+    EXECUTE format(
+      'CREATE CONSTRAINT TRIGGER retired_minimization AFTER INSERT OR UPDATE OR DELETE ON app.%I DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.guard_retired_minimization()',
+      table_name
+    );
+  END LOOP;
 END $$;
 
 CREATE FUNCTION app.create_open_play_quick_test_room_command(
