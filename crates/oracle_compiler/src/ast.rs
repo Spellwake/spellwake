@@ -1222,6 +1222,45 @@ pub enum GameMarker {
     PlayerRevealedExtremeSecretNumber {
         lowest: bool,
     },
+    /// `color` is the most common color among all permanents (optionally tied for most common) (`Sulam Djinn`, `Zanam Djinn`, `Ruham Djinn`).
+    MostCommonPermanentColor {
+        color: ColorMask,
+        or_tied: bool,
+    },
+    /// Active during a specific player's step (`during your end step`).
+    DuringStep {
+        player: PlayerRefAst,
+        step: TurnStepAst,
+    },
+    /// Persists until a specific player's upcoming step (`until your next end step`).
+    UntilStep {
+        player: PlayerRefAst,
+        step: TurnStepAst,
+    },
+    /// An ability (optionally of a permanent) was countered by the current effect (`Green Slime`).
+    AbilityCounteredThisWay {
+        permanent_only: bool,
+    },
+    /// Referenced creature is attacking the player with the most life (optionally tied for most life).
+    AttackingPlayerWithMostLife {
+        or_tied: bool,
+    },
+    /// `player` cast `op value` spells matching `filter` this turn.
+    CastFilteredSpellsThisTurn {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        op: CompareOp,
+        value: u16,
+    },
+    /// Some player controls more objects matching `filter` than each other player.
+    AnyPlayerControlsMoreThanEachOther {
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Specific referenced exiled card(s) remain in exile (`Release to the Wind`).
+    SubjectRemainsExiled {
+        subject: Box<SubjectRefAst>,
+        any_of: bool,
+    },
 }
 
 /// Condition AST used by intervening-if triggers, resolution branches, and conditional statics.
@@ -1403,6 +1442,16 @@ pub enum ConditionAst {
     /// Opt-in tabletop honor-system yes/no check (e.g. attire, physical feat, social prompt).
     ManualTabletopCheck {
         prompt: String,
+    },
+    /// True during the active turn of `PlayerRefAst` (distinguishes `not their turn` from `not your turn`).
+    IsPlayersTurn(PlayerRefAst),
+    /// Lossless turn-history zone-change check (entered under opponent's control, left battlefield, died matching filter).
+    ZoneChangeThisTurn {
+        filter: Box<ObjectFilterAst>,
+        from_zone: Option<ZoneFilter>,
+        to_zone: Option<ZoneFilter>,
+        controller: Option<PlayerRefAst>,
+        min_count: u16,
     },
 }
 
@@ -1827,6 +1876,24 @@ pub enum TriggerEventAst {
     ManualTabletopClaim {
         prompt: String,
         any_player_can_trigger: bool,
+    },
+    /// Activated-ability trigger preserving loyalty-only and nonmana-only restrictions.
+    QualifiedAbilityActivated {
+        player: PlayerRefAst,
+        source_filter: Box<ObjectFilterAst>,
+        loyalty_only: bool,
+        nonmana_only: bool,
+    },
+    /// Trigger wrapper preserving temporal, frequency, or causal qualifiers (`first time each turn`, `other than your first`, `during your turn`, `during combat`, `this way`).
+    QualifiedTrigger {
+        inner: Box<TriggerEventAst>,
+        first_time_each_turn: bool,
+        timing: Option<String>,
+    },
+    /// Player plays a card matching `filter` (distinguishes filtered play triggers from plain land plays).
+    CardPlayed {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
     },
 }
 
@@ -3148,6 +3215,23 @@ pub enum InstructionAst {
         #[serde(default)]
         without_paying_mana_cost: bool,
     },
+    /// Applies an explicit leading duration to instructions without an inline duration field (e.g. one-shot replacements).
+    ScopedDuration {
+        duration: DurationAst,
+        body: Vec<InstructionAst>,
+    },
+    /// Replacement effect body preserving `instead of <alt>` and leading `only` qualifiers (`Hinder`, `Remand`, `Spell Crumple`).
+    ReplaceEffectWith(Box<ReplaceEffectWithAst>),
+    /// Cast/play permission preserving flash, face-down, mana-fixing, and additional-cost modifiers.
+    GrantModifiedCastPermission(Box<ModifiedCastPermissionAst>),
+    /// Forced-block rule preserving the exact blocker subject filter (`All <filter> able to block <target> do so`).
+    ForcedBlockByFilter {
+        blockers: Box<SubjectRefAst>,
+        target: Box<SubjectRefAst>,
+        duration: DurationAst,
+    },
+    /// Token creation preserving blocking status, dynamic P/T expressions, and chosen color/type qualifiers (`Skullspore Nexus`, `Volrath's Laboratory`).
+    CreateQualifiedToken(Box<QualifiedTokenCreationAst>),
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -3525,6 +3609,21 @@ pub enum StaticAbilityAst {
     ManualTabletopStatic {
         prompt: String,
     },
+    /// Opening-hand reveal action (`You may reveal ~ from your opening hand. If you do, <body>`) (Chancellor cycle).
+    OpeningHandRevealAction {
+        body: Vec<InstructionAst>,
+    },
+    /// Optional exert-on-attack action (`You may exert ~ as it attacks. When you do, <body>`).
+    ExertOnAttackAction {
+        body: Vec<InstructionAst>,
+    },
+    /// Static ability usable once during each of your turns (preserves both once-per-turn and during-your-turn restrictions).
+    OnceDuringYourTurn(Box<StaticAbilityAst>),
+    /// Continuous modifier scoped strictly to the next spell matching `filter` cast this turn.
+    NextSpellModifier {
+        filter: Box<ObjectFilterAst>,
+        effect: Box<StaticAbilityAst>,
+    },
 }
 
 /// Consolidated replacement effect AST.
@@ -3588,6 +3687,19 @@ pub enum ReplacementEffectAst {
     ScaledBy {
         per: Box<ValueExprAst>,
         inner: Box<ReplacementEffectAst>,
+    },
+    /// Other permanents matching `affected` enter as a copy of `copy_of` (`Essence of the Wild`, `Infinite Reflection`).
+    OthersEnterAsCopy {
+        affected: Box<SubjectRefAst>,
+        copy_of: Box<SubjectRefAst>,
+        exception: Option<String>,
+    },
+    /// Self copy-on-entry replacement preserving `enters_tapped` and non-permanent `duration`.
+    EntersAsCopyModified(Box<EntersAsCopyModifiedAst>),
+    /// Replacement action firing as this Aura/Equipment becomes attached rather than on ETB (`As ~ becomes attached to a creature, <effect>`).
+    AsBecomesAttachedAction {
+        target_filter: Box<ObjectFilterAst>,
+        body: Vec<InstructionAst>,
     },
 }
 
@@ -3707,4 +3819,50 @@ pub struct CardAst {
     pub faces: Vec<FaceAst>,
     pub strictly_compiled: bool,
     pub uses_tabletop_honor_system: bool,
+}
+
+/// Boxed payload for `InstructionAst::ReplaceEffectWith` (keeps `InstructionAst` compact).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplaceEffectWithAst {
+    pub body: Vec<InstructionAst>,
+    pub instead_of: Option<String>,
+    pub only: bool,
+}
+
+/// Boxed payload for `InstructionAst::GrantModifiedCastPermission` (keeps `InstructionAst` compact).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModifiedCastPermissionAst {
+    pub player: PlayerRefAst,
+    pub subject: Box<SubjectRefAst>,
+    pub cast_only: bool,
+    pub free: bool,
+    pub duration: String,
+    pub as_though_flash: bool,
+    pub face_down_2_2: bool,
+    pub spend_mana_as_any_color: bool,
+    pub additional_cost: Option<String>,
+}
+
+/// Boxed payload for `InstructionAst::CreateQualifiedToken` (keeps `InstructionAst` compact).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualifiedTokenCreationAst {
+    pub controller: PlayerRefAst,
+    pub token: TokenSpecAst,
+    pub blocking: bool,
+    pub dynamic_power: Option<Box<ValueExprAst>>,
+    pub dynamic_toughness: Option<Box<ValueExprAst>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_pt_text: Option<String>,
+    pub chosen_color: bool,
+    pub chosen_type: bool,
+}
+
+/// Boxed payload for `ReplacementEffectAst::EntersAsCopyModified`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntersAsCopyModifiedAst {
+    pub optional: bool,
+    pub filter: Box<ObjectFilterAst>,
+    pub exception: Option<String>,
+    pub enters_tapped: bool,
+    pub duration: DurationAst,
 }
