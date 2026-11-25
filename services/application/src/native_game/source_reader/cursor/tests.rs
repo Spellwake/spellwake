@@ -243,6 +243,7 @@ fn cursor_cuts() -> Vec<CursorCut> {
                     zones: vec![],
                     stack: vec![],
                     decisions: vec![],
+                    cast_offers: None,
                     through_event_sequence: Amount::from(sequence),
                 },
                 receipt: id(100 + u128::try_from(index).unwrap()),
