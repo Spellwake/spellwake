@@ -267,17 +267,46 @@ fn stage_a_and_b_fidelity_regressions() {
         );
     }
 
-    // 4. ForEachObject referencing "it" must fail closed rather than targeting self
-    let bad_foreach = synthetic_card(
+    // 4. ForEachObject referencing "it" must desugar cleanly to a group subject (never AbilitySource)
+    //    when loop-independent, and fail closed when per-object dependent.
+    let group_foreach = synthetic_card(
         "ForEach It",
         "Sorcery",
         Some("{2}{G}"),
         None,
         "For each creature you control, put a +1/+1 counter on it.",
     );
+    let foreach_prog = compile_with_reason(&group_foreach, &vocab)
+        .expect("loop-independent ForEachObject with 'it' should lower to a group op");
+    if let ProgramKind::Spell(sp) = &foreach_prog.kind {
+        assert!(
+            sp.body.instructions.iter().any(|op| {
+                matches!(op, Instruction::PutCountersOnControlledCreatures)
+                    || matches!(
+                        op,
+                        Instruction::PutCountersOnSubject { subject, .. }
+                            if matches!(
+                                subject.as_ref(),
+                                spellwake_engine::program::EffectSubject::Matching(_)
+                            )
+                    )
+            }),
+            "ForEachObject with 'it' must target controlled creatures group, never source: {:?}",
+            sp.body.instructions
+        );
+    } else {
+        panic!("expected Spell program for ForEach It");
+    }
+    let dependent_foreach = synthetic_card(
+        "ForEach Dependent It",
+        "Sorcery",
+        Some("{2}{G}"),
+        None,
+        "For each creature you control, put a number of +1/+1 counters on it equal to its power.",
+    );
     assert!(
-        compile_with_reason(&bad_foreach, &vocab).is_err(),
-        "ForEachObject with 'it' must not misapply counters to source"
+        compile_with_reason(&dependent_foreach, &vocab).is_err(),
+        "loop-dependent ForEachObject with 'its power' must fail closed"
     );
 
     // 5. AdditionalCombat must reject extra upkeep phase text
@@ -1996,4 +2025,110 @@ fn oracle_lowering_corpus_coverage_audit() {
     for (cap, total_hits) in shared_sorted.iter().take(45) {
         eprintln!("  total={total_hits:5}  {cap}");
     }
+}
+
+#[test]
+fn pass_e12_filter_and_chooser_fidelity() {
+    let vocab = synthetic_vocab();
+
+    // 1. KEYWORDS_MATCH_ANY lowers two-keyword OR to ObjectFilter::Either, while AND stays fail-closed.
+    let or_kw = synthetic_card(
+        "Sky Swatter",
+        "Instant",
+        Some("{1}{G}"),
+        None,
+        "Destroy target creature with flying or reach.",
+    );
+    let or_prog = compile_with_reason(&or_kw, &vocab).expect("flying or reach should lower");
+    let ProgramKind::Spell(or_spell) = or_prog.kind else {
+        panic!("expected spell");
+    };
+    let BodyTarget::FilteredPermanent(filter) = or_spell.body.target else {
+        panic!("expected filtered permanent target");
+    };
+    let (c1, c2) = filter.clauses();
+    let c2 = c2.expect("two-keyword OR must lower to ObjectFilter::Either");
+    assert_eq!(c1.keyword, Some(KeywordAbility::Flying));
+    assert_eq!(c2.keyword, Some(KeywordAbility::Reach));
+
+    let and_kw = synthetic_card(
+        "Dual Keyword Bane",
+        "Instant",
+        Some("{1}{B}"),
+        None,
+        "Destroy target creature with flying and vigilance.",
+    );
+    assert!(
+        compile_with_reason(&and_kw, &vocab).is_err(),
+        "AND multi-keyword filter must fail closed"
+    );
+
+    // 2. SubtypesMatchAny lowers OR subtypes while AND multi-subtypes stay fail-closed.
+    let or_sub = synthetic_card(
+        "Tribal Snipe",
+        "Instant",
+        Some("{1}{B}"),
+        None,
+        "Destroy target Elf or Goblin.",
+    );
+    assert!(
+        compile_with_reason(&or_sub, &vocab).is_ok(),
+        "OR multi-subtype filter should lower"
+    );
+
+    let and_sub = synthetic_card(
+        "Specific Snipe",
+        "Instant",
+        Some("{1}{B}"),
+        None,
+        "Destroy target Human Warrior.",
+    );
+    assert!(
+        compile_with_reason(&and_sub, &vocab).is_err(),
+        "AND multi-subtype filter must fail closed"
+    );
+
+    // 3. ChosenByPlayer matches actor on sacrifice, while mismatched chooser stays fail-closed.
+    let self_choice_sac = synthetic_card(
+        "Fair Edict",
+        "Sorcery",
+        Some("{1}{B}"),
+        None,
+        "Each opponent sacrifices a creature of their choice they control.",
+    );
+    assert!(
+        compile_with_reason(&self_choice_sac, &vocab).is_ok(),
+        "matching chooser on sacrifice should lower"
+    );
+
+    let foreign_choice_sac = synthetic_card(
+        "Foreign Edict",
+        "Sorcery",
+        Some("{1}{B}"),
+        None,
+        "Target opponent sacrifices a creature of your choice they control.",
+    );
+    assert!(
+        compile_with_reason(&foreign_choice_sac, &vocab).is_err(),
+        "foreign chooser on sacrifice must fail closed"
+    );
+
+    // 4. EntersTappedAndWithCounters lowers both EntryTap::Always and entry counters.
+    let tapped_with_counter = synthetic_card(
+        "Slumbering Construct",
+        "Artifact Creature \u{2014} Construct",
+        Some("{2}"),
+        Some(("1", "1")),
+        "Slumbering Construct enters tapped with a +1/+1 counter on it.",
+    );
+    let twc_prog = compile_with_reason(&tapped_with_counter, &vocab)
+        .expect("enters tapped with a +1/+1 counter should lower");
+    let ProgramKind::Permanent(def) = twc_prog.kind else {
+        panic!("expected permanent");
+    };
+    assert_eq!(
+        def.entry_tap,
+        Some(spellwake_engine::land::EntryTap::Always)
+    );
+    assert!(!twc_prog.entry_counter_abilities.is_empty());
 }
