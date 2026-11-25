@@ -48,13 +48,10 @@ impl EffectWindow {
         controller: SeatId,
     ) -> bool {
         self.has_city_blessing(controller)
-            || !current.has_battlefield_rule(|ability| {
+            || !Self::permanent_has_restriction(current, |rule| {
                 matches!(
-                    ability,
-                    crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule: crate::characteristics::StaticRestriction::CombatRequiresCityBlessing,
-                        ..
-                    }
+                    rule,
+                    crate::characteristics::StaticRestriction::CombatRequiresCityBlessing
                 )
             })
     }

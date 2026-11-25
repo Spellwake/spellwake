@@ -97,7 +97,7 @@ pub(super) fn compile_rules(
             StaticPart::Abilities(abilities) => Some(abilities),
             _ => None,
         })?;
-        abilities.granted_trigger = Some(Box::new(TriggeredAbility {
+        abilities.granted_triggers.push(TriggeredAbility {
             id: TriggeredAbilityId(0),
             condition: spellwake_engine::program::TriggerSpec::deals_damage(
                 spellwake_engine::program::ObjectFilter::self_object(),
@@ -109,7 +109,7 @@ pub(super) fn compile_rules(
                 BodyTarget::None,
                 vec![Instruction::ExileCombatDamagedCreature],
             ),
-        }));
+        });
         program.continuous = Some(continuous);
         return Some(program);
     }

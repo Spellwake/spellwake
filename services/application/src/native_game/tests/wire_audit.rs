@@ -207,6 +207,9 @@ fn collect_body_counter_kinds(body: &ExecutableBody, out: &mut Vec<CounterKind>)
             } => out.push(*kind),
             Instruction::RemoveCountersFromPermanent {
                 kind: Some(kind), ..
+            }
+            | Instruction::MoveCounters {
+                kind: Some(kind), ..
             } => out.push(*kind),
             Instruction::FixedTargetClause(inner)
             | Instruction::EmitReflexiveTrigger { body: inner }

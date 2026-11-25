@@ -41,6 +41,14 @@ impl CounterRemovalChoice {
     pub fn domain(&self) -> &BTreeMap<CounterKind, u8> {
         &self.domain
     }
+
+    pub(super) fn entry(&self) -> StackEntryId {
+        self.entry
+    }
+
+    pub(super) fn instruction(&self) -> usize {
+        self.instruction
+    }
 }
 
 impl EffectWindow {
@@ -53,13 +61,13 @@ impl EffectWindow {
             .resolving()
             .filter(|entry| entry.id() == cursor.entry)
             .ok_or(EffectError::WrongResolutionFrame)?;
-        let (object, minimum, maximum) = match self.current_instruction()? {
+        let (object, minimum, maximum, kind_filter) = match self.current_instruction()? {
             Instruction::RemoveCreatureCounters { maximum } => {
                 let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
                 else {
                     return Err(EffectError::InconsistentProgram);
                 };
-                (object, 0, *maximum)
+                (object, 0, *maximum, None)
             }
             Instruction::RemoveCountersFromPermanent {
                 target_self,
@@ -96,12 +104,58 @@ impl EffectWindow {
                     total_avail = total_avail.saturating_add(u32::try_from(avail).unwrap_or(0));
                 }
                 let exact = u8::try_from(total_avail.min(u32::from(resolved))).unwrap_or(resolved);
-                (object, exact, exact)
+                (object, exact, exact, None)
+            }
+            Instruction::MoveCounters {
+                from,
+                kind,
+                all: false,
+                any_number,
+                amount,
+                ..
+            } => {
+                let object = self
+                    .resolve_pass_c_move_subject(entry, *from)?
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let mut total_avail: u32 = 0;
+                for ck in self.characteristics.present_permanent_counter_kinds(object) {
+                    if kind.is_some_and(|only| only != ck) {
+                        continue;
+                    }
+                    let avail = self
+                        .counters_of_kind(object, ck)
+                        .min(i64::from(u8::MAX).into())
+                        .to_usize()
+                        .unwrap_or(0);
+                    total_avail = total_avail.saturating_add(u32::try_from(avail).unwrap_or(0));
+                }
+                if *any_number {
+                    let max_u8 =
+                        u8::try_from(total_avail.min(u32::from(u8::MAX))).unwrap_or(u8::MAX);
+                    (object, 0, max_u8, *kind)
+                } else {
+                    let resolved = match amount {
+                        Some(expr) => self
+                            .resolve_value_expr(entry.controller(), expr)?
+                            .max(0.into())
+                            .min(i64::from(u8::MAX).into())
+                            .to_usize()
+                            .and_then(|v| u8::try_from(v).ok())
+                            .unwrap_or(0),
+                        None => 1,
+                    };
+                    let exact =
+                        u8::try_from(total_avail.min(u32::from(resolved))).unwrap_or(resolved);
+                    (object, exact, exact, *kind)
+                }
             }
             _ => return Err(EffectError::WrongResolutionFrame),
         };
         let mut domain = BTreeMap::new();
         for kind in self.characteristics.present_permanent_counter_kinds(object) {
+            if kind_filter.is_some_and(|only| only != kind) {
+                continue;
+            }
             let available = self
                 .counters_of_kind(object, kind)
                 .min(i64::from(maximum).into());

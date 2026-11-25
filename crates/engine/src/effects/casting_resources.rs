@@ -561,7 +561,10 @@ impl EffectWindow {
                     if !spell.printed_text.extra_cast_costs.is_empty()
                         || matches!(
                             spell.printed_text.graveyard_self_cast,
-                            Some(crate::program::GraveyardSelfCast::WithExtraCost(_))
+                            Some(
+                                crate::program::GraveyardSelfCast::WithExtraCost(_)
+                                    | crate::program::GraveyardSelfCast::WithAlternativeCost { .. }
+                            )
                         )
                         || spell.printed_text.additional_cast_costs.iter().any(|cost| {
                             matches!(
@@ -1291,8 +1294,10 @@ impl EffectWindow {
             && !resources
                 .iter()
                 .any(|r| matches!(r, CastResource::Retrace(_)))
-            && let Some(crate::program::GraveyardSelfCast::WithExtraCost(extra)) =
-                &program.graveyard_self_cast
+            && let Some(
+                crate::program::GraveyardSelfCast::WithExtraCost(extra)
+                | crate::program::GraveyardSelfCast::WithAlternativeCost { extra, .. },
+            ) = &program.graveyard_self_cast
         {
             supplementary.extend(extra.iter().cloned());
         }

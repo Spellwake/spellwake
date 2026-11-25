@@ -1,5 +1,5 @@
 //! Semantic creature-type substitutions in printed definitions, never raw text.
-use super::{StaticContinuousAbility, types::*};
+use super::{StaticContinuousAbility, StaticRestriction, types::*};
 use crate::mana::ManaOutput;
 use crate::program::{ExecutableBody, Instruction};
 use spellwake_contracts::creature_types::CreatureTypeId;
@@ -103,13 +103,109 @@ fn numeric(change: CreatureTypeTextChange, value: &mut NumericExpression) {
         NumericExpression::Eval(expr) => expr.rewrite_creature_type(change.from, change.to),
     }
 }
+fn rewrite_static_restriction(change: CreatureTypeTextChange, rule: &mut StaticRestriction) {
+    match rule {
+        StaticRestriction::PreventControlledTransform { subtype, except } => {
+            word(change, subtype);
+            word(change, except);
+        }
+        StaticRestriction::ProhibitCasting { filter, .. } => {
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        StaticRestriction::OthersEnterTapped(sel)
+        | StaticRestriction::PreventMatchingActivations(sel)
+        | StaticRestriction::PreventMatchingNonManaActivations(sel)
+        | StaticRestriction::IgnoreOpponentsHexproof(sel)
+        | StaticRestriction::ActivateAbilitiesAsThoughHaste(sel)
+        | StaticRestriction::CannotBeSacrificed(sel)
+        | StaticRestriction::CannotBeUntapped(sel)
+        | StaticRestriction::CantBeTargetedBy { selector: sel, .. }
+        | StaticRestriction::EnterUntapped(sel)
+        | StaticRestriction::ProhibitEntering(sel)
+        | StaticRestriction::PreventCounters {
+            selector: Some(sel),
+            ..
+        } => selector(change, sel),
+        _ => {}
+    }
+}
+fn rewrite_battlefield_static_parts(change: CreatureTypeTextChange, parts: &mut StaticParts) {
+    for part in &mut parts.0 {
+        match part {
+            StaticPart::Text(value) => {
+                word(change, &mut value.from);
+                word(change, &mut value.to);
+            }
+            StaticPart::Type(value) | StaticPart::TypeWithSubtypes { base: value, .. } => {
+                subtypes(change, &mut value.subtypes, static_subtype)
+            }
+            StaticPart::SetPT(value) | StaticPart::ModifyPT(value) => {
+                numeric(change, &mut value.power);
+                numeric(change, &mut value.toughness);
+            }
+            StaticPart::BlockingRestriction(
+                BlockingRestriction::OnlyBlockedBySubtype(value)
+                | BlockingRestriction::CannotBlockSubtype(value)
+                | BlockingRestriction::CannotBeBlockedBySubtype(value),
+            ) => word(change, value),
+            StaticPart::BlockingRestriction(
+                BlockingRestriction::CannotBlockMatching(filter)
+                | BlockingRestriction::CannotBeBlockedByMatching(filter)
+                | BlockingRestriction::OnlyBlockedByMatching(filter)
+                | BlockingRestriction::CanBlockOnlyMatching(filter)
+                | BlockingRestriction::CannotAttackUnlessDefenderControls(filter)
+                | BlockingRestriction::MustBeBlockedByAllMatching(filter),
+            ) => filter.rewrite_creature_type(change.from, change.to),
+            StaticPart::BlockingRestriction(_) => {}
+            StaticPart::GrantRestriction(restriction) => {
+                rewrite_static_restriction(change, restriction);
+            }
+            StaticPart::GrantActivated(ability)
+            | StaticPart::GrantActivatedRestricted { ability, .. } => {
+                body(change, &mut ability.body)
+            }
+            StaticPart::GrantSubtypeProtection { types, .. } => static_subtype(change, types),
+            StaticPart::GrantTrigger(ability) => trigger(change, ability),
+            StaticPart::Abilities(ability_change) => {
+                for ability in &mut ability_change.granted_triggers {
+                    trigger(change, ability);
+                }
+            }
+            StaticPart::Names(_)
+            | StaticPart::ControlSourceController
+            | StaticPart::Color(_)
+            | StaticPart::InheritCounteredCreatureAbilities
+            | StaticPart::InheritExiledCreatureAbilities
+            | StaticPart::GrantFixedColorMana(_)
+            | StaticPart::GrantAnyColorMana
+            | StaticPart::GrantMana(_)
+            | StaticPart::GrantProtectionChosenColor
+            | StaticPart::GrantProtectionChosenPlayer
+            | StaticPart::SetPTToOwnManaValue
+            | StaticPart::SwitchPT => {}
+        }
+    }
+}
+fn rewrite_static_ability(change: CreatureTypeTextChange, ability: &mut StaticContinuousAbility) {
+    ability.rewrite_creature_type_in_rule(change);
+    if let StaticContinuousAbility::Battlefield {
+        selector: target,
+        parts,
+        ..
+    } = ability
+    {
+        selector(change, target);
+        rewrite_battlefield_static_parts(change, parts);
+    }
+}
 fn parts(change: CreatureTypeTextChange, value: &mut ResolvedPartsSpec) {
     for part in &mut value.0 {
         match part {
-            ResolvedPartSpec::Abilities(crate::characteristics::AbilityChange {
-                granted_trigger: Some(ability),
-                ..
-            }) => trigger(change, ability),
+            ResolvedPartSpec::Abilities(ability_change) => {
+                for ability in &mut ability_change.granted_triggers {
+                    trigger(change, ability);
+                }
+            }
             ResolvedPartSpec::Text(value) => {
                 operand(change, &mut value.from);
                 operand(change, &mut value.to);
@@ -152,11 +248,8 @@ fn parts(change: CreatureTypeTextChange, value: &mut ResolvedPartsSpec) {
             | ResolvedPartSpec::ChosenBasicLandType { .. }
             | ResolvedPartSpec::ProtectionFromEachOpponent
             | ResolvedPartSpec::CannotBeTargetedByColors(_)
+            | ResolvedPartSpec::CannotBeTargetedBySpellsOfColors(_)
             | ResolvedPartSpec::MustBlockSubject(_)
-            | ResolvedPartSpec::Abilities(crate::characteristics::AbilityChange {
-                granted_trigger: None,
-                ..
-            })
             | ResolvedPartSpec::SetPT(_)
             | ResolvedPartSpec::ModifyPT(_)
             | ResolvedPartSpec::SwitchPT => {}
@@ -271,7 +364,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DamageAmountThenExileIfDies(amount)
             | Instruction::DamageCreatureAtSpellMastery { amount, .. } => rewrite_amount(amount),
             Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations } => {
+            | Instruction::CreateAttackingTokens { creations, .. } => {
                 for spec in creations {
                     rewrite_amount(&mut spec.amount);
                 }
@@ -338,16 +431,26 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             Instruction::SkipNextUntap { subject }
             | Instruction::RequireCombatAction { subject, .. }
-            | Instruction::DestroySubject { subject, .. } => {
+            | Instruction::DestroySubject { subject, .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { subject }
+            | Instruction::TurnFaceUpSubject { subject } => {
                 subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::CreateTemporaryRule { rule, .. } => match rule.as_mut() {
                 crate::program::TemporaryRuleKind::CantBeCountered {
                     filter: Some(f), ..
                 }
+                | crate::program::TemporaryRuleKind::CantBeCounteredByColors {
+                    filter: Some(f),
+                    ..
+                }
                 | crate::program::TemporaryRuleKind::CantCastSpells {
                     filter: Some(f), ..
                 }
+                | crate::program::TemporaryRuleKind::ExileSpellOnResolve {
+                    filter: Some(f), ..
+                }
+                | crate::program::TemporaryRuleKind::NextSpellFree { filter: Some(f) }
                 | crate::program::TemporaryRuleKind::SpellCostReduction { filter: f, .. }
                 | crate::program::TemporaryRuleKind::SpellCostIncrease { filter: f, .. }
                 | crate::program::TemporaryRuleKind::FilteredFlash { filter: f, .. }
@@ -364,8 +467,63 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     filter.rewrite_creature_type(change.from, change.to);
                     amount.rewrite_creature_type(change.from, change.to);
                 }
-                crate::program::TemporaryRuleKind::ExileIfDies { subject } => {
+                crate::program::TemporaryRuleKind::ExileIfDies { subject }
+                | crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
                     subject.rewrite_creature_type(change.from, change.to);
+                }
+                crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
+                    rewrite_static_ability(change, ability);
+                }
+                crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
+                    condition,
+                    ability,
+                } => {
+                    static_source_condition(change, condition);
+                    rewrite_static_ability(change, ability);
+                }
+                crate::program::TemporaryRuleKind::PreventNextTimeDamage {
+                    source,
+                    recipient,
+                    ..
+                }
+                | crate::program::TemporaryRuleKind::PreventNextDamage {
+                    source, recipient, ..
+                }
+                | crate::program::TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    from: recipient,
+                    ..
+                } => {
+                    if let Some(f) = source {
+                        f.rewrite_creature_type(change.from, change.to);
+                    }
+                    if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
+                        recipient
+                    {
+                        f.rewrite_creature_type(change.from, change.to);
+                    }
+                }
+                crate::program::TemporaryRuleKind::PreventNextDamageExpr {
+                    amount,
+                    source,
+                    recipient,
+                    ..
+                }
+                | crate::program::TemporaryRuleKind::RedirectNextDamageExpr {
+                    amount,
+                    source,
+                    from: recipient,
+                    ..
+                } => {
+                    amount.rewrite_creature_type(change.from, change.to);
+                    if let Some(f) = source {
+                        f.rewrite_creature_type(change.from, change.to);
+                    }
+                    if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
+                        recipient
+                    {
+                        f.rewrite_creature_type(change.from, change.to);
+                    }
                 }
                 _ => {}
             },
@@ -398,6 +556,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::WinGame(_)
             | Instruction::LoseGame(_)
+            | Instruction::DrawGame
             | Instruction::AttachPermanent { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::MoveSubject { .. }
@@ -463,18 +622,14 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DoublePowerToughnessSubject { subject, .. }
             | Instruction::DoubleCountersOnSubject { subject, .. }
             | Instruction::ShuffleSubjectIntoLibrary { subject, .. } => {
-                if let crate::program::EffectSubject::Matching(group) = subject.as_mut() {
-                    group.rewrite_creature_type(change.from, change.to);
-                }
+                subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::BecomeCopy {
                 receiver,
                 exceptions,
                 ..
             } => {
-                if let crate::program::EffectSubject::Matching(group) = receiver.as_mut() {
-                    group.rewrite_creature_type(change.from, change.to);
-                }
+                receiver.rewrite_creature_type(change.from, change.to);
                 if exceptions.extra_creature_subtypes.remove(&change.from) {
                     exceptions.extra_creature_subtypes.insert(change.to);
                 }
@@ -507,9 +662,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::PutCountersOnSubject { subject, .. } => {
-                if let crate::program::EffectSubject::Matching(group) = subject.as_mut() {
-                    group.rewrite_creature_type(change.from, change.to);
-                }
+                subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::BranchIfFalse { condition, .. } => {
                 condition.left.rewrite_creature_type(change.from, change.to);
@@ -538,14 +691,28 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 definition.rewrite_creature_types(change)
             }
             Instruction::TemptWithTokens { creation, .. } => {
-                creation.definition.rewrite_creature_types(change)
+                match &mut creation.base_size {
+                    Some(crate::token::TokenSize::AtCreation(size)) => rewrite_amount(size),
+                    Some(crate::token::TokenSize::AtCreationPair { power, toughness }) => {
+                        rewrite_amount(power);
+                        rewrite_amount(toughness);
+                    }
+                    Some(crate::token::TokenSize::AbilitySourceCounters(_)) | None => {}
+                }
+                creation.definition.rewrite_creature_types(change);
             }
             Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations } => {
+            | Instruction::CreateAttackingTokens { creations, .. } => {
                 for creation in creations {
-                    if let Some(crate::token::TokenSize::AtCreation(size)) = &mut creation.base_size
-                    {
-                        rewrite_amount(size);
+                    match &mut creation.base_size {
+                        Some(crate::token::TokenSize::AtCreation(size)) => {
+                            rewrite_amount(size);
+                        }
+                        Some(crate::token::TokenSize::AtCreationPair { power, toughness }) => {
+                            rewrite_amount(power);
+                            rewrite_amount(toughness);
+                        }
+                        Some(crate::token::TokenSize::AbilitySourceCounters(_)) | None => {}
                     }
                     creation.definition.rewrite_creature_types(change);
                 }
@@ -554,15 +721,26 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::OrderArtifactCreatureLandSacrifices
             | Instruction::ChooseTypeThenDestroyUnchosen
             | Instruction::ChooseCreatureTypeForPlayer { .. } => {}
-            Instruction::SearchLibrary { filter } => match &mut filter.matcher {
-                crate::program::SearchCardMatcher::CreatureSubtype(kind) => {
-                    word(change, kind);
+            Instruction::SearchLibrary { filter } => {
+                if let crate::program::SearchCount::UpToExpr(expr) = &mut filter.count {
+                    rewrite_amount(expr);
                 }
-                crate::program::SearchCardMatcher::Filtered(obj_filter) => {
-                    obj_filter.rewrite_creature_type(change.from, change.to);
+                match &mut filter.matcher {
+                    crate::program::SearchCardMatcher::CreatureSubtype(kind) => {
+                        word(change, kind);
+                    }
+                    crate::program::SearchCardMatcher::Filtered(obj_filter) => {
+                        obj_filter.rewrite_creature_type(change.from, change.to);
+                    }
+                    crate::program::SearchCardMatcher::SameNameAs {
+                        extra: Some(obj_filter),
+                        ..
+                    } => {
+                        obj_filter.rewrite_creature_type(change.from, change.to);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Instruction::DamageGroup {
                 group:
                     crate::program::DamageGroup::Filtered(filter)
@@ -604,9 +782,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 parts: value,
                 ..
             } => {
-                if let crate::program::EffectSubject::Matching(filter) = group.as_mut() {
-                    filter.rewrite_creature_type(change.from, change.to);
-                }
+                group.rewrite_creature_type(change.from, change.to);
                 parts(change, value);
             }
             Instruction::ChangeControlledPlaneswalkers { parts: value, .. }
@@ -655,6 +831,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 subject, amount, ..
             } => {
                 subject.rewrite_creature_type(change.from, change.to);
+                if let Some(expr) = amount {
+                    rewrite_amount(expr);
+                }
+            }
+            Instruction::MoveCounters { amount, .. } => {
                 if let Some(expr) = amount {
                     rewrite_amount(expr);
                 }
@@ -917,6 +1098,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileRelatedPermanents(_)
             | Instruction::ExileTargetWithLink(_)
             | Instruction::ReturnCardsExiledWithLink(_)
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
             | Instruction::TargetDamagesItsControllersOtherCreatures
@@ -1136,7 +1318,7 @@ pub(crate) fn rewrite_program(
             trigger(change, ability);
         }
         for ability in &mut spec.extra_static {
-            ability.rewrite_creature_type_in_rule(change);
+            rewrite_static_ability(change, ability);
         }
     }
     if let crate::program::ProgramKind::Spell(value) = &mut program.kind {
@@ -1189,7 +1371,10 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
         Some(crate::program::GraveyardSelfCast::WhileControllingSubtype(kind)) => {
             word(change, kind);
         }
-        Some(crate::program::GraveyardSelfCast::WithExtraCost(costs)) => {
+        Some(
+            crate::program::GraveyardSelfCast::WithExtraCost(costs)
+            | crate::program::GraveyardSelfCast::WithAlternativeCost { extra: costs, .. },
+        ) => {
             for cost in costs {
                 cost.rewrite_creature_type(change.from, change.to);
             }
@@ -1343,61 +1528,7 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
             continue;
         };
         selector(change, target);
-        for part in &mut parts.0 {
-            match part {
-                StaticPart::Text(value) => {
-                    word(change, &mut value.from);
-                    word(change, &mut value.to);
-                }
-                StaticPart::Type(value) | StaticPart::TypeWithSubtypes { base: value, .. } => {
-                    subtypes(change, &mut value.subtypes, static_subtype)
-                }
-                StaticPart::SetPT(value) | StaticPart::ModifyPT(value) => {
-                    numeric(change, &mut value.power);
-                    numeric(change, &mut value.toughness);
-                }
-                StaticPart::BlockingRestriction(
-                    BlockingRestriction::OnlyBlockedBySubtype(value)
-                    | BlockingRestriction::CannotBlockSubtype(value)
-                    | BlockingRestriction::CannotBeBlockedBySubtype(value),
-                ) => word(change, value),
-                StaticPart::BlockingRestriction(
-                    BlockingRestriction::CannotBlockMatching(filter)
-                    | BlockingRestriction::CannotBeBlockedByMatching(filter)
-                    | BlockingRestriction::OnlyBlockedByMatching(filter)
-                    | BlockingRestriction::CanBlockOnlyMatching(filter)
-                    | BlockingRestriction::CannotAttackUnlessDefenderControls(filter)
-                    | BlockingRestriction::MustBeBlockedByAllMatching(filter),
-                ) => filter.rewrite_creature_type(change.from, change.to),
-                StaticPart::BlockingRestriction(_) => {}
-                StaticPart::GrantActivated(ability)
-                | StaticPart::GrantActivatedRestricted { ability, .. } => {
-                    body(change, &mut ability.body)
-                }
-                StaticPart::GrantSubtypeProtection { types, .. } => static_subtype(change, types),
-                StaticPart::GrantTrigger(ability)
-                | StaticPart::Abilities(crate::characteristics::AbilityChange {
-                    granted_trigger: Some(ability),
-                    ..
-                }) => trigger(change, ability),
-                StaticPart::Names(_)
-                | StaticPart::ControlSourceController
-                | StaticPart::Color(_)
-                | StaticPart::Abilities(crate::characteristics::AbilityChange {
-                    granted_trigger: None,
-                    ..
-                })
-                | StaticPart::InheritCounteredCreatureAbilities
-                | StaticPart::InheritExiledCreatureAbilities
-                | StaticPart::GrantFixedColorMana(_)
-                | StaticPart::GrantAnyColorMana
-                | StaticPart::GrantMana(_)
-                | StaticPart::GrantProtectionChosenColor
-                | StaticPart::GrantProtectionChosenPlayer
-                | StaticPart::SetPTToOwnManaValue
-                | StaticPart::SwitchPT => {}
-            }
-        }
+        rewrite_battlefield_static_parts(change, parts);
     }
     for cond in text.static_conditions.values_mut() {
         static_source_condition(change, cond);

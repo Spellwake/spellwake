@@ -161,6 +161,11 @@ impl EffectWindow {
                         || (!object.cannot_be_targeted_by_colors.is_empty()
                             && object
                                 .cannot_be_targeted_by_colors
+                                .matches_any(&source.colors))
+                        || (!source.is_ability
+                            && !object.cannot_be_targeted_by_spells_of_colors.is_empty()
+                            && object
+                                .cannot_be_targeted_by_spells_of_colors
                                 .matches_any(&source.colors));
                 object.zone == ObjectZone::Battlefield
                     && (restricted_by_static

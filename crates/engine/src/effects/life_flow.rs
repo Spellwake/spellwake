@@ -49,31 +49,27 @@ impl EffectWindow {
     ) -> Result<BTreeSet<SeatId>, EffectError> {
         let mut prohibited = BTreeSet::new();
         for active in &self.temporary_rules {
-            match &active.rule {
-                crate::program::TemporaryRuleKind::PlayerCantGainLife { .. } => {
-                    prohibited.extend(active.resolved_players.iter().copied());
-                }
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
-                    match ability.as_ref() {
-                        crate::characteristics::StaticContinuousAbility::Restriction {
-                            rule: crate::characteristics::StaticRestriction::PlayersCannotGainLife,
-                            ..
-                        } => {
-                            prohibited.extend(self.window.participants().iter().copied());
-                        }
-                        crate::characteristics::StaticContinuousAbility::Restriction {
-                            rule: crate::characteristics::StaticRestriction::OpponentsCannotGainLife,
-                            ..
-                        } => {
-                            prohibited.extend(
-                                self.combat_rules
-                                    .opponents(self.window.participants(), active.controller)?,
-                            );
-                        }
-                        _ => {}
+            if let crate::program::TemporaryRuleKind::PlayerCantGainLife { .. } = &active.rule {
+                prohibited.extend(active.resolved_players.iter().copied());
+            } else if let Some(ability) = self.active_temporary_static(active, current) {
+                match ability {
+                    crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule: crate::characteristics::StaticRestriction::PlayersCannotGainLife,
+                        ..
+                    } => {
+                        prohibited.extend(self.window.participants().iter().copied());
                     }
+                    crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule: crate::characteristics::StaticRestriction::OpponentsCannotGainLife,
+                        ..
+                    } => {
+                        prohibited.extend(
+                            self.combat_rules
+                                .opponents(self.window.participants(), active.controller)?,
+                        );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         for source in current
@@ -81,37 +77,21 @@ impl EffectWindow {
             .values()
             .filter(|permanent| permanent.zone == ObjectZone::Battlefield)
         {
-            let forbids_all = source.has_battlefield_rule(|ability| {
+            let forbids_all = Self::permanent_has_restriction(source, |rule| {
                 matches!(
-                    ability,
-                    crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule: crate::characteristics::StaticRestriction::PlayersCannotGainLife,
-                        ..
-                    }
+                    rule,
+                    crate::characteristics::StaticRestriction::PlayersCannotGainLife
                 )
             });
             if forbids_all {
                 prohibited.extend(self.window.participants().iter().copied());
             }
-            let forbids_gain = source
-                .printed_text
-                .continuous
-                .iter()
-                .chain(&source.printed_text.additional_battlefield_abilities)
-                .any(|ability| {
-                    matches!(
-                        ability,
-                        crate::characteristics::StaticContinuousAbility::Restriction {
-                            rule:
-                                crate::characteristics::StaticRestriction::OpponentsCannotGainLife,
-                            ..
-                        }
-                    ) && (source.abilities.continuous == Some(ability.id())
-                        || source
-                            .abilities
-                            .additional_battlefield_abilities
-                            .contains(&ability.id()))
-                });
+            let forbids_gain = Self::permanent_has_restriction(source, |rule| {
+                matches!(
+                    rule,
+                    crate::characteristics::StaticRestriction::OpponentsCannotGainLife
+                )
+            });
             if forbids_gain && let Some(controller) = source.controller {
                 prohibited.extend(
                     self.combat_rules
@@ -129,12 +109,9 @@ impl EffectWindow {
     ) -> BTreeSet<SeatId> {
         let mut frozen = BTreeSet::new();
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+            if let Some(ability) = self.active_temporary_static(active, current)
                 && matches!(
-                    ability.as_ref(),
+                    ability,
                     crate::characteristics::StaticContinuousAbility::Restriction {
                         rule:
                             crate::characteristics::StaticRestriction::ControllerLifeTotalCantChange,
@@ -151,13 +128,10 @@ impl EffectWindow {
             .filter(|permanent| permanent.zone == ObjectZone::Battlefield)
         {
             if let Some(controller) = source.controller
-                && source.has_battlefield_rule(|ability| {
+                && Self::permanent_has_restriction(source, |rule| {
                     matches!(
-                        ability,
-                        crate::characteristics::StaticContinuousAbility::Restriction {
-                            rule: crate::characteristics::StaticRestriction::ControllerLifeTotalCantChange,
-                            ..
-                        }
+                        rule,
+                        crate::characteristics::StaticRestriction::ControllerLifeTotalCantChange
                     )
                 })
             {
@@ -207,11 +181,8 @@ impl EffectWindow {
             let mut lose_instead = false;
             let mut skip_event = false;
             for active in &self.temporary_rules {
-                if active.consumed {
-                    continue;
-                }
-                if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule {
-                    match ability.as_ref() {
+                if let Some(ability) = self.active_temporary_static(active, current) {
+                    match ability {
                         crate::characteristics::StaticContinuousAbility::Modifier {
                             rule:
                                 crate::characteristics::StaticModifierRule::ModifyLifeGain {
@@ -274,6 +245,7 @@ impl EffectWindow {
                                     active.source_object.is_some_and(|src| {
                                         let ctx = crate::characteristics::WorldEvalCtx {
                                             active_player: self.window.active_player(),
+                                            step: self.current_step,
                                             participants: self.window.participants(),
                                             life: Some(&self.life),
                                             combat: self.combat.as_ref(),
@@ -429,6 +401,7 @@ impl EffectWindow {
                             if applies {
                                 let ctx = crate::characteristics::WorldEvalCtx {
                                     active_player: self.window.active_player(),
+                                    step: self.current_step,
                                     participants: self.window.participants(),
                                     life: Some(&self.life),
                                     combat: self.combat.as_ref(),
@@ -481,6 +454,7 @@ impl EffectWindow {
                                 };
                                 let ctx = crate::characteristics::WorldEvalCtx {
                                     active_player: self.window.active_player(),
+                                    step: self.current_step,
                                     participants: self.window.participants(),
                                     life: Some(&self.life),
                                     combat: self.combat.as_ref(),

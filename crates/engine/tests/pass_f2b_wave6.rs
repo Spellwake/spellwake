@@ -455,7 +455,9 @@ fn prevent_next_time_damage_source_is_target_filters_by_targeted_source() {
                     rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
                         source: None,
                         source_chosen_color: false,
+                        source_chosen_type: false,
                         source_is_target: true,
+                        half_round_down: false,
                         recipient: StaticDamageRecipient::Controller,
                         combat_only: false,
                     }),
@@ -572,7 +574,9 @@ fn targeted_damage_prevention_and_redirection_recipients_and_second_target() {
                     rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
                         source: None,
                         source_chosen_color: false,
+                        source_chosen_type: false,
                         source_is_target: false,
+                        half_round_down: false,
                         recipient: StaticDamageRecipient::TargetAny,
                         combat_only: false,
                     }),

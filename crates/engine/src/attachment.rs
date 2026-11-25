@@ -69,10 +69,28 @@ impl EnchantRestriction {
                             | ControllerFilter::TargetPlayer
                             | ControllerFilter::TargetOpponent
                             | ControllerFilter::ActivePlayer
-                            | ControllerFilter::DefendingPlayer => false,
+                            | ControllerFilter::DefendingPlayer
+                            | ControllerFilter::FirstTargetController => false,
+                        };
+                        let owner_ok = match clause.owner {
+                            ControllerFilter::Any => true,
+                            ControllerFilter::You | ControllerFilter::OwnerYou => {
+                                object.owner == controller
+                            }
+                            ControllerFilter::Opponent
+                            | ControllerFilter::NotYou
+                            | ControllerFilter::OwnerOpponent => object.owner != controller,
+                            ControllerFilter::Player(seat) => object.owner == seat,
+                            ControllerFilter::RelatedPlayer
+                            | ControllerFilter::TargetPlayer
+                            | ControllerFilter::TargetOpponent
+                            | ControllerFilter::ActivePlayer
+                            | ControllerFilter::DefendingPlayer
+                            | ControllerFilter::FirstTargetController => false,
                         };
                         let mv = || Some(object.defined.mana_value.clone());
                         controller_ok
+                            && owner_ok
                             && clause.matches_static_characteristics(object, &excluded, mv)
                     };
                     match filter {

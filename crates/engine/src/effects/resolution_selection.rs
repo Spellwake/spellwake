@@ -235,6 +235,7 @@ pub enum ResolutionSelectionOperation {
         min: usize,
         destination: crate::program::SubjectDestination,
         reveal: bool,
+        last_moved: BTreeSet<ObjectId>,
     },
 }
 impl ResolutionSelectionOperation {
@@ -2714,6 +2715,13 @@ impl EffectWindow {
                     .max(0.into())
                     .to_usize()
                     .unwrap_or(0);
+                let last_moved = if *source_zone == crate::program::SourceZoneFilter::LastMoved {
+                    self.resolution_cursor()
+                        .map(|cursor| cursor.results.last_moved_objects.iter().copied().collect())
+                        .unwrap_or_default()
+                } else {
+                    BTreeSet::new()
+                };
                 (
                     AffectedPlayers::One(*player),
                     max,
@@ -2723,6 +2731,7 @@ impl EffectWindow {
                         min: min_val,
                         destination: *destination,
                         reveal: *reveal,
+                        last_moved,
                     },
                 )
             }
@@ -3164,7 +3173,12 @@ impl EffectWindow {
             | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
+            | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::MoveCounters { .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+            | Instruction::DrawGame
+            | Instruction::TurnFaceUpSubject { .. } => return Ok(false),
         };
         let entry = self
             .window
@@ -3393,6 +3407,19 @@ impl EffectWindow {
             StackKind::CardSpell(id) => Some(*id),
             _ => None,
         };
+        if matches!(
+            destination,
+            SubjectDestination::Exile {
+                delayed_return: Some(DelayedReturnTiming::UntilSourceLeaves),
+            }
+        ) && !source_id.is_some_and(|src| {
+            self.window
+                .cards()
+                .get(src)
+                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+        }) {
+            return Ok(Vec::new());
+        }
         let (mut moves, reason): (Vec<(ObjectId, ObjectDestination)>, ZoneReason) =
             match destination {
                 SubjectDestination::Battlefield {
@@ -3638,6 +3665,7 @@ impl EffectWindow {
                     self.begin_linked_cohort_return(
                         LinkedReturnOrigin::ChosenExile {
                             controller: None,
+                            tapped: false,
                             entry: entry.id(),
                             instruction,
                         },
@@ -6225,6 +6253,7 @@ fn selection_eligible(
         ResolutionSelectionOperation::SelectZoneCards {
             source_zone,
             filter,
+            last_moved,
             ..
         } => {
             let zone_ok = match source_zone {
@@ -6268,6 +6297,7 @@ fn selection_eligible(
                 crate::program::SourceZoneFilter::LinkedExile => {
                     object.card_id().is_some() && object.zone() == ObjectZone::Exile
                 }
+                crate::program::SourceZoneFilter::LastMoved => last_moved.contains(&object.id()),
             };
             zone_ok
                 && evaluated.get(object.id()).is_some_and(|card| {

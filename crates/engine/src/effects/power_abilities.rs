@@ -59,10 +59,7 @@ impl EffectWindow {
             }
         }
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+            if let Some(ab) = self.active_temporary_static(active, current)
                 && let StaticContinuousAbility::Modifier {
                     rule:
                         StaticModifierRule::CrewAndSaddlePowerBonus {
@@ -72,7 +69,7 @@ impl EffectWindow {
                             bonus,
                         },
                     ..
-                } = ab.as_ref()
+                } = ab
                 && applies_to_kind(*crews, *saddles)
                 && selector_matches_permanent(
                     self.window.cards(),

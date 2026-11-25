@@ -213,6 +213,74 @@ impl EffectWindow {
                     .map(|p| p.object)
                     .collect())
             }
+            EffectSubject::TargetAndSameNameMatching(filter) => {
+                let targets: Vec<ObjectId> = if let Ok(target) = self.instruction_target(entry) {
+                    if let TargetRef::Object(id) = target.choice().target
+                        && view
+                            .get(id)
+                            .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                    {
+                        vec![id]
+                    } else {
+                        Vec::new()
+                    }
+                } else if let Ok(selected) = self.legal_permanent_targets() {
+                    selected
+                        .into_iter()
+                        .filter(|id| {
+                            view.get(*id)
+                                .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if targets.is_empty() {
+                    return Ok(BTreeSet::new());
+                }
+                let mut excluded = BTreeSet::new();
+                if let Some(slot) = filter.chosen_type_slot() {
+                    let kind = *self
+                        .resolution_cursor()
+                        .and_then(|cursor| cursor.values.get(&slot))
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    excluded.insert(kind);
+                } else if filter.uses_outside_named_slots()
+                    && let Some(cursor) = self.resolution_cursor()
+                {
+                    excluded.extend(cursor.values.values().copied());
+                }
+                let ability_source = match entry.kind() {
+                    StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                let mut affected: BTreeSet<ObjectId> = targets.iter().copied().collect();
+                for &target_id in &targets {
+                    let Some(target_view) = view.get(target_id) else {
+                        continue;
+                    };
+                    for p in view.objects.values() {
+                        if p.zone == ObjectZone::Battlefield
+                            && p.object != target_id
+                            && self
+                                .name_rules
+                                .shares_name(&target_view.current_names, &p.current_names)
+                            && self.matches_object_filter(
+                                filter,
+                                p,
+                                entry.controller(),
+                                ability_source,
+                                &excluded,
+                                &view,
+                            )
+                        {
+                            affected.insert(p.object);
+                        }
+                    }
+                }
+                Ok(affected)
+            }
         }
     }
 

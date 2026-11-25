@@ -1,4 +1,7 @@
 use super::*;
+use spellwake_oracle_compiler::ast::{
+    FilterPredicateAst, NameFilterAst, PartitionMembershipAst, PileRefAst,
+};
 
 pub(super) fn subject_is_anaphora(subj: &SubjectRefAst) -> bool {
     matches!(subj, SubjectRefAst::Anaphora(_))
@@ -14,24 +17,145 @@ pub(super) fn player_is_target_anaphora(p: PlayerRefAst) -> bool {
     )
 }
 
+fn zone_is_target_anaphora(zone: ZoneFilter) -> bool {
+    matches!(
+        zone,
+        ZoneFilter::ThatPlayerGraveyard
+            | ZoneFilter::ThatPlayerHand
+            | ZoneFilter::ThatPlayerLibrary
+            | ZoneFilter::ItsOwnerGraveyard
+    )
+}
+
+fn controller_relation_is_target_anaphora(rel: ControllerRelation) -> bool {
+    matches!(
+        rel,
+        ControllerRelation::ThatPlayer
+            | ControllerRelation::ItsController
+            | ControllerRelation::OwnerThatPlayer
+    )
+}
+
+fn name_filter_references_target_anaphora(name: &NameFilterAst) -> bool {
+    match name {
+        NameFilterAst::SameAsReferenced => true,
+        NameFilterAst::SameAs(subj) => subject_references_target_anaphora(subj),
+        NameFilterAst::SelfName | NameFilterAst::Exact(_) => false,
+    }
+}
+
+fn pile_references_target_anaphora(pile: &PileRefAst) -> bool {
+    match pile {
+        PileRefAst::FilteredInPile { filter, pile } => {
+            filter_references_target_anaphora(filter) || pile_references_target_anaphora(pile)
+        }
+        PileRefAst::ChosenPile
+        | PileRefAst::OtherPile
+        | PileRefAst::ThatPile
+        | PileRefAst::EachPile => false,
+    }
+}
+
+fn filter_references_target_anaphora(f: &ObjectFilterAst) -> bool {
+    if f.zone.is_some_and(zone_is_target_anaphora)
+        || f.extra_zones.iter().copied().any(zone_is_target_anaphora)
+        || f.controller
+            .is_some_and(controller_relation_is_target_anaphora)
+        || f.owner.is_some_and(controller_relation_is_target_anaphora)
+        || f.named
+            .as_ref()
+            .is_some_and(name_filter_references_target_anaphora)
+        || f.stat_bounds
+            .iter()
+            .any(|sb| value_expr_references_target_anaphora(&sb.value))
+    {
+        return true;
+    }
+    f.predicates.iter().any(|pred| match pred {
+        FilterPredicateAst::SuperlativeAmong { scope, .. }
+        | FilterPredicateAst::AttachedBy(scope)
+        | FilterPredicateAst::FromSource(scope)
+        | FilterPredicateAst::NotTargetedBy(scope)
+        | FilterPredicateAst::BlockedOrBlockedBy { other: scope, .. } => {
+            filter_references_target_anaphora(scope)
+        }
+        FilterPredicateAst::AnyOf(filters) => filters.iter().any(filter_references_target_anaphora),
+        FilterPredicateAst::CouldAttachTo(subj)
+        | FilterPredicateAst::SharesPropertyWith {
+            reference: subj, ..
+        }
+        | FilterPredicateAst::DifferentNameFrom(subj)
+        | FilterPredicateAst::AttachedTo(subj)
+        | FilterPredicateAst::AttackingTarget { target: subj, .. }
+        | FilterPredicateAst::Blocking(subj)
+        | FilterPredicateAst::Exclude(subj)
+        | FilterPredicateAst::TargetsSubject(subj)
+        | FilterPredicateAst::CouldBeTargetedBy(subj)
+        | FilterPredicateAst::BlockedBy { blocker: subj, .. }
+        | FilterPredicateAst::SameNameAsSplicedOnto(subj)
+        | FilterPredicateAst::WithSameControllerAs(subj)
+        | FilterPredicateAst::MatchesDraftLedger {
+            source_card_name: subj,
+            ..
+        } => subject_references_target_anaphora(subj),
+        FilterPredicateAst::InObjectPartition {
+            membership: PartitionMembershipAst::MatchingSubjectTag(subj),
+            ..
+        } => subject_references_target_anaphora(subj),
+        FilterPredicateAst::StatRelationTo { expr, .. }
+        | FilterPredicateAst::ColorCountCompare { expr, .. } => {
+            value_expr_references_target_anaphora(expr)
+        }
+        FilterPredicateAst::ChosenByPlayer(p) => player_is_target_anaphora(*p),
+        FilterPredicateAst::EnteredZoneFromThisTurn { from_zone } => {
+            zone_is_target_anaphora(*from_zone)
+        }
+        _ => false,
+    })
+}
+
+fn subject_references_target_anaphora(subj: &SubjectRefAst) -> bool {
+    match subj {
+        SubjectRefAst::Anaphora(_) => true,
+        SubjectRefAst::InZone { subject, zone } => {
+            subject_references_target_anaphora(subject) || zone_is_target_anaphora(*zone)
+        }
+        SubjectRefAst::ControllerOf(inner) | SubjectRefAst::OwnerOf(inner) => {
+            subject_references_target_anaphora(inner)
+        }
+        SubjectRefAst::Player(p) => player_is_target_anaphora(*p),
+        SubjectRefAst::PlayerMatching { player, condition } => {
+            player_is_target_anaphora(*player) || condition_references_target_anaphora(condition)
+        }
+        SubjectRefAst::Each(f)
+        | SubjectRefAst::All(f)
+        | SubjectRefAst::Group(f)
+        | SubjectRefAst::TargetObject { filter: f, .. }
+        | SubjectRefAst::DistinctTarget { filter: f, .. } => filter_references_target_anaphora(f),
+        SubjectRefAst::TargetOneOf { options, .. } | SubjectRefAst::Compound(options) => {
+            options.iter().any(subject_references_target_anaphora)
+        }
+        SubjectRefAst::PileRef(pile) => pile_references_target_anaphora(pile),
+        SubjectRefAst::ManualTabletopSelection { filter, .. } => filter
+            .as_deref()
+            .is_some_and(filter_references_target_anaphora),
+        SubjectRefAst::SelfObject
+        | SubjectRefAst::AttachedHost(_)
+        | SubjectRefAst::CraftExiledCards
+        | SubjectRefAst::AnyTarget
+        | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
+        | SubjectRefAst::TargetPlayer { .. }
+        | SubjectRefAst::TriggerSubject
+        | SubjectRefAst::TriggerCause => false,
+    }
+}
+
 pub(super) fn value_expr_references_target_anaphora(expr: &ValueExprAst) -> bool {
     match expr {
         ValueExprAst::ObjectStat { subject, .. } | ValueExprAst::CounterCount { subject, .. } => {
             subject_is_anaphora(subject)
         }
-        ValueExprAst::Count(f) => {
-            matches!(
-                f.zone,
-                Some(ZoneFilter::ThatPlayerGraveyard | ZoneFilter::ThatPlayerHand)
-            ) || matches!(
-                f.controller,
-                Some(
-                    ControllerRelation::ThatPlayer
-                        | ControllerRelation::ItsController
-                        | ControllerRelation::OwnerThatPlayer
-                )
-            )
-        }
+        ValueExprAst::Count(f) => filter_references_target_anaphora(f),
         ValueExprAst::PlayerStat { player, .. }
         | ValueExprAst::PlayerCounterCount { player, .. }
         | ValueExprAst::LifeChangedThisTurn { player, .. } => player_is_target_anaphora(*player),
@@ -62,18 +186,162 @@ pub(super) fn condition_references_target_anaphora(cond: &ConditionAst) -> bool 
         ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
             condition_references_target_anaphora(a) || condition_references_target_anaphora(b)
         }
-        ConditionAst::Compare { lhs, rhs, .. } => {
+        ConditionAst::Compare { lhs, rhs, .. } | ConditionAst::ExprCompare { lhs, rhs, .. } => {
             value_expr_references_target_anaphora(lhs) || value_expr_references_target_anaphora(rhs)
         }
-        ConditionAst::MatchesFilter { subject, .. } | ConditionAst::HasStatus { subject, .. } => {
-            subject_is_anaphora(subject)
+        ConditionAst::MatchesFilter { subject, filter } => {
+            subject_references_target_anaphora(subject) || filter_references_target_anaphora(filter)
         }
-        ConditionAst::ControlsCount { player, .. }
-        | ConditionAst::HandCount { player, .. }
+        ConditionAst::HasStatus { subject, .. }
+        | ConditionAst::HasKeyword { subject, .. }
+        | ConditionAst::StatCompare { subject, .. }
+        | ConditionAst::CounterCompare { subject, .. }
+        | ConditionAst::PaidAltCost { subject, .. }
+        | ConditionAst::AllColors(subject) => subject_references_target_anaphora(subject),
+        ConditionAst::TargetsSubject { subject, target } => {
+            subject_references_target_anaphora(subject)
+                || subject_references_target_anaphora(target)
+        }
+        ConditionAst::AttachedTo { subject, host } => {
+            subject_references_target_anaphora(subject) || subject_references_target_anaphora(host)
+        }
+        ConditionAst::SameNameAs { subject, other }
+        | ConditionAst::SharesPropertyWith { subject, other, .. } => {
+            subject_references_target_anaphora(subject) || subject_references_target_anaphora(other)
+        }
+        ConditionAst::BlockedByFilter {
+            subject,
+            blocker_filter,
+            ..
+        } => {
+            subject_references_target_anaphora(subject)
+                || filter_references_target_anaphora(blocker_filter)
+        }
+        ConditionAst::PlayerControlsMost { player, filter, .. }
+        | ConditionAst::AttackedWithFilteredThisTurn { player, filter, .. }
+        | ConditionAst::ControlsCount { player, filter, .. }
+        | ConditionAst::CastSpellThisTurn { player, filter } => {
+            player_is_target_anaphora(*player) || filter_references_target_anaphora(filter)
+        }
+        ConditionAst::ControlsMoreThan {
+            player,
+            filter,
+            than_player,
+        } => {
+            player_is_target_anaphora(*player)
+                || player_is_target_anaphora(*than_player)
+                || filter_references_target_anaphora(filter)
+        }
+        ConditionAst::SubjectControlledBy { subject, player } => {
+            subject_references_target_anaphora(subject) || player_is_target_anaphora(*player)
+        }
+        ConditionAst::SubjectInZone { subject, zone }
+        | ConditionAst::WasCastFromZone { subject, zone } => {
+            subject_references_target_anaphora(subject) || zone_is_target_anaphora(*zone)
+        }
+        ConditionAst::TopCardMatches { zone, filter } => {
+            zone_is_target_anaphora(*zone) || filter_references_target_anaphora(filter)
+        }
+        ConditionAst::CardWithNameInZone {
+            name_filter,
+            filter,
+            zone,
+            ..
+        } => {
+            name_filter_references_target_anaphora(name_filter)
+                || zone_is_target_anaphora(*zone)
+                || filter_references_target_anaphora(filter)
+        }
+        ConditionAst::IsPhaseOrStep { player, .. } => player.is_some_and(player_is_target_anaphora),
+        ConditionAst::GainedLifeAtLeastThisTurn { player, .. } => {
+            player_is_target_anaphora(*player)
+        }
+        ConditionAst::LifeComparePlayers { player, other, .. } => {
+            player_is_target_anaphora(*player) || player_is_target_anaphora(*other)
+        }
+        ConditionAst::DamageDealtThisTurn {
+            source,
+            target_filter,
+            ..
+        } => {
+            subject_references_target_anaphora(source)
+                || target_filter
+                    .as_deref()
+                    .is_some_and(filter_references_target_anaphora)
+        }
+        ConditionAst::PriorActionOccurred { subject_filter, .. } => subject_filter
+            .as_deref()
+            .is_some_and(filter_references_target_anaphora),
+        ConditionAst::OpponentMoreThanYou { filter, .. } => filter
+            .as_deref()
+            .is_some_and(filter_references_target_anaphora),
+        ConditionAst::PrimeNumberCheck { expr } => value_expr_references_target_anaphora(expr),
+        ConditionAst::AnyOfGroupMatches { group, .. } => subject_references_target_anaphora(group),
+        ConditionAst::CanLegallySwapBlockAssignments { subjects, .. } => {
+            subject_references_target_anaphora(subjects)
+        }
+        ConditionAst::ZoneObjectCount { filter, .. }
+        | ConditionAst::TotalStatCompare { filter, .. }
+        | ConditionAst::TargetsFilter(filter)
+        | ConditionAst::EnteredUnderYourControlThisTurn { filter, .. } => {
+            filter_references_target_anaphora(filter)
+        }
+        ConditionAst::ZoneChangeThisTurn {
+            filter,
+            from_zone,
+            to_zone,
+            controller,
+            ..
+        } => {
+            filter_references_target_anaphora(filter)
+                || from_zone.is_some_and(zone_is_target_anaphora)
+                || to_zone.is_some_and(zone_is_target_anaphora)
+                || controller.is_some_and(player_is_target_anaphora)
+        }
+        ConditionAst::HandCount { player, .. }
         | ConditionAst::GraveyardCount { player, .. }
         | ConditionAst::LifeCompare { player, .. }
-        | ConditionAst::PlayerActionThisTurn { player, .. } => player_is_target_anaphora(*player),
-        _ => false,
+        | ConditionAst::PlayerActionThisTurn { player, .. }
+        | ConditionAst::PlayerCounterCompare { player, .. }
+        | ConditionAst::LostLifeThisTurn { player, .. }
+        | ConditionAst::UnspentManaAtLeast { player, .. }
+        | ConditionAst::IsPlayersTurn(player)
+        | ConditionAst::PlayerCoinFlipOutcome { player, .. }
+        | ConditionAst::DieRollCompare { player, .. }
+        | ConditionAst::IsStartingPlayer(player)
+        | ConditionAst::ControlsEachColor(player) => player_is_target_anaphora(*player),
+        ConditionAst::Marker(_)
+        | ConditionAst::WasKicked
+        | ConditionAst::WasKickedSlot(_)
+        | ConditionAst::WasCast { .. }
+        | ConditionAst::Morbid { .. }
+        | ConditionAst::Revolt
+        | ConditionAst::Threshold
+        | ConditionAst::Delirium
+        | ConditionAst::Metalcraft
+        | ConditionAst::IsYourTurn
+        | ConditionAst::GainedLifeThisTurn
+        | ConditionAst::OpponentLostLifeThisTurn
+        | ConditionAst::AttackedThisTurn
+        | ConditionAst::EnteredThisTurn
+        | ConditionAst::ControlsCommander
+        | ConditionAst::TributeNotPaid
+        | ConditionAst::IsNotToken
+        | ConditionAst::SharesTypeWithSelf
+        | ConditionAst::OpponentCountCompare { .. }
+        | ConditionAst::ManaSpentToCast(_)
+        | ConditionAst::WonContest
+        | ConditionAst::GameStateFlag(_)
+        | ConditionAst::SearchedLibraryThisWay
+        | ConditionAst::SpellsCastLastTurn { .. }
+        | ConditionAst::DevotionCompare { .. }
+        | ConditionAst::CoinFlipOutcome { .. }
+        | ConditionAst::PlayersTiedFor { .. }
+        | ConditionAst::EventOccurredThisTurn { .. }
+        | ConditionAst::ManualTabletopCheck { .. }
+        | ConditionAst::NumberParity { .. }
+        | ConditionAst::ColorsOfManaSpentCompare { .. }
+        | ConditionAst::ResolutionCountThisTurn { .. } => false,
     }
 }
 
@@ -970,10 +1238,14 @@ fn bind_filter_player_target_local(
 ) -> Result<(), &'static str> {
     let mut needs_player = false;
     let mut needs_opponent = false;
-    let mut inspect = |clause: ObjectClause| match clause.controller {
-        ControllerFilter::TargetPlayer => needs_player = true,
-        ControllerFilter::TargetOpponent => needs_opponent = true,
-        _ => {}
+    let mut inspect = |clause: ObjectClause| {
+        for relation in [clause.controller, clause.owner] {
+            match relation {
+                ControllerFilter::TargetPlayer => needs_player = true,
+                ControllerFilter::TargetOpponent => needs_opponent = true,
+                _ => {}
+            }
+        }
     };
     match *filter {
         ObjectFilter::Clause(c) => inspect(c),
@@ -2548,7 +2820,6 @@ pub(super) fn lower_search_matcher(
         return Err("oracle:unsupported-search-filter");
     }
     if let Some(named) = &f.named {
-        use spellwake_oracle_compiler::ast::NameFilterAst;
         let build_extra =
             |base: &ObjectFilterAst| -> Result<Option<Box<ObjectFilter>>, &'static str> {
                 let mut stripped = base.clone();
@@ -2603,6 +2874,13 @@ pub(super) fn lower_search_matcher(
             extra,
         });
     }
+    let has_complex_predicates = match f.predicates.as_slice() {
+        [] => false,
+        [FilterPredicateAst::SubtypesMatchAny] => {
+            f.subtypes.is_empty() || !f.required_supertypes.is_empty()
+        }
+        _ => true,
+    };
     let has_complex = !f.any_colors.is_empty()
         || !f.forbidden_colors.is_empty()
         || f.color_arity.is_some()
@@ -2611,7 +2889,7 @@ pub(super) fn lower_search_matcher(
         || !f.forbidden_keywords.is_empty()
         || !f.forbidden_subtypes.is_empty()
         || !f.stat_bounds.is_empty()
-        || !f.predicates.is_empty()
+        || has_complex_predicates
         || f.controller.is_some()
         || f.owner.is_some()
         || f.tapped.is_some()
@@ -2663,7 +2941,10 @@ pub(super) fn lower_search_matcher(
                         break;
                     }
                 }
-                if all_lands && !lands.is_empty() {
+                if all_lands
+                    && !lands.is_empty()
+                    && (f.any_types.is_empty() || f.any_types == AstCardTypeMask::LAND)
+                {
                     return Ok(SearchCardMatcher::LandSubtypes {
                         subtypes: lands,
                         require_land_type: f.any_types.0 & AstCardTypeMask::LAND.0 != 0,

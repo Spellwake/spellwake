@@ -2854,7 +2854,7 @@ impl GameState {
                     if let Some(err) = skip_err {
                         return Err(err.into());
                     }
-                    if turn.position().step == Step::EndCombat
+                    if matches!(turn.position().step, Step::EndCombat | Step::PostcombatMain)
                         && self.execution.take_additional_combat()
                     {
                         next = next.begin_additional_combat();
