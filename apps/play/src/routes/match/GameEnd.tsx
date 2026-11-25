@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ActionButton, useAllowsControlMotion } from "@spellwake/ui";
 import type { GameResult, MatchSeries } from "../../match/match-sources";
 import { scoreLine, timeLeft } from "../../match/match-series";
+import { SideboardDialog } from "./Sideboard";
 import * as s from "./game-end.css";
 
 const TITLE: Record<GameResult["outcome"], string> = {
@@ -94,15 +95,43 @@ function EndAction({
         Leave table
       </ActionButton>
     );
-  if (next.kind !== "deciding" || !next.ready) return null;
+  if (next.kind !== "deciding") return null;
+  return <Deciding next={next} />;
+}
+
+/** Between games: sideboard first, or start the next game with the deck as it is. */
+function Deciding({
+  next,
+}: {
+  next: Extract<MatchSeries["next"], { kind: "deciding" }>;
+}): ReactElement | null {
+  const [sideboarding, setSideboarding] = useState(false);
   return (
-    <ActionButton
-      emphasis="primary"
-      pending={next.readyPending}
-      onClick={next.ready}
-    >
-      Next game
-    </ActionButton>
+    <>
+      {next.sideboard && (
+        <ActionButton
+          disabled={next.readyPending}
+          onClick={() => setSideboarding(true)}
+        >
+          Sideboard
+        </ActionButton>
+      )}
+      {next.ready && (
+        <ActionButton
+          emphasis="primary"
+          pending={next.readyPending}
+          onClick={next.ready}
+        >
+          Next game
+        </ActionButton>
+      )}
+      {sideboarding && next.sideboard && (
+        <SideboardDialog
+          sideboard={next.sideboard}
+          onClose={() => setSideboarding(false)}
+        />
+      )}
+    </>
   );
 }
 

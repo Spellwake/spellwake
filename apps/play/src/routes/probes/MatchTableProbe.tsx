@@ -6,7 +6,12 @@ import {
   previewSnapshot,
   type PreviewScene,
 } from "../../match/preview-table";
-import type { GameResult, MatchSeries } from "../../match/match-sources";
+import type {
+  GameResult,
+  MatchSeries,
+  Sideboard,
+} from "../../match/match-sources";
+import type { SideboardCard } from "../../match/sideboard";
 import { MatchPage } from "../match/MatchPage";
 
 const noop = (): void => undefined;
@@ -45,11 +50,56 @@ function previewResult(
  * next game waits on the viewer, with two minutes on the clock), `untimed`,
  * `stuck` (the answer was not taken), `waiting`, or `over`.
  */
+/** The preview deck between games: a red deck with answers waiting in its sideboard. */
+const PREVIEW_SIDEBOARD: readonly SideboardCard[] = [
+  ["Abrade", 0, 3],
+  ["Arc Lightning", 2, 1],
+  ["Goblin Matron", 4, 0],
+  ["Goblin Piledriver", 4, 0],
+  ["Krenko, Mob Boss", 2, 0],
+  ["Lightning Bolt", 4, 0],
+  ["Mountain", 24, 0],
+  ["Pyroclasm", 0, 4],
+  ["Searing Blood", 0, 3],
+  ["Shock", 4, 0],
+  ["Goblin Guide", 4, 0],
+  ["Goblin Chieftain", 4, 0],
+  ["Mogg War Marshal", 4, 0],
+  ["Common Bond", 0, 2],
+  ["Legion Warboss", 4, 0],
+  ["Rending Volley", 0, 2],
+].map(([name, main, side]) => ({
+  key: `preview:${String(name)}`,
+  name: String(name),
+  main: Number(main),
+  side: Number(side),
+}));
+
+/**
+ * `?sideboard=` shows the preview's sideboarding: `slow` keeps the deck
+ * reading, `refused` refuses the list, `none` offers no sideboarding.
+ */
+function previewSideboard(
+  kind: string | null,
+  answer: { sent: boolean; send: () => void },
+  refused: { failed: boolean; fail: () => void },
+): Sideboard | null {
+  if (kind === "none") return null;
+  return {
+    cards: kind === "slow" ? null : PREVIEW_SIDEBOARD,
+    minimumMain: 60,
+    use: () => (kind === "refused" ? refused.fail() : answer.send()),
+    pending: false,
+    failure: refused.failed ? "Couldn’t save your sideboard. Try again." : null,
+  };
+}
+
 function previewSeries(
   kind: string | null,
   result: GameResult | null,
   deadlineAt: string,
   answer: { sent: boolean; send: () => void },
+  sideboard: Sideboard | null,
 ): MatchSeries | null {
   if (!result) return null;
   const wonGame = result.outcome === "won";
@@ -74,6 +124,7 @@ function previewSeries(
         ready: answer.send,
         readyPending: false,
         readyFailed: kind === "stuck",
+        sideboard,
       },
     };
   return null;
@@ -110,6 +161,8 @@ export function MatchTableProbe(): ReactElement {
     new Date(Date.now() + 161_000).toISOString(),
   );
   const [sent, setSent] = useState(false);
+  const [sideboardFailed, setSideboardFailed] = useState(false);
+  const answer = { sent, send: () => setSent(true) };
   const refused = params.get("chat") === "refused";
   const paused = params.get("pay") === "paused";
   const result =
@@ -128,10 +181,16 @@ export function MatchTableProbe(): ReactElement {
       : {
           ...source,
           result,
-          series: previewSeries(params.get("series"), result, deadlineAt, {
-            sent,
-            send: () => setSent(true),
-          }),
+          series: previewSeries(
+            params.get("series"),
+            result,
+            deadlineAt,
+            answer,
+            previewSideboard(params.get("sideboard"), answer, {
+              failed: sideboardFailed,
+              fail: () => setSideboardFailed(true),
+            }),
+          ),
           ...(refused
             ? { chat: { ...source.chat, send: () => Promise.resolve(false) } }
             : {}),

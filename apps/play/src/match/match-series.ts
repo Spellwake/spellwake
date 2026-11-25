@@ -45,6 +45,8 @@ export type SeriesStanding = {
         deadlineAt: string | null;
         /** The match revision the answer must name. */
         matchRevision: string;
+        /** The list chosen after an earlier game, which the next game keeps by default. */
+        lastChosenRevisionId: string | null;
       }
     | { kind: "waiting" }
     | {
@@ -124,9 +126,26 @@ export function seriesStanding(
             decisionId: asked.id,
             deadlineAt: asked.deadlineAt,
             matchRevision: detail.match.revision,
+            lastChosenRevisionId: lastChosen(decisions, detail.ownSeatId),
           }
         : { kind: "waiting" },
   };
+}
+
+/** The list this seat chose most recently between games, if it has chosen one. */
+function lastChosen(
+  decisions: readonly OwnDecision[],
+  seatId: string,
+): string | null {
+  const answered = decisions
+    .filter(
+      (decision) =>
+        decision.seatId === seatId &&
+        decision.state === "answered" &&
+        decision.selectedDeckRevisionId !== null,
+    )
+    .sort((a, b) => Date.parse(b.openedAt) - Date.parse(a.openedAt));
+  return answered[0]?.selectedDeckRevisionId ?? null;
 }
 
 /** "You lead 1–0", "Tied 1–1", "You trail 0–1". */
