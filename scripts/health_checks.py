@@ -536,15 +536,17 @@ def evaluate_domain(
             "label": spec.label,
             "localStatus": "unknown",
             "localBadge": {
-                "label": spec.label,
-                "message": "unknown (unqualified)",
+                "label": "",
+                "message": "unknown",
                 "color": "lightgrey",
+                "ariaLabel": f"{spec.label} local: unknown (unqualified)",
             },
             "liveStatus": "unknown",
             "liveBadge": {
-                "label": f"{spec.label} live",
+                "label": "",
                 "message": "unknown",
                 "color": "lightgrey",
+                "ariaLabel": f"{spec.label} live: unknown",
             },
             "passedTests": 0,
             "failedTests": 0,
@@ -589,11 +591,7 @@ def evaluate_domain(
 
     if any_failing:
         local_status = "failing"
-        badge_msg = (
-            f"failing ({total_failed} failed)"
-            if total_failed > 0
-            else "failing (check error)"
-        )
+        badge_msg = f"fail · {total_failed}" if total_failed > 0 else "fail · error"
         badge_color = "red"
     elif not results or total_passed == 0 or any_unknown:
         local_status = "unknown"
@@ -601,11 +599,11 @@ def evaluate_domain(
         badge_color = "lightgrey"
     elif db_skipped_reason is not None:
         local_status = "local-partial"
-        badge_msg = f"unit/web {total_passed} passed (DB unrun)"
+        badge_msg = f"partial · {total_passed}"
         badge_color = "yellow"
     else:
         local_status = "local-verified"
-        badge_msg = f"local verified ({total_passed} tests)"
+        badge_msg = f"pass · {total_passed}"
         badge_color = "green"
 
     return {
@@ -613,15 +611,17 @@ def evaluate_domain(
         "label": spec.label,
         "localStatus": local_status,
         "localBadge": {
-            "label": spec.label,
+            "label": "",
             "message": badge_msg,
             "color": badge_color,
+            "ariaLabel": f"{spec.label} local: {badge_msg}",
         },
         "liveStatus": "unknown",
         "liveBadge": {
-            "label": f"{spec.label} live",
-            "message": "unknown (needs hosted creds)",
+            "label": "",
+            "message": "unknown",
             "color": "lightgrey",
+            "ariaLabel": f"{spec.label} live: unknown (needs hosted credentials)",
         },
         "passedTests": total_passed,
         "failedTests": total_failed,
@@ -645,6 +645,7 @@ def write_domain_badges(report: dict[str, Any], badges_dir: Path) -> dict[str, A
             lb["message"],
             lb["color"],
             is_error=domain["localStatus"] == "failing",
+            aria_label=lb.get("ariaLabel"),
         )
         live_b = domain["liveBadge"]
         endpoints[f"{slug}-live"] = badge_svg.write_badge(
@@ -654,6 +655,7 @@ def write_domain_badges(report: dict[str, Any], badges_dir: Path) -> dict[str, A
             live_b["message"],
             live_b["color"],
             is_error=False,
+            aria_label=live_b.get("ariaLabel"),
         )
     badge_svg.write_atomic_json(badges_dir / "health-endpoints.json", endpoints)
     return endpoints
