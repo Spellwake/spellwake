@@ -1,0 +1,1308 @@
+[
+  {
+    "oracle_id": "92eed395-62ca-4293-882b-8565c40daab5",
+    "name": "Sylvan Library",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Sylvan Library",
+        "type_line": "Enchantment",
+        "oracle_text": "At the beginning of your draw step, you may draw two additional cards. If you do, choose two cards in your hand drawn this turn. For each of those cards, pay 4 life or put the card on top of your library."
+      }
+    ]
+  },
+  {
+    "oracle_id": "4c6a0c30-b547-4eff-8ff4-0ca25803c076",
+    "name": "Urza's Saga",
+    "layout": "saga",
+    "faces": [
+      {
+        "name": "Urza's Saga",
+        "type_line": "Enchantment Land — Urza's Saga",
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore counter. Sacrifice after III.)\nI — This Saga gains \"{T}: Add {C}.\"\nII — This Saga gains \"{2}, {T}: Create a 0/0 colorless Construct artifact creature token with 'This token gets +1/+1 for each artifact you control.'\"\nIII — Search your library for an artifact card with mana cost {0} or {1}, put it onto the battlefield, then shuffle."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0ba134d8-ee7d-48ec-8dc6-57942b8e9261",
+    "name": "Liliana of the Veil",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Liliana of the Veil",
+        "type_line": "Legendary Planeswalker — Liliana",
+        "oracle_text": "+1: Each player discards a card.\n−2: Target player sacrifices a creature.\n−6: Separate all permanents target player controls into two piles. That player sacrifices all permanents in the pile of their choice."
+      }
+    ]
+  },
+  {
+    "oracle_id": "153376c9-dffd-458c-8ce3-a4c8269bc4e9",
+    "name": "Smothering Tithe",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Smothering Tithe",
+        "type_line": "Enchantment",
+        "oracle_text": "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you create a Treasure token. (It's an artifact with \"{T}, Sacrifice this token: Add one mana of any color.\")"
+      }
+    ]
+  },
+  {
+    "oracle_id": "f0c5864f-83c3-4d99-8f97-0ab92608fff3",
+    "name": "Sen Triplets",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Sen Triplets",
+        "type_line": "Legendary Artifact Creature — Human Wizard",
+        "oracle_text": "At the beginning of your upkeep, choose target opponent. This turn, that player can't cast spells or activate abilities and plays with their hand revealed. You may play lands and cast spells from that player's hand this turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "76678885-3674-443d-b9a2-2a460cf6aac0",
+    "name": "Panharmonicon",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Panharmonicon",
+        "type_line": "Artifact",
+        "oracle_text": "If an artifact or creature entering causes a triggered ability of a permanent you control to trigger, that ability triggers an additional time."
+      }
+    ]
+  },
+  {
+    "oracle_id": "c0957e5e-c71b-439c-931c-9f55d2f76ace",
+    "name": "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki",
+    "layout": "transform",
+    "faces": [
+      {
+        "name": "Fable of the Mirror-Breaker",
+        "type_line": "Enchantment — Saga",
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore counter.)\nI — Create a 2/2 red Goblin Shaman creature token with \"Whenever this token attacks, create a Treasure token.\"\nII — You may discard up to two cards. If you do, draw that many cards.\nIII — Exile this Saga, then return it to the battlefield transformed under your control."
+      },
+      {
+        "name": "Reflection of Kiki-Jiki",
+        "type_line": "Enchantment Creature — Goblin Shaman",
+        "oracle_text": "{1}, {T}: Create a token that's a copy of another target nonlegendary creature you control, except it has haste. Sacrifice it at the beginning of the next end step."
+      }
+    ]
+  },
+  {
+    "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+    "name": "Rhystic Study",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Rhystic Study",
+        "type_line": "Enchantment",
+        "oracle_text": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}."
+      }
+    ]
+  },
+  {
+    "oracle_id": "09b895ff-e729-48d1-bfc1-ea5fd7adda6a",
+    "name": "Caged Sun",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Caged Sun",
+        "type_line": "Artifact",
+        "oracle_text": "As this artifact enters, choose a color.\nCreatures you control of the chosen color get +1/+1.\nWhenever a land's ability causes you to add one or more mana of the chosen color, add an additional one mana of that color."
+      }
+    ]
+  },
+  {
+    "oracle_id": "01546b7d-a233-4176-8843-d732074dc5b6",
+    "name": "Doubling Season",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Doubling Season",
+        "type_line": "Enchantment",
+        "oracle_text": "If an effect would create one or more tokens under your control, it creates twice that many of those tokens instead.\nIf an effect would put one or more counters on a permanent you control, it puts twice that many of those counters on that permanent instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "2bd111bb-ce02-414c-b5b7-e0e037d8d96b",
+    "name": "Bolas's Citadel",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Bolas's Citadel",
+        "type_line": "Legendary Artifact",
+        "oracle_text": "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library. If you cast a spell this way, pay life equal to its mana value rather than pay its mana cost.\n{T}, Sacrifice ten nonland permanents: Each opponent loses 10 life."
+      }
+    ]
+  },
+  {
+    "oracle_id": "94a844d2-0574-45a7-b347-e0e329767c42",
+    "name": "Necropotence",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Necropotence",
+        "type_line": "Enchantment",
+        "oracle_text": "Skip your draw step.\nWhenever you discard a card, exile that card from your graveyard.\nPay 1 life: Exile the top card of your library face down. Put that card into your hand at the beginning of your next end step."
+      }
+    ]
+  },
+  {
+    "oracle_id": "ae7604bb-4818-45a3-960c-cf3d83f15964",
+    "name": "Teferi, Time Raveler",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Teferi, Time Raveler",
+        "type_line": "Legendary Planeswalker — Teferi",
+        "oracle_text": "Each opponent can cast spells only any time they could cast a sorcery.\n+1: Until your next turn, you may cast sorcery spells as though they had flash.\n−3: Return up to one target artifact, creature, or enchantment to its owner's hand. Draw a card."
+      }
+    ]
+  },
+  {
+    "oracle_id": "ea5103f5-27e0-4eb1-902c-7f34652d6bf3",
+    "name": "Orcish Bowmasters",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Orcish Bowmasters",
+        "type_line": "Creature — Orc Archer",
+        "oracle_text": "Flash\nWhen this creature enters and whenever an opponent draws a card except the first one they draw in each of their draw steps, this creature deals 1 damage to any target. Then amass Orcs 1."
+      }
+    ]
+  },
+  {
+    "oracle_id": "d6d72f5f-8f5d-4180-b514-f22ff5482902",
+    "name": "Bonecrusher Giant // Stomp",
+    "layout": "adventure",
+    "faces": [
+      {
+        "name": "Bonecrusher Giant",
+        "type_line": "Creature — Giant",
+        "oracle_text": "Whenever this creature becomes the target of a spell, this creature deals 2 damage to that spell's controller."
+      },
+      {
+        "name": "Stomp",
+        "type_line": "Instant — Adventure",
+        "oracle_text": "Damage can't be prevented this turn. Stomp deals 2 damage to any target."
+      }
+    ]
+  },
+  {
+    "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070",
+    "name": "Lightning Bolt",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Lightning Bolt",
+        "type_line": "Instant",
+        "oracle_text": "Lightning Bolt deals 3 damage to any target."
+      }
+    ]
+  },
+  {
+    "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+    "name": "Counterspell",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Counterspell",
+        "type_line": "Instant",
+        "oracle_text": "Counter target spell."
+      }
+    ]
+  },
+  {
+    "oracle_id": "b1544f21-7e98-461b-aed5-e748b0168c52",
+    "name": "Swords to Plowshares",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Swords to Plowshares",
+        "type_line": "Instant",
+        "oracle_text": "Exile target creature. Its controller gains life equal to its power."
+      }
+    ]
+  },
+  {
+    "oracle_id": "36cd2364-d113-47d1-b2c4-b088d9eb88dd",
+    "name": "Brainstorm",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Brainstorm",
+        "type_line": "Instant",
+        "oracle_text": "Draw three cards, then put two cards from your hand on top of your library in any order."
+      }
+    ]
+  },
+  {
+    "oracle_id": "34515b16-c9a4-4f98-8c77-416a7a523407",
+    "name": "Wrath of God",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Wrath of God",
+        "type_line": "Sorcery",
+        "oracle_text": "Destroy all creatures. They can't be regenerated."
+      }
+    ]
+  },
+  {
+    "oracle_id": "82004860-e589-4e38-8d61-8c0210e4ea39",
+    "name": "Demonic Tutor",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Demonic Tutor",
+        "type_line": "Sorcery",
+        "oracle_text": "Search your library for a card, put that card into your hand, then shuffle."
+      }
+    ]
+  },
+  {
+    "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487",
+    "name": "Sol Ring",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Sol Ring",
+        "type_line": "Artifact",
+        "oracle_text": "{T}: Add {C}{C}."
+      }
+    ]
+  },
+  {
+    "oracle_id": "d3a0b660-358c-41bd-9cd2-41fbf3491b1a",
+    "name": "Birds of Paradise",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Birds of Paradise",
+        "type_line": "Creature — Bird",
+        "oracle_text": "Flying\n{T}: Add one mana of any color."
+      }
+    ]
+  },
+  {
+    "oracle_id": "53f7c868-b03e-4fc2-8dcf-a75bbfa3272b",
+    "name": "Dark Ritual",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Dark Ritual",
+        "type_line": "Instant",
+        "oracle_text": "Add {B}{B}{B}."
+      }
+    ]
+  },
+  {
+    "oracle_id": "34f34409-326d-4994-a0ea-1a69aa278f03",
+    "name": "Sheoldred, the Apocalypse",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Sheoldred, the Apocalypse",
+        "type_line": "Legendary Creature — Phyrexian Praetor",
+        "oracle_text": "Deathtouch\nWhenever you draw a card, you gain 2 life.\nWhenever an opponent draws a card, they lose 2 life."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3aa83ed2-f48b-4ce6-a614-2c54ddf50538",
+    "name": "The One Ring",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "The One Ring",
+        "type_line": "Legendary Artifact",
+        "oracle_text": "Indestructible\nWhen The One Ring enters, if you cast it, you gain protection from everything until your next turn.\nAt the beginning of your upkeep, you lose 1 life for each burden counter on The One Ring.\n{T}: Put a burden counter on The One Ring, then draw a card for each burden counter on The One Ring."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0bbcb563-09b3-499d-a9cc-3a6d7501dd81",
+    "name": "Collected Company",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Collected Company",
+        "type_line": "Instant",
+        "oracle_text": "Look at the top six cards of your library. Put up to two creature cards with mana value 3 or less from among them onto the battlefield. Put the rest on the bottom of your library in any order."
+      }
+    ]
+  },
+  {
+    "oracle_id": "6789a170-f2c5-4fc0-8a45-2b2361e67410",
+    "name": "Chord of Calling",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Chord of Calling",
+        "type_line": "Instant",
+        "oracle_text": "Convoke (Your creatures can help cast this spell. Each creature you tap while casting this spell pays for {1} or one mana of that creature's color.)\nSearch your library for a creature card with mana value X or less, put it onto the battlefield, then shuffle."
+      }
+    ]
+  },
+  {
+    "oracle_id": "437b2dab-15e0-4b9a-a204-58622d37a3b3",
+    "name": "Fact or Fiction",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Fact or Fiction",
+        "type_line": "Instant",
+        "oracle_text": "Reveal the top five cards of your library. An opponent separates those cards into two piles. Put one pile into your hand and the other into your graveyard."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3d7d609a-e447-4757-9a0c-28f9787eab38",
+    "name": "Tarmogoyf",
+    "layout": "token",
+    "faces": [
+      {
+        "name": "Tarmogoyf",
+        "type_line": "Token Creature — Lhurgoyf",
+        "oracle_text": "Tarmogoyf's power is equal to the number of card types among cards in all graveyards and its toughness is equal to that number plus 1.\n(This token's mana cost is {1}{G}.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "94fac5fe-97d5-4c12-a80c-8efff9d853ae",
+    "name": "Blood Moon",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Blood Moon",
+        "type_line": "Enchantment",
+        "oracle_text": "Nonbasic lands are Mountains."
+      }
+    ]
+  },
+  {
+    "oracle_id": "ed7bdb3e-5c51-4547-9266-76a791e0b2b0",
+    "name": "Humility",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Humility",
+        "type_line": "Enchantment",
+        "oracle_text": "All creatures lose all abilities and have base power and toughness 1/1."
+      }
+    ]
+  },
+  {
+    "oracle_id": "a3e51a35-09df-4189-b131-08a21e6a557d",
+    "name": "Cryptic Command",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Cryptic Command",
+        "type_line": "Instant",
+        "oracle_text": "Choose two —\n• Counter target spell.\n• Return target permanent to its owner's hand.\n• Tap all creatures your opponents control.\n• Draw a card."
+      }
+    ]
+  },
+  {
+    "oracle_id": "9842734c-1eac-4509-a731-4c22017ae586",
+    "name": "Wear // Tear",
+    "layout": "split",
+    "faces": [
+      {
+        "name": "Wear",
+        "type_line": "Instant",
+        "oracle_text": "Destroy target artifact.\nFuse (You may cast one or both halves of this card from your hand.)"
+      },
+      {
+        "name": "Tear",
+        "type_line": "Instant",
+        "oracle_text": "Destroy target enchantment.\nFuse (You may cast one or both halves of this card from your hand.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "e996cd67-739c-40f4-b276-0042acf26c71",
+    "name": "Dryad Arbor",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Dryad Arbor",
+        "type_line": "Land Creature — Forest Dryad",
+        "oracle_text": "(This land isn't a spell, it's affected by summoning sickness, and it has \"{T}: Add {G}.\")"
+      }
+    ]
+  },
+  {
+    "oracle_id": "8a280ba8-6b7b-46dd-9c2b-6d0027cfff30",
+    "name": "Fighter Class",
+    "layout": "class",
+    "faces": [
+      {
+        "name": "Fighter Class",
+        "type_line": "Enchantment — Class",
+        "oracle_text": "(Gain the next level as a sorcery to add its ability.)\nWhen this Class enters, search your library for an Equipment card, reveal it, put it into your hand, then shuffle.\n{1}{R}{W}: Level 2\nEquip abilities you activate cost {2} less to activate.\n{3}{R}{W}: Level 3\nWhenever a creature you control attacks, up to one target creature blocks it this combat if able."
+      }
+    ]
+  },
+  {
+    "oracle_id": "00c1788d-c52f-4839-9cd8-11fb86c418b6",
+    "name": "Stormchaser's Talent",
+    "layout": "class",
+    "faces": [
+      {
+        "name": "Stormchaser's Talent",
+        "type_line": "Enchantment — Class",
+        "oracle_text": "(Gain the next level as a sorcery to add its ability.)\nWhen this Class enters, create a 1/1 blue and red Otter creature token with prowess.\n{3}{U}: Level 2\nWhen this Class becomes level 2, return target instant or sorcery card from your graveyard to your hand.\n{5}{U}: Level 3\nWhenever you cast an instant or sorcery spell, create a 1/1 blue and red Otter creature token with prowess."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0d8730b5-f7ba-48b0-928d-d8b7685347d3",
+    "name": "Case of the Uneaten Feast",
+    "layout": "case",
+    "faces": [
+      {
+        "name": "Case of the Uneaten Feast",
+        "type_line": "Enchantment — Case",
+        "oracle_text": "Whenever a creature you control enters, you gain 1 life.\nTo solve — You've gained 5 or more life this turn. (If unsolved, solve at the beginning of your end step.)\nSolved — Sacrifice this Case: Creature cards in your graveyard gain \"You may cast this card from your graveyard\" until end of turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0bc2875b-3a5a-4885-86b9-16ab7330ac10",
+    "name": "Student of Warfare",
+    "layout": "leveler",
+    "faces": [
+      {
+        "name": "Student of Warfare",
+        "type_line": "Creature — Human Knight",
+        "oracle_text": "Level up {W} ({W}: Put a level counter on this. Level up only as a sorcery.)\nLEVEL 2-6\n3/3\nFirst strike\nLEVEL 7+\n4/4\nDouble strike"
+      }
+    ]
+  },
+  {
+    "oracle_id": "d83bb32d-f409-421a-9d93-bd7ea3240b47",
+    "name": "Erayo, Soratami Ascendant // Erayo's Essence",
+    "layout": "flip",
+    "faces": [
+      {
+        "name": "Erayo, Soratami Ascendant",
+        "type_line": "Legendary Creature — Moonfolk Monk",
+        "oracle_text": "Flying\nWhenever the fourth spell of a turn is cast, flip Erayo."
+      },
+      {
+        "name": "Erayo's Essence",
+        "type_line": "Legendary Enchantment",
+        "oracle_text": "Whenever an opponent casts their first spell each turn, counter that spell."
+      }
+    ]
+  },
+  {
+    "oracle_id": "bce7e45d-b2c5-43aa-91a6-3a3c24f30850",
+    "name": "Bruna, the Fading Light",
+    "layout": "meld",
+    "faces": [
+      {
+        "name": "Bruna, the Fading Light",
+        "type_line": "Legendary Creature — Angel Horror",
+        "oracle_text": "When you cast this spell, you may return target Angel or Human creature card from your graveyard to the battlefield.\nFlying, vigilance\n(Melds with Gisela, the Broken Blade.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "927fa223-69a3-4563-80b1-b578f3d031f1",
+    "name": "Central Elevator // Promising Stairs",
+    "layout": "split",
+    "faces": [
+      {
+        "name": "Central Elevator",
+        "type_line": "Enchantment — Room",
+        "oracle_text": "When you unlock this door, search your library for a Room card that doesn't have the same name as a Room you control, reveal it, put it into your hand, then shuffle.\n(You may cast either half. That door unlocks on the battlefield. As a sorcery, you may pay the mana cost of a locked door to unlock it.)"
+      },
+      {
+        "name": "Promising Stairs",
+        "type_line": "Enchantment — Room",
+        "oracle_text": "At the beginning of your upkeep, surveil 1. You win the game if there are eight or more different names among unlocked doors of Rooms you control.\n(You may cast either half. That door unlocks on the battlefield. As a sorcery, you may pay the mana cost of a locked door to unlock it.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "21d90735-5e04-4a8c-a546-ff26d4d5998d",
+    "name": "Invasion of Ikoria // Zilortha, Apex of Ikoria",
+    "layout": "transform",
+    "faces": [
+      {
+        "name": "Invasion of Ikoria",
+        "type_line": "Battle — Siege",
+        "oracle_text": "(As a Siege enters, choose an opponent to protect it. You and others can attack it. When it's defeated, exile it, then cast it transformed.)\nWhen this Siege enters, search your library and/or graveyard for a non-Human creature card with mana value X or less and put it onto the battlefield. If you search your library this way, shuffle."
+      },
+      {
+        "name": "Zilortha, Apex of Ikoria",
+        "type_line": "Legendary Creature — Dinosaur",
+        "oracle_text": "Reach\nFor each non-Human creature you control, you may have that creature assign its combat damage as though it weren't blocked."
+      }
+    ]
+  },
+  {
+    "oracle_id": "d3a5a830-cd14-49da-9412-c50049c74c92",
+    "name": "Phyrexian Fleshgorger",
+    "layout": "prototype",
+    "faces": [
+      {
+        "name": "Phyrexian Fleshgorger",
+        "type_line": "Artifact Creature — Phyrexian Wurm",
+        "oracle_text": "Prototype {1}{B}{B} — 3/3 (You may cast this spell with different mana cost, color, and size. It keeps its abilities and types.)\nMenace, lifelink\nWard—Pay life equal to this creature's power."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3dfb0c0a-b68f-43b9-8475-28d0192fc4ed",
+    "name": "Gemrazer",
+    "layout": "mutate",
+    "faces": [
+      {
+        "name": "Gemrazer",
+        "type_line": "Creature — Beast",
+        "oracle_text": "Mutate {1}{G}{G} (If you cast this spell for its mutate cost, put it over or under target non-Human creature you own. They mutate into the creature on top plus all abilities from under it.)\nReach, trample\nWhenever this creature mutates, destroy target artifact or enchantment an opponent controls."
+      }
+    ]
+  },
+  {
+    "oracle_id": "5ed0c7cc-9969-4387-90f8-3084dd18026b",
+    "name": "Fluctuator",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Fluctuator",
+        "type_line": "Artifact",
+        "oracle_text": "Cycling abilities you activate cost {2} less to activate."
+      }
+    ]
+  },
+  {
+    "oracle_id": "10da681b-50bd-4a1b-9934-f0c90e0af55c",
+    "name": "Tectonic Reformation",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Tectonic Reformation",
+        "type_line": "Enchantment",
+        "oracle_text": "Each land card in your hand has cycling {R}.\nCycling {2} ({2}, Discard this card: Draw a card.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "716a3bb8-04bd-41f5-a568-131f175e00a6",
+    "name": "Gavi, Nest Warden",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Gavi, Nest Warden",
+        "type_line": "Legendary Creature — Human Shaman",
+        "oracle_text": "You may pay {0} rather than pay the cycling cost of the first card you cycle each turn.\nWhenever you draw your second card each turn, create a 2/2 red and white Dinosaur Cat creature token."
+      }
+    ]
+  },
+  {
+    "oracle_id": "a051dee0-60c8-4f58-84cb-55460c097115",
+    "name": "Abandoned Sarcophagus",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Abandoned Sarcophagus",
+        "type_line": "Artifact",
+        "oracle_text": "You may cast spells that have a cycling ability from your graveyard.\nIf a card that has a cycling ability would be put into your graveyard from anywhere and it wasn't cycled, exile it instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "d32f7af3-b371-4883-b619-5a569767ff89",
+    "name": "Catalyst Stone",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Catalyst Stone",
+        "type_line": "Artifact",
+        "oracle_text": "Flashback costs you pay cost {2} less.\nFlashback costs your opponents pay cost {2} more."
+      }
+    ]
+  },
+  {
+    "oracle_id": "e3ee8b0e-9bdc-4b9a-b4f9-59189dd6a80d",
+    "name": "Auriok Steelshaper",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Auriok Steelshaper",
+        "type_line": "Creature — Human Soldier",
+        "oracle_text": "Equip costs you pay cost {1} less.\nAs long as this creature is equipped, each creature you control that's a Soldier or a Knight gets +1/+1."
+      }
+    ]
+  },
+  {
+    "oracle_id": "f5fd3141-6fd9-4491-9f29-7fd81209bd57",
+    "name": "Memory Crystal",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Memory Crystal",
+        "type_line": "Artifact",
+        "oracle_text": "Buyback costs cost {2} less."
+      }
+    ]
+  },
+  {
+    "oracle_id": "15f1fe23-5af4-4fc4-8cde-2e0bf9f9be0c",
+    "name": "Citadel Gate",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Citadel Gate",
+        "type_line": "Land — Gate",
+        "oracle_text": "This land enters tapped.\nAs this land enters, choose a color other than white.\n{T}: Add {W} or one mana of the chosen color."
+      }
+    ]
+  },
+  {
+    "oracle_id": "69fc70b8-b143-4662-ac95-e2743037239d",
+    "name": "Thriving Isle",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Thriving Isle",
+        "type_line": "Land",
+        "oracle_text": "This land enters tapped. As it enters, choose a color other than blue.\n{T}: Add {U} or one mana of the chosen color."
+      }
+    ]
+  },
+  {
+    "oracle_id": "205f6384-7203-42ed-bc0f-8803cf1f4514",
+    "name": "Eater of Days",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Eater of Days",
+        "type_line": "Artifact Creature — Leviathan",
+        "oracle_text": "Flying, trample\nWhen this creature enters, you skip your next two turns."
+      }
+    ]
+  },
+  {
+    "oracle_id": "00317e4f-0228-469a-9789-fb6c39976860",
+    "name": "Aura Graft",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Aura Graft",
+        "type_line": "Instant",
+        "oracle_text": "Gain control of target Aura that's attached to a permanent. Attach it to another permanent it can enchant."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0068a341-92a5-470e-a565-9ace69eb04a8",
+    "name": "Warden of the First Tree",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Warden of the First Tree",
+        "type_line": "Creature — Human",
+        "oracle_text": "{1}{W/B}: This creature becomes a Human Warrior with base power and toughness 3/3.\n{2}{W/B}{W/B}: If this creature is a Warrior, it becomes a Human Spirit Warrior with trample and lifelink.\n{3}{W/B}{W/B}{W/B}: If this creature is a Spirit, put five +1/+1 counters on it."
+      }
+    ]
+  },
+  {
+    "oracle_id": "aa95501f-bb59-494a-bcae-b74ca10ad57e",
+    "name": "Angelic Accord",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Angelic Accord",
+        "type_line": "Enchantment",
+        "oracle_text": "At the beginning of each end step, if you gained 4 or more life this turn, create a 4/4 white Angel creature token with flying."
+      }
+    ]
+  },
+  {
+    "oracle_id": "390cbc61-6291-4e7d-b262-4de57c827702",
+    "name": "Tahngarth's Glare",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Tahngarth's Glare",
+        "type_line": "Sorcery",
+        "oracle_text": "Look at the top three cards of target opponent's library, then put them back in any order. That player looks at the top three cards of your library, then puts them back in any order."
+      }
+    ]
+  },
+  {
+    "oracle_id": "c983644d-6741-4aa1-aa68-a6e680c26bb6",
+    "name": "Serpentine Spike",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Serpentine Spike",
+        "type_line": "Sorcery",
+        "oracle_text": "Devoid (This card has no color.)\nSerpentine Spike deals 2 damage to target creature, 3 damage to another target creature, and 4 damage to a third target creature. If a creature dealt damage this way would die this turn, exile it instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "05e6b243-48a6-4a42-bc5f-413441de9c33",
+    "name": "Elspeth, Sun's Champion",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Elspeth, Sun's Champion",
+        "type_line": "Legendary Planeswalker — Elspeth",
+        "oracle_text": "+1: Create three 1/1 white Soldier creature tokens.\n−3: Destroy all creatures with power 4 or greater.\n−7: You get an emblem with \"Creatures you control get +2/+2 and have flying.\""
+      }
+    ]
+  },
+  {
+    "oracle_id": "5aa3abf1-d56b-4f42-8c84-7e5a2c15ee0f",
+    "name": "Nissa, Who Shakes the World",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Nissa, Who Shakes the World",
+        "type_line": "Legendary Planeswalker — Nissa",
+        "oracle_text": "Whenever you tap a Forest for mana, add an additional {G}.\n+1: Put three +1/+1 counters on up to one target noncreature land you control. Untap it. It becomes a 0/0 Elemental creature with vigilance and haste that's still a land.\n−8: You get an emblem with \"Lands you control have indestructible.\" Search your library for any number of Forest cards, put them onto the battlefield tapped, then shuffle."
+      }
+    ]
+  },
+  {
+    "oracle_id": "12cc800c-c7be-4811-8207-fd01a99cc892",
+    "name": "Chandra, Torch of Defiance",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Chandra, Torch of Defiance",
+        "type_line": "Legendary Planeswalker — Chandra",
+        "oracle_text": "+1: Exile the top card of your library. You may cast that card. If you don't, Chandra deals 2 damage to each opponent.\n+1: Add {R}{R}.\n−3: Chandra deals 4 damage to target creature.\n−7: You get an emblem with \"Whenever you cast a spell, this emblem deals 5 damage to any target.\""
+      }
+    ]
+  },
+  {
+    "oracle_id": "9cf99129-f51a-4418-a8cc-8ca2992b17fa",
+    "name": "Tamiyo, Field Researcher",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Tamiyo, Field Researcher",
+        "type_line": "Legendary Planeswalker — Tamiyo",
+        "oracle_text": "+1: Choose up to two target creatures. Until your next turn, whenever either of those creatures deals combat damage, you draw a card.\n−2: Tap up to two target nonland permanents. They don't untap during their controller's next untap step.\n−7: Draw three cards. You get an emblem with \"You may cast spells from your hand without paying their mana costs.\""
+      }
+    ]
+  },
+  {
+    "oracle_id": "60c60923-ff1b-43f7-8768-731499fcffc9",
+    "name": "Oko, Thief of Crowns",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Oko, Thief of Crowns",
+        "type_line": "Legendary Planeswalker — Oko",
+        "oracle_text": "+2: Create a Food token. (It's an artifact with \"{2}, {T}, Sacrifice this token: You gain 3 life.\")\n+1: Target artifact or creature loses all abilities and becomes a green Elk creature with base power and toughness 3/3.\n−5: Exchange control of target artifact or creature you control and target creature an opponent controls with power 3 or less."
+      }
+    ]
+  },
+  {
+    "oracle_id": "8d11aa49-d4cd-48b1-aa0f-8548fa733416",
+    "name": "Kinnan, Bonder Prodigy",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Kinnan, Bonder Prodigy",
+        "type_line": "Legendary Creature — Human Druid",
+        "oracle_text": "Whenever you tap a nonland permanent for mana, add one mana of any type that permanent produced.\n{5}{G}{U}: Look at the top five cards of your library. You may put a non-Human creature card from among them onto the battlefield. Put the rest on the bottom of your library in a random order."
+      }
+    ]
+  },
+  {
+    "oracle_id": "1de1b591-a73f-4974-b507-8c63e07a0868",
+    "name": "Thassa's Oracle",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Thassa's Oracle",
+        "type_line": "Creature — Merfolk Wizard",
+        "oracle_text": "When this creature enters, look at the top X cards of your library, where X is your devotion to blue. Put up to one of them on top of your library and the rest on the bottom of your library in a random order. If X is greater than or equal to the number of cards in your library, you win the game. (Each {U} in the mana costs of permanents you control counts toward your devotion to blue.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "697bcfe1-ecbf-42a1-bfc7-0766d48ca56b",
+    "name": "Dockside Extortionist",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Dockside Extortionist",
+        "type_line": "Creature — Goblin Pirate",
+        "oracle_text": "When this creature enters, create X Treasure tokens, where X is the number of artifacts and enchantments your opponents control. (Treasure tokens are artifacts with \"{T}, Sacrifice this token: Add one mana of any color.\")"
+      }
+    ]
+  },
+  {
+    "oracle_id": "d75b9c82-1b49-4c3e-a1b5-aeef57d6644b",
+    "name": "Cyclonic Rift",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Cyclonic Rift",
+        "type_line": "Instant",
+        "oracle_text": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")"
+      }
+    ]
+  },
+  {
+    "oracle_id": "956381ba-6d37-4a8a-846c-bad79222dbee",
+    "name": "Force of Will",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Force of Will",
+        "type_line": "Instant",
+        "oracle_text": "You may pay 1 life and exile a blue card from your hand rather than pay this spell's mana cost.\nCounter target spell."
+      }
+    ]
+  },
+  {
+    "oracle_id": "09193c40-538c-4154-a671-076eece35e54",
+    "name": "Tuinvale Treefolk // Oaken Boon",
+    "layout": "adventure",
+    "faces": [
+      {
+        "name": "Tuinvale Treefolk",
+        "type_line": "Creature — Treefolk Druid",
+        "oracle_text": ""
+      },
+      {
+        "name": "Oaken Boon",
+        "type_line": "Sorcery — Adventure",
+        "oracle_text": "Put two +1/+1 counters on target creature. (Then exile this card. You may cast the creature later from exile.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "0a364b66-95df-480b-a733-e90f6d5c4d2b",
+    "name": "Altar of Bhaal // Bone Offering",
+    "layout": "adventure",
+    "faces": [
+      {
+        "name": "Altar of Bhaal",
+        "type_line": "Artifact",
+        "oracle_text": "{2}{B}, {T}, Exile a creature you control: Return target creature card from your graveyard to the battlefield. Activate only as a sorcery."
+      },
+      {
+        "name": "Bone Offering",
+        "type_line": "Sorcery — Adventure",
+        "oracle_text": "Create a tapped 4/1 black Skeleton creature token with menace. (Then exile this card. You may cast the artifact later from exile.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "2699005b-a471-429f-a9d8-fbf2077ee2fd",
+    "name": "Disciple of Freyalise // Garden of Freyalise",
+    "layout": "modal_dfc",
+    "faces": [
+      {
+        "name": "Disciple of Freyalise",
+        "type_line": "Creature — Elf Druid",
+        "oracle_text": "When this creature enters, you may sacrifice another creature. If you do, you gain X life and draw X cards, where X is that creature's power."
+      },
+      {
+        "name": "Garden of Freyalise",
+        "type_line": "Land",
+        "oracle_text": "As this land enters, you may pay 3 life. If you don't, it enters tapped.\n{T}: Add {G}."
+      }
+    ]
+  },
+  {
+    "oracle_id": "648100cd-d44a-48f8-87e4-a1d5467f348c",
+    "name": "Cosima, God of the Voyage // The Omenkeel",
+    "layout": "modal_dfc",
+    "faces": [
+      {
+        "name": "Cosima, God of the Voyage",
+        "type_line": "Legendary Creature — God",
+        "oracle_text": "At the beginning of your upkeep, you may exile Cosima. If you do, it gains \"Whenever a land you control enters, if Cosima is exiled, you may put a voyage counter on it. If you don't, return Cosima to the battlefield with X +1/+1 counters on it and draw X cards, where X is the number of voyage counters on it.\""
+      },
+      {
+        "name": "The Omenkeel",
+        "type_line": "Legendary Artifact — Vehicle",
+        "oracle_text": "Whenever a Vehicle you control deals combat damage to a player, that player exiles that many cards from the top of their library. You may play lands from among those cards for as long as they remain exiled.\nCrew 1"
+      }
+    ]
+  },
+  {
+    "oracle_id": "068699a9-dd5c-428b-96eb-fd085dda71e9",
+    "name": "Mezzio Mugger",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Mezzio Mugger",
+        "type_line": "Creature — Lizard Rogue",
+        "oracle_text": "Whenever this creature attacks, exile the top card of each player's library. You may play those cards this turn, and you may spend mana as though it were mana of any color to cast those spells.\nBlitz {2}{R} (If you cast this spell for its blitz cost, it gains haste and \"When this creature dies, draw a card.\" Sacrifice it at the beginning of the next end step.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "076865e9-ee10-4a87-9180-4274202d37c1",
+    "name": "Starbreach Whale",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Starbreach Whale",
+        "type_line": "Creature — Whale",
+        "oracle_text": "Flying\nWhen this creature enters, surveil 2. (Look at the top two cards of your library, then put any number of them into your graveyard and the rest on top of your library in any order.)\nWarp {1}{U} (You may cast this card from your hand for its warp cost. Exile this creature at the beginning of the next end step, then you may cast it from exile on a later turn.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "00909d51-3da8-41eb-a535-0c325fedc59f",
+    "name": "Summon the School",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Summon the School",
+        "type_line": "Kindred Sorcery — Merfolk",
+        "oracle_text": "Create two 1/1 blue Merfolk Wizard creature tokens.\nTap four untapped Merfolk you control: Return this card from your graveyard to your hand."
+      }
+    ]
+  },
+  {
+    "oracle_id": "019d0013-52fd-4261-9cc8-7efcee5a4616",
+    "name": "Dwarven Thaumaturgist",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Dwarven Thaumaturgist",
+        "type_line": "Creature — Dwarf Shaman",
+        "oracle_text": "{T}: Switch target creature's power and toughness until end of turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "00e25126-b807-4753-ba63-9a533755e5ce",
+    "name": "Lantern of Revealing",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Lantern of Revealing",
+        "type_line": "Artifact",
+        "oracle_text": "{T}: Add one mana of any color.\n{4}, {T}: Look at the top card of your library. If it's a land card, you may put it onto the battlefield tapped. If you don't put the card onto the battlefield, you may put it on the bottom of your library."
+      }
+    ]
+  },
+  {
+    "oracle_id": "011da9c5-aa8a-4fa0-b1f2-62b9f3760476",
+    "name": "Belladonna Took",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Belladonna Took",
+        "type_line": "Legendary Creature — Halfling Citizen",
+        "oracle_text": "Whenever a token you control enters, you gain 1 life if this is the first time this ability has resolved this turn. If it's the second time, draw a card. If it's the third time, put a +1/+1 counter on each creature you control."
+      }
+    ]
+  },
+  {
+    "oracle_id": "09ab1278-811f-4b97-bd34-7493d6e081e9",
+    "name": "Karn, Living Legacy",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Karn, Living Legacy",
+        "type_line": "Legendary Planeswalker — Karn",
+        "oracle_text": "+1: Create a tapped Powerstone token. (It's an artifact with \"{T}: Add {C}. This mana can't be spent to cast a nonartifact spell.\")\n−1: Pay any amount of mana. Look at that many cards from the top of your library, then put one of those cards into your hand and the rest on the bottom of your library in a random order.\n−7: You get an emblem with \"Tap an untapped artifact you control: This emblem deals 1 damage to any target.\""
+      }
+    ]
+  },
+  {
+    "oracle_id": "0c4a2c42-0874-40b4-8d12-47eeadc3e976",
+    "name": "Domri Rade",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Domri Rade",
+        "type_line": "Legendary Planeswalker — Domri",
+        "oracle_text": "+1: Look at the top card of your library. If it's a creature card, you may reveal it and put it into your hand.\n−2: Target creature you control fights another target creature.\n−7: You get an emblem with \"Creatures you control have double strike, trample, hexproof, and haste.\""
+      }
+    ]
+  },
+  {
+    "oracle_id": "0056e07b-416b-487e-9e6c-3697db402dd4",
+    "name": "Leopard-Spotted Jiao",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Leopard-Spotted Jiao",
+        "type_line": "Creature — Beast",
+        "oracle_text": ""
+      }
+    ]
+  },
+  {
+    "oracle_id": "18fe834f-4417-4df8-a49c-98e9bf2f87d2",
+    "name": "Kyoshi Warrior Guard",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Kyoshi Warrior Guard",
+        "type_line": "Creature — Human Warrior Ally",
+        "oracle_text": ""
+      }
+    ]
+  },
+  {
+    "oracle_id": "511951ed-fbff-4e44-9429-27f237496672",
+    "name": "Paradox Shaper // Omit Variables",
+    "layout": "prepare",
+    "faces": [
+      {
+        "name": "Paradox Shaper",
+        "type_line": "Creature — Octopus Wizard",
+        "oracle_text": "At the beginning of your upkeep, if this creature isn't prepared, it becomes prepared.\n{2}: Put target card from your graveyard on the bottom of your library."
+      },
+      {
+        "name": "Omit Variables",
+        "type_line": "Sorcery",
+        "oracle_text": "Mill three cards. (Put the top three cards of your library into your graveyard.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "32ad5b3e-92c0-45be-b2e4-6f1794552f36",
+    "name": "The Mountain-king's Return",
+    "layout": "saga",
+    "faces": [
+      {
+        "name": "The Mountain-king's Return",
+        "type_line": "Enchantment — Saga",
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore counter. Sacrifice after III.)\nI — Recruit. (Draw a card, then discard a card. If you discarded a nonland card, create a 1/1 white Human Soldier creature token.)\nII — Return target creature card with mana value 3 or less from your graveyard to the battlefield.\nIII — Put a +1/+1 counter on up to one target creature."
+      }
+    ]
+  },
+  {
+    "oracle_id": "4567a42a-aa1c-4ca2-b5e2-b09acac3f276",
+    "name": "Braids's Frightful Return",
+    "layout": "saga",
+    "faces": [
+      {
+        "name": "Braids's Frightful Return",
+        "type_line": "Enchantment — Saga",
+        "oracle_text": "Read ahead (Choose a chapter and start with that many lore counters. Add one after your draw step. Skipped chapters don't trigger. Sacrifice after III.)\nI — You may sacrifice a creature. If you do, each opponent discards a card.\nII — Return target creature card from your graveyard to your hand.\nIII — Target opponent may sacrifice a nonland, nontoken permanent of their choice. If they don't, they lose 2 life and you draw a card."
+      }
+    ]
+  },
+  {
+    "oracle_id": "b996ae86-3bf6-4e84-8302-6ec6edaa6ff0",
+    "name": "Carnival // Carnage",
+    "layout": "split",
+    "faces": [
+      {
+        "name": "Carnival",
+        "type_line": "Instant",
+        "oracle_text": "Carnival deals 1 damage to target creature or planeswalker and 1 damage to that permanent's controller."
+      },
+      {
+        "name": "Carnage",
+        "type_line": "Sorcery",
+        "oracle_text": "Carnage deals 3 damage to target opponent. That player discards two cards."
+      }
+    ]
+  },
+  {
+    "oracle_id": "a9c5b155-7c09-4100-9679-8fca2b5e9222",
+    "name": "Child of the Pack // Savage Packmate",
+    "layout": "transform",
+    "faces": [
+      {
+        "name": "Child of the Pack",
+        "type_line": "Creature — Human Werewolf",
+        "oracle_text": "{2}{R}{G}: Create a 2/2 green Wolf creature token.\nDaybound (If a player casts no spells during their own turn, it becomes night next turn.)"
+      },
+      {
+        "name": "Savage Packmate",
+        "type_line": "Creature — Werewolf",
+        "oracle_text": "Trample\nOther creatures you control get +1/+0.\nNightbound (If a player casts at least two spells during their own turn, it becomes day next turn.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "c4e51cba-e5f7-4f44-9ae9-9223a2efd004",
+    "name": "Harried Artisan // Phyrexian Skyflayer",
+    "layout": "transform",
+    "faces": [
+      {
+        "name": "Harried Artisan",
+        "type_line": "Creature — Human Artificer",
+        "oracle_text": "Haste\n{3}{W/P}: Transform this creature. Activate only as a sorcery. ({W/P} can be paid with either {W} or 2 life.)"
+      },
+      {
+        "name": "Phyrexian Skyflayer",
+        "type_line": "Creature — Phyrexian Artificer",
+        "oracle_text": "Flying, haste"
+      }
+    ]
+  },
+  {
+    "oracle_id": "36082b5e-760b-4245-af59-00d308470d1a",
+    "name": "Plate Armor",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Plate Armor",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": "Equipped creature gets +3/+3 and has ward {1}. (Whenever equipped creature becomes the target of a spell or ability an opponent controls, counter it unless that player pays {1}.)\nEquip {3}. This ability costs {1} less to activate for each other Equipment you control. ({3}: Attach to target creature you control. Equip only as a sorcery.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "14104a52-c4e8-4755-8196-7fa5c5a35f36",
+    "name": "Duneblast",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Duneblast",
+        "type_line": "Sorcery",
+        "oracle_text": "Choose up to one creature. Destroy the rest."
+      }
+    ]
+  },
+  {
+    "oracle_id": "030b5408-f216-43e4-8593-f78d22821876",
+    "name": "Wail of the Forgotten",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Wail of the Forgotten",
+        "type_line": "Sorcery",
+        "oracle_text": "Descend 8 — Choose one. If there are eight or more permanent cards in your graveyard as you cast this spell, choose one or more instead.\n• Return target nonland permanent to its owner's hand.\n• Target opponent discards a card.\n• Look at the top three cards of your library. Put one of them into your hand and the rest into your graveyard."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3ea060d8-449c-4a5e-8883-b45bd7707b5b",
+    "name": "Season of Gathering",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Season of Gathering",
+        "type_line": "Sorcery",
+        "oracle_text": "Choose up to five {P} worth of modes. You may choose the same mode more than once.\n{P} — Put a +1/+1 counter on a creature you control. It gains vigilance and trample until end of turn.\n{P}{P} — Choose artifact or enchantment. Destroy all permanents of the chosen type.\n{P}{P}{P} — Draw cards equal to the greatest power among creatures you control."
+      }
+    ]
+  },
+  {
+    "oracle_id": "e2baf24c-7055-431d-8e96-ba5ff2ef91e1",
+    "name": "Doom Foretold",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Doom Foretold",
+        "type_line": "Enchantment",
+        "oracle_text": "At the beginning of each player's upkeep, that player sacrifices a nonland, nontoken permanent of their choice. If that player can't, they discard a card, they lose 2 life, you draw a card, you gain 2 life, you create a 2/2 white Knight creature token with vigilance, then you sacrifice this enchantment."
+      }
+    ]
+  },
+  {
+    "oracle_id": "1a168ba5-8e11-41dd-8f8a-8cb23bbde056",
+    "name": "Xanathar, Guild Kingpin",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Xanathar, Guild Kingpin",
+        "type_line": "Legendary Creature — Beholder",
+        "oracle_text": "At the beginning of your upkeep, choose target opponent. Until end of turn, that player can't cast spells, you may look at the top card of their library any time, you may play the top card of their library, and you may spend mana as though it were mana of any color to cast spells this way."
+      }
+    ]
+  },
+  {
+    "oracle_id": "61849685-b407-4ed0-aafc-ec3a003200b9",
+    "name": "Canoptek Wraith",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Canoptek Wraith",
+        "type_line": "Artifact Creature — Wraith",
+        "oracle_text": "Wraith Form — This creature can't be blocked.\nTransdimensional Scout — When this creature deals combat damage to a player, you may pay {3} and sacrifice it. If you do, choose a land you control. Then search your library for up to two basic land cards which have the same name as the chosen land, put them onto the battlefield tapped, then shuffle."
+      }
+    ]
+  },
+  {
+    "oracle_id": "1cfe6e3a-f8c9-4105-ad03-0faf1fcc4626",
+    "name": "Riku of Many Paths",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Riku of Many Paths",
+        "type_line": "Legendary Creature — Human Wizard",
+        "oracle_text": "Whenever you cast a modal spell, choose up to X, where X is the number of times you chose a mode for that spell —\n• Exile the top card of your library. Until the end of your next turn, you may play it.\n• Put a +1/+1 counter on Riku. It gains trample until end of turn.\n• Create a 1/1 blue Bird creature token with flying."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0636090b-49e0-45b4-a68d-48b1cdc0c54d",
+    "name": "Warbringer",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Warbringer",
+        "type_line": "Creature — Orc Berserker",
+        "oracle_text": "Dash costs you pay cost {2} less (as long as this creature is on the battlefield).\nDash {2}{R} (You may cast this spell for its dash cost. If you do, it gains haste, and it's returned from the battlefield to its owner's hand at the beginning of the next end step.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "34b4d137-780b-446c-8cdd-fd1673180971",
+    "name": "Homing Sliver",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Homing Sliver",
+        "type_line": "Creature — Sliver",
+        "oracle_text": "Each Sliver card in each player's hand has slivercycling {3}.\nSlivercycling {3} ({3}, Discard this card: Search your library for a Sliver card, reveal it, put it into your hand, then shuffle.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "8e93ea21-5e3f-448e-a175-96c8438c328e",
+    "name": "The Toymaker's Trap",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "The Toymaker's Trap",
+        "type_line": "Enchantment",
+        "oracle_text": "At the beginning of your upkeep, secretly choose a number between 1 and 5 that hasn't been chosen. If you do, an opponent guesses which number you chose, then you reveal the number you chose. If they guessed wrong, they lose life equal to the number they guessed and you draw a card. If they guessed right, sacrifice this enchantment."
+      }
+    ]
+  },
+  {
+    "oracle_id": "8fbfc5b1-2146-4d07-a5fe-5f025da31bd6",
+    "name": "Okoye, Mighty and Adored",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Okoye, Mighty and Adored",
+        "type_line": "Legendary Creature — Human Warrior Hero",
+        "oracle_text": "When Okoye enters, you become the monarch.\nAt the beginning of combat on your turn, put a +1/+1 counter on target creature. Whenever that creature attacks the monarch this turn, it gains double strike and trample until end of turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "92f0677f-64d8-4c83-abad-ffa2a37f88c1",
+    "name": "Celestial Convergence",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Celestial Convergence",
+        "type_line": "Enchantment",
+        "oracle_text": "This enchantment enters with seven omen counters on it.\nAt the beginning of your upkeep, remove an omen counter from this enchantment. If there are no omen counters on this enchantment, the player with the highest life total wins the game. If two or more players are tied for highest life total, the game is a draw."
+      }
+    ]
+  }
+]

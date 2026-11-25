@@ -474,6 +474,13 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         .to_ascii_lowercase()
         .replace("time lords", "timelords")
         .replace("time lord", "timelord");
+    if s == "a ~ planeswalker" || s == "~ planeswalker" {
+        flt.any_types = CardTypeMask::PLANESWALKER;
+        flt.predicates.push(FilterPredicateAst::StateQualification(
+            "same_planeswalker_type_as_self".to_string(),
+        ));
+        return Ok(flt);
+    }
 
     // Fast path for "<kind> stickers on <subj>" (Pin Collection Layer 6 ability inheritance).
     if let Some((kind_raw, host_raw)) = s
@@ -701,7 +708,9 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
         // Generalized "with the same name as <subj>"
-        if let Some((prefix, same_as_raw)) = s.rsplit_once(" with the same name as ")
+        if let Some((prefix, same_as_raw)) = s
+            .rsplit_once(" with the same name as ")
+            .or_else(|| s.rsplit_once(" that have the same name as "))
             && !prefix.trim().is_empty()
             && !same_as_raw.contains(" another card in their hand")
         {
@@ -2177,7 +2186,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " that you've put one or more +1/+1 counters on this turn",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::WITH_ANY_COUNTER,
                 None,
             ),
             (
@@ -2754,7 +2763,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " with another aura attached to it",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::ENCHANTED,
                 None,
             ),
             (
@@ -2875,11 +2884,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 Some(CombatState::BlockingSelf),
             ),
-            (
-                " that crewed it this turn",
-                ObjectFilterFlags::MODIFIED,
-                None,
-            ),
+            (" that crewed it this turn", ObjectFilterFlags::EMPTY, None),
             (
                 " that's attached to a permanent",
                 ObjectFilterFlags::ATTACHED_TO_SELF,
@@ -2993,17 +2998,17 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " each with power greater than its base power",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with power greater than its base power",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with power greater than that creature's base power",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
@@ -3021,7 +3026,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 None,
             ),
             (" that weren't cast", ObjectFilterFlags::EMPTY, None),
-            (" that convoked it", ObjectFilterFlags::MODIFIED, None),
+            (" that convoked it", ObjectFilterFlags::EMPTY, None),
             (
                 " you've cast this turn",
                 ObjectFilterFlags::ENTERED_THIS_TURN,
@@ -3117,7 +3122,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 Some(CombatState::Attacking),
             ),
-            (" that fought this turn", ObjectFilterFlags::MODIFIED, None),
+            (" that fought this turn", ObjectFilterFlags::EMPTY, None),
             (
                 " on the battlefield or in the command zone",
                 ObjectFilterFlags::EMPTY,
@@ -3572,7 +3577,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " with another aura attached to it",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::ENCHANTED,
                 None,
             ),
             (
@@ -3624,7 +3629,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::MATCHES_CHOSEN_NAME,
                 None,
             ),
-            (" chosen this way", ObjectFilterFlags::MODIFIED, None),
+            (" chosen this way", ObjectFilterFlags::EMPTY, None),
             (
                 " other than enchanted creature",
                 ObjectFilterFlags::EXCLUDE_SELF,
@@ -3748,17 +3753,17 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " that has a -1/-1 counter on it",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::WITH_ANY_COUNTER,
                 None,
             ),
             (
                 " that has a +1/+1 counter on it",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::WITH_ANY_COUNTER,
                 None,
             ),
             (
                 " with ice counters on them",
-                ObjectFilterFlags::MODIFIED,
+                ObjectFilterFlags::WITH_ANY_COUNTER,
                 None,
             ),
             (" it can enchant", ObjectFilterFlags::EMPTY, None),
@@ -4510,7 +4515,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             "activated" | "triggered" => flt.is_ability = true,
             "noncommander" => flt.flags = flt.flags.union(ObjectFilterFlags::NOT_COMMANDER),
             "kicked" | "warped" | "bountied" | "blighted" | "stickered" | "solved" => {
-                flt.flags = flt.flags.union(ObjectFilterFlags::MODIFIED);
+                flt.predicates
+                    .push(FilterPredicateAst::StateQualification(tok.to_string()));
             }
             "token" | "tokens" => flt.token = Some(true),
             "nontoken" => flt.token = Some(false),
@@ -4534,10 +4540,14 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             }
             "blocked" => flt.combat = Some(CombatState::Blocked),
             "unblocked" => flt.combat = Some(CombatState::Unblocked),
-            "modified" | "saddled" | "suspected" | "goaded" | "monstrous" | "renowned"
-            | "exerted" | "prepared" | "adventure" | "modal" | "silver-bordered" | "acorn"
-            | "black-bordered" => {
+            "modified" => {
                 flt.flags = flt.flags.union(ObjectFilterFlags::MODIFIED);
+            }
+            "saddled" | "suspected" | "goaded" | "monstrous" | "renowned" | "exerted"
+            | "prepared" | "adventure" | "modal" | "silver-bordered" | "acorn"
+            | "black-bordered" => {
+                flt.predicates
+                    .push(FilterPredicateAst::StateQualification(tok.to_string()));
             }
             "equipped" => flt.flags = flt.flags.union(ObjectFilterFlags::EQUIPPED),
             "enchanted" => flt.flags = flt.flags.union(ObjectFilterFlags::ENCHANTED),
@@ -4587,11 +4597,12 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             "nonsnow" => {
                 flt.forbidden_supertypes = flt.forbidden_supertypes.union(SupertypeMask::SNOW);
             }
-            "nonattacking" | "nonblocking" => {
-                flt.flags = flt.flags.union(ObjectFilterFlags::EMPTY);
+            "nonattacking" => {
+                flt.combat = Some(CombatState::NotAttacking);
             }
-            "foretold" | "double-faced" => {
-                flt.flags = flt.flags.union(ObjectFilterFlags::EMPTY);
+            "nonblocking" | "foretold" | "double-faced" => {
+                flt.predicates
+                    .push(FilterPredicateAst::StateQualification(tok.to_string()));
             }
             "nonwhite" => flt.forbidden_colors = flt.forbidden_colors.union(ColorMask::WHITE),
             "nonblue" => flt.forbidden_colors = flt.forbidden_colors.union(ColorMask::BLUE),
@@ -4601,7 +4612,10 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             "nonaura" => flt.forbidden_subtypes.push("Aura".to_string()),
             "nonequipment" => flt.forbidden_subtypes.push("Equipment".to_string()),
             "transformed" | "sacrificed" | "exiled" | "discarded" | "revealed" | "milled"
-            | "chosen" | "returned" => flt.flags = flt.flags.union(ObjectFilterFlags::MODIFIED),
+            | "chosen" | "returned" => {
+                flt.predicates
+                    .push(FilterPredicateAst::StateQualification(tok.to_string()));
+            }
             _ => {
                 if let Some(c) = lookup_color(tok) {
                     flt.any_colors = flt.any_colors.union(c);
@@ -4625,7 +4639,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                     saw_subtype = true;
                     flt.subtypes.push(sub.to_string());
                 } else if parse_base_pt(tok).is_some() {
-                    flt.flags = flt.flags.union(ObjectFilterFlags::MODIFIED);
+                    flt.predicates
+                        .push(FilterPredicateAst::StateQualification(format!("pt:{tok}")));
                 } else {
                     unknown.push(tok);
                 }
@@ -6182,6 +6197,9 @@ fn finish_target(
 /// Strictly parse a dynamic numeric expression into `ValueExprAst`.
 pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst, String> {
     let raw = trim_punct(phrase);
+    if raw.eq_ignore_ascii_case("the number they guessed") {
+        return Ok(ValueExprAst::PriorResult);
+    }
     if raw.is_empty() {
         return Err("empty_value".to_string());
     }
@@ -10504,8 +10522,21 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some(rest) = low
         .strip_prefix("you've gained ")
         .or_else(|| low.strip_prefix("you gained "))
-        && rest.ends_with(" life this turn")
+        && let Some(amt_part) = rest.strip_suffix(" life this turn")
     {
+        let amt_clean = amt_part
+            .trim()
+            .strip_suffix(" or more")
+            .unwrap_or(amt_part.trim())
+            .trim();
+        if let Some(n) = parse_number_word(amt_clean)
+            && n > 1
+        {
+            return Ok(ConditionAst::GainedLifeAtLeastThisTurn {
+                player: PlayerRefAst::You,
+                amount: n,
+            });
+        }
         return Ok(ConditionAst::GainedLifeThisTurn);
     }
     if let Some(rest) = low
@@ -10789,14 +10820,31 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
                 status: status.to_string(),
             });
         }
+        if let Some(subj_raw) = low
+            .strip_suffix(&format!(" isn't {status}"))
+            .or_else(|| low.strip_suffix(&format!(" aren't {status}")))
+            .or_else(|| low.strip_suffix(&format!(" is not {status}")))
+            && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+        {
+            return Ok(ConditionAst::Not(Box::new(ConditionAst::HasStatus {
+                subject: Box::new(subj),
+                status: status.to_string(),
+            })));
+        }
         if low == format!("it's {status}")
             || low == format!("he's {status}")
             || low == format!("she's {status}")
         {
             return Ok(ConditionAst::HasStatus {
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
                 status: status.to_string(),
             });
+        }
+        if low == format!("it isn't {status}") || low == format!("it's not {status}") {
+            return Ok(ConditionAst::Not(Box::new(ConditionAst::HasStatus {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                status: status.to_string(),
+            })));
         }
     }
 
@@ -11017,22 +11065,32 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
                 && let Some(n) = parse_number_word(cnt_tok)
                 && let Ok(flt) = parse_object_filter(flt_raw, vocab)
             {
-                return Ok(ConditionAst::ControlsCount {
+                let c = ConditionAst::ControlsCount {
                     player,
                     filter: Box::new(flt),
                     op: CompareOp::Ge,
                     value: u16::try_from(n.max(0)).unwrap_or(1),
+                };
+                return Ok(if neg {
+                    ConditionAst::Not(Box::new(c))
+                } else {
+                    c
                 });
             }
             if let Some((cnt_tok, flt_raw)) = rest.split_once(" or fewer ")
                 && let Some(n) = parse_number_word(cnt_tok)
                 && let Ok(flt) = parse_object_filter(flt_raw, vocab)
             {
-                return Ok(ConditionAst::ControlsCount {
+                let c = ConditionAst::ControlsCount {
                     player,
                     filter: Box::new(flt),
                     op: CompareOp::Le,
                     value: u16::try_from(n.max(0)).unwrap_or(0),
+                };
+                return Ok(if neg {
+                    ConditionAst::Not(Box::new(c))
+                } else {
+                    c
                 });
             }
             if let Ok(flt) = parse_object_filter(rest, vocab) {
@@ -12405,6 +12463,139 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         return Ok(ConditionAst::EventOccurredThisTurn { event: low.clone() });
     }
 
+    // Pass E13-B typed conditions (exposed by fixing period-crossing trigger scanner)
+    if low == "you're not the monarch" {
+        return Ok(ConditionAst::Not(Box::new(ConditionAst::Marker(
+            GameMarker::Monarch(PlayerRefAst::You),
+        ))));
+    }
+    if low == "they don't have any rad counters" {
+        return Ok(ConditionAst::Not(Box::new(ConditionAst::Marker(
+            GameMarker::PlayerHasRadCounter {
+                player: PlayerRefAst::ThatPlayer,
+            },
+        ))));
+    }
+    if low == "there are five basic land types among lands you control" {
+        return Ok(ConditionAst::Compare {
+            lhs: Box::new(ValueExprAst::DomainCount),
+            op: CompareOp::Ge,
+            rhs: Box::new(ValueExprAst::Const(5)),
+        });
+    }
+    if let Some(after_no) = low.strip_prefix("there are no ")
+        && let Some(kind_raw) = after_no.strip_suffix(" counters on ~")
+    {
+        return Ok(ConditionAst::CounterCompare {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            counter_kind: kind_raw.trim().to_string(),
+            op: CompareOp::Eq,
+            value: 0,
+        });
+    }
+    if let Some(after_ex) = low.strip_prefix("you control exactly ")
+        && let Some((cnt_tok, flt_raw)) = after_ex.split_once(' ')
+        && let (Some(n), Ok(flt)) = (
+            parse_number_word(cnt_tok.trim()),
+            parse_object_filter(flt_raw.trim(), vocab),
+        )
+    {
+        return Ok(ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter: Box::new(flt),
+            op: CompareOp::Eq,
+            value: u16::try_from(n.max(0)).unwrap_or(0),
+        });
+    }
+    if low == "you control eight or more artifacts with the same name as one another" {
+        let flt = ObjectFilterAst {
+            any_types: CardTypeMask::ARTIFACT,
+            predicates: vec![FilterPredicateAst::StateQualification(
+                "same_name_as_one_another".to_string(),
+            )],
+            ..Default::default()
+        };
+        return Ok(ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter: Box::new(flt),
+            op: CompareOp::Ge,
+            value: 8,
+        });
+    }
+    if let Some(after_named) = low.strip_prefix("a creature named ")
+        && let Some(name_raw) = after_named.strip_suffix(" is on the battlefield")
+    {
+        let flt = ObjectFilterAst {
+            any_types: CardTypeMask::CREATURE,
+            zone: Some(ZoneFilter::Battlefield),
+            named: Some(NameFilterAst::Exact(name_raw.trim().to_string())),
+            ..Default::default()
+        };
+        return Ok(ConditionAst::ZoneObjectCount {
+            filter: Box::new(flt),
+            op: CompareOp::Ge,
+            value: 1,
+        });
+    }
+    if low == "the player is your opponent and has four or more cards in hand" {
+        return Ok(ConditionAst::And(
+            Box::new(ConditionAst::EventOccurredThisTurn {
+                event: "the player is your opponent".to_string(),
+            }),
+            Box::new(ConditionAst::HandCount {
+                player: PlayerRefAst::ThatPlayer,
+                op: CompareOp::Ge,
+                value: 4,
+            }),
+        ));
+    }
+    if let Some(after_roll) = low.strip_prefix("the roll was ")
+        && let Some(num_raw) = after_roll.strip_suffix(" or higher")
+        && let Some(n) = parse_number_word(num_raw.trim())
+    {
+        return Ok(ConditionAst::Compare {
+            lhs: Box::new(ValueExprAst::PriorResult),
+            op: CompareOp::Ge,
+            rhs: Box::new(ValueExprAst::Const(n)),
+        });
+    }
+    if low == "that player lost less than 8 life this turn" {
+        return Ok(ConditionAst::Compare {
+            lhs: Box::new(ValueExprAst::LifeChangedThisTurn {
+                player: PlayerRefAst::ThatPlayer,
+                gained: false,
+            }),
+            op: CompareOp::Lt,
+            rhs: Box::new(ValueExprAst::Const(8)),
+        });
+    }
+    if matches!(
+        low.as_str(),
+        "you had no cards in hand at the beginning of this turn"
+            | "you had a card in hand"
+            | "two nonland cards that share a color were milled this way"
+            | "two cards that share all their card types were milled this way"
+            | "two or more of those cards have the same name"
+            | "it attacked or blocked since your last upkeep"
+            | "it has blocked or been blocked since your last upkeep"
+            | "it deals damage to you this way"
+            | "~ deals damage to you this way"
+            | "~ is destroyed this way"
+            | "no counters were removed this way"
+            | "no life is lost this way"
+            | "the player mills at least one creature card this way"
+            | "cards with at least six different mana values are revealed this way"
+            | "two creatures are put onto the battlefield this way"
+            | "the player guessed wrong"
+            | "you searched for a creature card that doesn't have that name"
+            | "one or more opponents had the highest result"
+            | "you rolled doubles"
+            | "her sneak cost was paid this turn"
+            | "they didn't attack you that turn"
+    ) {
+        return Ok(ConditionAst::EventOccurredThisTurn { event: low.clone() });
+    }
+
     // Tabletop Honor-System physical/social condition fallback
     if is_physical_tabletop_clause(&low) {
         return Ok(ConditionAst::ManualTabletopCheck {
@@ -12433,16 +12624,8 @@ pub fn parse_mana_spec(phrase: &str, vocab: &Vocabulary) -> Result<ManaSpecAst, 
             parts.into_iter().map(ToString::to_string).collect(),
         ));
     }
-    // Multi-way generalized mana spec choice: "X {G} or X {W}", "{W}, {U}, or one mana of the chosen color", etc.
-    if parts.len() >= 2
-        && parts
-            .iter()
-            .all(|p| !p.contains(" or ") && parse_mana_spec(p, vocab).is_ok())
-    {
-        return Ok(ManaSpecAst::Choice(
-            parts.into_iter().map(ToString::to_string).collect(),
-        ));
-    }
+    // Mixed non-symbol mana choices (e.g. "{W} or one mana of the chosen color", "X {G} or X {W}")
+    // are emitted as typed `InstructionAst::AddQualifiedMana { choices: Vec<ManaSpecAst> }` in clauses.rs.
     // "<value_expr> {M}" e.g. "six {R}", "three {G}", "twice that much {G}", "that much {R}", "X {B}"
     if let Some((amt_raw, sym)) = raw.rsplit_once(' ')
         && is_mana_sequence(sym.trim())
@@ -12467,14 +12650,7 @@ pub fn parse_mana_spec(phrase: &str, vocab: &Vocabulary) -> Result<ManaSpecAst, 
     }
 
     let low = raw.to_ascii_lowercase();
-    if let Some((sym, _)) = raw.split_once(" or one mana of the chosen color")
-        && is_mana_sequence(sym.trim())
-    {
-        return Ok(ManaSpecAst::Choice(vec![
-            sym.trim().to_string(),
-            "chosen_color".to_string(),
-        ]));
-    }
+    // Handled as typed AddQualifiedMana choices in clauses.rs (avoid raw prose in ManaSpecAst::Choice).
     if low == "one mana of the chosen color" || low == "one mana of that color" {
         return Ok(ManaSpecAst::ChosenColor);
     }
@@ -13071,7 +13247,13 @@ pub fn parse_token_creation_rich(
             .or_else(|| body.strip_suffix(&format!(" {ptok} tokens")))
         {
             let base_cnt = parse_value_expr(cnt_str, vocab)?;
-            let count = for_each_expr.unwrap_or(base_cnt);
+            let count = match for_each_expr {
+                Some(fe) if base_cnt != ValueExprAst::Const(1) => {
+                    ValueExprAst::Mul(Box::new(base_cnt), Box::new(fe))
+                }
+                Some(fe) => fe,
+                None => base_cnt,
+            };
             let mut chars = ptok.chars();
             let cap = match chars.next() {
                 Some(c) => format!("{}{}", c.to_ascii_uppercase(), chars.as_str()),
@@ -13278,7 +13460,13 @@ pub fn parse_token_creation_rich(
 
     Ok(wrap_plain(
         TokenSpecAst::Creature {
-            count: Box::new(for_each_expr.unwrap_or(count_expr)),
+            count: Box::new(match for_each_expr {
+                Some(fe) if count_expr != ValueExprAst::Const(1) => {
+                    ValueExprAst::Mul(Box::new(count_expr), Box::new(fe))
+                }
+                Some(fe) => fe,
+                None => count_expr,
+            }),
             power,
             toughness,
             colors,
@@ -13341,6 +13529,37 @@ fn apply_rel_suffix_predicate(
     flt: &mut ObjectFilterAst,
 ) {
     match suf {
+        " with mana cost {0} or {1}" => {
+            flt.predicates
+                .push(FilterPredicateAst::ExactManaCostOneOf(vec![
+                    "{0}".to_string(),
+                    "{1}".to_string(),
+                ]));
+        }
+        " that has a -1/-1 counter on it" => {
+            flt.counter_kind = Some("-1/-1".to_string());
+        }
+        " that has a +1/+1 counter on it" => {
+            flt.counter_kind = Some("+1/+1".to_string());
+        }
+        " with ice counters on them" => {
+            flt.counter_kind = Some("ice".to_string());
+        }
+        " chosen this way" => {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "chosen_this_way".to_string(),
+            ));
+        }
+        " that crewed it this turn"
+        | " that convoked it"
+        | " that fought this turn"
+        | " each with power greater than its base power"
+        | " with power greater than its base power"
+        | " with power greater than that creature's base power" => {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                suf.trim().to_string(),
+            ));
+        }
         " that aren't of the chosen type" | " that isn't of the chosen type" => {
             flt.predicates
                 .push(FilterPredicateAst::MatchesChosen { negated: true });
