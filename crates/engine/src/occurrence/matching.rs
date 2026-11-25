@@ -670,8 +670,10 @@ fn matches_evaluated_permanent(
             crate::program::SourceRelation::OtherThanAbilitySource
             | crate::program::SourceRelation::OtherThanTriggerSource => !same,
             crate::program::SourceRelation::OtherThanBound(id) => candidate.object != id,
-            crate::program::SourceRelation::SharingNameWithAbilitySource
-            | crate::program::SourceRelation::MatchesNamedAgendaSlot => false,
+            crate::program::SourceRelation::SharingNameWithAbilitySource => after
+                .name_rules
+                .shares_name(&candidate.current_names, &source.current_names),
+            crate::program::SourceRelation::MatchesNamedAgendaSlot => false,
         };
         if !source_ok {
             return false;
@@ -736,6 +738,45 @@ fn matches_evaluated_permanent(
     match filter {
         ObjectFilter::Clause(a) => clause_ok(a),
         ObjectFilter::Either(a, b) => clause_ok(a) || clause_ok(b),
+    }
+}
+
+trait AppearanceFilterExt {
+    fn matches_appearance_with_names(
+        self,
+        source: &SupportedAppearance,
+        controller: SeatId,
+        object: &SupportedAppearance,
+        after: &RulesView<'_>,
+    ) -> bool;
+}
+
+impl AppearanceFilterExt for ObjectFilter {
+    fn matches_appearance_with_names(
+        self,
+        source: &SupportedAppearance,
+        controller: SeatId,
+        object: &SupportedAppearance,
+        after: &RulesView<'_>,
+    ) -> bool {
+        let clause_ok = |mut clause: crate::program::ObjectClause| -> bool {
+            if clause.source_relation
+                == crate::program::SourceRelation::SharingNameWithAbilitySource
+            {
+                if !after
+                    .name_rules
+                    .shares_name(&source.current_names, &object.current_names)
+                {
+                    return false;
+                }
+                clause.source_relation = crate::program::SourceRelation::Any;
+            }
+            ObjectFilter::Clause(clause).matches_appearance(source, controller, object)
+        };
+        match self {
+            ObjectFilter::Clause(a) => clause_ok(a),
+            ObjectFilter::Either(a, b) => clause_ok(a) || clause_ok(b),
+        }
     }
 }
 
@@ -909,7 +950,12 @@ pub(super) fn match_trigger_event(
                             }
                             Some(_) => false,
                         }
-                        && subject.matches_appearance(source, controller, after_appearance)
+                        && subject.matches_appearance_with_names(
+                            source,
+                            controller,
+                            after_appearance,
+                            after,
+                        )
                         && actor_matches(
                             before_appearance.object.zone(),
                             after_appearance.object.controller(),
@@ -933,7 +979,7 @@ pub(super) fn match_trigger_event(
                             new_cnt < old_cnt
                         })
                         && after.appearance(*recipient).is_some_and(|app| {
-                            subject.matches_appearance(source, controller, &app)
+                            subject.matches_appearance_with_names(source, controller, &app, after)
                                 && actor_matches(app.object.zone(), app.object.controller())
                         }) =>
                     {
@@ -954,7 +1000,7 @@ pub(super) fn match_trigger_event(
                             new_cnt < old_cnt
                         })
                         && after.appearance(*recipient).is_some_and(|app| {
-                            subject.matches_appearance(source, controller, &app)
+                            subject.matches_appearance_with_names(source, controller, &app, after)
                                 && actor_matches(app.object.zone(), app.object.controller())
                         }) =>
                     {
@@ -975,7 +1021,7 @@ pub(super) fn match_trigger_event(
                             new_cnt < old_cnt
                         })
                         && after.appearance(*recipient).is_some_and(|app| {
-                            subject.matches_appearance(source, controller, &app)
+                            subject.matches_appearance_with_names(source, controller, &app, after)
                                 && actor_matches(app.object.zone(), app.object.controller())
                         }) =>
                     {
@@ -996,7 +1042,12 @@ pub(super) fn match_trigger_event(
                     added,
                     ..
                 } if added.plus_one.is_positive()
-                    && subject.matches_appearance(source, controller, after_appearance) =>
+                    && subject.matches_appearance_with_names(
+                        source,
+                        controller,
+                        after_appearance,
+                        after,
+                    ) =>
                 {
                     let actor_ok = if *by_controller_only {
                         let actor = if before_appearance.object.zone() != ObjectZone::Battlefield {
@@ -1951,7 +2002,7 @@ pub(super) fn match_trigger_event(
                 {
                     return Ok(());
                 }
-                if !relation.matches_appearance(source, controller, entering) {
+                if !relation.matches_appearance_with_names(source, controller, entering, after) {
                     return Ok(());
                 }
                 let player = entering
@@ -2157,7 +2208,8 @@ pub(super) fn match_trigger_event(
                             ..
                         },
                     ) => {
-                        if subject.matches_appearance(source, controller, created) {
+                        if subject.matches_appearance_with_names(source, controller, created, after)
+                        {
                             members.push(TriggerCauseMember {
                                 occurrence: occurrence.id,
                                 related_player: created.object.controller().or(Some(controller)),
@@ -2170,7 +2222,12 @@ pub(super) fn match_trigger_event(
                     }
                     (_, RulesOccurrence::ZoneChange(change))
                         if change.after.object.zone() == ObjectZone::Battlefield
-                            && subject.matches_appearance(source, controller, &change.after) =>
+                            && subject.matches_appearance_with_names(
+                                source,
+                                controller,
+                                &change.after,
+                                after,
+                            ) =>
                     {
                         let is_self = *subject == ObjectFilter::self_object();
                         let ok = match *origin {
@@ -2243,7 +2300,12 @@ pub(super) fn match_trigger_event(
                         ),
                         TriggerFromZone::Any => true,
                     }
-                    && subject.matches_appearance(source, controller, &change.after)
+                    && subject.matches_appearance_with_names(
+                        source,
+                        controller,
+                        &change.after,
+                        after,
+                    )
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -2275,7 +2337,7 @@ pub(super) fn match_trigger_event(
             {
                 return Ok(());
             }
-            if !subject.matches_appearance(source, controller, entering) {
+            if !subject.matches_appearance_with_names(source, controller, entering, after) {
                 return Ok(());
             }
             let player = entering
@@ -2328,7 +2390,7 @@ pub(super) fn match_trigger_event(
                         ObjectZone::Graveyard(_) | ObjectZone::Exile
                     ),
                 }
-                && subject.matches_appearance(source, controller, &change.before)
+                && subject.matches_appearance_with_names(source, controller, &change.before, after)
             {
                 let related_player = change
                     .before
@@ -2349,7 +2411,7 @@ pub(super) fn match_trigger_event(
             if let RulesOccurrence::ZoneChange(change) = value
                 && change.before.object.zone() == ObjectZone::Battlefield
                 && matches!(change.after.object.zone(), ObjectZone::Hand(_))
-                && subject.matches_appearance(source, controller, &change.before)
+                && subject.matches_appearance_with_names(source, controller, &change.before, after)
             {
                 let related_player = change
                     .before
@@ -2374,7 +2436,7 @@ pub(super) fn match_trigger_event(
                 && let ObjectZone::Graveyard(owner) = change.before.object.zone()
                 && change.after.object.zone() != ObjectZone::Graveyard(owner)
                 && player_matches(*relation, controller, owner, after)
-                && subject.matches_appearance(source, controller, &change.before)
+                && subject.matches_appearance_with_names(source, controller, &change.before, after)
             {
                 members.push(TriggerCauseMember {
                     occurrence: occurrence.id,
@@ -2391,7 +2453,7 @@ pub(super) fn match_trigger_event(
             let without_dying = matches!(event, TriggerEvent::LeavesBattlefieldWithoutDying { .. });
             match value {
                 RulesOccurrence::PermanentLeftGame { before }
-                    if subject.matches_appearance(source, controller, before) =>
+                    if subject.matches_appearance_with_names(source, controller, before, after) =>
                 {
                     let departing_controller = before
                         .object
@@ -2408,7 +2470,12 @@ pub(super) fn match_trigger_event(
                         && change.after.object.zone() != ObjectZone::Battlefield
                         && (!without_dying
                             || !matches!(change.after.object.zone(), ObjectZone::Graveyard(_)))
-                        && subject.matches_appearance(source, controller, &change.before) =>
+                        && subject.matches_appearance_with_names(
+                            source,
+                            controller,
+                            &change.before,
+                            after,
+                        ) =>
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -2443,7 +2510,12 @@ pub(super) fn match_trigger_event(
                 DiesTriggerMode::ToControllerGraveyard => {
                     let ok = change.after.object.zone() == ObjectZone::Graveyard(controller)
                         && change.before.is_creature()
-                        && subject.matches_appearance(source, controller, &change.before);
+                        && subject.matches_appearance_with_names(
+                            source,
+                            controller,
+                            &change.before,
+                            after,
+                        );
                     (ok, Some(controller))
                 }
                 DiesTriggerMode::DamagedBySource => {
@@ -2459,7 +2531,12 @@ pub(super) fn match_trigger_event(
                 }
                 DiesTriggerMode::DamagedByAttachedHost => {
                     let ok = change.before.is_creature()
-                        && subject.matches_appearance(source, controller, &change.before)
+                        && subject.matches_appearance_with_names(
+                            source,
+                            controller,
+                            &change.before,
+                            after,
+                        )
                         && matches!(
                             source.attached_to,
                             Some(crate::targets::TargetRef::Object(host))
@@ -2478,7 +2555,12 @@ pub(super) fn match_trigger_event(
                     (ok, None)
                 }
                 DiesTriggerMode::Permanent | DiesTriggerMode::OrCommandZone => {
-                    let ok = subject.matches_appearance(source, controller, &change.before);
+                    let ok = subject.matches_appearance_with_names(
+                        source,
+                        controller,
+                        &change.before,
+                        after,
+                    );
                     (ok, None)
                 }
                 DiesTriggerMode::Creature => {
@@ -2486,7 +2568,12 @@ pub(super) fn match_trigger_event(
                         || (*subject
                             == ObjectFilter::creature().controlled().nontoken().or_self()
                             && source.object.id() == change.before.object.id()))
-                        && subject.matches_appearance(source, controller, &change.before);
+                        && subject.matches_appearance_with_names(
+                            source,
+                            controller,
+                            &change.before,
+                            after,
+                        );
                     (ok, None)
                 }
             };
@@ -2529,7 +2616,7 @@ pub(super) fn match_trigger_event(
             }
             if change.after.object.card_id().is_some()
                 && player_matches(*relation, controller, owner, after)
-                && subject.matches_appearance(source, controller, &change.after)
+                && subject.matches_appearance_with_names(source, controller, &change.after, after)
             {
                 members.push(TriggerCauseMember {
                     occurrence: occurrence.id,
@@ -2983,7 +3070,7 @@ pub(super) fn match_trigger_event(
         TriggerEvent::PutIntoLibrary { subject } => {
             if let RulesOccurrence::ZoneChange(change) = value
                 && matches!(change.after.object.zone(), ObjectZone::Library(_))
-                && subject.matches_appearance(source, controller, &change.before)
+                && subject.matches_appearance_with_names(source, controller, &change.before, after)
             {
                 let owner = match change.after.object.zone() {
                     ObjectZone::Library(p) => p,
@@ -3116,7 +3203,7 @@ pub(super) fn match_trigger_event(
                     let obj = after
                         .appearance(change.after.id())
                         .ok_or(TriggerError::InvalidWorld)?;
-                    if subject.matches_appearance(source, controller, &obj) {
+                    if subject.matches_appearance_with_names(source, controller, &obj, after) {
                         members.push(TriggerCauseMember {
                             occurrence: occurrence.id,
                             related_player: Some(
@@ -3138,7 +3225,7 @@ pub(super) fn match_trigger_event(
                     let obj = after
                         .appearance(change.after.id())
                         .ok_or(TriggerError::InvalidWorld)?;
-                    if subject.matches_appearance(source, controller, &obj) {
+                    if subject.matches_appearance_with_names(source, controller, &obj, after) {
                         members.push(TriggerCauseMember {
                             occurrence: occurrence.id,
                             related_player: Some(
@@ -3159,7 +3246,7 @@ pub(super) fn match_trigger_event(
                     before,
                     after: face_up,
                 } = value
-                    && subject.matches_appearance(source, controller, face_up)
+                    && subject.matches_appearance_with_names(source, controller, face_up, after)
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3175,7 +3262,7 @@ pub(super) fn match_trigger_event(
                 if let RulesOccurrence::Transformed {
                     after: transformed, ..
                 } = value
-                    && subject.matches_appearance(source, controller, transformed)
+                    && subject.matches_appearance_with_names(source, controller, transformed, after)
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3190,9 +3277,9 @@ pub(super) fn match_trigger_event(
                 {
                     for &phased_id in objects {
                         let matched = if let Some(app) = after.appearance(phased_id) {
-                            subject.matches_appearance(source, controller, &app)
+                            subject.matches_appearance_with_names(source, controller, &app, after)
                         } else if phased_id == source.object.id() {
-                            subject.matches_appearance(source, controller, source)
+                            subject.matches_appearance_with_names(source, controller, source, after)
                         } else {
                             false
                         };
@@ -3213,9 +3300,9 @@ pub(super) fn match_trigger_event(
             }
             StatusTriggerKind::Mutated => {
                 if let RulesOccurrence::Mutated { permanent } = value
-                    && after
-                        .appearance(*permanent)
-                        .is_some_and(|app| subject.matches_appearance(source, controller, &app))
+                    && after.appearance(*permanent).is_some_and(|app| {
+                        subject.matches_appearance_with_names(source, controller, &app, after)
+                    })
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3231,9 +3318,9 @@ pub(super) fn match_trigger_event(
             StatusTriggerKind::ClassLevelReached(expected) => {
                 if let RulesOccurrence::ClassLevelReached { object, level } = value
                     && *level == expected
-                    && after
-                        .appearance(*object)
-                        .is_some_and(|app| subject.matches_appearance(source, controller, &app))
+                    && after.appearance(*object).is_some_and(|app| {
+                        subject.matches_appearance_with_names(source, controller, &app, after)
+                    })
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3248,9 +3335,9 @@ pub(super) fn match_trigger_event(
             }
             StatusTriggerKind::CaseSolved => {
                 if let RulesOccurrence::CaseSolved { object } = value
-                    && after
-                        .appearance(*object)
-                        .is_some_and(|app| subject.matches_appearance(source, controller, &app))
+                    && after.appearance(*object).is_some_and(|app| {
+                        subject.matches_appearance_with_names(source, controller, &app, after)
+                    })
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3278,9 +3365,9 @@ pub(super) fn match_trigger_event(
             }
             StatusTriggerKind::BecomesRenowned => {
                 if let RulesOccurrence::BecameRenowned { object } = value
-                    && after
-                        .appearance(*object)
-                        .is_some_and(|app| subject.matches_appearance(source, controller, &app))
+                    && after.appearance(*object).is_some_and(|app| {
+                        subject.matches_appearance_with_names(source, controller, &app, after)
+                    })
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3393,7 +3480,12 @@ pub(super) fn match_trigger_event(
             PlayerTriggerAction::Sacrificed(filter) => {
                 if let RulesOccurrence::ZoneChange(change) = value
                     && change.before.object.zone() == ObjectZone::Battlefield
-                    && filter.matches_appearance(source, controller, &change.before)
+                    && filter.matches_appearance_with_names(
+                        source,
+                        controller,
+                        &change.before,
+                        after,
+                    )
                 {
                     let actor = match change.reason {
                         ZoneReason::Sacrifice { player } => Some(player),
@@ -3445,7 +3537,12 @@ pub(super) fn match_trigger_event(
                     }
                     PlayerTriggerAction::DiscardedMatching(filter) => {
                         player_matches(*relation, controller, player, after)
-                            && filter.matches_appearance(source, controller, &change.after)
+                            && filter.matches_appearance_with_names(
+                                source,
+                                controller,
+                                &change.after,
+                                after,
+                            )
                     }
                     PlayerTriggerAction::DiscardedByOpponent(opt_filter) => {
                         let cause_controller = match event_cause {
@@ -3461,7 +3558,12 @@ pub(super) fn match_trigger_event(
                         player_matches(*relation, controller, player, after)
                             && cause_controller.is_some_and(|actor| actor != player)
                             && opt_filter.is_none_or(|filter| {
-                                filter.matches_appearance(source, controller, &change.after)
+                                filter.matches_appearance_with_names(
+                                    source,
+                                    controller,
+                                    &change.after,
+                                    after,
+                                )
                             })
                     }
                     _ => false,
@@ -3556,7 +3658,7 @@ pub(super) fn match_trigger_event(
                     appearance,
                 } = value
                     && player_matches(*relation, controller, *actor, after)
-                    && filter.matches_appearance(source, controller, appearance)
+                    && filter.matches_appearance_with_names(source, controller, appearance, after)
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -3957,7 +4059,12 @@ pub(super) fn match_trigger_event(
                         && change.reason != ZoneReason::LandPlay
                         && (!creature_enters_suppressed
                             || !change.after.types.contains(&CardType::Creature))
-                        && subject.matches_appearance(source, controller, &change.after) =>
+                        && subject.matches_appearance_with_names(
+                            source,
+                            controller,
+                            &change.after,
+                            after,
+                        ) =>
                 {
                     let player = change
                         .after
@@ -3978,7 +4085,8 @@ pub(super) fn match_trigger_event(
                     after: created,
                 } if (!creature_enters_suppressed
                     || !created.types.contains(&CardType::Creature))
-                    && subject.matches_appearance(source, controller, created) =>
+                    && subject
+                        .matches_appearance_with_names(source, controller, created, after) =>
                 {
                     let player = created
                         .object
@@ -4205,6 +4313,13 @@ fn matches_cast_spell_filter(
             .ordinal_this_turn
             .as_ref()
             .is_some_and(|actual| *actual == i64::from(ordinal.get()).into())
+    {
+        return false;
+    }
+    if filter.object.requires_same_name_as_source()
+        && !after
+            .name_rules
+            .shares_name(&cast.spell().current_names, &source.current_names)
     {
         return false;
     }
