@@ -471,6 +471,12 @@ const cases: Case[] = [
         ["stack-long", undefined],
         ["stack-long", "match-stack-oldest"],
         ["stack-waiting", undefined],
+        ["ask-order", undefined],
+        ["ask-targets", undefined],
+        ["ask-counters", undefined],
+        ["ask-prevention", undefined],
+        ["ask-modes", undefined],
+        ["ask-attack-cost", undefined],
       ] as const
     ).map(([scene, state]) => ({
       viewport,
