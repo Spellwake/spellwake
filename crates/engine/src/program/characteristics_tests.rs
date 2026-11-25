@@ -318,6 +318,8 @@ fn keyword_components_round_trip_and_reject_unknown_duplicate_or_omitted_fields(
             granted_trigger: None,
             granted_combat_keywords: vec![],
             granted_keywords: BTreeSet::from([Haste]),
+            suppressed_activations: None,
+            doesnt_untap: false,
             suppressed_keywords: BTreeSet::new(),
         },
     ] {

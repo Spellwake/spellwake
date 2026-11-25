@@ -348,6 +348,11 @@ enum LibraryStage {
         groups: Vec<ResolutionGraveyardGroup>,
         orders: Vec<ResolutionAcceptedGraveyardOrder>,
     },
+    ApplyEventReplacement(Box<super::event_replacement::EventBodyReplacement>),
+    OptionalEventReplacement {
+        replacement: Box<super::event_replacement::EventBodyReplacement>,
+        declined: BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LibraryTopWork {
@@ -410,6 +415,12 @@ impl LibraryTopWork {
                         ),
                     )
                 })
+            }
+            LibraryStage::ApplyEventReplacement(_) => None,
+            LibraryStage::OptionalEventReplacement { replacement, .. } => {
+                Some(EffectDecision::OptionalEffect(
+                    OptionalEffectFrame::event_replacement(revision, replacement.affected_player),
+                ))
             }
         }
     }
@@ -525,6 +536,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -608,6 +623,7 @@ impl EffectWindow {
             | Instruction::PutNamedCounterOnSource { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -777,6 +793,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
@@ -827,6 +844,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -964,7 +982,19 @@ impl EffectWindow {
             | Instruction::Discard { .. }
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::DrawPlayer { .. }
-            | Instruction::DiscardFiltered { .. } => return Ok(false),
+            | Instruction::DiscardFiltered { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
         };
         let controller = self
             .window
@@ -976,14 +1006,42 @@ impl EffectWindow {
             return Err(EffectError::InconsistentLibraryTopWork);
         }
         let player = self.resolving_player(role)?;
-        let requested = self.adjusted_library_action_amount(kind, player, raw_requested)?;
+        let requested = self.adjusted_library_action_amount(kind, player, raw_requested.clone())?;
         let library_before = self.window.cards().library(player).to_vec();
         let library = &library_before;
         let count = std::cmp::min(&requested, &RulesInteger::from_usize(library.len()))
             .to_usize()
             .ok_or(EffectError::InconsistentLibraryTopWork)?;
         let domain = library[..count].to_vec();
-        let stage = if kind != LibraryActionKind::Mill && !domain.is_empty() {
+        let event_replacement = if raw_requested.is_positive() {
+            let event_kind = match kind {
+                LibraryActionKind::Scry => {
+                    Some(super::event_replacement::ReplacementEventKind::Scry)
+                }
+                LibraryActionKind::Mill => {
+                    Some(super::event_replacement::ReplacementEventKind::Mill)
+                }
+                LibraryActionKind::Surveil => None,
+            };
+            if let Some(ev) = event_kind {
+                let evaluated = self.evaluated_characteristics()?;
+                self.find_event_body_replacement(&evaluated, ev, player, &BTreeSet::new())?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let stage = if let Some(rep) = event_replacement {
+            if rep.optional {
+                LibraryStage::OptionalEventReplacement {
+                    replacement: Box::new(rep),
+                    declined: BTreeSet::new(),
+                }
+            } else {
+                LibraryStage::ApplyEventReplacement(Box::new(rep))
+            }
+        } else if kind != LibraryActionKind::Mill && !domain.is_empty() {
             LibraryStage::Choosing
         } else {
             let selected = if kind == LibraryActionKind::Mill {
@@ -1124,6 +1182,25 @@ impl EffectWindow {
                         return Ok(None);
                     }
                 }
+                LibraryStage::ApplyEventReplacement(rep) => {
+                    let cause = EventCause::Instruction {
+                        entry: work.cursor.entry,
+                        instruction: work.cursor.instruction,
+                    };
+                    self.pending_work = Some(PendingWork::Resolution(work.cursor));
+                    self.execute_inline_replacement_body(&rep, cause, append)?;
+                    self.advance_instruction()?;
+                    return Ok(None);
+                }
+                LibraryStage::OptionalEventReplacement {
+                    replacement,
+                    declined,
+                } => {
+                    work.stage = LibraryStage::OptionalEventReplacement {
+                        replacement,
+                        declined,
+                    };
+                }
             }
             let frame = work
                 .frame(self.revision)
@@ -1245,6 +1322,57 @@ impl EffectWindow {
                     batch,
                 }
             }
+            (
+                LibraryStage::OptionalEventReplacement {
+                    replacement,
+                    mut declined,
+                },
+                DecisionReply::OptionalEffect(choice),
+            ) => match choice {
+                OptionalEffectChoice::Take => LibraryStage::ApplyEventReplacement(replacement),
+                OptionalEffectChoice::Decline => {
+                    declined.insert((replacement.source, replacement.ability));
+                    let event_kind = match work.kind {
+                        LibraryActionKind::Scry => {
+                            Some(super::event_replacement::ReplacementEventKind::Scry)
+                        }
+                        LibraryActionKind::Mill => {
+                            Some(super::event_replacement::ReplacementEventKind::Mill)
+                        }
+                        LibraryActionKind::Surveil => None,
+                    };
+                    let next_rep = if let Some(ev) = event_kind {
+                        let evaluated = next.evaluated_characteristics()?;
+                        next.find_event_body_replacement(&evaluated, ev, work.player, &declined)?
+                    } else {
+                        None
+                    };
+                    if let Some(rep) = next_rep {
+                        if rep.optional {
+                            LibraryStage::OptionalEventReplacement {
+                                replacement: Box::new(rep),
+                                declined,
+                            }
+                        } else {
+                            LibraryStage::ApplyEventReplacement(Box::new(rep))
+                        }
+                    } else if work.kind != LibraryActionKind::Mill && !work.domain.is_empty() {
+                        LibraryStage::Choosing
+                    } else {
+                        let selected = if work.kind == LibraryActionKind::Mill {
+                            work.domain.clone()
+                        } else {
+                            vec![]
+                        };
+                        LibraryStage::Preparing {
+                            top_first: vec![],
+                            bottom_top_first: vec![],
+                            selected,
+                        }
+                    }
+                }
+                _ => return Err(EffectError::IllegalOptionalEffect),
+            },
             _ => return Err(EffectError::WrongDecisionKind),
         };
         next.pending_work = Some(PendingWork::LibraryTop(Box::new(work)));
@@ -1257,7 +1385,7 @@ impl EffectWindow {
             RulesJournal::default(),
         )
     }
-    fn adjusted_library_action_amount(
+    pub(super) fn adjusted_library_action_amount(
         &self,
         kind: LibraryActionKind,
         player: SeatId,
@@ -1327,7 +1455,11 @@ impl EffectWindow {
                         }
                         crate::characteristics::StaticReplacementAction::ReplaceWithBody {
                             ..
-                        } => {}
+                        } => {
+                            // Whole-event body replacements execute via LibraryStage::{ApplyEventReplacement,
+                            // OptionalEventReplacement} in begin_library_top/progress_library_top rather than
+                            // scaling the numeric count here.
+                        }
                     }
                 }
             }
@@ -1622,6 +1754,10 @@ impl EffectWindow {
             work.cursor.results.last_action_count =
                 Some(RulesInteger::from_usize(public_zone_moves.len()));
             work.cursor.results.last_action_succeeded = !public_zone_moves.is_empty();
+            work.cursor.results.last_moved_objects = public_zone_moves
+                .iter()
+                .map(|movement| movement.after)
+                .collect();
             work.cursor.results.milled_mana_values = public_zone_moves
                 .iter()
                 .map(|movement| {

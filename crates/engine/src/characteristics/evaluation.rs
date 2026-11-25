@@ -301,6 +301,14 @@ pub(crate) fn evaluate(
             granted_combat_keywords: BTreeMap::new(),
             blocking_restrictions: Vec::new(),
             granted_unblockable: false,
+            cannot_be_sacrificed: false,
+            cannot_be_untapped: false,
+            doesnt_untap_during_untap_step: false,
+            suppressed_activations: None,
+            activate_as_though_haste: false,
+            cannot_be_targeted_by_auras: false,
+            cannot_be_targeted_by_colors: crate::program::ColorMask::EMPTY,
+            hexproof_ignored_by: BTreeSet::new(),
             power_toughness,
         };
         if matches!(
@@ -384,6 +392,36 @@ pub(crate) fn evaluate(
         // Fixed copy snapshots were selected before constructing any baseline
         // or static instance. They cannot depend on later layers or one another.
         if matches!(effect.parts.0.as_slice(), [ResolvedPart::Copy(_)]) {
+            continue;
+        }
+        let duration_live = match effect.duration {
+            ResolvedDuration::WhileSourceOnBattlefield { source } => {
+                world.cards.get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && world.cards.phased_out_under(source).is_none()
+                })
+            }
+            ResolvedDuration::WhileSourceTapped { source } => {
+                world.cards.get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && world.cards.phased_out_under(source).is_none()
+                        && card.tapped() == Some(true)
+                })
+            }
+            ResolvedDuration::WhileSourceControlledAndTapped {
+                source,
+                controller,
+                epoch,
+            } => world.cards.get(source).is_some_and(|card| {
+                card.zone() == ObjectZone::Battlefield
+                    && world.cards.phased_out_under(source).is_none()
+                    && card.control_epoch() == Some(epoch)
+                    && card.controller() == Some(controller)
+                    && card.tapped() == Some(true)
+            }),
+            _ => true,
+        };
+        if !duration_live {
             continue;
         }
         let key = EffectInstanceKey::Resolved(effect.id);
@@ -534,24 +572,51 @@ pub(crate) fn evaluate(
                 })
                 .collect::<Result<_, _>>()?;
             let mut original_waits = BTreeSet::new();
-            for (a_key, a) in &remaining {
-                for b_key in remaining.keys().filter(|key| *key != a_key) {
-                    let mut probe = objects.clone();
-                    apply(&generated[b_key], &mut probe, &world.state.speed);
-                    let after = generate(
-                        world,
-                        *a,
-                        bucket,
-                        &probe,
-                        &battlefield,
-                        &trace.bindings,
-                        world.name_rules,
-                    )?;
-                    if !generated[a_key].same_semantics(&after) {
-                        original_waits.insert(ComponentWait {
-                            waiting: *a_key,
-                            prerequisite: *b_key,
-                        });
+            if remaining.len() > 1 {
+                for b_key in remaining.keys() {
+                    let b_comp = &generated[b_key];
+                    if b_comp.generated.is_empty() {
+                        continue;
+                    }
+                    let saved: Vec<(ObjectId, ObjectCharacteristics)> = b_comp
+                        .generated
+                        .keys()
+                        .filter_map(|id| objects.get(id).cloned().map(|prev| (*id, prev)))
+                        .collect();
+                    apply(b_comp, &mut objects, &world.state.speed);
+                    let mut err = None;
+                    for (a_key, a) in &remaining {
+                        if a_key == b_key {
+                            continue;
+                        }
+                        match generate(
+                            world,
+                            *a,
+                            bucket,
+                            &objects,
+                            &battlefield,
+                            &trace.bindings,
+                            world.name_rules,
+                        ) {
+                            Ok(after) => {
+                                if !generated[a_key].same_semantics(&after) {
+                                    original_waits.insert(ComponentWait {
+                                        waiting: *a_key,
+                                        prerequisite: *b_key,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                err = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    for (id, prev) in saved {
+                        objects.insert(id, prev);
+                    }
+                    if let Some(e) = err {
+                        return Err(e);
                     }
                 }
             }
@@ -649,6 +714,150 @@ pub(crate) fn evaluate(
                 .retain(|id| *id != static_id);
         }
     }
+    // Stamp selector-driven static restriction flags after conditional statics are resolved.
+    {
+        use crate::characteristics::StaticRestriction;
+        enum RestrictionFlag {
+            IgnoreHexproof(SeatId),
+            ActivateAsHaste,
+            CannotBeSacrificed,
+            CannotBeUntapped,
+            CantBeTargetedBy {
+                auras_only: bool,
+                colors: crate::program::ColorMask,
+            },
+        }
+        let mut stamped: Vec<(ObjectId, RestrictionFlag)> = Vec::new();
+        let collect_restriction =
+            |source_id: ObjectId,
+             ctrl: SeatId,
+             rule: &StaticRestriction,
+             stamped: &mut Vec<(ObjectId, RestrictionFlag)>| {
+                let (selector, kind) = match rule {
+                    StaticRestriction::IgnoreOpponentsHexproof(sel) => {
+                        (sel.as_ref(), RestrictionFlag::IgnoreHexproof(ctrl))
+                    }
+                    StaticRestriction::ActivateAbilitiesAsThoughHaste(sel) => {
+                        (sel.as_ref(), RestrictionFlag::ActivateAsHaste)
+                    }
+                    StaticRestriction::CannotBeSacrificed(sel) => {
+                        (sel.as_ref(), RestrictionFlag::CannotBeSacrificed)
+                    }
+                    StaticRestriction::CannotBeUntapped(sel) => {
+                        (sel.as_ref(), RestrictionFlag::CannotBeUntapped)
+                    }
+                    StaticRestriction::CantBeTargetedBy {
+                        selector: sel,
+                        auras_only,
+                        colors,
+                    } => (
+                        sel.as_ref(),
+                        RestrictionFlag::CantBeTargetedBy {
+                            auras_only: *auras_only,
+                            colors: *colors,
+                        },
+                    ),
+                    _ => return,
+                };
+                let affected = select_affected(
+                    selector,
+                    source_id,
+                    ctrl,
+                    &objects,
+                    &battlefield,
+                    world.name_rules,
+                    world.combat,
+                    Some(world.state),
+                );
+                for target_id in affected {
+                    let flag = match kind {
+                        RestrictionFlag::IgnoreHexproof(s) => RestrictionFlag::IgnoreHexproof(s),
+                        RestrictionFlag::ActivateAsHaste => RestrictionFlag::ActivateAsHaste,
+                        RestrictionFlag::CannotBeSacrificed => RestrictionFlag::CannotBeSacrificed,
+                        RestrictionFlag::CannotBeUntapped => RestrictionFlag::CannotBeUntapped,
+                        RestrictionFlag::CantBeTargetedBy { auras_only, colors } => {
+                            RestrictionFlag::CantBeTargetedBy { auras_only, colors }
+                        }
+                    };
+                    stamped.push((target_id, flag));
+                }
+            };
+        for source in objects.values() {
+            if source.zone != ObjectZone::Battlefield {
+                continue;
+            }
+            let Some(ctrl) = source.controller else {
+                continue;
+            };
+            for ability in source
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&source.printed_text.additional_battlefield_abilities)
+            {
+                let active = source.abilities.continuous == Some(ability.id())
+                    || source
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability.id());
+                if !active {
+                    continue;
+                }
+                if let StaticContinuousAbility::Restriction { rule, .. } = ability {
+                    collect_restriction(source.object, ctrl, rule, &mut stamped);
+                }
+            }
+        }
+        for temp in world.state.temporary_statics.values() {
+            if let StaticContinuousAbility::Restriction { rule, .. } = &temp.ability {
+                let src_id = temp.source_object.unwrap_or(ObjectId::SENTINEL);
+                collect_restriction(src_id, temp.controller, rule, &mut stamped);
+            }
+        }
+        for (target_id, flag) in stamped {
+            if let Some(target) = objects.get_mut(&target_id) {
+                match flag {
+                    RestrictionFlag::IgnoreHexproof(seat) => {
+                        target.hexproof_ignored_by.insert(seat);
+                    }
+                    RestrictionFlag::ActivateAsHaste => {
+                        target.activate_as_though_haste = true;
+                    }
+                    RestrictionFlag::CannotBeSacrificed => {
+                        target.cannot_be_sacrificed = true;
+                    }
+                    RestrictionFlag::CannotBeUntapped => {
+                        target.cannot_be_untapped = true;
+                    }
+                    RestrictionFlag::CantBeTargetedBy { auras_only, colors } => {
+                        if auras_only {
+                            target.cannot_be_targeted_by_auras = true;
+                        }
+                        target.cannot_be_targeted_by_colors =
+                            target.cannot_be_targeted_by_colors.union(colors);
+                    }
+                }
+            }
+        }
+    }
+    // CR 701.60a: A suspected creature has menace and "This creature can't block."
+    for (&suspect_id, count) in &world.state.suspect_counters {
+        if count.is_positive()
+            && let Some(creature) = objects.get_mut(&suspect_id)
+            && creature.zone == ObjectZone::Battlefield
+            && creature.is_creature()
+        {
+            if !creature
+                .suppressed_keywords
+                .contains(&KeywordAbility::Menace)
+            {
+                creature.keywords.insert(KeywordAbility::Menace);
+            }
+            creature
+                .blocking_restrictions
+                .push(BlockingRestriction::CannotBlock);
+        }
+    }
     // CR 701.52c Ring-bearer level 1: legendary and cannot be blocked by creatures with greater power.
     for (&seat, &bearer_id) in &world.state.ring_bearer {
         if world.state.ring_level.get(&seat).copied().unwrap_or(0) >= 1
@@ -742,6 +951,7 @@ pub(crate) fn evaluate(
         objects,
         trace,
         player_color_protection: world.state.player_color_protection.clone(),
+        player_granted_keywords: BTreeMap::new(),
         emblem_rules,
     };
     let improvised: Vec<_> = evaluated
@@ -924,6 +1134,8 @@ fn apply_definitions(
     }
     Ok(())
 }
+// Private selector helper passes borrowed evaluation context slices directly to avoid allocating a wrapper struct on hot layer sweeps.
+#[allow(clippy::too_many_arguments)]
 fn select_affected(
     selector: &PermanentSelector,
     source: ObjectId,
@@ -931,6 +1143,8 @@ fn select_affected(
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
+    combat: Option<&crate::combat::CombatState>,
+    state: Option<&super::CharacteristicState>,
 ) -> BTreeSet<ObjectId> {
     if let Some(subtype) = selector.controlled_creatures_and_typed_tokens {
         return objects
@@ -1009,11 +1223,39 @@ fn select_affected(
                 && selector
                     .artifact_subtype
                     .is_none_or(|kind| object.current_artifact_subtypes.contains(&kind))
+                && selector
+                    .planeswalker_subtype
+                    .is_none_or(|kind| object.current_planeswalker_subtypes.contains(&kind))
                 && selector.combat_role.is_none_or(|role| match role {
                     CombatSelector::Attacking => object.attacking,
                     CombatSelector::Blocking => object.blocking,
                     CombatSelector::AttackingOrBlocking => object.attacking || object.blocking,
                     CombatSelector::OutsideCombat => !object.attacking && !object.blocking,
+                    CombatSelector::Blocked => combat.is_some_and(|c| {
+                        c.attacker(*id).is_some_and(|a| {
+                            a.block_status() == crate::combat::BlockStatus::Blocked
+                        })
+                    }),
+                    CombatSelector::Unblocked => combat.is_some_and(|c| {
+                        c.attacker(*id).is_some_and(|a| {
+                            a.block_status() == crate::combat::BlockStatus::Unblocked
+                        })
+                    }),
+                    CombatSelector::BlockingSource => combat.is_some_and(|c| {
+                        c.blocker(*id)
+                            .is_some_and(|b| b.attackers().contains(&source))
+                    }),
+                    CombatSelector::BlockedBySource => combat.is_some_and(|c| {
+                        c.blocker(source)
+                            .is_some_and(|b| b.attackers().contains(id))
+                    }),
+                    CombatSelector::BlockingOrBlockedBySource => combat.is_some_and(|c| {
+                        c.blocker(*id)
+                            .is_some_and(|b| b.attackers().contains(&source))
+                            || c.blocker(source)
+                                .is_some_and(|b| b.attackers().contains(id))
+                    }),
+                    CombatSelector::NotAttacking => !object.attacking,
                 })
                 && (!selector.requires_untapped || object.tapped == Some(false))
                 && (!selector.requires_tapped || object.tapped == Some(true))
@@ -1033,6 +1275,31 @@ fn select_affected(
                 && selector
                     .required_keyword
                     .is_none_or(|kw| object.has_keyword(kw))
+                && selector
+                    .extra_required_keyword
+                    .is_none_or(|kw| object.has_keyword(kw))
+                && (!selector.requires_toxic
+                    || object
+                        .toxic_value
+                        .as_ref()
+                        .is_some_and(RulesInteger::is_positive))
+                && selector.required_counter_kind.is_none_or(|kind| {
+                    if let Some(st) = state {
+                        st.permanent_counter_count(*id, kind).is_positive()
+                    } else {
+                        match kind {
+                            crate::effects::CounterKind::PlusOne => object.has_plus_one_counter,
+                            crate::effects::CounterKind::MinusOne => object.has_minus_one_counter,
+                            crate::effects::CounterKind::Charge => {
+                                object.charge_counters.is_positive()
+                            }
+                            crate::effects::CounterKind::Blessing => {
+                                object.blessing_counters.is_positive()
+                            }
+                            _ => object.has_any_counter,
+                        }
+                    }
+                })
                 && selector
                     .forbidden_keyword
                     .is_none_or(|kw| !object.has_keyword(kw))
@@ -1263,6 +1530,61 @@ fn static_source_condition_met(
         SourceCounterAtLeast { kind, minimum } => {
             world.state.permanent_counter_count(source, *kind) >= i64::from(*minimum).into()
         }
+        SourceAnyCounterAtLeast(minimum) => {
+            world.state.total_permanent_counters(source) >= i64::from(*minimum).into()
+        }
+        SourceIsEquipped => battlefield
+            .iter()
+            .filter_map(|id| objects.get(id))
+            .any(|equipment| {
+                equipment.attached_to == Some(crate::targets::TargetRef::Object(source))
+                    && equipment.has_type(CardType::Artifact)
+                    && equipment
+                        .current_artifact_subtypes
+                        .contains(&crate::program::ArtifactSubtype::Equipment)
+            }),
+        SourceIsEnchanted => battlefield
+            .iter()
+            .filter_map(|id| objects.get(id))
+            .any(|aura| {
+                aura.attached_to == Some(crate::targets::TargetRef::Object(source))
+                    && aura.has_type(CardType::Enchantment)
+            }),
+        AttachedHostMatches(selector) => objects
+            .get(&source)
+            .and_then(|src| match src.attached_to {
+                Some(crate::targets::TargetRef::Object(host)) => Some(host),
+                _ => None,
+            })
+            .is_some_and(|host| {
+                select_affected(
+                    selector,
+                    source,
+                    controller,
+                    objects,
+                    battlefield,
+                    world.name_rules,
+                    world.combat,
+                    Some(world.state),
+                )
+                .contains(&host)
+            }),
+        ControlsExactCount { selector, count } => {
+            let mut sel = selector.as_ref().clone();
+            if sel.controller == ControllerSelector::Any {
+                sel.controller = ControllerSelector::SourceController;
+            }
+            count_matching(
+                &sel,
+                source,
+                controller,
+                objects,
+                battlefield,
+                world.name_rules,
+                world.combat,
+                Some(world.state),
+            ) == i64::from(*count).into()
+        }
         SourceIsTapped => objects.get(&source).is_some_and(|o| o.tapped == Some(true)),
         SourceIsUntapped => objects
             .get(&source)
@@ -1274,6 +1596,9 @@ fn static_source_condition_met(
         SourceEnteredThisTurn => world.state.entered_objects_this_turn.contains(&source),
         SourcePaired => world.state.paired_creatures.contains_key(&source),
         SourceIsPrepared => world.state.prepared.contains(&source),
+        EntryOptionChosen(expected) => {
+            world.state.entry_option_choices.get(&source) == Some(expected)
+        }
         NonlandPermanentsEnteredThisTurnAtLeast(min) => {
             let total = world
                 .state
@@ -1419,6 +1744,8 @@ fn static_source_condition_met(
                 objects,
                 battlefield,
                 world.name_rules,
+                world.combat,
+                Some(world.state),
             ) >= i64::from(*minimum).into()
         }
         OpponentControlsMatching { selector, minimum } => {
@@ -1433,6 +1760,8 @@ fn static_source_condition_met(
                 objects,
                 battlefield,
                 world.name_rules,
+                world.combat,
+                Some(world.state),
             ) >= i64::from(*minimum).into()
         }
         Eval(cond) => {
@@ -1513,6 +1842,8 @@ fn numeric(
             objects,
             battlefield,
             name_rules,
+            world.combat,
+            Some(world.state),
         )
         .times(multiplier)
         .plus(offset),
@@ -1677,6 +2008,8 @@ fn numeric(
         }
     }
 }
+// Private wrapper forwarding the same borrowed layer-evaluation context to select_affected.
+#[allow(clippy::too_many_arguments)]
 fn count_matching(
     selector: &PermanentSelector,
     source: ObjectId,
@@ -1684,6 +2017,8 @@ fn count_matching(
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
+    combat: Option<&crate::combat::CombatState>,
+    state: Option<&super::CharacteristicState>,
 ) -> RulesInteger {
     select_affected(
         selector,
@@ -1692,6 +2027,8 @@ fn count_matching(
         objects,
         battlefield,
         name_rules,
+        combat,
+        state,
     )
     .iter()
     .fold(0.into(), |count: RulesInteger, _| count.plus(&1.into()))
@@ -1718,6 +2055,8 @@ pub(crate) fn count_permanents(
         &evaluated.objects,
         &battlefield,
         name_rules,
+        None,
+        None,
     )
 }
 /// Whether a battlefield `selector` hosted by `source` (`controller`) matches `candidate`.
@@ -1742,6 +2081,8 @@ pub(crate) fn selector_matches_permanent(
         &evaluated.objects,
         &battlefield,
         name_rules,
+        None,
+        None,
     )
     .contains(&candidate)
 }
@@ -1798,11 +2139,23 @@ fn static_land_subtype(
     operand: &StaticLandSubtypeOperand,
     source: ObjectId,
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+    state: &super::CharacteristicState,
 ) -> BTreeSet<crate::land::LandType> {
     match operand {
         StaticLandSubtypeOperand::Literal(value) => value.clone(),
         StaticLandSubtypeOperand::SourceCurrentLandSubtypes => {
             objects[&source].current_land_subtypes.clone()
+        }
+        StaticLandSubtypeOperand::SourceEntryBasicLandType => {
+            let chosen = match state.entry_option_choices.get(&source).copied() {
+                Some(0) => Some(crate::land::LandType::Plains),
+                Some(1) => Some(crate::land::LandType::Island),
+                Some(2) => Some(crate::land::LandType::Swamp),
+                Some(3) => Some(crate::land::LandType::Mountain),
+                Some(4) => Some(crate::land::LandType::Forest),
+                _ => None,
+            };
+            chosen.into_iter().collect()
         }
     }
 }
@@ -1887,6 +2240,8 @@ fn generate(
                     objects,
                     battlefield,
                     name_rules,
+                    world.combat,
+                    Some(world.state),
                 ),
             };
             let operation = if affected.is_empty() {
@@ -1944,10 +2299,10 @@ fn generate(
                                     SubtypeOperation::Remove(values.clone())
                                 }
                                 SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                    static_land_subtype(operand, sentinel, objects),
+                                    static_land_subtype(operand, sentinel, objects, world.state),
                                 ),
                                 SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                    static_land_subtype(operand, sentinel, objects),
+                                    static_land_subtype(operand, sentinel, objects, world.state),
                                 ),
                             },
                             supertypes: change.supertypes.clone(),
@@ -1976,12 +2331,22 @@ fn generate(
                                     SubtypeOperation::Remove(values) => {
                                         SubtypeOperation::Remove(values.clone())
                                     }
-                                    SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                        static_land_subtype(operand, sentinel, objects),
-                                    ),
-                                    SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                        static_land_subtype(operand, sentinel, objects),
-                                    ),
+                                    SubtypeOperation::Add(operand) => {
+                                        SubtypeOperation::Add(static_land_subtype(
+                                            operand,
+                                            sentinel,
+                                            objects,
+                                            world.state,
+                                        ))
+                                    }
+                                    SubtypeOperation::Set(operand) => {
+                                        SubtypeOperation::Set(static_land_subtype(
+                                            operand,
+                                            sentinel,
+                                            objects,
+                                            world.state,
+                                        ))
+                                    }
                                 },
                                 supertypes: change.supertypes.clone(),
                                 types: change.types.clone(),
@@ -2223,6 +2588,8 @@ fn generate(
                     objects,
                     battlefield,
                     name_rules,
+                    world.combat,
+                    Some(world.state),
                 ),
             };
             // Empty generated data is independent of unused numeric/source values.
@@ -2283,10 +2650,10 @@ fn generate(
                                     SubtypeOperation::Remove(values.clone())
                                 }
                                 SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                    static_land_subtype(operand, source, objects),
+                                    static_land_subtype(operand, source, objects, world.state),
                                 ),
                                 SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                    static_land_subtype(operand, source, objects),
+                                    static_land_subtype(operand, source, objects, world.state),
                                 ),
                             },
                             supertypes: change.supertypes.clone(),
@@ -2316,10 +2683,10 @@ fn generate(
                                         SubtypeOperation::Remove(values.clone())
                                     }
                                     SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                        static_land_subtype(operand, source, objects),
+                                        static_land_subtype(operand, source, objects, world.state),
                                     ),
                                     SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                        static_land_subtype(operand, source, objects),
+                                        static_land_subtype(operand, source, objects, world.state),
                                     ),
                                 },
                                 supertypes: change.supertypes.clone(),
@@ -2636,6 +3003,10 @@ fn apply_part(
         ResolvedPart::BlockingRestriction(value) => {
             object.blocking_restrictions.push(value.clone())
         }
+        ResolvedPart::CannotBeTargetedByColors(colors) => {
+            object.cannot_be_targeted_by_colors =
+                object.cannot_be_targeted_by_colors.union(*colors);
+        }
         ResolvedPart::Abilities(change) => {
             if change.removal == Some(AbilityRemoval::Flying) {
                 object.keywords.remove(&KeywordAbility::Flying);
@@ -2666,6 +3037,16 @@ fn apply_part(
                 object.inherited_activation_terms.clear();
             }
             object.granted_unblockable |= change.grants_unblockable;
+            object.doesnt_untap_during_untap_step |= change.doesnt_untap;
+            if let Some(suppression) = change.suppressed_activations {
+                object.suppressed_activations = match (object.suppressed_activations, suppression) {
+                    (Some(crate::characteristics::ActivationSuppression::All), _)
+                    | (_, crate::characteristics::ActivationSuppression::All) => {
+                        Some(crate::characteristics::ActivationSuppression::All)
+                    }
+                    _ => Some(crate::characteristics::ActivationSuppression::NonMana),
+                };
+            }
             if let Some(trigger) = &change.granted_trigger {
                 object.granted_triggers.insert(key, (**trigger).clone());
             }

@@ -56,6 +56,8 @@ fn color_definition_roundtrips_program_and_printed_text_including_colorless() {
             activation_modes: Default::default(),
             activation_hybrid_symbols: Default::default(),
             extra_activation_costs: Default::default(),
+            activation_cost_reductions: Default::default(),
+            zone_replacement_extras: Default::default(),
             extra_cast_costs: Vec::new(),
             loyalty_costs: Default::default(),
             variable_loyalty_costs: Default::default(),

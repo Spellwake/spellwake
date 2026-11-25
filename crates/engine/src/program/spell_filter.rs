@@ -345,6 +345,11 @@ impl SpellFilter {
                         return false;
                     }
                 }
+                SubtypeFilter::Planeswalker(kind) => {
+                    if !spell.current_planeswalker_subtypes.contains(&kind) {
+                        return false;
+                    }
+                }
                 _ => return false,
             }
             if !c.color.matches(&spell.current_colors) {

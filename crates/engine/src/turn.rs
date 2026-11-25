@@ -261,6 +261,38 @@ impl TurnScheduler {
         }
         Ok(next)
     }
+    /// Advance past priority, skipping any consecutive steps for which `should_skip` returns true.
+    pub(crate) fn complete_priority_with_step_skip(
+        &self,
+        result: PriorityCompleted,
+        skip_draw: bool,
+        mut should_skip: impl FnMut(Step) -> bool,
+    ) -> Result<Self, TurnError> {
+        let mut next = self.complete_priority_with_draw_skip(result, skip_draw)?;
+        for _ in 0..8 {
+            let step = next.position.step;
+            if matches!(step, Step::Cleanup) || !should_skip(step) {
+                break;
+            }
+            let successor = match step {
+                Step::Untap => Step::Upkeep,
+                Step::Upkeep => Step::Draw,
+                Step::Draw => Step::PrecombatMain,
+                Step::PrecombatMain => Step::BeginningCombat,
+                Step::BeginningCombat
+                | Step::DeclareAttackers
+                | Step::DeclareBlockers
+                | Step::CombatDamage
+                | Step::EndCombat => Step::PostcombatMain,
+                Step::PostcombatMain => Step::End,
+                Step::End => Step::Cleanup,
+                Step::Cleanup => break,
+            };
+            next.enter(successor);
+        }
+        Ok(next)
+    }
+
     /// Called only after an actual empty-stack consecutive-pass round. Resolving
     /// an entry never calls this method. The enclosing GameState enforces that gate.
     pub fn complete_priority(&self, result: PriorityCompleted) -> Result<Self, TurnError> {

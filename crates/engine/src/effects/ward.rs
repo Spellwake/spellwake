@@ -1,7 +1,7 @@
 //! Ward retains the exact opposing entry and payer even if the permanent leaves.
 use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence, TriggerRelated, ZoneReason};
-use crate::program::{ObjectFilter, SubtypeFilter, TriggerEvent};
+use crate::program::{ObjectFilter, TriggerEvent};
 
 impl EffectWindow {
     pub(super) fn permanent_target_events(
@@ -36,67 +36,53 @@ impl EffectWindow {
             if sheet.zone != ObjectZone::Battlefield {
                 continue;
             }
-            let spell_watcher = is_spell
-                && current.objects.values().any(|watcher| {
-                    watcher.zone == ObjectZone::Battlefield
-                        && watcher.printed_text.triggered.iter().any(|ability| {
-                            watcher.abilities.triggered.contains(&ability.id)
-                                && match ability.condition.event {
-                                    TriggerEvent::Targeted {
-                                        subject,
-                                        by_opponent: false,
-                                        spell_only: true,
-                                        instant_or_sorcery_only: false,
-                                    } if subject == ObjectFilter::self_object() => {
-                                        watcher.object == object
-                                    }
-                                    TriggerEvent::Targeted {
-                                        subject,
-                                        by_opponent: false,
-                                        spell_only: true,
-                                        instant_or_sorcery_only: false,
-                                    } if subject == ObjectFilter::any().attached_to_self() => {
-                                        watcher.attached_to == Some(TargetRef::Object(object))
-                                    }
-                                    TriggerEvent::Targeted {
-                                        subject,
-                                        by_opponent: false,
-                                        spell_only: true,
-                                        instant_or_sorcery_only: true,
-                                    } if subject == ObjectFilter::creature().controlled() => {
-                                        instant_or_sorcery
-                                            && sheet.is_creature()
-                                            && watcher.controller == Some(controller)
-                                    }
-                                    _ => false,
-                                }
+            let excluded = BTreeSet::new();
+            let has_targeted_watcher = current.objects.values().any(|watcher| {
+                watcher.zone == ObjectZone::Battlefield
+                    && watcher
+                        .printed_text
+                        .triggered
+                        .iter()
+                        .filter(|ability| watcher.abilities.triggered.contains(&ability.id))
+                        .chain(watcher.granted_triggers.values())
+                        .any(|ability| {
+                            let TriggerEvent::Targeted {
+                                subject,
+                                by_opponent,
+                                spell_only,
+                                instant_or_sorcery_only,
+                            } = ability.condition.event
+                            else {
+                                return false;
+                            };
+                            if by_opponent && controller == entry.controller() {
+                                return false;
+                            }
+                            if spell_only && !is_spell {
+                                return false;
+                            }
+                            if instant_or_sorcery_only && !instant_or_sorcery {
+                                return false;
+                            }
+                            if subject == ObjectFilter::self_object() {
+                                watcher.object == object
+                            } else if subject == ObjectFilter::any().attached_to_self() {
+                                watcher.attached_to == Some(TargetRef::Object(object))
+                            } else if let Some(watcher_ctrl) = watcher.controller {
+                                self.matches_object_filter(
+                                    subject,
+                                    sheet,
+                                    watcher_ctrl,
+                                    Some(watcher.object),
+                                    &excluded,
+                                    current,
+                                )
+                            } else {
+                                false
+                            }
                         })
-                });
-            if spell_watcher {
-                objects.insert(object);
-                continue;
-            }
-            if controller == entry.controller() {
-                continue;
-            }
-            let has_ward = sheet.printed_text.triggered.iter().any(|ability| {
-                matches!(
-                    ability.condition.event,
-                    TriggerEvent::Targeted { subject, by_opponent: true, spell_only: false, instant_or_sorcery_only: false }
-                        if subject == ObjectFilter::self_object()
-                ) && sheet.abilities.triggered.contains(&ability.id)
             });
-            let has_subtype_watcher = sheet.is_creature() && current.objects.values().any(|watcher| {
-                watcher.zone == ObjectZone::Battlefield && watcher.controller == Some(controller)
-                    && watcher.printed_text.triggered.iter().any(|ability| {
-                        matches!(
-                            ability.condition.event,
-                            TriggerEvent::Targeted { subject: ObjectFilter::Clause(c), by_opponent: true, spell_only: false, instant_or_sorcery_only: false }
-                                if matches!(c.subtypes, SubtypeFilter::Has(subtype) if sheet.current_creature_subtypes.contains(&subtype))
-                        ) && watcher.abilities.triggered.contains(&ability.id)
-                    })
-            });
-            if has_ward || has_subtype_watcher {
+            if has_targeted_watcher {
                 objects.insert(object);
             }
         }
@@ -127,11 +113,48 @@ impl EffectWindow {
         let TriggerRelated::TargetingEntry(target) = member.related else {
             return Err(EffectError::InconsistentProgram);
         };
+        let _ = self.counter_captured_stack_entry(ward, index, target, append)?;
+        Ok(())
+    }
+
+    pub(super) fn counter_triggering_stack_object(
+        &mut self,
+        entry: StackEntryId,
+        index: usize,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let binding = self
+            .execution_bindings(entry)
+            .and_then(|b| b.trigger.as_ref())
+            .ok_or(EffectError::InconsistentProgram)?;
+        let Some(member) = binding.causes.members().first() else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let target = match &member.related {
+            TriggerRelated::TargetingEntry(target) | TriggerRelated::SpellCopied(target) => *target,
+            TriggerRelated::SpellCast(cast) => cast.entry(),
+            _ => return Err(EffectError::InconsistentProgram),
+        };
+        let countered = self.counter_captured_stack_entry(entry, index, target, append)?;
+        self.resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .results
+            .last_action_succeeded = countered;
+        Ok(())
+    }
+
+    fn counter_captured_stack_entry(
+        &mut self,
+        source_entry: StackEntryId,
+        index: usize,
+        target: StackEntryId,
+        append: &mut RulesJournal,
+    ) -> Result<bool, EffectError> {
         if !self.window.entries().iter().any(|s| s.id() == target) {
-            return Ok(());
+            return Ok(false);
         }
         if self.spell_cannot_be_countered(target)? {
-            return Ok(());
+            return Ok(false);
         }
         let previous = self.rules_snapshot(None)?;
         let (window, exit) = self.window.counter_captured_entry(target)?;
@@ -139,7 +162,7 @@ impl EffectWindow {
         self.payloads.remove(&target);
         self.emit_from(
             EventCause::CounterSpell {
-                entry: ward,
+                entry: source_entry,
                 instruction: index,
                 target,
             },
@@ -158,6 +181,7 @@ impl EffectWindow {
                     None => RulesOccurrence::AbilityCountered { entry: target },
                 }])
             },
-        )
+        )?;
+        Ok(true)
     }
 }

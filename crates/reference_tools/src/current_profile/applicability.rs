@@ -321,6 +321,10 @@ native!(ExecutableBody, self, {
         | Instruction::RequireCombatAction { .. }
         | Instruction::CreateTemporaryRule { .. }
         | Instruction::CreateTokenCopy { .. }
+        | Instruction::BindResolutionX(_)
+        | Instruction::PutResolvingSpellInLibrary(_)
+        | Instruction::PutSubjectIntoLibraryFromTop { .. }
+        | Instruction::SetDayNight(_)
         | Instruction::CreateAuraTokenAttached { .. }
         | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -833,7 +837,22 @@ native!(ExecutableBody, self, {
         | Instruction::CastLinkedFaceDownFree
         | Instruction::Ripple(_)
         | Instruction::Demonstrate
-        | Instruction::Enlist => Ok(()),
+        | Instruction::Enlist
+        | Instruction::CounterSpellToLibrary { .. }
+        | Instruction::CounterTriggeringStackObject
+        | Instruction::SetSubjectTapped { .. }
+        | Instruction::ForEachPlayer { .. }
+        | Instruction::OfferAnyPlayer { .. }
+        | Instruction::DealDamageToAnnouncedTargets { .. }
+        | Instruction::GrantChosenProtection { .. }
+        | Instruction::RemoveCountersFromSubject { .. }
+        | Instruction::MoveGroupToLibrary { .. }
+        | Instruction::ExileLibraryTopLinked { .. }
+        | Instruction::UntapOrTapSelect { .. }
+        | Instruction::MoveGraveyardGroupOwned { .. }
+        | Instruction::LookTopChooseExt { .. }
+        | Instruction::RevealUntilMatchExt { .. }
+        | Instruction::CreateTokenCopyExt { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {
@@ -1243,6 +1262,7 @@ native!(ResolvedContinuousEffect, self, {
         | ResolvedPart::Names(_)
         | ResolvedPart::Type(_)
         | ResolvedPart::Color(_)
+        | ResolvedPart::CannotBeTargetedByColors(_)
         | ResolvedPart::SetPT(_)
         | ResolvedPart::SetToughness(_)
         | ResolvedPart::ModifyPT(_)

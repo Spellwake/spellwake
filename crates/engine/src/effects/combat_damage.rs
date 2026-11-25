@@ -136,6 +136,12 @@ impl EffectWindow {
             let attacker_view = evaluated
                 .get(source.object())
                 .ok_or(CombatError::InvalidContext)?;
+            if attacker_view
+                .blocking_restrictions
+                .contains(&crate::characteristics::BlockingRestriction::AssignNoCombatDamage)
+            {
+                continue;
+            }
             let attacker_pt = attacker_view
                 .power_toughness
                 .as_ref()
@@ -286,6 +292,12 @@ impl EffectWindow {
             let blocker_view = evaluated
                 .get(source.object())
                 .ok_or(CombatError::InvalidContext)?;
+            if blocker_view
+                .blocking_restrictions
+                .contains(&crate::characteristics::BlockingRestriction::AssignNoCombatDamage)
+            {
+                continue;
+            }
             let blocker_pt = blocker_view
                 .power_toughness
                 .as_ref()

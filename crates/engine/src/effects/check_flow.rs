@@ -215,10 +215,6 @@ impl EffectWindow {
         }
     }
     fn cleanup_discard_count(&self, cards_in_hand: usize) -> Result<usize, EffectError> {
-        let excess = cards_in_hand.saturating_sub(7);
-        if excess == 0 {
-            return Ok(0);
-        }
         let active = self.window.active_player();
         let emblem = self.characteristics.emblems.values().any(|emblem| {
             emblem.controller == active
@@ -242,18 +238,15 @@ impl EffectWindow {
                     }
             )
         });
+        let evaluated = self.evaluated_characteristics()?;
         let no_limit = emblem
             || temp_no_limit
             || self
                 .characteristics
                 .no_max_hand_size_players
                 .contains(&active)
-            || self
-                .evaluated_characteristics()?
-                .objects
-                .values()
-                .any(|object| {
-                    object.zone == ObjectZone::Battlefield
+            || evaluated.objects.values().any(|object| {
+                object.zone == ObjectZone::Battlefield
                     && object.has_battlefield_rule(|rule| match rule {
                         crate::characteristics::StaticContinuousAbility::DrawRule {
                             rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
@@ -266,8 +259,49 @@ impl EffectWindow {
                         } => true,
                         _ => false,
                     })
-                });
-        Ok(if no_limit { 0 } else { excess })
+            });
+        if no_limit {
+            return Ok(0);
+        }
+        // CR 402.2: If multiple effects modify maximum hand size, the one with the latest timestamp wins.
+        let mut best_limit: Option<(crate::characteristics::CharacteristicTimestamp, usize)> = None;
+        for object in evaluated.objects.values() {
+            if object.zone != ObjectZone::Battlefield || object.controller != Some(active) {
+                continue;
+            }
+            for ability in object
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&object.printed_text.additional_battlefield_abilities)
+            {
+                let is_active = object.abilities.continuous == Some(ability.id())
+                    || object
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability.id());
+                if !is_active {
+                    continue;
+                }
+                if let crate::characteristics::StaticContinuousAbility::DrawRule {
+                    rule: crate::characteristics::StaticDrawRule::MaxHandSize(limit),
+                    ..
+                } = ability
+                    && let Some(ts) = self.characteristics.object_timestamp(object.object)
+                    && best_limit.is_none_or(|(prev_ts, _)| ts >= prev_ts)
+                {
+                    best_limit = Some((ts, usize::from(*limit)));
+                }
+            }
+        }
+        let base_limit = best_limit.map_or(7, |(_, limit)| limit);
+        let delta = self.max_hand_size_delta(active)?;
+        let adjusted = i64::try_from(base_limit)
+            .unwrap_or(i64::MAX)
+            .saturating_add(i64::from(delta))
+            .max(0);
+        let max_hand_size = usize::try_from(adjusted).unwrap_or(0);
+        Ok(cards_in_hand.saturating_sub(max_hand_size))
     }
     fn cleanup_hand(&self) -> Vec<ObjectId> {
         let active = self.window.active_player();
@@ -1841,21 +1875,38 @@ impl EffectWindow {
                 }
             }
         }
-        let mut losses = self.failed_draws.clone();
-        losses.extend(self.life.nonpositive_players());
-        losses.extend(self.commander_damage_losses().map(|(player, _)| player));
-        losses.extend(
-            self.window
-                .participants()
-                .iter()
-                .copied()
-                .filter(|&player| {
-                    self.poison
-                        .get(&player)
-                        .is_some_and(|count| count >= &10.into())
-                }),
-        );
-        losses.retain(|player| self.window.participants().contains(player));
+        let mut losses = BTreeSet::new();
+        for &player in &self.failed_draws {
+            if self.window.participants().contains(&player)
+                && !self.player_cannot_lose(&current, player, false)?
+            {
+                losses.insert(player);
+            }
+        }
+        for player in self.life.nonpositive_players() {
+            if self.window.participants().contains(&player)
+                && !self.player_cannot_lose(&current, player, true)?
+            {
+                losses.insert(player);
+            }
+        }
+        for (player, _) in self.commander_damage_losses() {
+            if self.window.participants().contains(&player)
+                && !self.player_cannot_lose(&current, player, false)?
+            {
+                losses.insert(player);
+            }
+        }
+        for &player in self.window.participants() {
+            if self
+                .poison
+                .get(&player)
+                .is_some_and(|count| count >= &10.into())
+                && !self.player_cannot_lose(&current, player, false)?
+            {
+                losses.insert(player);
+            }
+        }
         let mut by_owner: BTreeMap<SeatId, Vec<ObjectId>> = BTreeMap::new();
         for record in self.commanders.values() {
             if let Some(object) = record
@@ -2199,8 +2250,13 @@ impl EffectWindow {
                                 .map(|object| RulesOccurrence::TokenCeased { object }),
                         );
                     }
+                    let check_evaluated = before.view().evaluated.clone();
+                    let mut surviving_losses = BTreeSet::new();
                     for player in self.window.apnap_players()? {
                         if actions.losses.contains(&player) {
+                            if self.player_cannot_lose(&check_evaluated, player, false)? {
+                                continue;
+                            }
                             let mut reasons = BTreeSet::new();
                             if self
                                 .poison
@@ -2217,13 +2273,19 @@ impl EffectWindow {
                             if self.failed_draws.contains(&player) {
                                 reasons.insert(PlayerLossReason::FailedDraw);
                             }
-                            if self.life.get(player).is_some_and(|life| *life <= 0.into()) {
+                            if self.life.get(player).is_some_and(|life| *life <= 0.into())
+                                && !self.player_cannot_lose(&check_evaluated, player, true)?
+                            {
                                 reasons.insert(PlayerLossReason::NonpositiveLife);
                             }
+                            if reasons.is_empty() {
+                                continue;
+                            }
+                            surviving_losses.insert(player);
                             occurrences.push(RulesOccurrence::PlayerLost { player, reasons });
                         }
                     }
-                    self.state_based_losses.extend(actions.losses);
+                    self.state_based_losses.extend(surviving_losses);
                     self.failed_draws.clear();
                     self.deathtouch_damage.clear();
                     self.emit_from(
@@ -2264,6 +2326,15 @@ impl EffectWindow {
                             moves.append(&mut occurrences);
                             Ok(moves)
                         },
+                    )?;
+                    self.apply_zone_replacement_extras_from_movements(
+                        moves.replacements(),
+                        &logical_changes,
+                        EventCause::StateBasedActions {
+                            event: process.event,
+                            boundary: process.boundary,
+                        },
+                        &mut append,
                     )?;
                     if !self.state_based_losses.is_empty() {
                         if self.window.participants().len() - self.state_based_losses.len() <= 1 {

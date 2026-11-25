@@ -406,6 +406,158 @@ fn stage_a_and_b_fidelity_regressions() {
     );
 }
 
+// Recurse through control-flow and container AST variants that oracle_lowering
+// lowers recursively (in body.rs or instructions.rs) so Gate 4 blocker
+// attribution surfaces the real leaf blocker instead of the wrapper.
+// Unimplemented container combinators (for example TemporaryTrigger,
+// TemporarySpecialAction, ForEachColorAmong, WhenYouNext, ManaSpendRider,
+// SequentialChoose, ReflexiveEventTrigger, Simultaneous, ForEachCategory) stay
+// as leaves so Gate 4 keeps reporting them as named unsupported instructions
+// instead of collapsing them into generic *-body buckets.
+fn collect_leaf_ins<'a>(ins: &'a [InstructionAst], out: &mut Vec<&'a InstructionAst>) {
+    for item in ins {
+        match item {
+            InstructionAst::Optional(inner)
+            | InstructionAst::OptionalPlayer { body: inner, .. }
+            | InstructionAst::IfCondition {
+                then_body: inner, ..
+            }
+            | InstructionAst::Otherwise(inner)
+            | InstructionAst::ReplaceEffect(inner)
+            | InstructionAst::IfPreviousSucceeded(inner)
+            | InstructionAst::IfPreviousFailed(inner)
+            | InstructionAst::BindX { body: inner, .. }
+            | InstructionAst::BindXY { body: inner, .. }
+            | InstructionAst::ReflexiveTrigger(inner)
+            | InstructionAst::DelayedTrigger { body: inner, .. }
+            | InstructionAst::DelayedEventTrigger { body: inner, .. }
+            | InstructionAst::ForEachPlayer { body: inner, .. }
+            | InstructionAst::ForEachSubjectPlayer { body: inner, .. }
+            | InstructionAst::ForEachObject { body: inner, .. }
+            | InstructionAst::ForEachCount { body: inner, .. }
+            | InstructionAst::ForAsLongAs { body: inner, .. }
+            | InstructionAst::SpreeMode { body: inner, .. } => {
+                collect_leaf_ins(inner, out);
+            }
+            InstructionAst::Unless {
+                body,
+                unless_action,
+                ..
+            } => {
+                collect_leaf_ins(body, out);
+                if let Some(action) = unless_action {
+                    collect_leaf_ins(action, out);
+                }
+            }
+            InstructionAst::Choice(branches)
+            | InstructionAst::InteractiveChoice(InteractiveChoiceKind::VillainousChoice {
+                options: branches,
+                ..
+            }) => {
+                for branch in branches {
+                    collect_leaf_ins(branch, out);
+                }
+            }
+            InstructionAst::Modal { modes, .. } => {
+                for mode in modes {
+                    collect_leaf_ins(&mode.body, out);
+                }
+            }
+            _ => out.push(item),
+        }
+    }
+}
+
+#[test]
+fn collect_leaf_ins_recurses_into_lowered_containers() {
+    let sample = vec![
+        InstructionAst::IfCondition {
+            condition: Box::new(ConditionAst::Metalcraft),
+            then_body: vec![InstructionAst::ReplaceEffect(vec![
+                InstructionAst::Proliferate,
+            ])],
+        },
+        InstructionAst::SpreeMode {
+            cost: Vec::new(),
+            body: vec![InstructionAst::EndTurn],
+        },
+        InstructionAst::BindXY {
+            x_expr: Box::new(ValueExprAst::Const(1)),
+            y_expr: Box::new(ValueExprAst::Const(2)),
+            body: vec![InstructionAst::ClaimPrize],
+        },
+        InstructionAst::DelayedEventTrigger {
+            trigger: TriggerSpecAst {
+                events: Vec::new(),
+                intervening_if: None,
+            },
+            body: vec![InstructionAst::Planeswalk],
+        },
+        InstructionAst::ForEachSubjectPlayer {
+            players: Box::new(SubjectRefAst::Player(PlayerRefAst::EachPlayer)),
+            body: vec![InstructionAst::Proliferate],
+        },
+        InstructionAst::ForAsLongAs {
+            condition: Box::new(ConditionAst::Marker(GameMarker::RemainsExiled)),
+            body: vec![InstructionAst::EndTurn],
+        },
+        InstructionAst::Unless {
+            body: vec![InstructionAst::ClaimPrize],
+            unless_player: None,
+            unless_cost: None,
+            unless_action: Some(vec![InstructionAst::Planeswalk]),
+            unless_condition: None,
+        },
+        InstructionAst::Choice(vec![
+            vec![InstructionAst::Proliferate],
+            vec![InstructionAst::EndTurn],
+        ]),
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::VillainousChoice {
+            chooser: PlayerRefAst::EachOpponent,
+            options: vec![
+                vec![InstructionAst::ClaimPrize],
+                vec![InstructionAst::Planeswalk],
+            ],
+        }),
+        InstructionAst::Modal {
+            choice: "Choose one".to_string(),
+            modes: vec![spellwake_oracle_compiler::ast::ModalModeAst {
+                body: vec![InstructionAst::ReplaceEffect(vec![
+                    InstructionAst::Proliferate,
+                ])],
+                label: None,
+                granted: None,
+            }],
+        },
+        // Unimplemented container stays as a leaf so it remains a named blocker.
+        InstructionAst::Simultaneous(vec![InstructionAst::EndTurn]),
+    ];
+
+    let mut leaves = Vec::new();
+    collect_leaf_ins(&sample, &mut leaves);
+
+    assert_eq!(leaves.len(), 14);
+    assert!(
+        !leaves
+            .iter()
+            .any(|ins| matches!(ins, InstructionAst::ReplaceEffect(_)))
+    );
+    assert!(matches!(leaves[0], InstructionAst::Proliferate));
+    assert!(matches!(leaves[1], InstructionAst::EndTurn));
+    assert!(matches!(leaves[2], InstructionAst::ClaimPrize));
+    assert!(matches!(leaves[3], InstructionAst::Planeswalk));
+    assert!(matches!(leaves[4], InstructionAst::Proliferate));
+    assert!(matches!(leaves[5], InstructionAst::EndTurn));
+    assert!(matches!(leaves[6], InstructionAst::ClaimPrize));
+    assert!(matches!(leaves[7], InstructionAst::Planeswalk));
+    assert!(matches!(leaves[8], InstructionAst::Proliferate));
+    assert!(matches!(leaves[9], InstructionAst::EndTurn));
+    assert!(matches!(leaves[10], InstructionAst::ClaimPrize));
+    assert!(matches!(leaves[11], InstructionAst::Planeswalk));
+    assert!(matches!(leaves[12], InstructionAst::Proliferate));
+    assert!(matches!(leaves[13], InstructionAst::Simultaneous(_)));
+}
+
 #[test]
 #[ignore = "uses saved dated Scryfall bulk corpus and creature vocabulary"]
 fn oracle_lowering_corpus_coverage_audit() {
@@ -753,30 +905,6 @@ fn oracle_lowering_corpus_coverage_audit() {
     let mut unsup_kw_action: HashMap<String, usize> = HashMap::new();
     let mut unsup_pay_cost: HashMap<String, usize> = HashMap::new();
     let mut unsup_marker: HashMap<String, usize> = HashMap::new();
-
-    fn collect_leaf_ins<'a>(ins: &'a [InstructionAst], out: &mut Vec<&'a InstructionAst>) {
-        for item in ins {
-            match item {
-                InstructionAst::Optional(inner)
-                | InstructionAst::OptionalPlayer { body: inner, .. }
-                | InstructionAst::IfCondition {
-                    then_body: inner, ..
-                }
-                | InstructionAst::Otherwise(inner)
-                | InstructionAst::IfPreviousSucceeded(inner)
-                | InstructionAst::IfPreviousFailed(inner)
-                | InstructionAst::BindX { body: inner, .. }
-                | InstructionAst::ReflexiveTrigger(inner)
-                | InstructionAst::DelayedTrigger { body: inner, .. }
-                | InstructionAst::ForEachPlayer { body: inner, .. }
-                | InstructionAst::ForEachObject { body: inner, .. }
-                | InstructionAst::ForEachCount { body: inner, .. } => {
-                    collect_leaf_ins(inner, out);
-                }
-                _ => out.push(item),
-            }
-        }
-    }
 
     let compiler_vocab = cached_compiler_vocab(&vocabulary);
     for card in inventory
