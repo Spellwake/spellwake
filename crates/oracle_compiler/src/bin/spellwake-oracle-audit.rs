@@ -1,7 +1,7 @@
 //! CLI auditing tool for Spellwake's Stage 1 Oracle Parser.
 //!
 //! Subcommands:
-//! - `audit-corpus --snapshot <oracle-cards.jsonl[.gz]> --vocab <vocab.json> [--output <json>] [--max-critical <N>] [--max-opaque <N>]`
+//! - `audit-corpus --snapshot <oracle-cards.jsonl[.gz]> --vocab <vocab.json> [--output <json>] [--max-critical <N>] [--max-structural <N>] [--max-opaque <N>]`
 //! - `inspect --vocab <vocab.json> --name <name> --type-line <tl> --oracle-text <text>`
 
 use std::collections::BTreeMap;
@@ -119,6 +119,7 @@ fn process_line(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_corpus_audit(
     snapshot: &Path,
     vocab_path: &Path,
@@ -126,6 +127,7 @@ fn run_corpus_audit(
     dump_critical: Option<&Path>,
     all_cards: bool,
     max_critical: Option<usize>,
+    max_structural: Option<usize>,
     max_opaque: Option<usize>,
 ) -> Result<ExitCode, String> {
     let vocab = Vocabulary::load_from_file(vocab_path).map_err(|e| {
@@ -233,13 +235,19 @@ fn run_corpus_audit(
         summary.strictly_compiled_cards as f64 / total * 100.0
     );
     eprintln!(
-        "  Zero Critical Defect: {:>6} / {:<6} ({:.2}%)",
+        "  Zero Critical Defect:   {:>6} / {:<6} ({:.2}%)",
         summary.zero_critical_defect_cards,
         summary.total_cards,
         summary.zero_critical_defect_cards as f64 / total * 100.0
     );
     eprintln!(
-        "  Pure Typed AST:       {:>6} / {:<6} ({:.2}%)",
+        "  Zero Structural Defect: {:>6} / {:<6} ({:.2}%)",
+        summary.zero_structural_defect_cards,
+        summary.total_cards,
+        summary.zero_structural_defect_cards as f64 / total * 100.0
+    );
+    eprintln!(
+        "  Pure Typed AST:         {:>6} / {:<6} ({:.2}%)",
         summary.fully_typed_pure_cards,
         summary.total_cards,
         summary.fully_typed_pure_cards as f64 / total * 100.0
@@ -273,6 +281,15 @@ fn run_corpus_audit(
         );
         return Ok(ExitCode::FAILURE);
     }
+    if let Some(limit) = max_structural
+        && summary.cards_with_structural_defects > limit
+    {
+        eprintln!(
+            "FAIL: {} cards have structural parser corruption defects (limit: {limit})",
+            summary.cards_with_structural_defects
+        );
+        return Ok(ExitCode::FAILURE);
+    }
     if let Some(limit) = max_opaque
         && summary.cards_with_opaque_strings > limit
     {
@@ -300,6 +317,7 @@ fn main() -> ExitCode {
             let mut dump_critical: Option<PathBuf> = None;
             let mut all_cards = false;
             let mut max_critical: Option<usize> = None;
+            let mut max_structural: Option<usize> = None;
             let mut max_opaque: Option<usize> = None;
 
             let mut i = 1;
@@ -335,6 +353,16 @@ fn main() -> ExitCode {
                         }
                         i += 2;
                     }
+                    "--max-structural" if i + 1 < args.len() => {
+                        match args[i + 1].parse::<usize>() {
+                            Ok(v) => max_structural = Some(v),
+                            Err(_) => {
+                                eprintln!("Invalid --max-structural value: {:?}", args[i + 1]);
+                                return ExitCode::FAILURE;
+                            }
+                        }
+                        i += 2;
+                    }
                     "--max-opaque" if i + 1 < args.len() => {
                         match args[i + 1].parse::<usize>() {
                             Ok(v) => max_opaque = Some(v),
@@ -363,6 +391,7 @@ fn main() -> ExitCode {
                 dump_critical.as_deref(),
                 all_cards,
                 max_critical,
+                max_structural,
                 max_opaque,
             ) {
                 Ok(code) => code,
