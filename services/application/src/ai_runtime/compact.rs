@@ -5,8 +5,12 @@
 //! deduplicates card definitions, orders static instructions first for provider
 //! prompt caching, and expands compact LLM replies fail-closed into validated
 //! native `PlayerCommand` values.
-use super::{affordances::PriorityAffordances, scheduler::WakeCondition};
-use crate::player_wire::{PlayerAction, PlayerBasis, PlayerCommand, PlayerSnapshot};
+use super::{
+    affordances::PriorityAffordances, knowledge::SeatKnowledgeView, scheduler::WakeCondition,
+};
+use crate::player_wire::{
+    PlayerAction, PlayerBasis, PlayerCharacteristics, PlayerCommand, PlayerSnapshot,
+};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,9 +27,14 @@ Return one JSON object matching the output schema: {\"action\": ..., \"delegate_
 \n\
 HANDLE GRAMMAR (use ONLY short handles from this snapshot):\n\
 - \"you\" = your seat; \"opp\" (or \"opp1\", \"opp2\", ...) = opponent seat.\n\
-- Hand cards: \"h1\", \"h2\", ...; your battlefield: \"b1\", ...; your mana abilities: \"m1\", ...;\n\
-  opponent battlefield: \"e1\", ...; graveyards: \"g1\" / \"eg1\"; stack: \"st1\", ...;\n\
+- Hand cards: \"h1\", \"h2\", ...; revealed opponent hand: \"oh1\", ...; your battlefield: \"b1\", ...; your mana abilities: \"m1\", ...;\n\
+  opponent battlefield: \"e1\", ...; graveyards: \"g1\" / \"eg1\"; visible library: \"lib1\" / \"elib1\"; stack: \"st1\", ...;\n\
   decisions: \"d1\", ...; options: \"opt1\", ...; exile/other: \"x1\", ....\n\
+\n\
+REVEALED-CARD KNOWLEDGE (seat-scoped):\n\
+- \"known_opp_hand\" lists cards you currently know are in an opponent's hand (revealed, publicly searched, bounced, or drawn from a known library top). Cards leave this list once played, discarded, or moved.\n\
+- \"visible_library\" lists cards you currently know at positions in your or an opponent's library (\"top\", \"top+N\", \"bottom\", \"bottom+N\", or \"bottom_unordered\"). Shuffles invalidate tracked library positions.\n\
+- \"historical_reveals\" lists earlier reveals seen by your seat and their current status (active, left_to_<zone>, or invalidated_by_shuffle).\n\
 \n\
 BOUNDARY RULE (CRITICAL):\n\
 - Check \"boundary\" FIRST.\n\
@@ -396,6 +405,24 @@ pub fn compact_prompt_with_affordances(
     own_recent: &[String],
     feedback: Option<&str>,
 ) -> Result<(String, HandleCodec), CompactError> {
+    compact_prompt_with_knowledge(snapshot, affordances, None, own_recent, feedback)
+}
+
+/// Compile a seat-filtered `PlayerSnapshot`, verified `PriorityAffordances`, and optional
+/// durable seat-scoped `SeatKnowledgeView` into a static-first `compact_v1` prompt string
+/// and its lossless `HandleCodec`.
+///
+/// When `knowledge` is `None`, single-cut snapshot visibility (opponent hand, visible
+/// library cards, and snapshot-level reveals) is still derived from `snapshot`.
+/// # Errors
+/// Returns `CompactError::SerializeSnapshot` if serialization fails.
+pub fn compact_prompt_with_knowledge(
+    snapshot: &PlayerSnapshot,
+    affordances: &PriorityAffordances,
+    knowledge: Option<&SeatKnowledgeView>,
+    own_recent: &[String],
+    feedback: Option<&str>,
+) -> Result<(String, HandleCodec), CompactError> {
     let basic_actions = &affordances.basic_actions;
     let raw = serde_json::to_value(snapshot).map_err(CompactError::SerializeSnapshot)?;
     let mut codec = HandleCodec::default();
@@ -455,14 +482,17 @@ pub fn compact_prompt_with_affordances(
                 .get("controllerSeatId")
                 .and_then(Value::as_str)
                 .unwrap_or(owner);
-            let is_mine = ctrl == viewer || (zone == "hand" && owner == viewer);
+            let is_mine = ctrl == viewer || (matches!(zone, "hand" | "library") && owner == viewer);
 
             let prefix = match (zone, is_mine) {
                 ("hand", true) => "h",
+                ("hand", false) => "oh",
                 ("battlefield", true) => "b",
                 ("battlefield", false) => "e",
                 ("graveyard", true) => "g",
                 ("graveyard", false) => "eg",
+                ("library", true) => "lib",
+                ("library", false) => "elib",
                 ("stack", _) => "so",
                 _ => "x",
             };
@@ -807,6 +837,99 @@ pub fn compact_prompt_with_affordances(
         .map(|(k, v)| (k.to_owned(), Value::from(v)))
         .collect();
 
+    // Seat-scoped revealed-card knowledge (durable ledger view when supplied, otherwise
+    // single-cut visibility derived strictly from `snapshot`).
+    let fallback_knowledge;
+    let effective_knowledge = match knowledge {
+        Some(view) => view,
+        None => {
+            fallback_knowledge = SeatKnowledgeView::from_snapshot_only(snapshot);
+            &fallback_knowledge
+        }
+    };
+
+    let mut known_opp_hand = Vec::with_capacity(effective_knowledge.known_opponent_hand.len());
+    for item in &effective_knowledge.known_opponent_hand {
+        insert_card_definition(&mut cards, &item.characteristics);
+        let seat_str = item.owner_seat_id.to_string();
+        let short_seat = codec.short_of(&seat_str).unwrap_or("opp").to_owned();
+        let mut entry = Map::new();
+        entry.insert("seat".into(), Value::String(short_seat));
+        if let Some(handle) = &item.handle
+            && let Some(short) = codec.short_of(handle.as_str())
+        {
+            entry.insert("id".into(), Value::String(short.to_owned()));
+        }
+        entry.insert(
+            "card".into(),
+            Value::String(item.characteristics.name.clone()),
+        );
+        entry.insert(
+            "source".into(),
+            Value::String(item.source.as_str().to_owned()),
+        );
+        if let Some(turn) = item.revealed_turn {
+            entry.insert("turn".into(), Value::from(turn));
+        }
+        known_opp_hand.push(Value::Object(entry));
+    }
+
+    let mut visible_library = Vec::with_capacity(effective_knowledge.visible_library_cards.len());
+    for item in &effective_knowledge.visible_library_cards {
+        insert_card_definition(&mut cards, &item.characteristics);
+        let owner_str = item.owner_seat_id.to_string();
+        let short_owner = codec.short_of(&owner_str).unwrap_or("opp").to_owned();
+        let mut entry = Map::new();
+        entry.insert("owner".into(), Value::String(short_owner));
+        if let Some(handle) = &item.handle
+            && let Some(short) = codec.short_of(handle.as_str())
+        {
+            entry.insert("id".into(), Value::String(short.to_owned()));
+        }
+        entry.insert(
+            "card".into(),
+            Value::String(item.characteristics.name.clone()),
+        );
+        entry.insert(
+            "position".into(),
+            Value::String(item.position.compact_label()),
+        );
+        if item.may_play {
+            entry.insert("may_play".into(), Value::Bool(true));
+        }
+        entry.insert(
+            "source".into(),
+            Value::String(item.source.as_str().to_owned()),
+        );
+        if let Some(turn) = item.revealed_turn {
+            entry.insert("turn".into(), Value::from(turn));
+        }
+        visible_library.push(Value::Object(entry));
+    }
+
+    const MAX_PROMPT_HISTORICAL_REVEALS: usize = 24;
+    let hist_slice = &effective_knowledge.historical_reveals;
+    let hist_start = hist_slice
+        .len()
+        .saturating_sub(MAX_PROMPT_HISTORICAL_REVEALS);
+    let mut historical_reveals = Vec::with_capacity(hist_slice.len().saturating_sub(hist_start));
+    for item in &hist_slice[hist_start..] {
+        let owner_str = item.owner_seat_id.to_string();
+        let short_owner = codec.short_of(&owner_str).unwrap_or("opp").to_owned();
+        let mut entry = Map::new();
+        entry.insert("owner".into(), Value::String(short_owner));
+        entry.insert("card".into(), Value::String(item.card_name.clone()));
+        entry.insert(
+            "source".into(),
+            Value::String(item.source.as_str().to_owned()),
+        );
+        entry.insert("status".into(), Value::String(item.status.compact_label()));
+        if let Some(turn) = item.revealed_turn {
+            entry.insert("turn".into(), Value::from(turn));
+        }
+        historical_reveals.push(Value::Object(entry));
+    }
+
     let mut state = Map::new();
     state.insert("boundary".into(), Value::String(boundary.into()));
     state.insert(
@@ -826,6 +949,12 @@ pub fn compact_prompt_with_affordances(
     }
     state.insert("can_tap_for_mana".into(), Value::Array(can_tap_for_mana));
     state.insert("hand".into(), Value::Array(hand));
+    if !known_opp_hand.is_empty() {
+        state.insert("known_opp_hand".into(), Value::Array(known_opp_hand));
+    }
+    if !visible_library.is_empty() {
+        state.insert("visible_library".into(), Value::Array(visible_library));
+    }
     state.insert("your_board".into(), Value::Array(your_board));
     state.insert("opp_board".into(), Value::Array(opp_board));
     if !your_gy.is_empty() {
@@ -839,6 +968,12 @@ pub fn compact_prompt_with_affordances(
         state.insert("stack_objects".into(), Value::Array(stack_objs));
     }
     state.insert("cards".into(), Value::Object(cards.into_iter().collect()));
+    if !historical_reveals.is_empty() {
+        state.insert(
+            "historical_reveals".into(),
+            Value::Array(historical_reveals),
+        );
+    }
     if !public_history.is_empty() {
         state.insert("public_history".into(), Value::Array(public_history));
     }
@@ -856,6 +991,30 @@ pub fn compact_prompt_with_affordances(
         serde_json::to_string(&Value::Object(state)).map_err(CompactError::SerializeSnapshot)?;
     let prompt = format!("{COMPACT_ACTION_GUIDE}\n\nSTATE:\n{state_json}");
     Ok((prompt, codec))
+}
+
+fn insert_card_definition(cards: &mut BTreeMap<String, Value>, ch: &PlayerCharacteristics) {
+    if ch.name.is_empty() {
+        return;
+    }
+    cards.entry(ch.name.clone()).or_insert_with(|| {
+        let mut def = Map::new();
+        if let Some(mc) = &ch.mana_cost
+            && !mc.is_empty()
+        {
+            def.insert("cost".into(), Value::String(mc.clone()));
+        }
+        if !ch.type_line.is_empty() {
+            def.insert("type".into(), Value::String(ch.type_line.clone()));
+        }
+        if !ch.rules_text.is_empty() {
+            def.insert("text".into(), Value::String(ch.rules_text.clone()));
+        }
+        if let (Some(p), Some(t)) = (&ch.printed_power, &ch.printed_toughness) {
+            def.insert("pt".into(), Value::String(format!("{p}/{t}")));
+        }
+        Value::Object(def)
+    });
 }
 
 /// Select the boundary-locked (and decision-kind-locked) strict JSON schema for `snapshot`.

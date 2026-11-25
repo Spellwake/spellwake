@@ -1,18 +1,20 @@
 //! Possessed-controller live View composition, with final local and SQL refresh.
 use super::*;
 use crate::{
-    ai_runtime::{PriorityAffordances, probe_priority_affordances},
+    ai_runtime::{PriorityAffordances, SeatKnowledgeView, probe_priority_affordances},
     controller_possession::{ControllerSecretStore, PossessedController},
     native_game::NativeCastBatchError,
     player_wire::{PlayerAction, PlayerCommand, PlayerCommandAck, PlayerSnapshot},
 };
 
 /// Live controller View together with verified priority affordances (legal land plays,
-/// mana sources, castable spells, and activatable abilities) computed on the exact same scope.
+/// mana sources, castable spells, and activatable abilities) and durable seat-scoped
+/// revealed-card knowledge computed on the exact same scope.
 pub struct NativeControllerSnapshot {
     pub snapshot: Box<PlayerSnapshot>,
     pub basic_actions: Vec<PlayerAction>,
     pub affordances: PriorityAffordances,
+    pub knowledge: Box<SeatKnowledgeView>,
 }
 
 /// Outcome of a controller view read that also returns verified basic affordances.
@@ -118,6 +120,12 @@ impl NativeGameRuntime {
             } else {
                 PriorityAffordances::default()
             };
+            let knowledge = recovered.checkpoint().seat_knowledge(
+                issued.view().snapshot().viewer_seat_id,
+                &display,
+                Some(issued.view().scope()),
+                issued.view().snapshot(),
+            );
             let basic_actions = affordances.basic_actions.clone();
             let snapshot = issued.into_snapshot();
             #[cfg(test)]
@@ -127,6 +135,7 @@ impl NativeGameRuntime {
                     snapshot: Box::new(snapshot),
                     basic_actions,
                     affordances,
+                    knowledge: Box::new(knowledge),
                 },
             ))
         })();

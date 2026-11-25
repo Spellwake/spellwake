@@ -8,11 +8,9 @@ use serde_json::json;
 use spellwake_application::{
     ai_runtime::{
         AiDecisionProvider, AiModelRequest, AiScheduler, AiTier, AiTierCatalog,
-        CodexAppServerConfig, CodexAppServerProvider, ScheduleDecision, StaticScriptedProvider,
-        auto_tap_plan,
-        compact::{
-            AiActionPlan, compact_prompt_with_affordances, compact_reply_schema_for_snapshot,
-        },
+        CodexAppServerConfig, CodexAppServerProvider, ScheduleDecision, SeatKnowledgeLedger,
+        StaticScriptedProvider, auto_tap_plan,
+        compact::{AiActionPlan, compact_prompt_with_knowledge, compact_reply_schema_for_snapshot},
         diagnose_rejection,
         driver::seat_must_act,
         fallback_command, probe_priority_affordances,
@@ -641,6 +639,15 @@ fn summarize_action(plan: &AiActionPlan) -> String {
     }
 }
 
+struct AcceptedBenchTurn {
+    candidates: Vec<spellwake_engine::game::NativeCandidate>,
+    summary: String,
+    delegate_pass: bool,
+    wake: std::collections::BTreeSet<spellwake_application::ai_runtime::WakeCondition>,
+    max_skips: u32,
+    line: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_game(
     game_index: usize,
@@ -683,8 +690,9 @@ fn run_game(
     )
     .map_err(|e| format!("prepare_initial failed: {e}"))?;
 
-    let (_, _, candidate, _) = opening.into_parts();
+    let (_, _, candidate, roster) = opening.into_parts();
     let mut state = candidate.into_state();
+    let mut knowledge = SeatKnowledgeLedger::initial(&state, &roster);
     let context = state.basis().context.clone();
     let display = BenchDisplay { source, context };
 
@@ -780,7 +788,9 @@ fn run_game(
                 action: PlayerAction::Pass {},
             };
             if let Ok(prepared) = scope.propose(&cmd) {
-                state = prepared.into_parts().3.into_state();
+                let candidate = prepared.into_parts().3;
+                knowledge.advance(&state, &candidate);
+                state = candidate.into_state();
                 seq += 1;
                 stats[seat_idx].fast_passes += 1;
                 transcript.push(format!(
@@ -802,7 +812,9 @@ fn run_game(
                 };
                 match scope.propose(&cmd) {
                     Ok(prepared) => {
-                        state = prepared.into_parts().3.into_state();
+                        let candidate = prepared.into_parts().3;
+                        knowledge.advance(&state, &candidate);
+                        state = candidate.into_state();
                         seq += 1;
                         schedulers[seat_idx].record_delegated_pass();
                         stats[seat_idx].delegated_passes += 1;
@@ -826,20 +838,16 @@ fn run_game(
                 let cache_key =
                     format!("bench:{}:{}:{seat_idx}", tiers[seat_idx].as_str(), game_id);
                 let own_recent: Vec<String> = recents[seat_idx].iter().cloned().collect();
+                let seat_knowledge =
+                    knowledge.view_for_seat(actor, &state, &display, Some(&scope), &snap);
                 let mut feedback: Option<String> = None;
-                let mut accepted_state: Option<(
-                    GameState,
-                    String,
-                    bool,
-                    std::collections::BTreeSet<spellwake_application::ai_runtime::WakeCondition>,
-                    u32,
-                    String,
-                )> = None;
+                let mut accepted_state: Option<AcceptedBenchTurn> = None;
 
                 for attempt in 0..MAX_RETRIES_PER_BOUNDARY {
-                    let (prompt, codec) = compact_prompt_with_affordances(
+                    let (prompt, codec) = compact_prompt_with_knowledge(
                         &snap,
                         &affordances,
+                        Some(&seat_knowledge),
                         &own_recent,
                         feedback.as_deref(),
                     )
@@ -897,19 +905,20 @@ fn run_game(
                     let plan =
                         auto_tap_plan(expanded.plan, &snap, &affordances.mana_sources, &snap.basis);
 
-                    let commit_res: Result<GameState, String> = match &plan {
-                        AiActionPlan::Single(cmd) => scope
-                            .propose(cmd)
-                            .map(|p| p.into_parts().3.into_state())
-                            .map_err(|e| e.to_string()),
-                        AiActionPlan::CastBatch(cmds) => scope
-                            .prepare_cast_batch(cmds)
-                            .map(|p| p.into_parts().0)
-                            .map_err(|e| e.to_string()),
-                    };
+                    let commit_res: Result<Vec<spellwake_engine::game::NativeCandidate>, String> =
+                        match &plan {
+                            AiActionPlan::Single(cmd) => scope
+                                .propose(cmd)
+                                .map(|p| vec![p.into_parts().3])
+                                .map_err(|e| e.to_string()),
+                            AiActionPlan::CastBatch(cmds) => scope
+                                .prepare_cast_batch(cmds)
+                                .map(|p| p.into_candidates())
+                                .map_err(|e| e.to_string()),
+                        };
 
                     match commit_res {
-                        Ok(next_state) => {
+                        Ok(candidates) => {
                             if attempt == 0 {
                                 stats[seat_idx].first_try_accepts += 1;
                             }
@@ -926,14 +935,14 @@ fn run_game(
                                 summary,
                                 resp.raw_json
                             );
-                            accepted_state = Some((
-                                next_state,
+                            accepted_state = Some(AcceptedBenchTurn {
+                                candidates,
                                 summary,
-                                expanded.delegate_pass,
-                                expanded.wake,
-                                expanded.max_skips,
+                                delegate_pass: expanded.delegate_pass,
+                                wake: expanded.wake,
+                                max_skips: expanded.max_skips,
                                 line,
-                            ));
+                            });
                             break;
                         }
                         Err(err) => {
@@ -951,11 +960,20 @@ fn run_game(
                     }
                 }
 
-                if let Some((next_state, summary, delegate_pass, wake, max_skips, line)) =
-                    accepted_state
+                if let Some(AcceptedBenchTurn {
+                    candidates,
+                    summary,
+                    delegate_pass,
+                    wake,
+                    max_skips,
+                    line,
+                }) = accepted_state
                 {
                     drop(scope);
-                    state = next_state;
+                    for candidate in candidates {
+                        knowledge.advance(&state, &candidate);
+                        state = candidate.into_state();
+                    }
                     seq += 1;
                     if recents[seat_idx].len() >= MAX_OWN_RECENT {
                         recents[seat_idx].pop_front();
@@ -986,12 +1004,13 @@ fn run_game(
                     transcript.push(line);
                 } else {
                     stats[seat_idx].exhausted_boundaries += 1;
-                    let fb_next = fallback_command(&snap)
+                    let fb_cand = fallback_command(&snap)
                         .and_then(|cmd| scope.propose(&cmd).ok())
-                        .map(|p| p.into_parts().3.into_state());
+                        .map(|p| p.into_parts().3);
                     drop(scope);
-                    if let Some(next_state) = fb_next {
-                        state = next_state;
+                    if let Some(candidate) = fb_cand {
+                        knowledge.advance(&state, &candidate);
+                        state = candidate.into_state();
                         seq += 1;
                         schedulers[seat_idx].revoke();
                         stats[seat_idx].fallback_actions += 1;

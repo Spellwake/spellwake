@@ -262,6 +262,7 @@ pub struct NativeCheckpoint {
     candidate: Arc<NativeCandidate>,
     pub(super) roster: Vec<NativeSeatBinding>,
     pub(super) activity: results::NativeActivity,
+    pub(super) knowledge: crate::ai_runtime::SeatKnowledgeLedger,
     provenance: Option<Arc<NativeInitialProvenance>>,
 }
 impl NativeCheckpoint {
@@ -271,6 +272,7 @@ impl NativeCheckpoint {
         roster: Vec<NativeSeatBinding>,
         provenance: Option<Arc<NativeInitialProvenance>>,
         activity: results::NativeActivity,
+        knowledge: crate::ai_runtime::SeatKnowledgeLedger,
     ) -> Result<Self, NativeCheckpointError> {
         if !manifest.valid() {
             return Err(NativeCheckpointError::Invalid);
@@ -295,6 +297,7 @@ impl NativeCheckpoint {
             roster,
             provenance,
             activity,
+            knowledge,
         })
     }
     /// Derive initial State manifest from the actual original opening proposal.
@@ -314,6 +317,7 @@ impl NativeCheckpoint {
             first,
         )?;
         let activity = results::NativeActivity::initial(&candidate, &roster)?;
+        let knowledge = crate::ai_runtime::SeatKnowledgeLedger::initial(candidate.state(), &roster);
         Self::seal(
             Manifest {
                 version: "native-checkpoint-v1".into(),
@@ -328,6 +332,7 @@ impl NativeCheckpoint {
             roster,
             provenance,
             activity,
+            knowledge,
         )
     }
     /// Frozen original physical-card provenance; absent for historical v1 roots.
@@ -370,6 +375,17 @@ impl NativeCheckpoint {
     /// Actual last native candidate for trusted downstream fact processing.
     pub fn candidate(&self) -> &NativeCandidate {
         &self.candidate
+    }
+    /// Project durable seat-scoped revealed-card knowledge strictly for `viewer`.
+    pub fn seat_knowledge(
+        &self,
+        viewer: Uuid,
+        display: &dyn NativeDisplaySource,
+        scope: Option<&NativeScope<'_>>,
+        snapshot: &crate::player_wire::PlayerSnapshot,
+    ) -> crate::ai_runtime::SeatKnowledgeView {
+        self.knowledge
+            .view_for_seat(viewer, self.state(), display, scope, snapshot)
     }
     /// Exact native basis derived from actual reconstruction.
     pub fn basis(&self) -> &PlayerBasis {
@@ -427,6 +443,8 @@ impl NativeCheckpoint {
             return Err(NativeCheckpointError::Invalid);
         }
         let activity = self.activity.advance(self.state(), &candidate)?;
+        let mut knowledge = self.knowledge.clone();
+        knowledge.advance(self.state(), &candidate);
         Self::seal(
             Manifest {
                 version: kind.version().into(),
@@ -441,6 +459,7 @@ impl NativeCheckpoint {
             self.roster.clone(),
             self.provenance.clone(),
             activity,
+            knowledge,
         )
     }
 }
@@ -640,8 +659,11 @@ where
         let activity = checkpoint
             .activity
             .advance(checkpoint.state(), &candidate)?;
+        let mut knowledge = checkpoint.knowledge;
+        knowledge.advance(checkpoint.candidate.state(), &candidate);
         checkpoint = NativeCheckpoint {
             activity,
+            knowledge,
             bytes,
             reference,
             manifest,
