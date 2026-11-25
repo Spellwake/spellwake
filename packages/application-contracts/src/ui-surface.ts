@@ -1,6 +1,7 @@
 /** Zod contracts for the completed Spellwake UI API surface. */
 import { z } from "zod";
 import { amountSchema, identifierSchema, instantSchema } from "./primitives.ts";
+import { hostLentDeckSchema } from "./rooms.ts";
 
 export const cardFaceMetadataSchema = z.object({
   faceIndex: z.number().int().nonnegative(),
@@ -229,6 +230,16 @@ export const roomGameHandoffSchema = z.discriminatedUnion("state", [
 ]);
 export type RoomGameHandoff = z.infer<typeof roomGameHandoffSchema>;
 
+export const updateRoomOptionsSchema = z.strictObject({
+  formatId: identifierSchema.optional(),
+  aiDifficulty: z.enum(["casual", "standard", "competitive"]).optional(),
+  planechaseEnabled: z.boolean().optional(),
+  rangeOfInfluence: z.number().int().min(1).max(5).nullable().optional(),
+  allowCustomCards: z.boolean().optional(),
+  shareHostDecks: z.boolean().optional(),
+});
+export type UpdateRoomOptions = z.infer<typeof updateRoomOptionsSchema>;
+
 export const roomEnrichedDetailSchema = z.object({
   accountId: identifierSchema,
   room: z.object({
@@ -247,6 +258,8 @@ export const roomEnrichedDetailSchema = z.object({
     aiDifficulty: z.enum(["casual", "standard", "competitive"]),
     planechaseEnabled: z.boolean(),
     rangeOfInfluence: z.number().int().nullable(),
+    allowCustomCards: z.boolean().optional().default(false),
+    shareHostDecks: z.boolean().optional().default(false),
   }),
   slots: z.array(
     z.object({
@@ -260,10 +273,12 @@ export const roomEnrichedDetailSchema = z.object({
       selectedBadge: z.string().nullable(),
       cardArtProfile: z.unknown().nullable(),
       deckRevisionId: identifierSchema.nullable(),
+      deckName: z.string().nullable().optional(),
       ready: z.boolean(),
       teamRef: z.string().nullable(),
     }),
   ),
+  hostLentDecks: z.array(hostLentDeckSchema).max(100).optional().default([]),
 });
 export type RoomEnrichedDetail = z.infer<typeof roomEnrichedDetailSchema>;
 

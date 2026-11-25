@@ -92,10 +92,14 @@ export const roomSummarySchema = z
     configurationId: identifierSchema,
     targetSeatCount: amountSchema.nullable(),
     countdownAt: instantSchema.nullable(),
+    allowCustomCards: z.boolean().optional().default(false),
+    shareHostDecks: z.boolean().optional().default(false),
   })
   .refine(
     (room) =>
       (!room.competitive || room.mode === "collection") &&
+      (!room.allowCustomCards || (room.mode === "open" && !room.competitive)) &&
+      (!room.shareHostDecks || (room.mode === "open" && !room.competitive)) &&
       (room.targetSeatCount === null ||
         (BigInt(room.targetSeatCount) >= 2n &&
           BigInt(room.targetSeatCount) <= 6n)),
@@ -108,8 +112,25 @@ export const roomSlotSchema = z
     controllerKind: z.enum(["human", "ai"]),
     ready: z.boolean(),
     deckRevisionId: identifierSchema.nullable(),
+    deckName: z.string().max(120).nullable().optional(),
   })
   .refine((slot) => slot.controllerKind !== "ai" || slot.accountId === null);
+export const hostLentDeckSchema = z.strictObject({
+  deckId: identifierSchema,
+  name: z.string().min(1).max(120),
+  currentRevisionId: identifierSchema,
+  formatId: identifierSchema,
+  hasCustomCards: z.boolean(),
+  cardCount: amountSchema,
+  faceDefinitionId: identifierSchema.nullable(),
+  faceArtUrl: z.string().max(2048).startsWith("https://").nullable(),
+  faceCustomCardRevisionId: identifierSchema.nullable(),
+  faceArtSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
+});
+export type HostLentDeck = z.infer<typeof hostLentDeckSchema>;
 export const roomSlotPageSchema = z.strictObject({
   items: z.array(roomSlotSchema).max(100),
   nextCursor: identifierSchema.nullable(),
@@ -123,6 +144,7 @@ export const roomDetailSchema = z.strictObject({
   accountId: identifierSchema,
   room: roomSummarySchema,
   slots: roomSlotPageSchema,
+  hostLentDecks: z.array(hostLentDeckSchema).max(100).optional().default([]),
 });
 /** Context validation is required after shape parsing; each page is an independent snapshot. */
 export function validRoomPage(
@@ -136,7 +158,7 @@ export function validRoomPage(
     validProgressionPage({ ...page }, owner, after, limit)
   );
 }
-/** Only an occupied human slot belonging to this caller can expose a selected revision. */
+/** Only an occupied human slot belonging to this caller (or Open Play AI slot for host) exposes a selected revision. */
 export function validRoomDetail(
   detail: z.infer<typeof roomDetailSchema>,
   owner: string,
@@ -144,6 +166,10 @@ export function validRoomDetail(
   after: string | null,
   limit: number,
 ): boolean {
+  const openPlayHost =
+    detail.room.mode === "open" &&
+    !detail.room.competitive &&
+    detail.room.hostId === owner;
   return (
     detail.accountId === owner &&
     detail.room.id === room &&
@@ -164,7 +190,8 @@ export function validRoomDetail(
     detail.slots.items.every(
       (s) =>
         s.deckRevisionId === null ||
-        (s.controllerKind === "human" && s.accountId === owner),
+        (s.controllerKind === "human" && s.accountId === owner) ||
+        (s.controllerKind === "ai" && openPlayHost),
     )
   );
 }

@@ -22,6 +22,9 @@ import {
   roomConfigurationAckSchema,
   roomConfigurationDispositionSchema,
   roomConfigurationErrorsSchema,
+  setAiDeckDispositionSchema,
+  setAiDeckErrorsSchema,
+  setAiDeckRequestSchema,
   setAiTierDispositionSchema,
   setAiTierErrorsSchema,
   setAiTierRequestSchema,
@@ -34,7 +37,7 @@ import { DEFAULT_APPEARANCE } from "@spellwake/deck-box";
 import { isTauri } from "@tauri-apps/api/core";
 import { z } from "zod";
 import { useAccount } from "../auth/AccountProvider";
-import { ownerBearer, useDeckLibrary } from "../data/account";
+import { ownerBearer, useDeckLibrary, useOwnProfile } from "../data/account";
 import { useDeckFormats } from "../data/deck-commands";
 import { inviteAddress } from "../data/room-invite";
 import type { IntentDisposition } from "../data/intent-journal";
@@ -47,6 +50,7 @@ import {
 import { useInventoryGap } from "../collection/connected-inventory";
 import {
   MATCH_LABEL,
+  RANDOM_DECK,
   type Departure,
   type LobbyDeck,
   type LobbyRules,
@@ -123,6 +127,7 @@ export function useConnectedLobby(
   const queries = useQueryClient();
   const library = useDeckLibrary();
   const formats = useDeckFormats();
+  const ownProfile = useOwnProfile();
   const [notice, setNotice] = useState<string | null>(null);
   const [departure, setDeparture] = useState<Departure | null>(null);
   const [isStarting, setIsStarting] = useState<
@@ -206,6 +211,33 @@ export function useConnectedLobby(
   });
   const room = detail.data?.room ?? null;
   const isHost = !!room && room.hostId === owner?.accountId;
+  const enriched = useQuery({
+    queryKey: ["room-enriched", owner?.accountId, roomId, room?.revision],
+    enabled:
+      !!owner &&
+      !!services &&
+      !!roomId &&
+      admission === "admitted" &&
+      mode === "open",
+    refetchInterval: POLL_MS,
+    retry: READ_ATTEMPTS - 1,
+    queryFn: async ({ signal }) => {
+      if (!owner || !services || !roomId) return null;
+      const result = await services.api.roomEnrichedDetail(
+        await bearer(),
+        roomId,
+        signal,
+      );
+      return result.status === "success" ? result.data : null;
+    },
+  });
+  const lentDecks = useMemo(
+    () =>
+      enriched.data?.hostLentDecks && enriched.data.hostLentDecks.length > 0
+        ? enriched.data.hostLentDecks
+        : (detail.data?.hostLentDecks ?? []),
+    [enriched.data, detail.data],
+  );
   const configuration = useQuery({
     queryKey: ["room-configuration", owner?.accountId, roomId, room?.revision],
     enabled: !!owner && !!services && !!roomId && isHost,
@@ -418,12 +450,13 @@ export function useConnectedLobby(
   const choseFirst = useRef(false);
   const chooseDeck = useCallback(
     async (id: string): Promise<Outcome> => {
-      const deck = ownDecks.find((candidate) => candidate.id === id);
-      if (!room || !roomId || !deck?.currentRevisionId)
+      const own = ownDecks.find((candidate) => candidate.id === id);
+      const lent = lentDecks.find((candidate) => candidate.deckId === id);
+      const revision = own?.currentRevisionId ?? lent?.currentRevisionId ?? null;
+      if (!room || !roomId || !revision)
         return failed("Choose a saved deck.");
-      if (deck.format.id !== room.formatId)
+      if (own && own.format.id !== room.formatId)
         return failed("Choose a deck for this format.");
-      const revision = deck.currentRevisionId;
       const outcome = await roomCommand("select_deck", roomId, () => ({
         kind: "select_deck",
         command: {
@@ -441,7 +474,7 @@ export function useConnectedLobby(
               : UNCONFIRMED,
           );
     },
-    [ownDecks, room, roomId, roomCommand],
+    [ownDecks, lentDecks, room, roomId, roomCommand],
   );
   useEffect(() => {
     if (choseFirst.current || !room || !deckId || !detail.data) return;
@@ -518,8 +551,10 @@ export function useConnectedLobby(
     formatName: deck.format.name,
     appearance: {
       ...DEFAULT_APPEARANCE,
-      faceArt: deck.faceCard?.artUrl ?? null,
+      faceArt:
+        deck.faceCard?.kind === "official" ? deck.faceCard.artUrl : null,
     },
+    hasCustomCards: deck.hasCustomCards ?? false,
   });
 
   if (gap === "loading") return { status: "loading" };
@@ -548,7 +583,10 @@ export function useConnectedLobby(
     (aiStatus.data?.items ?? []).map((item) => [item.slotId, item.aiTier]),
   );
   const seats: LobbySeat[] = slots.map((slot) => {
-    if (slot.controllerKind === "ai")
+    if (slot.controllerKind === "ai") {
+      const assignedOwn = slot.deckRevisionId
+        ? ownDecks.find((d) => d.currentRevisionId === slot.deckRevisionId)
+        : undefined;
       return {
         id: slot.id,
         kind: "ai",
@@ -556,14 +594,28 @@ export function useConnectedLobby(
         portrait: null,
         isHost: false,
         isReady: slot.ready,
-        deck: "random",
+        deck: assignedOwn
+          ? lobbyDeck(assignedOwn)
+          : slot.deckRevisionId && slot.deckName
+            ? {
+                id: slot.deckRevisionId,
+                name: slot.deckName,
+                formatName: roomFormat,
+                appearance: DEFAULT_APPEARANCE,
+              }
+            : "random",
         needsNewDeck: false,
         difficulty: aiTierBySlot.get(slot.id) ?? "normal",
       };
+    }
     const isYou = slot.accountId === owner?.accountId;
     const own = isYou
       ? ownDecks.find((deck) => deck.currentRevisionId === slot.deckRevisionId)
       : undefined;
+    const borrowed =
+      isYou && !own && slot.deckRevisionId
+        ? lentDecks.find((deck) => deck.currentRevisionId === slot.deckRevisionId)
+        : undefined;
     return {
       id: slot.id,
       kind: isYou ? "you" : "person",
@@ -574,9 +626,21 @@ export function useConnectedLobby(
       deck: isYou
         ? own
           ? lobbyDeck(own)
-          : slot.deckRevisionId
-            ? "selected"
-            : null
+          : borrowed
+            ? {
+                id: borrowed.deckId,
+                name: borrowed.name,
+                formatName: formatNames.get(borrowed.formatId) ?? roomFormat,
+                appearance: {
+                  ...DEFAULT_APPEARANCE,
+                  faceArt: borrowed.faceArtUrl ?? null,
+                },
+                lentByHost: true,
+                hasCustomCards: borrowed.hasCustomCards ?? false,
+              }
+            : slot.deckRevisionId
+              ? "selected"
+              : null
         : "private",
       needsNewDeck: !!own && own.format.id !== room.formatId,
       difficulty: null,
@@ -602,6 +666,8 @@ export function useConnectedLobby(
     match: MATCH_LABEL[room.structure],
     planechase: null,
     influence: null,
+    allowCustomCards: room.allowCustomCards ?? false,
+    shareHostDecks: room.shareHostDecks ?? false,
   };
   const phase: Phase =
     room.state === "started"
@@ -613,11 +679,31 @@ export function useConnectedLobby(
           : room.state === "countdown"
             ? "countdown"
             : "open";
-  const eligible = ownDecks
+  const ownEligible = ownDecks
     .filter(
-      (deck) => deck.format.id === room.formatId && deck.currentRevisionId,
+      (deck) =>
+        deck.format.id === room.formatId &&
+        deck.currentRevisionId &&
+        (!deck.hasCustomCards || Boolean(room.allowCustomCards)),
     )
     .map(lobbyDeck);
+  const lentEligible: LobbyDeck[] =
+    !isHost && room.shareHostDecks
+      ? lentDecks
+          .filter((deck) => !ownEligible.some((own) => own.id === deck.deckId))
+          .map((deck) => ({
+            id: deck.deckId,
+            name: deck.name,
+            formatName: formatNames.get(deck.formatId) ?? roomFormat,
+            appearance: {
+              ...DEFAULT_APPEARANCE,
+              faceArt: deck.faceArtUrl ?? null,
+            },
+            lentByHost: true,
+            hasCustomCards: deck.hasCustomCards ?? false,
+          }))
+      : [];
+  const eligible = [...ownEligible, ...lentEligible];
   const settle = (outcome: RoomOutcome<unknown>): Outcome =>
     outcome.state === "accepted"
       ? succeeded(undefined)
@@ -769,7 +855,42 @@ export function useConnectedLobby(
           resetsAt: aiQuotaQuery.data.resetsAt,
         }
       : null,
-    setAiDeck: null,
+    setAiDeck: isHost
+      ? async (seatId, chosenDeckId) => {
+          const deckRevisionId =
+            chosenDeckId === RANDOM_DECK
+              ? null
+              : (ownDecks.find((d) => d.id === chosenDeckId)
+                  ?.currentRevisionId ??
+                lentDecks.find((d) => d.deckId === chosenDeckId)
+                  ?.currentRevisionId ??
+                null);
+          if (chosenDeckId !== RANDOM_DECK && !deckRevisionId) {
+            return failed("Choose a saved deck.");
+          }
+          const outcome = await act("set_ai_deck", seatId, {
+            commandSchema: setAiDeckRequestSchema,
+            ackSchema: roomConfigurationAckSchema,
+            errorsSchema: setAiDeckErrorsSchema,
+            dispositionSchema: setAiDeckDispositionSchema,
+            build: () => ({
+              requestId: crypto.randomUUID(),
+              expectedRevision: room.revision,
+              deckRevisionId,
+            }),
+            send: (token, command) =>
+              api().setAiSlotDeck(token, seatId, command),
+            lookup: (token, command) =>
+              api().setAiSlotDeckDisposition(token, seatId, command),
+          });
+          if (outcome.state === "accepted" && owner) {
+            await queries.invalidateQueries({
+              queryKey: ["room-ai", owner.accountId, roomId],
+            });
+          }
+          return settle(outcome);
+        }
+      : null,
     rulesChoices:
       isHost && configuration.data && profiles.data
         ? {
@@ -786,6 +907,9 @@ export function useConnectedLobby(
             matches: ["Single game", "Best of three"],
             planechase: false,
             influences: [],
+            allowCustomCards: mode === "open" && !room.competitive,
+            shareHostDecks: mode === "open" && !room.competitive,
+            canEnableSupporterOptions: ownProfile.data?.supporter ?? false,
           }
         : null,
     applyRules:
@@ -796,6 +920,39 @@ export function useConnectedLobby(
             );
             const config = configuration.data;
             if (!chosen || !config) return failed(COULDNT);
+
+            let currentRevision = room.revision;
+            const customChanged =
+              Boolean(next.allowCustomCards) !==
+                Boolean(room.allowCustomCards) ||
+              Boolean(next.shareHostDecks) !== Boolean(room.shareHostDecks);
+            if (customChanged && mode === "open" && !room.competitive) {
+              const optRes = await api()
+                .updateRoomOptions(await bearer(), roomId, {
+                  allowCustomCards: Boolean(next.allowCustomCards),
+                  shareHostDecks: Boolean(next.shareHostDecks),
+                })
+                .catch(() => null);
+              if (!optRes || optRes.status !== "success") {
+                return failed(
+                  optRes?.status === "fail"
+                    ? (Object.values(optRes.data)[0] ?? COULDNT)
+                    : COULDNT,
+                );
+              }
+              currentRevision = optRes.data.room.revision;
+              await queries.invalidateQueries({
+                queryKey: ["room", owner?.accountId],
+              });
+            }
+
+            const structuralChanged =
+              chosen.id !== room.profileId ||
+              next.match !== MATCH_LABEL[room.structure];
+            if (!structuralChanged && customChanged) {
+              return succeeded(undefined);
+            }
+
             const outcome = await act("configure", roomId, {
               commandSchema: configureRoomSchema,
               ackSchema: roomConfigurationAckSchema,
@@ -803,10 +960,11 @@ export function useConnectedLobby(
               dispositionSchema: roomConfigurationDispositionSchema,
               build: () => ({
                 requestId: crypto.randomUUID(),
-                expectedRevision: room.revision,
+                expectedRevision: currentRevision,
                 profileId: chosen.id,
                 structure: (next.match === "Best of three" ? "bo3" : "bo1") as
-                  "bo1" | "bo3",
+                  | "bo1"
+                  | "bo3",
                 teams: config.teams,
               }),
               send: (token, command) =>

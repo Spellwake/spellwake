@@ -333,6 +333,8 @@ impl NativeGameRuntime {
                 return Err(error);
             }
         };
+        let revealed_custom_ids = collect_revealed_custom_card_ids(issued.view().snapshot());
+        let viewer_seat_index = recovered.source().seat_index(access.viewer_seat_id());
         let composed = compose(&access, &recovered, issued);
         #[cfg(test)]
         self.observe_delivery(TestDeliveryStage::Refresh, repository, &recovered);
@@ -342,8 +344,38 @@ impl NativeGameRuntime {
         {
             return Ok(NativeReadOutcome::Refused(outcome));
         }
+        // Commit revealed custom-card proofs strictly after fresh access confirmation
+        // and strictly before returning any snapshot referencing `customCardRevisionId`.
+        if !revealed_custom_ids.is_empty()
+            && let Some(seat_idx) = viewer_seat_index
+        {
+            let _: serde_json::Value = repository.native_record(
+                "record_revealed_custom_cards",
+                &serde_json::json!({
+                    "p_game_id": request.game_id,
+                    "p_context_id": request.context_id,
+                    "p_seat_index": seat_idx,
+                    "p_revision_ids": revealed_custom_ids,
+                }),
+                None,
+            )?;
+        }
         composed.map(NativeReadOutcome::Ready)
     }
+}
+
+fn collect_revealed_custom_card_ids(snapshot: &PlayerSnapshot) -> Vec<Uuid> {
+    let mut ids = std::collections::BTreeSet::new();
+    for obj in &snapshot.visible_objects {
+        if let crate::player_wire::PlayerObjectIdentity::Known {
+            custom_card_revision_id: Some(rev_id),
+            ..
+        } = &obj.identity
+        {
+            ids.insert(*rev_id);
+        }
+    }
+    ids.into_iter().collect()
 }
 fn classify_refresh(
     current: NativeHumanAccessOutcome,

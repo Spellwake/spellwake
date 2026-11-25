@@ -15,8 +15,12 @@ use spellwake_engine::{
 use std::collections::BTreeMap;
 
 const COMMANDER_ROOT: &str = "native-initial-commander-v3";
+const CONSTRUCTED_CUSTOM_ROOT: &str = "native-initial-v4";
+const COMMANDER_CUSTOM_ROOT: &str = "native-initial-commander-v4";
 const MAX_ROOT_BYTES: usize = 1_048_576;
 const MAX_ENTROPY_WORDS: usize = 65_536;
+
+type SeatSelectionIndices = Vec<Vec<(bool, usize)>>;
 /// One original prepared zone, never an arbitrary saved continuation.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -153,6 +157,12 @@ struct Root {
         deserialize_with = "selected_object"
     )]
     selected: Option<SelectedRoot>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    match_custom_card_rules_snapshot: Vec<FrozenCustomCardRules>,
 }
 fn selected_object<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -177,11 +187,24 @@ impl Root {
     fn roster(&self) -> Vec<Uuid> {
         self.participants.iter().map(|p| p.seat_id).collect()
     }
+    fn is_commander(&self) -> bool {
+        matches!(
+            self.version.as_str(),
+            COMMANDER_ROOT | COMMANDER_CUSTOM_ROOT
+        )
+    }
     fn validate(&self, source: &NativeProgramSource) -> Result<(), NativeInitialError> {
         let roster = self.roster();
+        let has_custom_snapshot = !self.match_custom_card_rules_snapshot.is_empty();
         if !matches!(
-            (self.version.as_str(), self.selected.is_some()),
-            ("native-initial-v1", false) | ("native-initial-v2" | COMMANDER_ROOT, true)
+            (
+                self.version.as_str(),
+                self.selected.is_some(),
+                has_custom_snapshot
+            ),
+            ("native-initial-v1", false, false)
+                | ("native-initial-v2" | COMMANDER_ROOT, true, false)
+                | (CONSTRUCTED_CUSTOM_ROOT | COMMANDER_CUSTOM_ROOT, true, true)
         ) || !valid_ids(self.ids())
             || !valid_roster(&roster)
             || !roster.contains(&self.first_player_seat_id)
@@ -193,7 +216,7 @@ impl Root {
         {
             return Err(NativeInitialError::Invalid);
         }
-        if self.version == COMMANDER_ROOT && !(2..=3).contains(&roster.len()) {
+        if self.is_commander() && !(2..=3).contains(&roster.len()) {
             return Err(NativeInitialError::Invalid);
         }
         if &self.program_source_id != source.identity() {
@@ -202,11 +225,11 @@ impl Root {
         self.selected_indices()?;
         Ok(())
     }
-    fn selected_indices(&self) -> Result<Option<Vec<Vec<usize>>>, NativeInitialError> {
+    fn selected_indices(&self) -> Result<Option<SeatSelectionIndices>, NativeInitialError> {
         self.selected
             .as_ref()
             .map(|selected| {
-                if self.version == COMMANDER_ROOT {
+                if self.is_commander() {
                     selected.validate_commander(self.ids(), &self.participants)
                 } else {
                     selected.validate(self.ids(), &self.participants)
@@ -218,6 +241,7 @@ impl Root {
     fn commander_identities(
         &self,
         source: &NativeProgramSource,
+        overlay: Option<&NativeProgramOverlay>,
         roster: &[NativeSeatBinding],
     ) -> Result<BTreeMap<SeatId, BTreeSet<Color>>, NativeInitialError> {
         let inventory = source
@@ -230,21 +254,84 @@ impl Root {
             .map(|(participant, seat)| {
                 let mut commanders = Vec::new();
                 let mut library = Vec::new();
+                let mut custom_commander_ci = BTreeSet::new();
+                let mut custom_library_ci = Vec::new();
                 for card in &participant.cards {
+                    if let Some(ci) = overlay.and_then(|ov| ov.color_identity(&card.oracle_id)) {
+                        match card.zone {
+                            NativeInitialZone::Command => {
+                                custom_commander_ci.extend(ci.iter().copied())
+                            }
+                            NativeInitialZone::Library => custom_library_ci.push(ci),
+                        }
+                        continue;
+                    }
                     match card.zone {
                         NativeInitialZone::Library => library.push(card.oracle_id.clone()),
                         NativeInitialZone::Command => commanders.push(card.oracle_id.clone()),
                     }
                 }
-                let deck = prepare_deck(
-                    inventory,
-                    &source.names,
-                    &commanders,
-                    &library,
-                    &BTreeMap::new(),
-                )
-                .map_err(|_| NativeInitialError::ForeignSource)?;
-                Ok((seat.native_seat, deck.color_identity().clone()))
+                if custom_commander_ci.is_empty() && custom_library_ci.is_empty() {
+                    let deck = prepare_deck(
+                        inventory,
+                        &source.names,
+                        &commanders,
+                        &library,
+                        &BTreeMap::new(),
+                    )
+                    .map_err(|_| NativeInitialError::ForeignSource)?;
+                    Ok((seat.native_seat, deck.color_identity().clone()))
+                } else {
+                    let mut identity = custom_commander_ci;
+                    for cmd in &commanders {
+                        if let Some(ci) = inventory.source_color_identity(cmd.as_str()) {
+                            for s in ci {
+                                match s.as_str() {
+                                    "W" => {
+                                        identity.insert(Color::White);
+                                    }
+                                    "U" => {
+                                        identity.insert(Color::Blue);
+                                    }
+                                    "B" => {
+                                        identity.insert(Color::Black);
+                                    }
+                                    "R" => {
+                                        identity.insert(Color::Red);
+                                    }
+                                    "G" => {
+                                        identity.insert(Color::Green);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    for lib_card in &library {
+                        let Some(ci) = inventory.source_color_identity(lib_card.as_str()) else {
+                            return Err(NativeInitialError::ForeignSource);
+                        };
+                        for s in ci {
+                            let color = match s.as_str() {
+                                "W" => Some(Color::White),
+                                "U" => Some(Color::Blue),
+                                "B" => Some(Color::Black),
+                                "R" => Some(Color::Red),
+                                "G" => Some(Color::Green),
+                                _ => None,
+                            };
+                            if color.is_some_and(|c| !identity.contains(&c)) {
+                                return Err(NativeInitialError::ForeignSource);
+                            }
+                        }
+                    }
+                    for ci in custom_library_ci {
+                        if !ci.is_subset(&identity) {
+                            return Err(NativeInitialError::ForeignSource);
+                        }
+                    }
+                    Ok((seat.native_seat, identity))
+                }
             })
             .collect()
     }
@@ -252,6 +339,14 @@ impl Root {
     fn initialize(self, source: &NativeProgramSource) -> Result<Initialized, NativeInitialError> {
         self.validate(source)?;
         let indices = self.selected_indices()?;
+        let overlay = if self.match_custom_card_rules_snapshot.is_empty() {
+            None
+        } else {
+            Some(Arc::new(NativeProgramOverlay::compile(
+                &self.match_custom_card_rules_snapshot,
+                &source.vocabulary,
+            )?))
+        };
         let mut physical = BTreeMap::new();
         let mut cards: Vec<SeedCard> = Vec::new();
         let mut roster = Vec::new();
@@ -277,14 +372,22 @@ impl Root {
                     NativeInitialZone::Library => ObjectDestination::LibraryBottom,
                     NativeInitialZone::Command => ObjectDestination::Command,
                 };
-                cards.push(source.registry.seed(
-                    &card.oracle_id,
-                    CardId(next_card),
-                    native_seat,
-                    destination,
-                )?);
+                let seeded = if let Some(custom_seed) = overlay.as_deref().and_then(|ov| {
+                    ov.seed(&card.oracle_id, CardId(next_card), native_seat, destination)
+                }) {
+                    custom_seed
+                } else {
+                    source.registry.seed(
+                        &card.oracle_id,
+                        CardId(next_card),
+                        native_seat,
+                        destination,
+                    )?
+                };
+                cards.push(seeded);
                 if let Some(indices) = &indices {
-                    physical.insert(CardId(next_card), (index, indices[index][card_index]));
+                    let (is_custom, entry_idx) = indices[index][card_index];
+                    physical.insert(CardId(next_card), (index, is_custom, entry_idx));
                 }
                 next_card = next_card
                     .checked_add(1)
@@ -308,8 +411,8 @@ impl Root {
         };
         let game = GameId(self.game_id.as_u128());
         let context = source.context(self.release_id, self.profile_id)?;
-        let candidate = if self.version == COMMANDER_ROOT {
-            let identities = self.commander_identities(source, &roster)?;
+        let candidate = if self.is_commander() {
+            let identities = self.commander_identities(source, overlay.as_deref(), &roster)?;
             GameState::initialize_commander_opening_with_identities(
                 game, context, setup, identities,
             )
@@ -323,7 +426,7 @@ impl Root {
             roster,
             provenance: self
                 .selected
-                .map(|selected| Arc::new(selected.bind(ids, physical))),
+                .map(|selected| Arc::new(selected.bind(ids, physical, overlay))),
         })
     }
 }
@@ -399,8 +502,32 @@ pub fn prepare_initial(
         participants: spec.participants,
         entropy: spec.entropy,
         selected: None,
+        match_custom_card_rules_snapshot: Vec::new(),
     };
     prepare_root(root, source)
+}
+
+fn collect_frozen_custom_cards(
+    reservation: &NativeReservedGameSource,
+) -> Vec<FrozenCustomCardRules> {
+    let mut by_rev = BTreeMap::new();
+    for seat in &reservation.metadata().seats {
+        for ce in &seat.custom_entries {
+            by_rev
+                .entry(ce.custom_card_revision_id)
+                .or_insert_with(|| FrozenCustomCardRules {
+                    custom_card_revision_id: ce.custom_card_revision_id,
+                    custom_card_id: ce.custom_card_id,
+                    rules_sha256: ce.rules_sha256.clone(),
+                    name: ce.name.clone(),
+                    layout: ce.layout.clone(),
+                    rarity: ce.rarity.clone(),
+                    faces_rules: ce.faces_rules.clone(),
+                    compiler_revision: ce.compiler_revision.clone(),
+                });
+        }
+    }
+    by_rev.into_values().collect()
 }
 /// Preserve a sealed reservation's selected entries and explicit physical assignments.
 /// The admission policy still owns the complete setup, section/zone rules, life,
@@ -416,8 +543,14 @@ pub fn prepare_selected_initial(
     selection: Vec<NativeInitialSelection>,
 ) -> Result<PreparedNativeOpening, NativeInitialError> {
     let r = reservation.metadata();
+    let frozen_custom = collect_frozen_custom_cards(reservation);
+    let version = if frozen_custom.is_empty() {
+        "native-initial-v2"
+    } else {
+        CONSTRUCTED_CUSTOM_ROOT
+    };
     let root = Root {
-        version: "native-initial-v2".into(),
+        version: version.into(),
         game_id: r.game_id,
         context_id,
         release_id: r.release.id,
@@ -427,6 +560,7 @@ pub fn prepare_selected_initial(
         participants: spec.participants,
         entropy: spec.entropy,
         selected: Some(SelectedRoot::from_reserved(reservation, selection)?),
+        match_custom_card_rules_snapshot: frozen_custom,
     };
     prepare_root(root, source)
 }
@@ -501,6 +635,32 @@ pub fn prepare_reserved_commander_opening(
             }));
             entry_ids.extend(std::iter::repeat_n(entry.entry_id, quantity));
         }
+        for entry in &seat.custom_entries {
+            let zone = match entry.section.as_str() {
+                "commander" => NativeInitialZone::Command,
+                "main" => NativeInitialZone::Library,
+                _ => return Err(NativeInitialError::ForeignSource),
+            };
+            let oracle = OracleId::try_from(entry.custom_card_revision_id.to_string())
+                .map_err(|_| NativeInitialError::ForeignSource)?;
+            let quantity = entry
+                .quantity
+                .integer()
+                .to_usize()
+                .ok_or(NativeInitialError::Invalid)?;
+            if cards
+                .len()
+                .checked_add(quantity)
+                .is_none_or(|count| count > 100)
+            {
+                return Err(NativeInitialError::ForeignSource);
+            }
+            cards.extend((0..quantity).map(|_| NativeInitialCard {
+                oracle_id: oracle.clone(),
+                zone,
+            }));
+            entry_ids.extend(std::iter::repeat_n(entry.entry_id, quantity));
+        }
         participants.push(NativeInitialParticipant {
             seat_id: seat.seat_id,
             life: 40.into(),
@@ -511,9 +671,15 @@ pub fn prepare_reserved_commander_opening(
             entry_ids,
         });
     }
+    let frozen_custom = collect_frozen_custom_cards(reservation);
+    let version = if frozen_custom.is_empty() {
+        COMMANDER_ROOT
+    } else {
+        COMMANDER_CUSTOM_ROOT
+    };
     prepare_root(
         Root {
-            version: COMMANDER_ROOT.into(),
+            version: version.into(),
             game_id: r.game_id,
             context_id,
             release_id: r.release.id,
@@ -523,6 +689,7 @@ pub fn prepare_reserved_commander_opening(
             participants,
             entropy,
             selected: Some(SelectedRoot::from_reserved(reservation, selection)?),
+            match_custom_card_rules_snapshot: frozen_custom,
         },
         source,
     )

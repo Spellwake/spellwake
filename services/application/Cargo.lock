@@ -2521,6 +2521,7 @@ dependencies = [
  "spellwake-content",
  "spellwake-contracts",
  "spellwake-engine",
+ "spellwake-oracle-compiler",
  "temporalio-client",
  "temporalio-common",
  "temporalio-macros",

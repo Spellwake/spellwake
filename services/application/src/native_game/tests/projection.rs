@@ -80,6 +80,7 @@ impl NativeDisplaySource for Display {
                 self.selected_identity.then_some(Uuid::from_u128(17))
             },
             printing_id: None,
+            custom_card_revision_id: None,
             characteristics: PlayerCharacteristics {
                 name: if self.invalid_text {
                     "invalid\0display".into()
@@ -2133,6 +2134,7 @@ fn live_priority_holder_projects_authoritative_cast_offers_and_validates_invaria
             Ok(NativeObjectDisplay {
                 definition_id: None,
                 printing_id: None,
+                custom_card_revision_id: None,
                 characteristics: if is_land {
                     PlayerCharacteristics {
                         name: "Mountain".into(),

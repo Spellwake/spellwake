@@ -1186,6 +1186,10 @@ struct UpdateRoomOptionsRequest {
     ai_difficulty: Option<String>,
     planechase_enabled: Option<bool>,
     range_of_influence: Option<i32>,
+    #[serde(default)]
+    allow_custom_cards: Option<bool>,
+    #[serde(default)]
+    share_host_decks: Option<bool>,
 }
 
 pub(super) async fn update_room_options(
@@ -1225,6 +1229,8 @@ pub(super) async fn update_room_options(
                             "p_ai_difficulty": input.ai_difficulty,
                             "p_planechase_enabled": input.planechase_enabled,
                             "p_range_of_influence": input.range_of_influence,
+                            "p_allow_custom_cards": input.allow_custom_cards,
+                            "p_share_host_decks": input.share_host_decks,
                         }),
                     )
                 }),

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAtom } from "jotai";
 import {
   identifierSchema,
@@ -27,6 +27,7 @@ import {
   linesFrom,
   printingLabel,
   refusalMessage,
+  sameCustomEntries,
   sameEntries,
   settingsOf,
 } from "./connected-mapping";
@@ -157,7 +158,11 @@ export function useConnectedDeckShelf(mode: PlayMode): DeckShelfSource {
           name: deck.name,
           format: { id: deck.format.id, name: deck.format.name },
           // The server keeps no colour identity; the face card's art is its own.
-          appearance: { colors: [], faceArt: deck.faceCard?.artUrl ?? null },
+          appearance: {
+            colors: [],
+            faceArt:
+              deck.faceCard?.kind === "official" ? deck.faceCard.artUrl : null,
+          },
         })),
     [library.data, mode],
   );
@@ -277,19 +282,62 @@ export function useConnectedDeckBuilder(
     return () => window.clearTimeout(timer);
   }, [query]);
   const found = useCardSearch(sent);
-  const results = useMemo(
+  const isOpenPlayDeck = opened?.deck.mode === "open";
+  const owner =
+    accountState.status === "ready" && accountState.session.accountId
+      ? accountState.session
+      : null;
+  const customVault = useQuery({
+    queryKey: ["open-play-builder-custom-cards", owner?.accountId, owner?.sessionId],
+    enabled: Boolean(isOpenPlayDeck && owner && services),
+    queryFn: async ({ signal }) => {
+      if (!owner || !services) return [];
+      const res = await services.api.listCustomCards(
+        await ownerBearer(services, owner),
+        { limit: 100, includeArchived: false },
+        signal,
+      );
+      return res.status === "success" ? res.data.items : [];
+    },
+  });
+  const customNames = useMemo(
     () =>
-      (found.data?.pages ?? []).flatMap((page) =>
-        page.items.map((card) => ({
-          name: card.name,
-          card: { definitionId: card.id, printingId: null },
-        })),
+      new Map(
+        (customVault.data ?? []).map((card) => [
+          card.currentRevision.revisionId,
+          card.currentRevision.name,
+        ]),
       ),
-    [found.data],
+    [customVault.data],
   );
+  const results = useMemo(() => {
+    const q = sent.toLowerCase();
+    const customMatches = isOpenPlayDeck
+      ? (customVault.data ?? [])
+          .filter(
+            (card) =>
+              card.currentRevision.stage2Playable &&
+              (!q || card.currentRevision.name.toLowerCase().includes(q)),
+          )
+          .map((card) => ({
+            name: card.currentRevision.name,
+            customCardRevisionId: card.currentRevision.revisionId,
+          }))
+      : [];
+    const officialMatches = (found.data?.pages ?? []).flatMap((page) =>
+      page.items.map((card) => ({
+        name: card.name,
+        card: { definitionId: card.id, printingId: null },
+      })),
+    );
+    return [...customMatches, ...officialMatches];
+  }, [found.data, isOpenPlayDeck, customVault.data, sent]);
   const lines = useMemo(
-    () => (opened && labels.data ? linesFrom(opened, labels.data).lines : null),
-    [opened, labels.data],
+    () =>
+      opened && labels.data
+        ? linesFrom(opened, labels.data, customNames).lines
+        : null,
+    [opened, labels.data, customNames],
   );
 
   if (accountGap) return { status: accountGap };
@@ -306,6 +354,12 @@ export function useConnectedDeckBuilder(
   };
   const nameOf = (definitionId: string | undefined): string | null =>
     names.cards.find((card) => card.id === definitionId)?.name ?? null;
+  const currentFaceName =
+    opened.deck.faceCard?.kind === "official"
+      ? nameOf(opened.deck.faceCard.definitionId)
+      : opened.deck.faceCard?.kind === "custom"
+        ? (customNames.get(opened.deck.faceCard.customCardRevisionId) ?? null)
+        : null;
   return {
     status: "ready",
     deck: {
@@ -315,7 +369,7 @@ export function useConnectedDeckBuilder(
       mode: opened.deck.mode,
       lines,
       appearance: selectionOf(opened.deck.appearance),
-      faceCard: nameOf(opened.deck.faceCard?.definitionId),
+      faceCard: currentFaceName,
     },
     formats,
     appearanceOptions,
@@ -331,7 +385,7 @@ export function useConnectedDeckBuilder(
       setQuery,
       filters: null,
       state:
-        query.trim() === ""
+        query.trim() === "" && !isOpenPlayDeck
           ? "idle"
           : found.isError
             ? "failed"
@@ -343,7 +397,8 @@ export function useConnectedDeckBuilder(
     hasCardsFailed: found.isError,
     save: async (draft) => {
       // Entries in a section the builder does not show are saved back as the server holds them.
-      const entries = entriesFrom(draft.lines, linesFrom(basis, names).kept);
+      const mapped = linesFrom(basis, names, customNames);
+      const entries = entriesFrom(draft.lines, mapped.kept, mapped.keptCustom);
       if (entries.status === "fail")
         return failed(`Couldn’t match ${entries.name}. Remove it, then save.`);
       /** What the server holds, refreshed after each step of this save. */
@@ -369,30 +424,69 @@ export function useConnectedDeckBuilder(
         // The name and format are saved even if the cards are then refused.
         current = (await rebase()) ?? current;
       }
-      if (!sameEntries(entries.entries, basis.revision?.entries ?? [])) {
+      if (
+        !sameEntries(entries.entries, basis.revision?.entries ?? []) ||
+        !sameCustomEntries(
+          entries.customEntries,
+          basis.revision?.customEntries ?? [],
+        )
+      ) {
         const saved = await submit(saveCards, {
           kind: "save",
           command: {
             deckId: id,
             expectedRevisionId: basis.deck.currentRevisionId,
             entries: entries.entries,
+            ...(entries.customEntries.length > 0
+              ? { customEntries: entries.customEntries }
+              : {}),
           },
         });
         if (saved.status === "fail") return saved;
         current = (await rebase()) ?? current;
       }
       // The face card is set last, once the cards it names are saved.
-      const face = draft.lines.find(
-        (line) => line.name === draft.faceCard,
-      )?.card;
-      if (face && face.definitionId !== current.deck.faceCard?.definitionId) {
+      const faceLine = draft.lines.find((line) => line.name === draft.faceCard);
+      const currentOfficialFaceId =
+        current.deck.faceCard?.kind === "official"
+          ? current.deck.faceCard.definitionId
+          : null;
+      const currentCustomFaceId =
+        current.deck.faceCard?.kind === "custom"
+          ? current.deck.faceCard.customCardRevisionId
+          : null;
+      if (
+        faceLine?.card &&
+        faceLine.card.definitionId !== currentOfficialFaceId
+      ) {
         const expected = settingsOf(current.deck);
         const faced = await submit(changeSettings, {
           kind: "settings",
           command: {
             deckId: id,
             expected,
-            settings: { ...expected, faceCardId: face.definitionId },
+            settings: {
+              ...expected,
+              faceCardId: faceLine.card.definitionId,
+            },
+          },
+        });
+        if (faced.status === "fail") return faced;
+        await rebase();
+      } else if (
+        faceLine?.customCardRevisionId &&
+        faceLine.customCardRevisionId !== currentCustomFaceId
+      ) {
+        const expected = settingsOf(current.deck);
+        const faced = await submit(changeSettings, {
+          kind: "settings",
+          command: {
+            deckId: id,
+            expected,
+            settings: {
+              ...expected,
+              faceCustomCardRevisionId: faceLine.customCardRevisionId,
+            },
           },
         });
         if (faced.status === "fail") return faced;

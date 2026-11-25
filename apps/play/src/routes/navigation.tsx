@@ -32,9 +32,16 @@ export const destinations: readonly Destination[] = [
   {
     id: "open-play",
     label: "Open Play",
-    path: "/open-play",
+    path: "/open-play/decks",
     icon: <Swords />,
-    sections: [],
+    sections: [
+      { path: "/open-play/decks", label: "Decks", icon: <DecksIcon /> },
+      {
+        path: "/open-play/custom-cards",
+        label: "Custom Cards",
+        icon: <CardsIcon />,
+      },
+    ],
   },
   {
     id: "collection",

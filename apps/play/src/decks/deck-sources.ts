@@ -81,6 +81,7 @@ export type DeckDraft = {
 export type SearchCard = {
   name: string;
   card?: CardRef;
+  customCardRevisionId?: string;
   facts?: BuilderCard;
 };
 

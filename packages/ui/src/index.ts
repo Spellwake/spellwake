@@ -93,6 +93,35 @@ export {
   type PrintedMode,
 } from "./cards/PrintedModePicker";
 export {
+  CARD_HEIGHT,
+  CARD_WIDTH,
+  parseManaTokens,
+  renderCardFrameSvg,
+  resolveFramePalette,
+  type CardFaceFrameInput,
+  type CardFaceRenderData,
+  type CardFrameAccent,
+  type CardFrameRenderInput,
+  type CardLayoutKind,
+  type CardRarityKind,
+  type FramePalette,
+  type StackTriggerFrameInput,
+} from "./cards/card-frame-svg";
+export {
+  renderCardFrameToCanvas,
+  renderCardFrameToPngBytes,
+  type CardCanvasRenderOptions,
+} from "./cards/card-frame-canvas";
+export {
+  CustomCardFrame,
+  type CustomCardFrameProps,
+} from "./cards/CustomCardFrame";
+export {
+  SCRYFALL_SYMBOL_SVGS,
+  lookupManaSymbolSvg,
+  manaSymbolDataUrl,
+} from "./cards/mana-symbols";
+export {
   CompactSpellStack,
   type StackEntry,
   type CompactSpellStackProps,

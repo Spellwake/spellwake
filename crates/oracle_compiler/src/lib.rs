@@ -9,6 +9,7 @@ pub mod clauses;
 pub mod filter;
 pub mod keywords;
 pub mod preprocess;
+pub mod standardize;
 pub mod vocab;
 pub mod wave_e10;
 pub mod wave_e6;

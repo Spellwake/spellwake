@@ -25,6 +25,16 @@ pub struct BootstrapRequest {
     #[serde(deserialize_with = "crate::identifiers::nullable_uuid")]
     pub deck_revision_id: Option<Uuid>,
 }
+/// Explicit null clears the AI slot's assigned deck; absence is malformed.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetAiDeckRequest {
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub request_id: Uuid,
+    pub expected_revision: Amount,
+    #[serde(deserialize_with = "crate::identifiers::nullable_uuid")]
+    pub deck_revision_id: Option<Uuid>,
+}
 /// A desired-running binding at its original epoch; private start identity is excluded.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -52,6 +62,7 @@ pub enum ControlKind {
     Remove,
     Unready,
     SetTier,
+    SetDeck,
 }
 impl ControlKind {
     /// Validate the operation-specific acknowledgment against its original target and basis.
@@ -64,6 +75,9 @@ impl ControlKind {
                         || basis
                             .checked_add(&1.into())
                             .is_ok_and(|next| a.revision == next))
+            }
+            (Self::SetDeck, ControlAck::Revision(a)) => {
+                a.resource_id == target && a.revision >= *basis
             }
             (Self::Bootstrap, ControlAck::Bootstrap(a)) => {
                 !a.resource_id.is_nil() && a.epoch == 1.into()
@@ -119,6 +133,17 @@ impl ControlKind {
                     ("account", "unavailable")
                         | ("slot", "stale or unavailable")
                         | ("revision", "conflict")
+                        | (
+                            "queue",
+                            "cancel the claimed room before changing its roster"
+                        )
+                ),
+                Self::SetDeck => matches!(
+                    (k.as_str(), v.as_str()),
+                    ("account", "unavailable")
+                        | ("slot", "stale or unavailable")
+                        | ("revision", "conflict")
+                        | ("deck", "unavailable")
                         | (
                             "queue",
                             "cancel the claimed room before changing its roster"

@@ -64,6 +64,15 @@ pub struct DeckEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomDeckEntry {
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub custom_card_revision_id: Uuid,
+    pub section: DeckSection,
+    pub quantity: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateDeck {
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub request_id: Uuid,
@@ -84,6 +93,12 @@ pub struct SaveDeck {
     pub expected_revision_id: Option<Uuid>,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub entries: Vec<DeckEntry>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub custom_entries: Vec<CustomDeckEntry>,
 }
 
 /// Mutable deck settings remain separate from immutable card-content revisions.
@@ -104,17 +119,25 @@ pub struct DeckSettings {
         deserialize_with = "crate::identifiers::present_uuid"
     )]
     pub face_card_id: Option<Uuid>,
+    /// Custom card revision shown on an Open Play deck box; mutually exclusive with `face_card_id`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::identifiers::present_uuid"
+    )]
+    pub face_custom_card_revision_id: Option<Uuid>,
 }
 
 impl DeckSettings {
     /// Validate settings shape; entitlement and format availability belong to SQL.
     ///
     /// # Errors
-    /// Rejects invalid names, nil format IDs and invalid appearance IDs.
+    /// Rejects invalid names, nil format IDs, conflicting face cards, and invalid appearance IDs.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.format_id.is_nil()
             || !(1..=120).contains(&self.name.trim().chars().count())
             || self.name.contains('\0')
+            || (self.face_card_id.is_some() && self.face_custom_card_revision_id.is_some())
         {
             return Err("invalid deck settings");
         }
@@ -146,7 +169,9 @@ impl ChangeDeckSettings {
             return Err("invalid deck settings identity");
         }
         // The face card is a preference outside the compared baseline.
-        if self.expected.face_card_id.is_some() {
+        if self.expected.face_card_id.is_some()
+            || self.expected.face_custom_card_revision_id.is_some()
+        {
             return Err("invalid deck settings");
         }
         self.expected.validate()?;
@@ -231,17 +256,27 @@ impl SaveDeck {
         {
             return Err("invalid deck command identity");
         }
-        validate_entries(&self.entries)
+        validate_all_entries(&self.entries, &self.custom_entries)
     }
 }
 
-fn validate_entries(entries: &[DeckEntry]) -> Result<(), &'static str> {
-    if entries.len() > 1000
+pub(crate) fn validate_entries(entries: &[DeckEntry]) -> Result<(), &'static str> {
+    validate_all_entries(entries, &[])
+}
+
+pub(crate) fn validate_all_entries(
+    entries: &[DeckEntry],
+    custom_entries: &[CustomDeckEntry],
+) -> Result<(), &'static str> {
+    if entries.len().saturating_add(custom_entries.len()) > 1000
         || entries.iter().any(|entry| {
             entry.quantity.is_zero()
                 || entry.definition_id.is_nil()
                 || entry.printing_id.is_some_and(|id| id.is_nil())
         })
+        || custom_entries
+            .iter()
+            .any(|entry| entry.quantity.is_zero() || entry.custom_card_revision_id.is_nil())
     {
         return Err("deck requires at most 1000 entries with positive quantities");
     }
@@ -253,6 +288,12 @@ fn validate_entries(entries: &[DeckEntry]) -> Result<(), &'static str> {
             entry.section.0.as_str(),
         )) {
             return Err("duplicate deck entry");
+        }
+    }
+    let mut custom_ids = std::collections::HashSet::new();
+    for entry in custom_entries {
+        if !custom_ids.insert((entry.custom_card_revision_id, entry.section.0.as_str())) {
+            return Err("duplicate custom deck entry");
         }
     }
     Ok(())

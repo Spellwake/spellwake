@@ -19,6 +19,10 @@ export const setAiTierRequestSchema = revisionRequestSchema.extend({
   tier: aiTierSchema,
 });
 export type SetAiTierRequest = z.infer<typeof setAiTierRequestSchema>;
+export const setAiDeckRequestSchema = revisionRequestSchema.extend({
+  deckRevisionId: identifierSchema.nullable(),
+});
+export type SetAiDeckRequest = z.infer<typeof setAiDeckRequestSchema>;
 export const bootstrapAckSchema = z.strictObject({
   resourceId: identifierSchema,
   epoch: z.literal("1"),
@@ -80,6 +84,19 @@ export const unreadyDispositionSchema = makeCommandDispositionSchema(
 );
 export const setAiTierDispositionSchema = makeCommandDispositionSchema(
   setAiTierErrorsSchema,
+  roomConfigurationAckSchema,
+);
+export const setAiDeckErrorsSchema = z.union([
+  z.strictObject({ account: z.literal("unavailable") }),
+  z.strictObject({ slot: z.literal("stale or unavailable") }),
+  z.strictObject({ revision: z.literal("conflict") }),
+  z.strictObject({ deck: z.literal("unavailable") }),
+  z.strictObject({
+    queue: z.literal("cancel the claimed room before changing its roster"),
+  }),
+]);
+export const setAiDeckDispositionSchema = makeCommandDispositionSchema(
+  setAiDeckErrorsSchema,
   roomConfigurationAckSchema,
 );
 

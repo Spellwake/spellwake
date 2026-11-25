@@ -33,6 +33,7 @@ import {
 } from "./entry/EntryRoutes";
 import type { FrameHandle } from "./frame-mode";
 import { PatreonReturnRoute } from "./patreon/PatreonReturnRoute";
+import { CustomCardsStudioRoute } from "./custom-cards/CustomCardsStudioRoute";
 
 /** A screen of the signed-in app. In a configured build it waits behind account entry. */
 const gated = (element: ReactElement): ReactElement => (
@@ -131,7 +132,18 @@ const router = createBrowserRouter(
       element: <AppShell />,
       children: [
         { index: true, element: <Navigate to="/collection/decks" replace /> },
-        { path: "open-play", element: gated(<DeckShelfRoute mode="open" />) },
+        {
+          path: "open-play",
+          element: <Navigate to="/open-play/decks" replace />,
+        },
+        {
+          path: "open-play/decks",
+          element: gated(<DeckShelfRoute mode="open" />),
+        },
+        {
+          path: "open-play/custom-cards",
+          element: gated(<CustomCardsStudioRoute />),
+        },
         { path: "open-play/lobby", element: gated(<LobbyRoute mode="open" />) },
         {
           path: "collection/lobby",

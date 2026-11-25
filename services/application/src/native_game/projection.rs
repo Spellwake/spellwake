@@ -285,6 +285,7 @@ impl RestoredProjection {
 pub struct NativeObjectDisplay {
     pub definition_id: Option<Uuid>,
     pub printing_id: Option<Uuid>,
+    pub custom_card_revision_id: Option<Uuid>,
     pub characteristics: PlayerCharacteristics,
 }
 /// Typed description role; not a serializable native ID or action permission.
@@ -1171,14 +1172,21 @@ impl Projection<'_, '_> {
                 .object(physical, physical.displayed_face(definition))?;
             if display.definition_id.is_some_and(|id| id.is_nil())
                 || display.printing_id.is_some_and(|id| id.is_nil())
+                || display
+                    .custom_card_revision_id
+                    .is_some_and(|id| id.is_nil())
+                || (display.definition_id.is_some() && display.custom_card_revision_id.is_some())
                 || (self.display.scope() == NativeDisplayScope::SourceOnly
-                    && (display.definition_id.is_some() || display.printing_id.is_some()))
+                    && (display.definition_id.is_some()
+                        || display.printing_id.is_some()
+                        || display.custom_card_revision_id.is_some()))
             {
                 return Err(NativeProjectionError::InvalidMetadata);
             }
             PlayerObjectIdentity::Known {
                 definition_id: display.definition_id,
                 printing_id: display.printing_id,
+                custom_card_revision_id: display.custom_card_revision_id,
                 characteristics: Box::new(display.characteristics),
                 current_names: if foretold.is_some() || exiled_face_down_viewer.is_some() {
                     spellwake_contracts::names::ObjectNames::nameless()

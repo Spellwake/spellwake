@@ -102,6 +102,20 @@ impl NativePrintedCard<'_> {
     }
 }
 
+pub(super) fn split_characteristics_pub(
+    card: &InventoryCard,
+) -> Result<PlayerCharacteristics, NativeInitialError> {
+    split_characteristics(card)
+}
+
+pub(super) fn face_characteristics_pub(
+    face: &spellwake_content::CatalogFace,
+    loyalty: Option<&spellwake_contracts::RulesInteger>,
+    defense: Option<&spellwake_contracts::RulesInteger>,
+) -> Result<PlayerCharacteristics, NativeInitialError> {
+    face_characteristics(face, loyalty, defense)
+}
+
 fn characteristics(card: &InventoryCard) -> Result<PlayerCharacteristics, NativeInitialError> {
     let [face] = card.faces.as_slice() else {
         return Err(NativeInitialError::Invalid);
@@ -268,7 +282,9 @@ impl NativeProgramSource {
                         program.printed_loyalty.as_ref(),
                         program.printed_defense.as_ref(),
                     )?
-                } else if program.has_type(spellwake_engine::program::CardType::Planeswalker) {
+                } else if program.has_type(spellwake_engine::program::CardType::Planeswalker)
+                    || program.printed_defense.is_some()
+                {
                     let [face] = card.faces.as_slice() else {
                         return Err(NativeInitialError::Invalid);
                     };

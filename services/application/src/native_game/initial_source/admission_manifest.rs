@@ -1,6 +1,7 @@
 //! Server-selected admission for one accepted application release and legality snapshot.
 use super::*;
 use crate::actor::ActorError;
+use crate::decks::PlayMode;
 use crate::native_game::preparation_source::NativePreparationRepository;
 use crate::price_source::EvidenceHash;
 use std::collections::BTreeSet;
@@ -315,14 +316,24 @@ impl AdmissionManifest {
         else {
             return Ok(None);
         };
+        let allow_custom = terms.r#match.allow_custom_cards && terms.r#match.mode == PlayMode::Open;
         if profile.table_policy.as_ref().is_some_and(|table| {
             table.mode != terms.r#match.mode || table.structure != terms.r#match.structure
         }) || !self.check_entries(&terms.entries)
             || programs
-                .verify_constructed_release_content(&terms.release, &terms.entries)
+                .verify_constructed_release_content_with_custom(
+                    &terms.release,
+                    &terms.entries,
+                    &terms.custom_entries,
+                )
                 .is_err()
             || programs
-                .inspect_selected_constructed_deck(&profile.format_key, &terms.entries)
+                .inspect_selected_match_deck_with_custom(
+                    &profile.format_key,
+                    &terms.entries,
+                    &terms.custom_entries,
+                    allow_custom,
+                )
                 .is_err()
         {
             return Ok(None);
@@ -418,14 +429,26 @@ impl AdmissionManifest {
             let Some(entries) = slot.entries.as_deref() else {
                 return Ok(None);
             };
+            let custom_entries = slot.custom_entries.as_deref().unwrap_or(&[]);
+            let allow_custom =
+                t.room.allow_custom_cards && t.room.mode == PlayMode::Open && !t.room.competitive;
             if !self.check_entries(entries)
                 || programs
-                    .verify_constructed_release_content(&t.release, entries)
+                    .verify_constructed_release_content_with_custom(
+                        &t.release,
+                        entries,
+                        custom_entries,
+                    )
                     .is_err()
             {
                 return Ok(None);
             }
-            let Ok(counts) = programs.selected_match_deck_counts(&p.format_key, entries) else {
+            let Ok(counts) = programs.selected_match_deck_counts_with_custom(
+                &p.format_key,
+                entries,
+                custom_entries,
+                allow_custom,
+            ) else {
                 return Ok(None);
             };
             if counts.is_err() {

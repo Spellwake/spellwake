@@ -98,7 +98,7 @@ fn assert_origins(checkpoint: &NativeCheckpoint) {
         );
         assert_eq!(
             physical.definition_id(),
-            Uuid::from_u128(0xbb00 + index as u128)
+            Some(Uuid::from_u128(0xbb00 + index as u128))
         );
         seen += 1;
     }
@@ -126,7 +126,7 @@ fn assert_immutable_display(checkpoint: &NativeCheckpoint, source: &NativeProgra
             .unwrap()
             .physical_card(object)
             .unwrap();
-        assert_eq!(described.definition_id, Some(physical.definition_id()));
+        assert_eq!(described.definition_id, physical.definition_id());
         assert_eq!(described.printing_id, physical.printing_id());
         assert!(
             described.characteristics

@@ -119,12 +119,20 @@ function surface(height = SIZE): CanvasRenderingContext2D {
 }
 async function image(url: string): Promise<HTMLImageElement> {
   const result = new Image();
+  const isLocalBlobOrData = url.startsWith("blob:") || url.startsWith("data:");
   // Card art may come from Scryfall's servers; it must not taint the texture canvas.
-  result.crossOrigin = "anonymous";
+  if (!isLocalBlobOrData) {
+    result.crossOrigin = "anonymous";
+  }
   result.src = url;
   try {
     await result.decode();
   } catch (cause) {
+    if (isLocalBlobOrData) {
+      throw new Error(`Unable to decode local box texture: ${url.slice(0, 32)}`, {
+        cause,
+      });
+    }
     console.warn(`Retrying box texture after decode failure: ${url}`, cause);
     const retryUrl = new URL(url);
     retryUrl.searchParams.set("retry", "1");

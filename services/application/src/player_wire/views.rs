@@ -101,6 +101,12 @@ pub enum PlayerObjectIdentity {
         definition_id: Option<Uuid>,
         #[serde(deserialize_with = "crate::identifiers::nullable_uuid")]
         printing_id: Option<Uuid>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::identifiers::present_uuid"
+        )]
+        custom_card_revision_id: Option<Uuid>,
         #[serde(deserialize_with = "crate::provider_json::object")]
         characteristics: Box<PlayerCharacteristics>,
         current_names: spellwake_contracts::names::ObjectNames,
@@ -242,7 +248,7 @@ impl PlayerPublicProperties {
             && unique(self.supertypes.iter())
             && self.land_types.len() <= 17
             && unique(self.land_types.iter())
-            && self.spell_types.len() <= 1
+            && self.spell_types.len() <= 5
             && unique(self.spell_types.iter())
             && (self.spell_types.is_empty()
                 || self.card_types.contains(&PlayerCardType::Instant)
@@ -1000,6 +1006,8 @@ impl PlayerSnapshot {
             }
             match &o.identity {
                 PlayerObjectIdentity::Known {
+                    definition_id,
+                    custom_card_revision_id,
                     characteristics,
                     current_names,
                     ..
@@ -1007,6 +1015,8 @@ impl PlayerSnapshot {
                     if !known.contains(&o.handle)
                         || !characteristics.valid()
                         || current_names.len() > MAX_PLAYER_ITEMS
+                        || custom_card_revision_id.is_some_and(|id| id.is_nil())
+                        || (definition_id.is_some() && custom_card_revision_id.is_some())
                     {
                         return false;
                     }
