@@ -149,6 +149,7 @@ export function AppHeader({
   onOpenPolicy,
   onToggleMessages,
   isMessagesOpen,
+  newUpdates = 0,
   messagesRef,
   onSignOut,
   hasDestinations,
@@ -168,6 +169,8 @@ export function AppHeader({
   /** Opens or closes Messages under its button. */
   onToggleMessages: () => void;
   isMessagesOpen: boolean;
+  /** Updates not yet seen; the Messages button carries a dot while there are any. */
+  newUpdates?: number;
   messagesRef: RefObject<HTMLButtonElement | null>;
   /** Null where there is no account to leave, which keeps Sign out off the menu. */
   onSignOut: (() => void) | null;
@@ -192,11 +195,14 @@ export function AppHeader({
           ref={messagesRef}
           type="button"
           className={s.iconAction}
-          aria-label="Messages"
+          aria-label={
+            newUpdates > 0 ? `Messages, ${newUpdates} new updates` : "Messages"
+          }
           aria-expanded={isMessagesOpen}
           onClick={onToggleMessages}
         >
           <MessageSquare size={designPixels(31)} strokeWidth={1.5} />
+          {newUpdates > 0 && <span className={s.newDot} aria-hidden="true" />}
         </button>
         <ActionMenu
           label="Account"

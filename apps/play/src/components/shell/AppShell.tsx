@@ -26,6 +26,7 @@ import { AppHeader } from "./AppHeader";
 import {
   MessagesOverlay,
   useMessagesParam,
+  useUpdates,
 } from "../../messaging/MessagesOverlay";
 import { useHeaderAccount } from "./header-account";
 import { Backdrop } from "./Backdrop";
@@ -57,6 +58,7 @@ export function AppShell(): ReactElement {
   const accountButton = useRef<HTMLButtonElement>(null);
   const messagesButton = useRef<HTMLButtonElement>(null);
   const [messages, setMessages] = useMessagesParam();
+  const updates = useUpdates();
   const destination = destinationFor(location.pathname);
   const previous = useRef(location.pathname);
   const direction = travelDirection(previous.current, location.pathname);
@@ -118,6 +120,7 @@ export function AppShell(): ReactElement {
                   void setMessages(messages ? null : "open")
                 }
                 isMessagesOpen={!!messages}
+                newUpdates={updates.status === "ready" ? updates.unread : 0}
                 messagesRef={messagesButton}
                 onSignOut={onSignOut}
                 hasDestinations={!isCompact}
@@ -218,7 +221,9 @@ export function AppShell(): ReactElement {
           {hasDock && <CompactNavigation current={destination} />}
           {/* Account settings and profiles belong to the signed-in app, not to account entry. */}
           {!isEntering && <AccountOverlays accountButton={accountButton} />}
-          {!isEntering && <MessagesOverlay trigger={messagesButton} />}
+          {!isEntering && (
+            <MessagesOverlay trigger={messagesButton} updates={updates} />
+          )}
           <FeedbackMessages
             label="Account messages"
             presentation="toast"
