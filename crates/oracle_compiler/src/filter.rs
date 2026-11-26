@@ -5552,6 +5552,17 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "that token"
         | "that aura"
         | "that equipment"
+        | "the creature"
+        | "the permanent"
+        | "the card"
+        | "the spell"
+        | "the ability"
+        | "the artifact"
+        | "the enchantment"
+        | "the land"
+        | "the planeswalker"
+        | "the aura"
+        | "the equipment"
         | "those creatures"
         | "those permanents"
         | "those cards"
@@ -8366,6 +8377,64 @@ fn parse_wave_e8_condition_atom(low: &str, vocab: &Vocabulary) -> Option<Conditi
 }
 
 /// Strictly parse an intervening-`if`, resolution-`if`, or `as long as` condition.
+fn starts_with_indefinite_article(s: &str) -> bool {
+    s.starts_with("a ") || s.starts_with("an ") || s.starts_with("another ")
+}
+
+/// Split independent conjoined control requirements such as "a Plains and an Island"
+/// or "an artifact and an enchantment" into `ConditionAst::And` of separate
+/// `ConditionAst::ControlsCount` checks rather than merging them into one filter.
+fn try_parse_conjoined_controls(
+    player: PlayerRefAst,
+    flt_raw: &str,
+    vocab: &Vocabulary,
+) -> Option<ConditionAst> {
+    let trimmed = flt_raw.trim();
+    if !starts_with_indefinite_article(trimmed) || trimmed.contains(" named ") {
+        return None;
+    }
+    let (head, last) = trimmed
+        .rsplit_once(", and ")
+        .or_else(|| trimmed.rsplit_once(" and "))?;
+    let last = last.trim();
+    if !starts_with_indefinite_article(last) {
+        return None;
+    }
+    let mut parts: Vec<&str> = if head.contains(", ") {
+        head.split(", ").map(str::trim).collect()
+    } else {
+        vec![head.trim()]
+    };
+    parts.push(last);
+    if parts.len() < 2
+        || parts.iter().any(|part| {
+            !starts_with_indefinite_article(part)
+                || part.contains(" with ")
+                || part.contains(" without ")
+                || part.contains(" and ")
+                || part.contains(" or ")
+        })
+    {
+        return None;
+    }
+    let mut filters = Vec::with_capacity(parts.len());
+    for part in parts {
+        filters.push(parse_object_filter(part, vocab).ok()?);
+    }
+    let mut iter = filters
+        .into_iter()
+        .map(|filter| ConditionAst::ControlsCount {
+            player,
+            filter: Box::new(filter),
+            op: CompareOp::Ge,
+            value: 1,
+        });
+    let first = iter.next()?;
+    Some(iter.fold(first, |acc, next| {
+        ConditionAst::And(Box::new(acc), Box::new(next))
+    }))
+}
+
 pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst, String> {
     let raw = trim_punct(phrase);
     if raw.is_empty() {
@@ -9917,17 +9986,19 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     }
     // "<player> controls <flt>" (e.g. "that player controls a Plains") / "you control <subj>" / "that mana is spent on <flt>" / "that target is <colors>"
     if let Some((who_raw, flt_raw)) = low.split_once(" controls ")
-        && let (Some(player), Ok(flt)) = (
-            parse_player_ref(who_raw),
-            parse_object_filter(flt_raw, vocab),
-        )
+        && let Some(player) = parse_player_ref(who_raw)
     {
-        return Ok(ConditionAst::ControlsCount {
-            player,
-            filter: Box::new(flt),
-            op: CompareOp::Ge,
-            value: 1,
-        });
+        if let Some(conjoined) = try_parse_conjoined_controls(player, flt_raw, vocab) {
+            return Ok(conjoined);
+        }
+        if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
+            return Ok(ConditionAst::ControlsCount {
+                player,
+                filter: Box::new(flt),
+                op: CompareOp::Ge,
+                value: 1,
+            });
+        }
     }
     // Lossless "you control <flt> named <A> [and <B> ...]" preserving exact original-case card names
     // (Scepter of Empires, Power Plant Worker, Helm of Kaldra, Festering Newt, Ruin in Their Wake, Galactus, etc.)
@@ -9983,6 +10054,9 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         }
     }
     if let Some(subj_raw) = low.strip_prefix("you control ") {
+        if let Some(conjoined) = try_parse_conjoined_controls(PlayerRefAst::You, subj_raw, vocab) {
+            return Ok(conjoined);
+        }
         if let Ok(flt) = parse_object_filter(subj_raw, vocab) {
             return Ok(ConditionAst::ControlsCount {
                 player: PlayerRefAst::You,
