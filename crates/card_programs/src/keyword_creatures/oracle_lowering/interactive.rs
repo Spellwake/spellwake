@@ -890,6 +890,89 @@ pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
     }
 }
 
+/// Lower CR 701.30a Populate into dedicated [`Instruction::Populate`] (or a loop for dynamic counts).
+pub(super) fn lower_populate(
+    count: &ValueExprAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<(), &'static str> {
+    let resolved = resolve_x(count, bound_x);
+    if let ValueExprAst::Const(n) = resolved {
+        if *n <= 0 {
+            return Ok(());
+        }
+        if *n <= 8 {
+            for _ in 0..*n {
+                builder.instructions.push(Instruction::Populate);
+            }
+            return Ok(());
+        }
+    }
+    let cnt = lower_value_expr_in_context(resolved, builder, in_trigger, vocabulary)?;
+    builder.instructions.push(Instruction::RepeatLoop {
+        count: cnt,
+        body: Box::new(ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::Populate],
+        )),
+    });
+    Ok(())
+}
+
+/// Extract a `"<filter> from it/them"` hand-choice description from either
+/// `InstructionAst::ChooseOption` or `InstructionAst::InteractiveChoice(ChooseFromGroup)`.
+pub(super) fn extract_revealed_hand_choice_desc(op: &InstructionAst) -> Option<&str> {
+    let raw = match op {
+        InstructionAst::ChooseOption(s) => s.as_str(),
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::ChooseFromGroup {
+            chooser: PlayerRefAst::You,
+            description,
+        }) => description.as_str(),
+        _ => return None,
+    };
+    let trimmed = raw.trim().trim_end_matches('.');
+    trimmed
+        .strip_suffix(" from it")
+        .or_else(|| trimmed.strip_suffix(" from them"))
+        .or_else(|| trimmed.strip_suffix(" from that hand"))
+        .or_else(|| trimmed.strip_suffix(" of those cards"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// Unwrap either a bare `LookTopLibrary` or a single-instruction `BindX([LookTopLibrary])`
+/// so `LookTopLibrary + ChooseAndKeep` fusion works for `Domain`/`Devotion`/counted `X` cards.
+pub(super) fn unwrap_look_top_with_bind_x<'a>(
+    op: &'a InstructionAst,
+    bound_x: Option<&'a ValueExprAst>,
+) -> Option<(bool, &'a str, &'a ValueExprAst, Option<&'a ValueExprAst>)> {
+    match op {
+        InstructionAst::LookTopLibrary {
+            reveal,
+            library,
+            count,
+        } => Some((*reveal, library.as_str(), count.as_ref(), bound_x)),
+        InstructionAst::BindX { x_expr, body } => match body.as_slice() {
+            [
+                InstructionAst::LookTopLibrary {
+                    reveal,
+                    library,
+                    count,
+                },
+            ] => Some((
+                *reveal,
+                library.as_str(),
+                count.as_ref(),
+                Some(x_expr.as_ref()),
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1656,3 +1656,162 @@ fn predicate_restricted_mana_projects_enforces_atomically_and_round_trips_wire()
         ObjectZone::Battlefield
     );
 }
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn populate_auto_resolves_singleton_prompts_on_multiple_and_rejects_invalid_atomically() {
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::{
+        effects::ResolutionSelectionKind,
+        object_identity::ObjectZone,
+        token::{TokenCreation, TokenDefinition, TokenName},
+    };
+
+    let vocab = vocabulary();
+    let make_token = |p: i64, t: i64| {
+        TokenDefinition::new(
+            Program::creature(None, p.into(), t.into(), BTreeSet::new()),
+            TokenName::Default {
+                ordered_subtypes: vec![],
+            },
+            &vocab,
+        )
+        .unwrap()
+    };
+    // First verify deterministic singleton auto-resolution (1 creature token -> auto-copies without prompting).
+    let singleton_spell = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::CreateTokens {
+                creations: vec![TokenCreation::one(make_token(1, 1))],
+            },
+            Instruction::Populate,
+        ],
+    );
+    let singleton_source = main_state(vec![card(1, A, ObjectDestination::Hand, singleton_spell)]);
+    let singleton_cast = bridged(&singleton_source, viewer_a(), |v| {
+        PlayerAction::CastUntargeted {
+            source: v
+                .issue(NativeReference::Object(object(&singleton_source, 1)))
+                .unwrap(),
+            payment: None,
+        }
+    });
+    let singleton_done = resolve(&singleton_cast);
+    assert!(singleton_done.pending_decision().is_none());
+    assert_eq!(
+        singleton_done
+            .execution()
+            .window()
+            .cards()
+            .iter()
+            .filter(|c| c.zone() == ObjectZone::Battlefield && c.is_token())
+            .count(),
+        2
+    );
+
+    // Multi-token Populate: 2 creature tokens + 1 nontoken creature -> prompts over the 2 tokens only.
+    let setup_spell = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::CreateTokens {
+                creations: vec![TokenCreation::one(make_token(1, 1))],
+            },
+            Instruction::CreateTokens {
+                creations: vec![TokenCreation::one(make_token(3, 3))],
+            },
+            Instruction::Populate,
+        ],
+    );
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, setup_spell),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        ),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let pending = resolve(&cast);
+
+    // Must prompt with ResolutionSelectionKind::Populate over the 2 creature tokens (excluding the nontoken creature).
+    let Some(RuleFrame::ResolutionSelect(frame)) = pending.pending_decision().map(|p| p.frame())
+    else {
+        panic!("expected ResolutionSelect decision for Populate");
+    };
+    assert_eq!(frame.operation(), ResolutionSelectionKind::Populate);
+    assert_eq!(frame.domain().len(), 2);
+    assert_eq!(frame.minimum(), 1);
+    assert_eq!(frame.required(), 1);
+    let nontoken = object(&pending, 2);
+    assert!(!frame.domain().contains(&nontoken));
+
+    // Verify wire projection emits SelectResolution with minimum=1, maximum=1.
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::SelectResolution);
+    let PlayerDomain::Objects {
+        objects,
+        minimum,
+        maximum,
+        ..
+    } = &snap.decisions[0].domain
+    else {
+        panic!("expected Objects domain for Populate");
+    };
+    assert_eq!(objects.len(), 2);
+    assert_eq!(*minimum.as_rules_integer(), 1.into());
+    assert_eq!(*maximum.as_rules_integer(), 1.into());
+
+    // Atomic invalid reply: empty selection and nontoken creature must both fail without mutating state.
+    let dec_handle = view
+        .issue(NativeReference::Decision(
+            pending.pending_decision().unwrap().id(),
+        ))
+        .unwrap();
+    let empty_cmd = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle.clone(),
+            response: PlayerChoice::Objects { objects: vec![] },
+        },
+    );
+    let _ = rejected_proposal(&view, &empty_cmd);
+
+    let nontoken_handle = view.issue(NativeReference::Object(nontoken)).unwrap();
+    let bad_obj_cmd = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle,
+            response: PlayerChoice::Objects {
+                objects: vec![nontoken_handle],
+            },
+        },
+    );
+    let _ = rejected_proposal(&view, &bad_obj_cmd);
+
+    // Legal reply: choose the second creature token and verify a 3rd creature token enters the battlefield.
+    let chosen = frame.domain()[1];
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::Objects {
+            objects: vec![v.issue(NativeReference::Object(chosen)).unwrap()],
+        },
+        DecisionReply::SelectResolution(vec![chosen]),
+    );
+    let token_count = done
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Battlefield && c.is_token())
+        .count();
+    assert_eq!(token_count, 3);
+}

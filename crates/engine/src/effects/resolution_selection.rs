@@ -39,6 +39,8 @@ pub enum ResolutionSelectionKind {
     /// Place any of the selected hand or graveyard Auras attached to the source.
     AttachAurasFromHandOrGraveyard,
     CopyDifferentlyNamedTokens,
+    /// CR 701.30a Populate: choose one controlled creature token to copy.
+    Populate,
     Untap,
     /// An effect's selected objects would enter the battlefield.
     EnterBattlefield,
@@ -120,6 +122,8 @@ pub enum ResolutionSelectionOperation {
         eligible: BTreeSet<ObjectId>,
     },
     CopyDifferentlyNamedTokens,
+    /// CR 701.30a Populate: choose one controlled creature token to copy.
+    Populate,
     Untap {
         kind: CardType,
     },
@@ -309,6 +313,7 @@ impl ResolutionSelectionOperation {
                 optional: false, ..
             } => ResolutionSelectionKind::AttachAllEquipment,
             Self::CopyDifferentlyNamedTokens => ResolutionSelectionKind::CopyDifferentlyNamedTokens,
+            Self::Populate => ResolutionSelectionKind::Populate,
             Self::ChooseVow => ResolutionSelectionKind::VowCreature,
             Self::ChooseCreaturesToKeep => ResolutionSelectionKind::ChooseCreatureToKeep,
             Self::PayLifeToSaveCreatures { .. } => ResolutionSelectionKind::PayLifeToSaveCreatures,
@@ -444,6 +449,7 @@ impl ResolutionSelectionOperation {
             | Self::AttachToSource { .. }
             | Self::EnterAurasAttachedToSource { .. }
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::Bolster { .. }
             | Self::Amass { .. }
             | Self::Untap { .. }
@@ -520,6 +526,7 @@ impl ResolutionSelectionOperation {
             | Self::AttachToSource { .. }
             | Self::EnterAurasAttachedToSource { .. }
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::Bolster { .. }
             | Self::Amass { .. }
             | Self::Untap { .. }
@@ -2470,6 +2477,14 @@ impl EffectWindow {
                     ResolutionSelectionOperation::CopyDifferentlyNamedTokens,
                 )
             }
+            Instruction::Populate => {
+                all = ValueExpr::Literal(1.into());
+                (
+                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
+                    &all,
+                    ResolutionSelectionOperation::Populate,
+                )
+            }
             Instruction::Amass {
                 army,
                 subtype,
@@ -4013,6 +4028,7 @@ impl EffectWindow {
                             ResolutionSelectionOperation::Amass { .. }
                                 | ResolutionSelectionOperation::ChooseCreaturesToKeep
                                 | ResolutionSelectionOperation::Blight { .. }
+                                | ResolutionSelectionOperation::Populate
                         ) && requirement.domain.len() == 1;
                         let forced_select_all = matches!(
                             operation,
@@ -4211,7 +4227,11 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         return Ok(None);
                     }
-                    if operation == ResolutionSelectionOperation::CopyDifferentlyNamedTokens {
+                    if matches!(
+                        operation,
+                        ResolutionSelectionOperation::CopyDifferentlyNamedTokens
+                            | ResolutionSelectionOperation::Populate
+                    ) {
                         let [selection] = accepted.as_slice() else {
                             return Err(EffectError::InconsistentSelectionWork);
                         };
@@ -6511,6 +6531,13 @@ impl EffectWindow {
                             && !view.current_names.is_empty()
                             && (view.has_type(CardType::Artifact) || view.is_creature())
                     })
+            }
+            ResolutionSelectionOperation::Populate => {
+                object.zone() == ObjectZone::Battlefield
+                    && object.is_token()
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|view| view.controller == Some(player) && view.is_creature())
             }
             ResolutionSelectionOperation::Bolster { eligible, .. }
             | ResolutionSelectionOperation::Amass { eligible, .. } => {

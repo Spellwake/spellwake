@@ -16893,6 +16893,9 @@ pub(super) fn lower_instruction(
             builder.instructions.push(Instruction::RingTemptsYou);
             Ok(())
         }
+        InstructionAst::Populate { count } => {
+            interactive::lower_populate(count, builder, vocabulary, in_trigger, bound_x)
+        }
         InstructionAst::VentureIntoDungeon { player } => {
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(

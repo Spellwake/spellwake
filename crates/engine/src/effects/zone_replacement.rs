@@ -1669,6 +1669,7 @@ impl EffectWindow {
             | ResolutionSelectionOperation::AttachToSource { .. }
             | ResolutionSelectionOperation::EnterAurasAttachedToSource { .. }
             | ResolutionSelectionOperation::CopyDifferentlyNamedTokens
+            | ResolutionSelectionOperation::Populate
             | ResolutionSelectionOperation::Bolster { .. }
             | ResolutionSelectionOperation::Amass { .. }
             | ResolutionSelectionOperation::Untap { .. }

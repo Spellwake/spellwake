@@ -302,6 +302,7 @@ native!(ExecutableBody, self, {
         | Instruction::ExertAbilitySource
         | Instruction::CollectEvidence { .. }
         | Instruction::Blight { .. }
+        | Instruction::Populate
         | Instruction::MoveSubject { .. }
         | Instruction::SelectZoneCardsToZone { .. }
         | Instruction::ChooseOption { .. }

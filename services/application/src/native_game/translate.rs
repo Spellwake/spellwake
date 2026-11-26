@@ -316,8 +316,8 @@ fn translate_mana_predicate(
     vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
 ) -> Result<spellwake_engine::mana::ManaSpendPredicate, NativeBridgeError> {
     use crate::player_wire::{
-        PlayerAbilitySpendKind, PlayerManaSpecialAction, PlayerManaSpellKeyword, PlayerSpellCastMode,
-        PlayerSpellColorRule,
+        PlayerAbilitySpendKind, PlayerManaSpecialAction, PlayerManaSpellKeyword,
+        PlayerSpellCastMode, PlayerSpellColorRule,
     };
     use spellwake_engine::mana::{
         AbilityManaClause, AbilitySpendKind, ManaSpecialAction, ManaSpellKeyword,
@@ -385,11 +385,9 @@ fn translate_mana_predicate(
                     .map(|r| match r {
                         PlayerSpellColorRule::Colorless => Ok(SpellColorRule::Colorless),
                         PlayerSpellColorRule::Colored => Ok(SpellColorRule::Colored),
-                        PlayerSpellColorRule::ExactColor { color } => {
-                            Ok(SpellColorRule::ExactColor(translate_mana_color_from_wire(
-                                color,
-                            )?))
-                        }
+                        PlayerSpellColorRule::ExactColor { color } => Ok(
+                            SpellColorRule::ExactColor(translate_mana_color_from_wire(color)?),
+                        ),
                         PlayerSpellColorRule::MonocoloredOf { color } => Ok(
                             SpellColorRule::MonocoloredOf(translate_mana_color_from_wire(color)?),
                         ),

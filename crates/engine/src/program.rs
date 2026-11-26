@@ -3609,6 +3609,8 @@ pub enum Instruction {
     /// The controller chooses zero to the stated number of permanents at resolution, without targeting.
     /// Choose named artifact and creature tokens with pairwise disjoint names and copy them.
     CopyDifferentlyNamedTokens,
+    /// CR 701.30a Populate: choose a creature token you control and create a token copy of it.
+    Populate,
     /// Permanently copy the creature this Aura entered attached to across the current nontoken cohort.
     CopyOtherControlledNontokensAsEntryHost,
     /// Attach all controlled Equipment, or any number of controlled Auras and Equipment, to the ability source.
@@ -4566,6 +4568,7 @@ impl Instruction {
             | Self::DestroyOtherCreatures
             | Self::SacrificeOtherCreatures
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::CopyOtherControlledNontokensAsEntryHost
             | Self::AttachControlledToSource { .. }
             | Self::AttachBattlefieldAurasToSource
@@ -5690,6 +5693,7 @@ impl Instruction {
             | Self::DestroyOtherCreatures
             | Self::SacrificeOtherCreatures
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::CopyOtherControlledNontokensAsEntryHost
             | Self::AttachControlledToSource { .. }
             | Self::AttachBattlefieldAurasToSource
@@ -6129,6 +6133,7 @@ impl Instruction {
             | Self::EnterHandOrGraveyardAurasAttachedToSource
             | Self::CopyCreatureAsToken
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::CopyOtherControlledNontokensAsEntryHost
             | Self::DamagePlayersHalfLife
             | Self::DrawAndDamageOpponents { .. } => false,
@@ -8249,6 +8254,7 @@ impl ExecutableBody {
                 | Instruction::Proliferate
                 | Instruction::AttachControlledToSource { .. }
                 | Instruction::CopyDifferentlyNamedTokens
+                | Instruction::Populate
                 | Instruction::DamagePlayersHalfLife => None,
                 Instruction::DamageTargetControllersCreatures { amount, .. } => {
                     if !matches!(
@@ -16093,6 +16099,7 @@ impl ExecutableBody {
                     | Instruction::CopyEntrantOnceEachTurn
                     | Instruction::CopyCreatureAsToken
                     | Instruction::CopyDifferentlyNamedTokens
+                    | Instruction::Populate
                     | Instruction::CopyOtherControlledNontokensAsEntryHost
                     | Instruction::DamagePlayersHalfLife
                     | Instruction::DamageGroup { .. }
@@ -20036,6 +20043,7 @@ impl Program {
                             | Instruction::CopyEntrantOnceEachTurn
                             | Instruction::CopyCreatureAsToken
                             | Instruction::CopyDifferentlyNamedTokens
+                            | Instruction::Populate
                             | Instruction::DamagePlayersHalfLife
                             | Instruction::DamageGroup { .. }
                             | Instruction::DamageGroupAmount { .. }

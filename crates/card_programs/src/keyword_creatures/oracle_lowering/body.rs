@@ -19956,13 +19956,10 @@ pub(super) fn lower_instruction_seq(
                 }
             }
         }
-        // Fuse LookTopLibrary + ChooseAndKeep (e.g. Anticipate, Impulse, Sleight of Hand, Forbidden Alchemy, Commune, Mulch, Collected Company, Dig Through Time, Dimir Charm)
+        // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + ChooseAndKeep (e.g. Anticipate, Impulse, Worldly Counsel, Thassa's Oracle, Memory Deluge)
         if i + 1 < ins.len()
-            && let InstructionAst::LookTopLibrary {
-                reveal,
-                library,
-                count,
-            } = &ins[i]
+            && let Some((reveal_val, library, count, eff_bound_x)) =
+                interactive::unwrap_look_top_with_bind_x(&ins[i], bound_x)
             && let Some((req_bt, library_owner)) =
                 parse_look_top_library_owner(library, builder, in_trigger)
             && let InstructionAst::ChooseAndKeep {
@@ -19971,6 +19968,7 @@ pub(super) fn lower_instruction_seq(
                 rest_to,
             } = &ins[i + 1]
         {
+            let reveal = &reveal_val;
             let keep_low = keep_to.to_ascii_lowercase();
             let rest_low = rest_to.to_ascii_lowercase();
             let keep_dest_opt = parse_look_top_keep_dest_ext(keep_to, false);
@@ -20104,7 +20102,7 @@ pub(super) fn lower_instruction_seq(
                     )
                 };
                 if let Some(maybe_filter) = filter_opt {
-                    let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
+                    let cnt = lower_value_expr(resolve_x(count, eff_bound_x), vocabulary)?;
                     let mut probe = builder.clone();
                     if req_bt.is_none_or(|bt| probe.bind_target(bt).is_ok()) {
                         *builder = probe;
@@ -20408,13 +20406,9 @@ pub(super) fn lower_instruction_seq(
         if let Some(reveal_player) = hand_reveal_player {
             let mut fused_step = 0usize;
             let mut chosen_spec: Option<(u8, Option<ObjectFilterAst>, ChosenHandAction)> = None;
-            // 3-step pattern: RevealHand/LookAtHand + ChooseOption("<count?> <filter> from it/them") + Discard/Exile(anaphora)
+            // 3-step pattern: RevealHand/LookAtHand + ChooseOption/InteractiveChoice("<count?> <filter> from it/them") + Discard/Exile(anaphora)
             if i + 2 < ins.len()
-                && let InstructionAst::ChooseOption(opt_desc) = &ins[i + 1]
-                && let Some(core_desc) = opt_desc
-                    .trim()
-                    .strip_suffix(" from it")
-                    .or_else(|| opt_desc.trim().strip_suffix(" from them"))
+                && let Some(core_desc) = interactive::extract_revealed_hand_choice_desc(&ins[i + 1])
             {
                 let action_opt = match &ins[i + 2] {
                     InstructionAst::Discard {

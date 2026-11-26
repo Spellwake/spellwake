@@ -980,6 +980,7 @@ enum Op {
     ReplaceSourceCreatedTokens {},
     CopyEntrantOnceEachTurn {},
     CopyDifferentlyNamedTokens {},
+    Populate {},
     CopyOtherControlledNontokensAsEntryHost {},
     Bolster {
         amount: u16,
@@ -4667,6 +4668,7 @@ impl Body {
                     Op::CopyCreatureAsToken {} => Instruction::CopyCreatureAsToken,
                     Op::CopyOtherControlledNontokensAsEntryHost {} => Instruction::CopyOtherControlledNontokensAsEntryHost,
                     Op::CopyDifferentlyNamedTokens {} => Instruction::CopyDifferentlyNamedTokens,
+                    Op::Populate {} => Instruction::Populate,
                     Op::Bolster {amount} => Instruction::Bolster(amount),
                     Op::CreateArmyIfAbsent { army, subtype } => Instruction::CreateArmyIfAbsent {
                         army: creature_types::id(army, vocabulary)?, subtype: creature_types::id(subtype, vocabulary)?,
@@ -10816,6 +10818,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::CopyCreatureAsToken => json!({"op":"CopyCreatureAsToken"}),
             Instruction::CopyOtherControlledNontokensAsEntryHost => json!({"op":"CopyOtherControlledNontokensAsEntryHost"}),
             Instruction::CopyDifferentlyNamedTokens => json!({"op":"CopyDifferentlyNamedTokens"}),
+            Instruction::Populate => json!({"op":"Populate"}),
             Instruction::Bolster(amount) => json!({"op":"Bolster","amount":amount}),
             Instruction::CreateArmyIfAbsent { army, subtype } => json!({"op":"CreateArmyIfAbsent","army":projection::creature_type_id(*army),"subtype":projection::creature_type_id(*subtype)}),
             Instruction::Amass { army, subtype, amount } => json!({"op":"Amass","army":projection::creature_type_id(*army),"subtype":projection::creature_type_id(*subtype),"amount":amount}),

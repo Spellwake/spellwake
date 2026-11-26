@@ -675,6 +675,7 @@ fn resolve_choices(
                     | ResolutionSelectionKind::AttachChosenAurasAndEquipment
                     | ResolutionSelectionKind::AttachAllEquipment
                     | ResolutionSelectionKind::CopyDifferentlyNamedTokens
+                    | ResolutionSelectionKind::Populate
                     | ResolutionSelectionKind::Bolster
                     | ResolutionSelectionKind::Amass
                     | ResolutionSelectionKind::Untap
@@ -719,6 +720,7 @@ fn resolve_choices(
                     | ResolutionSelectionKind::AttachChosenAurasAndEquipment
                     | ResolutionSelectionKind::AttachAllEquipment
                     | ResolutionSelectionKind::CopyDifferentlyNamedTokens
+                    | ResolutionSelectionKind::Populate
                     | ResolutionSelectionKind::Bolster
                     | ResolutionSelectionKind::Amass
                     | ResolutionSelectionKind::Untap
