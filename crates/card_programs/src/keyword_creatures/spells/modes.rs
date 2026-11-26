@@ -1,7 +1,6 @@
 //! Fixed-count modal spells. Each bullet must compile as its own complete body.
 use super::*;
 use spellwake_engine::{
-    characteristics::PowerToughnessCounters,
     life::LifeAdjustment,
     program::{ProgramKind, ResolvingPlayer, SpellModes},
 };
@@ -126,21 +125,23 @@ fn mode_body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: ordinary_text::amount(count)?.into(),
-                    minus_one: 0.into(),
-                },
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::Literal(
+                        ordinary_text::amount(count)?.into(),
+                    ),
+                ),
+            ],
         ));
     }
     if text == "Target player draws a card and loses 1 life." {
         return Some(ExecutableBody::new(
             BodyTarget::SinglePlayer,
             vec![
-                Instruction::DrawTargetPlayer {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
                 Instruction::AdjustTargetLife {
                     adjustment: LifeAdjustment::Lose(1.into()),
                 },

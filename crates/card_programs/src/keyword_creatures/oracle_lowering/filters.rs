@@ -6375,12 +6375,29 @@ fn find_value_expr_cost_object_ref(expr: &ValueExpr) -> Option<ValueObjectRef> {
 
 fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjectRef> {
     instructions.iter().rev().find_map(|op| match op {
-        Instruction::DrawController { amount }
-        | Instruction::DrawTargetPlayer { amount }
-        | Instruction::DrawEachPlayer { amount }
-        | Instruction::DrawPlayer { amount, .. }
-        | Instruction::DrawControllerAndTarget { amount }
-        | Instruction::GainControllerLife { amount }
+        Instruction::DrawCards(spec) => find_value_expr_cost_object_ref(&spec.amount),
+        Instruction::MutateObject(spec) => match &spec.op {
+            spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. } => {
+                find_value_expr_cost_object_ref(amount)
+            }
+            spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                amount: Some(amount),
+                ..
+            } => find_value_expr_cost_object_ref(amount),
+            _ => None,
+        },
+        Instruction::ApplyContinuous(spec) => match &spec.payload {
+            spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                power, toughness, ..
+            } => find_value_expr_cost_object_ref(power)
+                .or_else(|| find_value_expr_cost_object_ref(toughness)),
+            spellwake_engine::toolbox::ContinuousPayload::SkipTurns { count, .. } => {
+                find_value_expr_cost_object_ref(count)
+            }
+            _ => None,
+        },
+        Instruction::GainControllerLife { amount }
         | Instruction::AdjustPlayersLife { amount, .. }
         | Instruction::DamageAmount(amount)
         | Instruction::DamageAmountThenExileIfDies(amount)
@@ -6391,11 +6408,7 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
         | Instruction::OpponentsLoseAndControllerGains(amount)
         | Instruction::Mill { amount, .. }
         | Instruction::Scry { amount, .. }
-        | Instruction::Surveil { amount, .. }
-        | Instruction::PutNamedCounterOnTarget { amount, .. }
-        | Instruction::PutCountersOnSubject { amount, .. }
-        | Instruction::ModifyGroupByAmount { amount, .. }
-        | Instruction::BoostTargetPower { amount, .. } => find_value_expr_cost_object_ref(amount),
+        | Instruction::Surveil { amount, .. } => find_value_expr_cost_object_ref(amount),
         Instruction::CreateTokens { creations }
         | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()
@@ -6439,16 +6452,14 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
 fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
     context.is_some_and(|(b, _)| {
         b.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::ExileLibraryTop { .. } | Instruction::ExileTopPlay { .. }
-            ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .is_some_and(|spec| {
-                    matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                    ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
-                })
+            matches!(op, Instruction::ExileTopPlay { .. })
+                || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                    })
         })
     })
 }
@@ -7414,12 +7425,18 @@ fn lower_value_expr_inner(
                     (kind, last_ins),
                     (
                         PriorActionRefKind::TappedThisWay,
-                        Instruction::SetGroupTapped { tapped: true, .. }
-                            | Instruction::UntapOrTapSelect { tap: true, .. },
+                        Instruction::UntapOrTapSelect { tap: true, .. },
                     ) | (
                         PriorActionRefKind::SacrificedThisWay,
                         Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_),
                     )
+                ) || matches!(
+                    (kind, last_ins),
+                    (PriorActionRefKind::TappedThisWay, Instruction::MutateObject(spec))
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true)
+                        )
                 ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(last_ins)
                     .is_some_and(|spec| match kind {
                         PriorActionRefKind::DestroyedThisWay => matches!(
@@ -8181,16 +8198,18 @@ fn lower_value_expr_inner(
                         let has_prior_source_counter_op = builder.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::PutNamedCounterOnSource { .. }
-                                    | Instruction::PutChargeCounterOnSource
-                                    | Instruction::PutBlessingCounterOnSource
-                                    | Instruction::PutQuestCounterOnSource
-                                    | Instruction::PutStorageCounterOnSource
-                                    | Instruction::PutCountersOnSource { .. }
-                            ) || matches!(
-                                op,
-                                Instruction::PutCountersOnSubject { subject, .. }
-                                    if matches!(subject.as_ref(), EffectSubject::AbilitySource)
+                                Instruction::MutateObject(spec)
+                                    if matches!(
+                                        spec.op,
+                                        spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
+                                    ) && (matches!(
+                                        spec.source,
+                                        spellwake_engine::toolbox::ObjectQuery::Source
+                                    ) || matches!(
+                                        &spec.source,
+                                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                                            if matches!(s.as_ref(), EffectSubject::AbilitySource)
+                                    ))
                             )
                         });
                         if !has_obj_target

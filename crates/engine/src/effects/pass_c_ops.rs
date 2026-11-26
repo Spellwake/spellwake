@@ -740,10 +740,13 @@ impl EffectWindow {
                         amount: ValueExpr::Literal(amount.clone()),
                     }
                 } else {
-                    Instruction::DrawPlayer {
-                        players: AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
+                    Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec {
+                        players: crate::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::ChosenPlayer,
+                        ),
                         amount: ValueExpr::Literal(amount.clone()),
-                    }
+                        bind_drawn: None,
+                    }))
                 };
                 let discard_role = if subj_ctrl == entry.controller() {
                     ResolvingPlayer::Controller

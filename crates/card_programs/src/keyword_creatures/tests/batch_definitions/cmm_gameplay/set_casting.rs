@@ -325,9 +325,9 @@ fn set_game(
             ObjectDestination::Graveyard,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
             ),
         );
     }
@@ -357,9 +357,9 @@ fn set_game(
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
             ),
         ));
     }
@@ -370,9 +370,9 @@ fn set_game(
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(0.into()),
+                ),
             ),
         ));
     }
@@ -1383,7 +1383,19 @@ fn innistrad_reuses_morbid_fateful_hour_and_flashback_in_play() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ));
         }
         let mut state = game(vec![A, B], cards, &price, Step::PrecombatMain);
@@ -2088,7 +2100,19 @@ fn innistrad_fiend_hunter_has_independent_entry_and_leave_triggers() {
         3,
         A,
         ObjectDestination::Hand,
-        free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+        free_instant(
+            BodyTarget::SingleCreature,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        ),
     );
     let price = [(ManaType::White, 2), (ManaType::Colourless, 1)];
     let state = game(
@@ -2167,12 +2191,10 @@ fn innistrad_tree_exchanges_life_and_sets_only_toughness_in_one_event() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::SingleCreature,
-            Instruction::PutPowerToughnessCounters {
-                counters: spellwake_engine::characteristics::PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 0.into(),
-                },
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                spellwake_engine::effects::CounterKind::PlusOne,
+                spellwake_engine::program::ValueExpr::literal(1),
+            ),
         ),
     );
     let state = game(vec![A, B], vec![tree, counter], &[], Step::PrecombatMain);
@@ -2244,7 +2266,19 @@ fn innistrad_loyal_cathar_enters_on_its_back_face_under_its_last_controllers_con
         2,
         A,
         ObjectDestination::Hand,
-        free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+        free_instant(
+            BodyTarget::SingleCreature,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        ),
     );
     let start = game(vec![A, B], vec![cathar, removal], &[], Step::PrecombatMain);
     let target = TargetRef::Object(physical(&start, 1).id());
@@ -2657,7 +2691,11 @@ fn innistrad_ravager_still_damages_its_creature_target_after_the_planeswalker_le
                 6,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::ReturnToOwnersHand),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
+                    ),
+                ),
             ),
         ],
         &price,
@@ -2729,7 +2767,19 @@ fn innistrad_curse_searches_share_entry_and_keep_the_right_player_and_names() {
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &[],
@@ -3358,7 +3408,19 @@ fn innistrad_morbid_search_offers_the_same_land_for_hand_or_battlefield() {
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &mana,
@@ -3525,9 +3587,9 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
     };
     let mut flashback = free_instant(
         BodyTarget::None,
-        Instruction::DrawController {
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        },
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        ),
     );
     flashback.flashback = Some(ManaCost::free());
     let start = game(
@@ -3546,7 +3608,19 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(6, A, ObjectDestination::Hand, reanimate()),
         ],
@@ -3623,7 +3697,19 @@ fn innistrad_named_counters_fund_the_library_choice_from_the_paid_count() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(
                 4,
@@ -3647,7 +3733,19 @@ fn innistrad_named_counters_fund_the_library_choice_from_the_paid_count() {
                 7,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -3901,7 +3999,21 @@ fn innistrad_counter_sized_tokens_track_the_source_and_retain_its_last_count() {
             ObjectDestination::Battlefield { controller: A },
         )
         .unwrap();
-    let destroy = || free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget);
+    let destroy = || {
+        free_instant(
+            BodyTarget::SinglePermanent,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        )
+    };
     let start = game(
         vec![A, B],
         vec![
@@ -4010,7 +4122,19 @@ fn innistrad_kindred_look_keeps_the_private_cohort_and_uses_the_last_host() {
                 6,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -4575,9 +4699,9 @@ fn innistrad_empty_draw_victory_ends_the_resolving_instruction_immediately() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::DrawEachPlayer {
-                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
                 ),
             ),
         ],
@@ -4789,12 +4913,13 @@ fn innistrad_source_control_duration_expires_permanently_when_control_changes() 
     let vampire = vocabulary.resolve_label("Vampire").unwrap();
     let steal = free_instant(
         BodyTarget::SingleCreature,
-        Instruction::CreateContinuousEffect {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                 ControlRecipient::ResolvingController,
             )]),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        },
+            ResolvedDuration::UntilEndOfTurn,
+        ),
     );
     let price = [
         (ManaType::Colourless, 4),
@@ -5430,9 +5555,11 @@ fn innistrad_a_graveyard_cast_grants_the_exact_cards_abilities_after_the_delayed
         source_cost: spellwake_engine::activated::SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            ],
         ),
     });
     let mana = [(ManaType::Colourless, 4)];
@@ -5736,7 +5863,7 @@ fn innistrad_equipment_unattaches_transforms_and_grows_after_a_player_leaves() {
                 RulesRecord::TriggerDiscovered(waiting) =>
                     waiting.source.object.id() == item
                         && waiting.body.instructions
-                            == [Instruction::PutCountersOnSource { amount: 13.into() }],
+                            == [crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(13))],
                 _ => false,
             })
     );

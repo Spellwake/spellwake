@@ -1,70 +1,8 @@
 //! Goad designations and the attack declarations satisfying the most requirements.
 use super::*;
-use crate::stack_window::StackEntry;
-use crate::{
-    combat::AttackersDecision,
-    occurrence::{EventCause, RulesOccurrence},
-    program::AttackRequirement,
-};
+use crate::{combat::AttackersDecision, program::AttackRequirement};
 
 impl EffectWindow {
-    pub(super) fn goad_creatures(
-        &mut self,
-        entry: &StackEntry,
-        index: usize,
-        targeted: bool,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let controller = entry.controller();
-        let before = self.rules_snapshot(None)?;
-        let objects = if targeted {
-            let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            self.window
-                .cards()
-                .get(object)
-                .filter(|card| card.zone() == ObjectZone::Battlefield)
-                .map(|_| object)
-                .into_iter()
-                .collect::<Vec<_>>()
-        } else {
-            before
-                .view()
-                .evaluated
-                .objects
-                .values()
-                .filter(|p| {
-                    p.zone == ObjectZone::Battlefield
-                        && p.is_creature()
-                        && p.controller != Some(controller)
-                })
-                .map(|p| p.object)
-                .collect()
-        };
-        if objects.is_empty() {
-            return Ok(());
-        }
-        for object in &objects {
-            self.goaded.entry(*object).or_default().insert(controller);
-        }
-        self.emit_from(
-            EventCause::Instruction {
-                entry: entry.id(),
-                instruction: index,
-            },
-            &before,
-            None,
-            append,
-            |_, _, _| {
-                Ok(vec![RulesOccurrence::CreaturesGoaded {
-                    player: controller,
-                    objects,
-                }])
-            },
-        )
-    }
-
     pub(super) fn defender_attack_cost(
         &self,
         target: TargetRef,

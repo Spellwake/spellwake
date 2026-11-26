@@ -1713,8 +1713,8 @@ impl EffectWindow {
                 for op in &payload.body.instructions {
                     let kind = match op {
                         Instruction::SearchLibrary { filter } => filter.source_counter_kind(),
-                        Instruction::DrawEachPlayer { amount }
-                        | Instruction::DamageAmount(amount)
+                        Instruction::DrawCards(spec) => spec.amount.ability_source_counter_kind(),
+                        Instruction::DamageAmount(amount)
                         | Instruction::ExileFromHandOrBattlefield(amount) => {
                             amount.ability_source_counter_kind()
                         }

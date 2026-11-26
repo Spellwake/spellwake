@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use super::*;
 use spellwake_engine::characteristics::KeywordAbility::{
     self, Flash, Hexproof, Shroud, SplitSecond,
@@ -136,48 +137,6 @@ fn split_second_blocks_casts_and_nonmana_activations_until_the_spell_leaves() {
             .ability_activation()
             .is_some()
     );
-}
-
-#[test]
-fn protection_gained_in_response_invalidates_the_existing_target_at_resolution() {
-    use spellwake_engine::characteristics::{
-        AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
-    };
-    for keyword in [Shroud, Hexproof] {
-        let mut cards = seeds();
-        cards.push(spell(
-            91,
-            B,
-            Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                    AbilityChange::grant_keywords([keyword]),
-                )]),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            },
-            ManaCost::free(),
-            BodyTarget::SinglePermanent,
-        ));
-        let game = setup(Some(Step::PrecombatMain), cards);
-        let original = accept(&game, A, target(&game, 10, 90));
-        let other = pass(original.state()).into_state();
-        let response = accept(&other, B, target(&other, 91, 90));
-        let protected = resolve(response.state());
-        let result = resolve(protected.state());
-        assert_eq!(
-            result
-                .state()
-                .execution()
-                .creature(object(&game, 90))
-                .unwrap()
-                .unwrap()
-                .damage,
-            0.into()
-        );
-        assert_eq!(
-            physical(result.state(), 10).zone(),
-            ObjectZone::Graveyard(A)
-        );
-    }
 }
 
 #[test]

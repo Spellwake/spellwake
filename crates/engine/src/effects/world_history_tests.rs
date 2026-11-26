@@ -11,16 +11,33 @@ use serde_json::json;
 
 #[test]
 fn world_history_snapshot_and_privileged_receipts_survive_later_loss_exit_and_draw_overlay() {
-    let operation = |supertypes| Instruction::CreateContinuousEffect {
-        parts: crate::characteristics::ResolvedPartsSpec(vec![ResolvedPartSpec::Type(
-            TypeChangeSpec {
-                land_subtypes: SubtypeOperation::Keep,
-                supertypes,
-                types: TypeOperation::Keep,
-                subtypes: SubtypeOperation::Keep,
+    let operation = |supertypes| {
+        struct _Tmp {
+            parts: crate::characteristics::ResolvedPartsSpec,
+            duration: crate::characteristics::ResolvedDuration,
+        }
+        let _t = _Tmp {
+            parts: crate::characteristics::ResolvedPartsSpec(vec![ResolvedPartSpec::Type(
+                TypeChangeSpec {
+                    land_subtypes: SubtypeOperation::Keep,
+                    supertypes,
+                    types: TypeOperation::Keep,
+                    subtypes: SubtypeOperation::Keep,
+                },
+            )]),
+            duration: ResolvedDuration::NoStatedDuration,
+        };
+        crate::program::Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec {
+                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                duration: _t.duration,
+                condition: None,
+                one_shot: false,
+                as_emblem: None,
+                emblem_label: None,
             },
-        )]),
-        duration: ResolvedDuration::NoStatedDuration,
+        ))
     };
     let mut library = tr::card(4, Program::artifact(None, vec![]), false);
     library.destination = ObjectDestination::LibraryTop;
@@ -40,7 +57,12 @@ fn world_history_snapshot_and_privileged_receipts_survive_later_loss_exit_and_dr
                 BodyTarget::SinglePermanent,
                 vec![
                     operation(TypeOperation::Remove(BTreeSet::from([Supertype::World]))),
-                    Instruction::ReturnToOwnersHand,
+                    crate::program::Instruction::ZoneOp(Box::new(
+                        crate::toolbox::ZoneOpSpec::move_all(
+                            crate::toolbox::ObjectQuery::Targets,
+                            crate::toolbox::ZoneDest::Hand,
+                        ),
+                    )),
                 ],
             ),
             library,

@@ -214,7 +214,12 @@ fn run_probe(
                         probe.cost,
                         ExecutableBody::new(
                             BodyTarget::SingleCreature,
-                            vec![Instruction::ReturnToOwnersHand],
+                            vec![Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Hand,
+                                ),
+                            ))],
                         ),
                     ),
                 },

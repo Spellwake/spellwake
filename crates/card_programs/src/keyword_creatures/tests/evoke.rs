@@ -142,7 +142,7 @@ fn mulldrifter_orders_evoke_and_draw_and_walker_of_the_grove_leaves_its_token() 
         ids.sort_by_key(|instance| {
             matches!(
                 instance.body.instructions.as_slice(),
-                [Instruction::DrawController { .. }]
+                [Instruction::DrawCards(_)]
             ) == draw_first
         });
         let stacked = advance(

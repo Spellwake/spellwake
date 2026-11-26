@@ -113,7 +113,12 @@ fn actual_private_target_replies_reuse_object_and_entry_joins_and_leave_player_l
                 vec![if stack_target {
                     Instruction::CounterSpell
                 } else {
-                    Instruction::ReturnToOwnersHand
+                    crate::program::Instruction::ZoneOp(Box::new(
+                        crate::toolbox::ZoneOpSpec::move_all(
+                            crate::toolbox::ObjectQuery::Targets,
+                            crate::toolbox::ZoneDest::Hand,
+                        ),
+                    ))
                 }],
             ),
         });

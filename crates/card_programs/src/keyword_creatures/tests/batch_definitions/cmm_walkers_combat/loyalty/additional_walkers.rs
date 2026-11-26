@@ -151,7 +151,19 @@ fn cmm_vronos_phases_only_other_own_walkers_bounces_one_per_opponent_and_permane
                 11,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
     );
@@ -667,7 +679,19 @@ fn cmm_chandra_awakened_inferno_resists_countering_grants_separate_emblems_and_e
                 7,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             named("Jace Beleren", 8, A, ObjectDestination::Hand),
             mana_source(9, &[(Colourless, 1), (Blue, 2)]),

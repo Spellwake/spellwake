@@ -138,24 +138,22 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
         ),
         "put two +1/+1 counters on target creature." => (
             BodyTarget::SingleCreature,
-            Instruction::PutPowerToughnessCounters {
-                counters: spellwake_engine::characteristics::PowerToughnessCounters {
-                    plus_one: 2.into(),
-                    minus_one: 0.into(),
-                },
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                spellwake_engine::effects::CounterKind::PlusOne,
+                spellwake_engine::program::ValueExpr::literal(2),
+            ),
         ),
         "draw a card." => (
             BodyTarget::None,
-            Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
         ),
         "draw two cards." => (
             BodyTarget::None,
-            Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ),
         ),
         "target player discards two cards." => (
             BodyTarget::SinglePlayer,

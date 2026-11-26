@@ -21,7 +21,13 @@ fn with_loyalty_for_ultimate(
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::PutLoyaltyCounter; additional],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        spellwake_engine::effects::CounterKind::Loyalty,
+                        spellwake_engine::program::ValueExpr::literal(1)
+                    );
+                    additional
+                ],
             ),
         ),
     ));
@@ -568,7 +574,20 @@ fn cmm_freyalise_and_ob_nixilis_are_commanders_and_pay_the_tax_when_recast() {
                     2,
                     A,
                     ObjectDestination::LibraryBottom,
-                    free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                    free_instant(
+                        BodyTarget::SinglePermanent,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ),
                 ),
             ],
             None,

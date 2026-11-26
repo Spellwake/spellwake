@@ -50,9 +50,11 @@ pub(super) fn compile(
                 source_cost: SourceCost::Tap,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ],
                 ),
             });
             land.activation_restrictions

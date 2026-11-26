@@ -26,14 +26,22 @@ pub(super) fn compile(
             }
         } else if let Some(effect) = line.strip_prefix("Whenever this creature mutates, ") {
             let instruction = match effect {
-                "draw a card." => Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                "draw a card." => {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    )
+                }
                 "put a +1/+1 counter on it." => {
-                    Instruction::PutCountersOnSource { amount: 1.into() }
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        spellwake_engine::effects::CounterKind::PlusOne,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    )
                 }
                 "put two +1/+1 counters on it." => {
-                    Instruction::PutCountersOnSource { amount: 2.into() }
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        spellwake_engine::effects::CounterKind::PlusOne,
+                        spellwake_engine::program::ValueExpr::literal(2),
+                    )
                 }
                 _ => {
                     let life = effect

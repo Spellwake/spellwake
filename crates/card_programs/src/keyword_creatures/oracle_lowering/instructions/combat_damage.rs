@@ -2089,7 +2089,10 @@ pub(super) fn lower_combat_damage_instruction(
             let has_source = in_trigger || self_pronoun_valid || builder.has_source;
             match subject.as_ref() {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                    builder.instructions.push(Instruction::RegenerateSource);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source(
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -2100,7 +2103,10 @@ pub(super) fn lower_combat_damage_instruction(
                         filter, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder.instructions.push(Instruction::RegenerateTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_target(
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject { filter, count }
@@ -2138,11 +2144,13 @@ pub(super) fn lower_combat_damage_instruction(
                     Ok(())
                 }
                 SubjectRefAst::AttachedHost(_) if has_source => {
-                    builder.instructions.push(Instruction::RegenerateSubject {
-                        subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                            ObjectClause::any().attached_to_self(),
-                        ))),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(
+                            EffectSubject::Matching(ObjectFilter::Clause(
+                                ObjectClause::any().attached_to_self(),
+                            )),
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) if f.zone.is_none() => {
@@ -2189,15 +2197,19 @@ pub(super) fn lower_combat_damage_instruction(
                     } else {
                         EffectSubject::Matching(obj)
                     };
-                    builder.instructions.push(Instruction::RegenerateSubject {
-                        subject: Box::new(subj),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(
+                            subj,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
-                    builder.instructions.push(Instruction::RegenerateSubject {
-                        subject: Box::new(EffectSubject::TriggerSubject),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(
+                            EffectSubject::TriggerSubject,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw) => {
@@ -2222,27 +2234,19 @@ pub(super) fn lower_combat_damage_instruction(
                             });
                         Ok(())
                     } else if is_permanent_body_target(builder.target) {
-                        builder.instructions.push(Instruction::RegenerateTarget);
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_target());
                         Ok(())
                     } else if last_instruction_created_tokens(&builder.instructions) {
-                        builder.instructions.push(Instruction::RegenerateSubject {
-                            subject: Box::new(EffectSubject::CreatedTokens),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(EffectSubject::CreatedTokens));
                         Ok(())
                     } else if last_instruction_moved_object(&builder.instructions) {
-                        builder.instructions.push(Instruction::RegenerateSubject {
-                            subject: Box::new(EffectSubject::LastMoved),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(EffectSubject::LastMoved));
                         Ok(())
                     } else if let Some(group) = builder.last_group_filter {
-                        builder.instructions.push(Instruction::RegenerateSubject {
-                            subject: Box::new(EffectSubject::Matching(group)),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(EffectSubject::Matching(group)));
                         Ok(())
                     } else if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) {
-                        builder.instructions.push(Instruction::RegenerateSubject {
-                            subject: Box::new(EffectSubject::TriggerSubject),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_subject(EffectSubject::TriggerSubject));
                         Ok(())
                     } else {
                         Err("oracle:unsupported-regenerate")
@@ -2568,10 +2572,11 @@ pub(super) fn lower_combat_damage_instruction(
                         combat_only: false,
                     },
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(rule),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        rule, dur,
+                    ),
+                );
                 return Ok(());
             }
             let has_source = in_trigger || self_pronoun_valid;
@@ -2609,10 +2614,11 @@ pub(super) fn lower_combat_damage_instruction(
                     combat_only: false,
                 },
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(rule),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    rule, dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::PreventNextSourceDamage {
@@ -2638,18 +2644,20 @@ pub(super) fn lower_combat_damage_instruction(
             {
                 return Err("oracle:unsupported-prevent-damage");
             }
-            trial.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
-                    source,
-                    source_chosen_color,
-                    source_chosen_type,
-                    source_is_target,
-                    half_round_down: false,
-                    recipient,
-                    combat_only: false,
-                }),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::PreventNextTimeDamage {
+                        source,
+                        source_chosen_color,
+                        source_chosen_type,
+                        source_is_target,
+                        half_round_down: false,
+                        recipient,
+                        combat_only: false,
+                    },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             *builder = trial;
             Ok(())
         }
@@ -2838,12 +2846,9 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     _ => return Err("oracle:unsupported-combat-mod"),
                 };
-                let op = Instruction::DoublePowerToughnessSubject {
-                    subject: Box::new(dp_subj),
-                    power: true,
-                    toughness: false,
-                    duration: dur,
-                };
+                let op = crate::keyword_creatures::oracle_lowering::toolbox_emit::double_pt_subject(
+                    dp_subj, true, false, dur,
+                );
                 if let Some(count) = repeat_expr {
                     builder.instructions.push(Instruction::RepeatLoop {
                         count,
@@ -2865,12 +2870,13 @@ pub(super) fn lower_combat_damage_instruction(
                 let lock_parts =
                     parse_temp_permanent_lock_parts("its activated abilities can't be activated")
                         .ok_or("oracle:unsupported-combat-mod")?;
-                builder
-                    .instructions
-                    .push(Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(lock_parts),
-                        duration: dur,
-                    });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(lock_parts),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             let is_turn_face_down = matches!(
@@ -2960,13 +2966,9 @@ pub(super) fn lower_combat_damage_instruction(
                     _ => return Err("oracle:unsupported-combat-mod"),
                 };
                 if is_turn_face_down {
-                    builder.instructions.push(Instruction::TurnFaceDownSubject {
-                        subject: Box::new(face_up_subj),
-                    });
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::turn_face_down_subject(face_up_subj));
                 } else {
-                    builder.instructions.push(Instruction::TurnFaceUpSubject {
-                        subject: Box::new(face_up_subj),
-                    });
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::turn_face_up_subject(face_up_subj));
                 }
                 return Ok(());
             }
@@ -2991,15 +2993,12 @@ pub(super) fn lower_combat_damage_instruction(
                     && let Some((target_colors, target_spells_only)) =
                         parse_cant_be_target_colors(target_clean)
                 {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::CantBeCounteredByColors {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
                             colors: counter_colors,
                             filter: None,
                             controller_only: true,
                             next_only: false,
-                        }),
-                        duration: dur,
-                    });
+                        }, dur));
                     let target_part = if target_spells_only {
                         ResolvedPartSpec::CannotBeTargetedBySpellsOfColors(target_colors)
                     } else {
@@ -3055,15 +3054,12 @@ pub(super) fn lower_combat_damage_instruction(
                             _ => return Err("oracle:unsupported-combat-mod"),
                         }
                     };
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::CantBeCounteredByColors {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
                             colors,
                             filter,
                             controller_only,
                             next_only: false,
-                        }),
-                        duration: eff_dur,
-                    });
+                        }, eff_dur));
                     return Ok(());
                 }
             }
@@ -3114,14 +3110,11 @@ pub(super) fn lower_combat_damage_instruction(
                     return Err("oracle:unsupported-combat-mod");
                 };
                 enum SameGrantShape {
-                    BoostSource,
-                    ModifyGroupUntilEndOfTurn(Box<EffectSubject>),
+                    DynamicBoost(spellwake_engine::toolbox::ObjectQuery, ResolvedDuration),
                     ChangeAbilitySource(ResolvedDuration),
                     ChangeGroup(Box<EffectSubject>, ResolvedDuration),
-                    CreateContinuousEffect(ResolvedDuration),
-                    PutCountersOnSubject(Box<EffectSubject>, ValueExpr),
-                    PutNamedCounterOnTarget(ValueExpr),
-                    PutNamedCounterOnSource(u16),
+                    ResolvedParts(spellwake_engine::toolbox::ObjectQuery, ResolvedDuration),
+                    AddCounters(spellwake_engine::toolbox::ObjectQuery, ValueExpr),
                 }
                 let kw_to_counter = |kw: KeywordAbility| -> Option<CounterKind> {
                     match kw {
@@ -3158,19 +3151,31 @@ pub(super) fn lower_combat_damage_instruction(
                     )
                 };
                 let shape = match prev_grant {
-                    Instruction::BoostSource {
-                        power_toughness: None,
-                        keywords,
-                    } if keywords.len() == 1 && keywords.contains(&prev_kw) => {
-                        SameGrantShape::BoostSource
-                    }
-                    Instruction::ModifyGroupUntilEndOfTurn {
-                        group,
-                        power_toughness: None,
-                        keywords,
-                    } if keywords.len() == 1 && keywords.contains(&prev_kw) => {
-                        SameGrantShape::ModifyGroupUntilEndOfTurn(group)
-                    }
+                    Instruction::ApplyContinuous(spec) => match (spec.selector, spec.payload) {
+                        (
+                            Some(sel),
+                            spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                                power,
+                                toughness,
+                                keywords,
+                                suppress_keywords,
+                            },
+                        ) if power == ValueExpr::literal(0)
+                            && toughness == ValueExpr::literal(0)
+                            && suppress_keywords.is_empty()
+                            && keywords.len() == 1
+                            && keywords.contains(&prev_kw) =>
+                        {
+                            SameGrantShape::DynamicBoost(sel, spec.duration)
+                        }
+                        (
+                            Some(sel),
+                            spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts),
+                        ) if is_single_kw_ab(&parts) => {
+                            SameGrantShape::ResolvedParts(sel, spec.duration)
+                        }
+                        _ => return Err("oracle:unsupported-combat-mod"),
+                    },
                     Instruction::ChangeAbilitySource { parts, duration }
                         if is_single_kw_ab(&parts) =>
                     {
@@ -3181,36 +3186,17 @@ pub(super) fn lower_combat_damage_instruction(
                         parts,
                         duration,
                     } if is_single_kw_ab(&parts) => SameGrantShape::ChangeGroup(group, duration),
-                    Instruction::CreateContinuousEffect { parts, duration }
-                        if is_single_kw_ab(&parts) =>
-                    {
-                        SameGrantShape::CreateContinuousEffect(duration)
-                    }
-                    Instruction::PutCountersOnSubject {
-                        subject,
-                        kind,
-                        amount,
-                    } if prev_kw_counter == Some(kind) => {
-                        SameGrantShape::PutCountersOnSubject(subject, amount)
-                    }
-                    Instruction::PutNamedCounterOnTarget { kind, amount }
-                        if prev_kw_counter == Some(kind) =>
-                    {
-                        SameGrantShape::PutNamedCounterOnTarget(amount)
-                    }
-                    Instruction::PutNamedCounterOnSource { kind, amount }
-                        if prev_kw_counter == Some(kind) =>
-                    {
-                        SameGrantShape::PutNamedCounterOnSource(amount)
-                    }
+                    Instruction::MutateObject(spec) => match spec.op {
+                        spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, amount }
+                            if prev_kw_counter == Some(kind) =>
+                        {
+                            SameGrantShape::AddCounters(spec.source, amount)
+                        }
+                        _ => return Err("oracle:unsupported-combat-mod"),
+                    },
                     _ => return Err("oracle:unsupported-combat-mod"),
                 };
-                let is_counter_shape = matches!(
-                    shape,
-                    SameGrantShape::PutCountersOnSubject(..)
-                        | SameGrantShape::PutNamedCounterOnTarget(..)
-                        | SameGrantShape::PutNamedCounterOnSource(..)
-                );
+                let is_counter_shape = matches!(shape, SameGrantShape::AddCounters(..));
                 if is_counter_shape && parsed_kws.iter().any(|kw| kw_to_counter(*kw).is_none()) {
                     return Err("oracle:unsupported-combat-mod");
                 }
@@ -3232,16 +3218,17 @@ pub(super) fn lower_combat_damage_instruction(
                         destination: next_dest,
                     });
                     let grant_op = match &shape {
-                        SameGrantShape::BoostSource => Instruction::BoostSource {
-                            power_toughness: None,
-                            keywords: BTreeSet::from([kw]),
-                        },
-                        SameGrantShape::ModifyGroupUntilEndOfTurn(group) => {
-                            Instruction::ModifyGroupUntilEndOfTurn {
-                                group: group.clone(),
-                                power_toughness: None,
-                                keywords: BTreeSet::from([kw]),
-                            }
+                        SameGrantShape::DynamicBoost(sel, d) => {
+                            Instruction::ApplyContinuous(Box::new(
+                                spellwake_engine::toolbox::ApplyContinuousSpec::dynamic_boost(
+                                    sel.clone(),
+                                    ValueExpr::literal(0),
+                                    ValueExpr::literal(0),
+                                    BTreeSet::from([kw]),
+                                    BTreeSet::new(),
+                                    *d,
+                                ),
+                            ))
                         }
                         SameGrantShape::ChangeAbilitySource(d) => {
                             let mut ab = AbilityChange::default();
@@ -3260,35 +3247,22 @@ pub(super) fn lower_combat_damage_instruction(
                                 duration: *d,
                             }
                         }
-                        SameGrantShape::CreateContinuousEffect(d) => {
+                        SameGrantShape::ResolvedParts(sel, d) => {
                             let mut ab = AbilityChange::default();
                             ab.granted_keywords.insert(kw);
-                            Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
-                                duration: *d,
-                            }
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                sel.clone(),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
+                                *d,
+                            )
                         }
-                        SameGrantShape::PutCountersOnSubject(subj, amt) => {
+                        SameGrantShape::AddCounters(src, amt) => {
                             let ck = kw_to_counter(kw).ok_or("oracle:unsupported-combat-mod")?;
-                            Instruction::PutCountersOnSubject {
-                                subject: subj.clone(),
-                                kind: ck,
-                                amount: amt.clone(),
-                            }
-                        }
-                        SameGrantShape::PutNamedCounterOnTarget(amt) => {
-                            let ck = kw_to_counter(kw).ok_or("oracle:unsupported-combat-mod")?;
-                            Instruction::PutNamedCounterOnTarget {
-                                kind: ck,
-                                amount: amt.clone(),
-                            }
-                        }
-                        SameGrantShape::PutNamedCounterOnSource(amt) => {
-                            let ck = kw_to_counter(kw).ok_or("oracle:unsupported-combat-mod")?;
-                            Instruction::PutNamedCounterOnSource {
-                                kind: ck,
-                                amount: *amt,
-                            }
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                                src.clone(),
+                                ck,
+                                amt.clone(),
+                            )
                         }
                     };
                     builder.instructions.push(grant_op);
@@ -3329,21 +3303,17 @@ pub(super) fn lower_combat_damage_instruction(
             if low == "no_max_hand_size"
                 && matches!(subject.as_ref(), SubjectRefAst::Player(PlayerRefAst::You))
             {
-                if dur == ResolvedDuration::NoStatedDuration {
-                    builder
-                        .instructions
-                        .push(Instruction::GrantNoMaxHandSizeRestOfGame);
-                } else {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
                             StaticContinuousAbility::DrawRule {
                                 id: ids.static_id(),
                                 rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize,
                             },
-                        ))),
-                        duration: dur,
-                    });
-                }
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if low == "next_spell_cant_be_countered"
@@ -3357,14 +3327,16 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     _ => None,
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::CantBeCountered {
-                        filter: flt,
-                        controller_only: true,
-                        next_only: low == "next_spell_cant_be_countered",
-                    }),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::CantBeCountered {
+                            filter: flt,
+                            controller_only: true,
+                            next_only: low == "next_spell_cant_be_countered",
+                        },
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(
@@ -3388,17 +3360,18 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     _ => return Err("oracle:unsupported-combat-mod"),
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::CantPlayLands { players }),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::CantPlayLands { players },
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if low
                 == "you can't lose life this turn, you can't lose the game this turn, and your opponents can't win the game this turn"
             {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                         StaticContinuousAbility::EventReplacement {
                             id: ids.static_id(),
                             event: spellwake_engine::characteristics::ReplaceableEvent::LifeLoss {
@@ -3408,18 +3381,18 @@ pub(super) fn lower_combat_damage_instruction(
                             action:
                                 spellwake_engine::characteristics::StaticReplacementAction::Skip,
                         },
-                    ))),
-                    duration: dur,
-                });
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                        },
-                    ))),
-                    duration: dur,
-                });
+                    )), dur));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(
@@ -3427,15 +3400,17 @@ pub(super) fn lower_combat_damage_instruction(
                 "you can't lose the game and your opponents can't win the game"
                     | "you can't lose the game this turn and your opponents can't win the game this turn"
             ) {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                        },
-                    ))),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             let low_no_dot = low.trim().trim_end_matches('.').trim();
@@ -3466,34 +3441,38 @@ pub(super) fn lower_combat_damage_instruction(
                 } else {
                     dur
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantLoseGame,
-                        },
-                    ))),
-                    duration: eff_dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantLoseGame,
+                            },
+                        )),
+                        eff_dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(
                 low.as_str(),
                 "players can't lose life" | "players can't lose life this turn"
             ) {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::EventReplacement {
-                            id: ids.static_id(),
-                            event: ReplaceableEvent::LifeLoss {
-                                player: AffectedPlayers::EachPlayer,
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::EventReplacement {
+                                id: ids.static_id(),
+                                event: ReplaceableEvent::LifeLoss {
+                                    player: AffectedPlayers::EachPlayer,
+                                },
+                                condition: None,
+                                action: StaticReplacementAction::Skip,
                             },
-                            condition: None,
-                            action: StaticReplacementAction::Skip,
-                        },
-                    ))),
-                    duration: dur,
-                });
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(
@@ -3503,60 +3482,70 @@ pub(super) fn lower_combat_damage_instruction(
                     | "players can't lose the game or win the game this turn"
                     | "players can't win the game or lose the game this turn"
             ) {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                        },
-                    ))),
-                    duration: dur,
-                });
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                        },
-                    ))),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if low
                 == "players can't lose life this turn and players can't lose the game or win the game this turn"
             {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::EventReplacement {
-                            id: ids.static_id(),
-                            event: ReplaceableEvent::LifeLoss {
-                                player: AffectedPlayers::EachPlayer,
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::EventReplacement {
+                                id: ids.static_id(),
+                                event: ReplaceableEvent::LifeLoss {
+                                    player: AffectedPlayers::EachPlayer,
+                                },
+                                condition: None,
+                                action: StaticReplacementAction::Skip,
                             },
-                            condition: None,
-                            action: StaticReplacementAction::Skip,
-                        },
-                    ))),
-                    duration: dur,
-                });
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                        },
-                    ))),
-                    duration: dur,
-                });
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                        },
-                    ))),
-                    duration: dur,
-                });
+                        )),
+                        dur,
+                    ),
+                );
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(
@@ -3568,15 +3557,17 @@ pub(super) fn lower_combat_damage_instruction(
                 subject.as_ref(),
                 SubjectRefAst::Player(PlayerRefAst::You) | SubjectRefAst::SelfObject
             ) {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Restriction {
-                            id: ids.static_id(),
-                            rule: StaticRestriction::ControllerLifeTotalCantChange,
-                        },
-                    ))),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerLifeTotalCantChange,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(
@@ -3606,15 +3597,12 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                 };
                 if let Some(rel) = rel {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule: StaticRestriction::PlayersCantSearchLibraries(rel),
                             },
-                        ))),
-                        duration: dur,
-                    });
+                        )), dur));
                     return Ok(());
                 }
             }
@@ -3646,13 +3634,10 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         _ => return Err("oracle:unsupported-combat-mod"),
                     };
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantActivateAbilities {
                             players,
                             nonmana_only,
-                        }),
-                        duration: eff_dur,
-                    });
+                        }, eff_dur));
                     return Ok(());
                 }
                 if let Some(lock_parts) = parse_temp_permanent_lock_parts(&rule_body) {
@@ -3700,15 +3685,12 @@ pub(super) fn lower_combat_damage_instruction(
                     } else {
                         StaticRestriction::PreventMatchingActivations(Box::new(sel))
                     };
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule,
                             },
-                        ))),
-                        duration: eff_dur,
-                    });
+                        )), eff_dur));
                     return Ok(());
                 }
                 if let Some((subj_raw, nonmana_only)) = rule_body
@@ -3866,15 +3848,12 @@ pub(super) fn lower_combat_damage_instruction(
                             .instructions
                             .push(Instruction::AdditionalLoyaltyActivation);
                     } else {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::Modifier {
                                     id: ids.static_id(),
                                     rule: StaticModifierRule::TwiceLoyaltyPerTurn,
                                 },
-                            ))),
-                            duration: dur,
-                        });
+                            )), dur));
                     }
                     return Ok(());
                 }
@@ -3939,13 +3918,15 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     _ => return Err("oracle:unsupported-combat-mod"),
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::CantCastSpells {
-                        players,
-                        filter: flt,
-                    }),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::CantCastSpells {
+                            players,
+                            filter: flt,
+                        },
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if low.contains("can't cast ")
@@ -4018,9 +3999,7 @@ pub(super) fn lower_combat_damage_instruction(
                 }
                 match eff_subject {
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::AbilitySource),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::AbilitySource));
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -4139,9 +4118,7 @@ pub(super) fn lower_combat_damage_instruction(
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_created_tokens(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::CreatedTokens),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::CreatedTokens));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
@@ -4163,9 +4140,7 @@ pub(super) fn lower_combat_damage_instruction(
                             )
                         });
                         if has_multi_target {
-                            builder.instructions.push(Instruction::SkipNextUntap {
-                                subject: Box::new(EffectSubject::TargetObject),
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::TargetObject));
                         } else {
                             builder
                                 .instructions
@@ -4180,40 +4155,30 @@ pub(super) fn lower_combat_damage_instruction(
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::LastMoved),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::LastMoved));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
                         if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                     {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::TriggerSubject),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::TriggerSubject));
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::TriggerSubject),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::TriggerSubject));
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::Matching(ObjectFilter::Clause(
                                 ObjectClause::any().attached_to_self(),
-                            ))),
-                        });
+                            ))));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if builder.target == BodyTarget::None
                             && let Some(group_obj) = builder.last_group_filter =>
                     {
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::Matching(group_obj)),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::Matching(group_obj)));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -4225,9 +4190,7 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         bind_filter_player_target(builder, &obj)?;
-                        builder.instructions.push(Instruction::SkipNextUntap {
-                            subject: Box::new(EffectSubject::Matching(obj)),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::Matching(obj)));
                         return Ok(());
                     }
                     _ => {}
@@ -4355,17 +4318,11 @@ pub(super) fn lower_combat_damage_instruction(
             if let Some(action_kind) = combat_action {
                 match eff_subject {
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::AbilitySource),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::AbilitySource, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::TriggerSubject),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::TriggerSubject, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -4373,19 +4330,13 @@ pub(super) fn lower_combat_damage_instruction(
                             && in_trigger
                             && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                     {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::TriggerSubject),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::TriggerSubject, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::Matching(ObjectFilter::Clause(
                                 ObjectClause::any().attached_to_self(),
-                            ))),
-                            kind: action_kind,
-                        });
+                            )), action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -4398,10 +4349,7 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::TargetObject),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::TargetObject, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::TargetOneOf {
@@ -4412,10 +4360,7 @@ pub(super) fn lower_combat_damage_instruction(
                             options, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::TargetObject),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::TargetObject, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::TargetOneOf {
@@ -4517,30 +4462,21 @@ pub(super) fn lower_combat_damage_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::TargetObject),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::TargetObject, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if !is_permanent_body_target(builder.target)
                             && last_instruction_created_tokens(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::CreatedTokens),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::CreatedTokens, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if !is_permanent_body_target(builder.target)
                             && last_instruction_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::LastMoved),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::LastMoved, action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -4550,10 +4486,7 @@ pub(super) fn lower_combat_damage_instruction(
                         let obj = builder
                             .last_group_filter
                             .ok_or("oracle:unsupported-combat-mod")?;
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::Matching(obj)),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::Matching(obj), action_kind));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -4566,10 +4499,7 @@ pub(super) fn lower_combat_damage_instruction(
                         )?;
                         bind_filter_player_target(builder, &obj)?;
                         builder.last_group_filter = Some(obj);
-                        builder.instructions.push(Instruction::RequireCombatAction {
-                            subject: Box::new(EffectSubject::Matching(obj)),
-                            kind: action_kind,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::Matching(obj), action_kind));
                         return Ok(());
                     }
                     _ => {}
@@ -4593,18 +4523,25 @@ pub(super) fn lower_combat_damage_instruction(
                     builder.last_group_filter = Some(ObjectFilter::creature().opposing());
                     builder
                         .instructions
-                        .push(Instruction::GoadOtherPlayersCreatures);
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::goad_other_players_creatures());
                     return Ok(());
                 }
                 let bt = lower_target_subject(subject, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::GoadTarget);
+                builder
+                    .instructions
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::goad_target());
                 return Ok(());
             }
             if low.contains("attacks this turn if able") || low == "must_attack" {
                 let bt = lower_target_subject(subject, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::RequireTargetAttack);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(
+                        EffectSubject::TargetObject,
+                        CombatActionKind::MustAttack,
+                    ),
+                );
                 return Ok(());
             }
             if (low.contains("must block this turn if able")
@@ -4618,9 +4555,12 @@ pub(super) fn lower_combat_damage_instruction(
                         ) && f.any_types == AstCardTypeMask::CREATURE
                 )
             {
-                builder
-                    .instructions
-                    .push(Instruction::RequireOpponentsCreaturesBlockThisTurn);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(
+                        EffectSubject::Matching(ObjectFilter::creature().opposing()),
+                        CombatActionKind::MustBlock,
+                    ),
+                );
                 return Ok(());
             }
             if low.contains("all creatures able to block")
@@ -4628,9 +4568,12 @@ pub(super) fn lower_combat_damage_instruction(
                 && let Ok(bt) = lower_target_subject(subject, vocabulary)
             {
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::RequireBlocksAgainstTargetThisTurn);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(
+                        EffectSubject::TargetObject,
+                        CombatActionKind::MustBeBlocked,
+                    ),
+                );
                 return Ok(());
             }
             let mut rule_for_br = rule
@@ -4830,12 +4773,9 @@ pub(super) fn lower_combat_damage_instruction(
                         builder.bind_target(bt)?;
                         builder
                             .instructions
-                            .push(Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(vec![
                                     ResolvedPartSpec::BlockingRestriction(br),
-                                ]),
-                                duration: br_dur,
-                            });
+                                ]), br_dur));
                         return Ok(());
                     }
                     SubjectRefAst::TargetOneOf {
@@ -4848,12 +4788,9 @@ pub(super) fn lower_combat_damage_instruction(
                         builder.bind_target(bt)?;
                         builder
                             .instructions
-                            .push(Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(vec![
                                     ResolvedPartSpec::BlockingRestriction(br),
-                                ]),
-                                duration: br_dur,
-                            });
+                                ]), br_dur));
                         return Ok(());
                     }
                     SubjectRefAst::TargetOneOf {
@@ -5058,10 +4995,7 @@ pub(super) fn lower_combat_damage_instruction(
                         } else {
                             builder
                                 .instructions
-                                .push(Instruction::CreateContinuousEffect {
-                                    parts,
-                                    duration: br_dur,
-                                });
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, br_dur));
                         }
                         return Ok(());
                     }
@@ -5281,14 +5215,11 @@ pub(super) fn lower_combat_damage_instruction(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         blocker_bt,
-                                        vec![Instruction::CreateContinuousEffect {
-                                            parts: ResolvedPartsSpec(vec![
+                                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(vec![
                                                 ResolvedPartSpec::MustBlockSubject(
                                                     MoveSubjectRef::RememberedFirst,
                                                 ),
-                                            ]),
-                                            duration: br_dur,
-                                        }],
+                                            ]), br_dur)],
                                     ),
                                 )));
                             return Ok(());
@@ -5322,14 +5253,11 @@ pub(super) fn lower_combat_damage_instruction(
                                 builder.instructions.push(Instruction::FixedTargetClause(
                                     Box::new(ExecutableBody::new(
                                         blocker_bt,
-                                        vec![Instruction::CreateContinuousEffect {
-                                            parts: ResolvedPartsSpec(vec![
+                                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(vec![
                                                 ResolvedPartSpec::MustBlockSubject(
                                                     MoveSubjectRef::RememberedFirst,
                                                 ),
-                                            ]),
-                                            duration: br_dur,
-                                        }],
+                                            ]), br_dur)],
                                     )),
                                 ));
                                 return Ok(());
@@ -5421,10 +5349,11 @@ pub(super) fn lower_combat_damage_instruction(
                     },
                 }
             };
-            trial.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(rule),
-                duration: dur,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    rule, dur,
+                ),
+            );
             *builder = trial;
             Ok(())
         }
@@ -6718,18 +6647,20 @@ pub(super) fn try_lower_redirect_next_damage(
             if !check_single_target_slot(source_is_target, from, to, false) {
                 return None;
             }
-            trial.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                    source,
-                    source_is_target,
-                    from,
-                    to,
-                    combat_only,
-                    amount: None,
-                    one_shot: true,
-                }),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::RedirectNextDamage {
+                        source,
+                        source_is_target,
+                        from,
+                        to,
+                        combat_only,
+                        amount: None,
+                        one_shot: true,
+                    },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             *builder = trial;
             return Some(Ok(()));
         }
@@ -6767,18 +6698,20 @@ pub(super) fn try_lower_redirect_next_damage(
             if !check_single_target_slot(true, from, DamageRedirectTarget::TargetObject, true) {
                 return None;
             }
-            trial.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                    source,
-                    source_is_target: true,
-                    from,
-                    to: DamageRedirectTarget::TargetObject,
-                    combat_only,
-                    amount: None,
-                    one_shot: true,
-                }),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::RedirectNextDamage {
+                        source,
+                        source_is_target: true,
+                        from,
+                        to: DamageRedirectTarget::TargetObject,
+                        combat_only,
+                        amount: None,
+                        one_shot: true,
+                    },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             *builder = trial;
             return Some(Ok(()));
         }
@@ -6827,18 +6760,20 @@ pub(super) fn try_lower_redirect_next_damage(
         if !check_single_target_slot(source_is_target, from, to, false) {
             return None;
         }
-        trial.instructions.push(Instruction::CreateTemporaryRule {
-            rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: None,
-                one_shot: true,
-            }),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        });
+        trial.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    source_is_target,
+                    from,
+                    to,
+                    combat_only,
+                    amount: None,
+                    one_shot: true,
+                },
+                ResolvedDuration::UntilEndOfTurn,
+            ),
+        );
         *builder = trial;
         return Some(Ok(()));
     }
@@ -6996,10 +6931,12 @@ pub(super) fn try_lower_redirect_next_damage(
                 one_shot: false,
             }
         };
-        trial.instructions.push(Instruction::CreateTemporaryRule {
-            rule: Box::new(rule),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        });
+        trial.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                rule,
+                ResolvedDuration::UntilEndOfTurn,
+            ),
+        );
         *builder = trial;
         return Some(Ok(()));
     }
@@ -7047,18 +6984,20 @@ pub(super) fn try_lower_redirect_next_damage(
         if !check_single_target_slot(source_is_target, from, to, false) {
             return None;
         }
-        trial.instructions.push(Instruction::CreateTemporaryRule {
-            rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: None,
-                one_shot: false,
-            }),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        });
+        trial.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    source_is_target,
+                    from,
+                    to,
+                    combat_only,
+                    amount: None,
+                    one_shot: false,
+                },
+                ResolvedDuration::UntilEndOfTurn,
+            ),
+        );
         *builder = trial;
         return Some(Ok(()));
     }
@@ -7094,18 +7033,20 @@ pub(super) fn try_lower_redirect_next_damage(
         if !check_single_target_slot(source_is_target, from, to, false) {
             return None;
         }
-        trial.instructions.push(Instruction::CreateTemporaryRule {
-            rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: None,
-                one_shot: false,
-            }),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        });
+        trial.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    source_is_target,
+                    from,
+                    to,
+                    combat_only,
+                    amount: None,
+                    one_shot: false,
+                },
+                ResolvedDuration::UntilEndOfTurn,
+            ),
+        );
         *builder = trial;
         return Some(Ok(()));
     }
@@ -7217,16 +7158,14 @@ pub(super) fn lower_target_one_of_damage_body_target(
 
 fn has_prior_exile_instruction(ops: &[Instruction]) -> bool {
     ops.iter().any(|op| {
-        matches!(
-            op,
-            Instruction::ExileLibraryTop { .. } | Instruction::ExileTopPlay { .. }
-        ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-            .is_some_and(|spec| {
-                matches!(
-                    spec.destination,
-                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                )
-            })
+        matches!(op, Instruction::ExileTopPlay { .. })
+            || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    )
+                })
     })
 }
 
@@ -7840,7 +7779,7 @@ mod wave12_source_prevention_tests {
             );
         }
         // Variant 0 (explicit Controller recipient) and variant 2 (targeted spell source)
-        // now lower to exact qualified `Instruction::PreventDamageSpec`.
+        // now lower to exact qualified `ApplyContinuous` PreventDamage specs.
         for variant in [0usize, 2] {
             let source = if variant == 2 {
                 let mut f = filter.clone();
@@ -7876,9 +7815,13 @@ mod wave12_source_prevention_tests {
             assert!(
                 matches!(
                     builder.instructions.as_slice(),
-                    [Instruction::PreventDamageSpec(_)]
+                    [Instruction::ApplyContinuous(spec)]
+                        if matches!(
+                            spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::PreventDamage(_)
+                        )
                 ),
-                "variant {variant} should lower to PreventDamageSpec"
+                "variant {variant} should lower to ApplyContinuous PreventDamage"
             );
         }
     }

@@ -84,7 +84,19 @@ fn cmm_zones_yedora_returns_stolen_creature_to_its_owner_as_a_forest() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -461,7 +473,19 @@ fn cmm_zones_gorex_casts_with_a_graveyard_card_and_recovers_that_card_on_death()
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(
                 4,
@@ -530,7 +554,19 @@ fn cmm_zones_isareth_binds_paid_x_to_a_reflexive_target_and_replaces_its_departu
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             named(
                 "Forest",
@@ -670,9 +706,9 @@ fn cmm_zones_abundance_replaces_a_draw_with_a_land_and_orders_the_other_cards() 
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                 ),
             ),
             filler(3),
@@ -743,9 +779,9 @@ fn cmm_zones_alms_collector_replaces_an_opponents_multiple_draw_once() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SinglePlayer,
-                    Instruction::DrawTargetPlayer {
-                        amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                        spellwake_engine::program::ValueExpr::Literal(3.into()),
+                    ),
                 ),
             ),
             seed(
@@ -861,7 +897,19 @@ fn cmm_zones_matter_reshaper_can_put_the_same_revealed_card_into_either_zone() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -1593,7 +1641,19 @@ fn cmm_zones_gonti_exiles_privately_and_casts_after_gonti_leaves_with_other_mana
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &[(ManaType::Colourless, 3), (ManaType::Black, 2)],
@@ -2017,7 +2077,20 @@ fn cmm_zones_matter_reshaper_puts_expensive_permanents_and_nonpermanents_in_hand
                     3,
                     A,
                     ObjectDestination::Hand,
-                    free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                    free_instant(
+                        BodyTarget::SingleCreature,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ),
                 ),
             ],
             &price,
@@ -2080,7 +2153,19 @@ fn cmm_zones_hoarding_dragon_links_its_optional_search_only_to_its_own_death() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(
                 4,

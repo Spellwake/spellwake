@@ -330,7 +330,19 @@ pub(super) fn remove_spell(n: u64, owner: SeatId) -> SeedCard {
         n,
         owner,
         ObjectDestination::Hand,
-        free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+        free_instant(
+            BodyTarget::SingleCreature,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        ),
     )
 }
 
@@ -1023,29 +1035,33 @@ fn cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source() {
                 },
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        ),
+                    ],
                 ),
             )
         };
         let strip = free_instant(
             BodyTarget::SinglePermanent,
-            Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                     AbilityRemoval::All,
                 ))]),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            },
+                ResolvedDuration::UntilEndOfTurn,
+            ),
         );
         let take = free_instant(
             BodyTarget::SinglePermanent,
-            Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                     ControlRecipient::ResolvingController,
                 )]),
-                duration: ResolvedDuration::NoStatedDuration,
-            },
+                ResolvedDuration::NoStatedDuration,
+            ),
         );
         let cards = vec![
             hand(name),
@@ -1310,7 +1326,19 @@ fn cmm_darksteel_ingot_survives_destroy_but_can_be_sacrificed_and_adds_each_colo
             2,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
         seed(
             3,
@@ -1445,7 +1473,19 @@ fn cmm_azusa_rechecks_additional_land_plays_after_source_departure_and_next_turn
             10,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
     ];
     cards.extend((2..=6).map(|n| {
@@ -1791,7 +1831,19 @@ fn cmm_tower_and_vessel_prevent_only_their_controllers_cleanup_discard() {
                 2,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ];
         cards.extend((0..hand_size - 1).map(|i| {

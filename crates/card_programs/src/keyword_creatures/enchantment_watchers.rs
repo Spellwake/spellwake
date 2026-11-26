@@ -136,7 +136,12 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::PutBlessingCounterOnSource],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        spellwake_engine::effects::CounterKind::Blessing,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ],
             ),
         });
         army_grants::add_battlefield_ability(
@@ -188,9 +193,11 @@ pub(super) fn compile(
             adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
         });
     }
-    instructions.push(Instruction::DrawController {
-        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-    });
+    instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        ),
+    );
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
         condition: spellwake_engine::program::TriggerSpec::spell_cast(

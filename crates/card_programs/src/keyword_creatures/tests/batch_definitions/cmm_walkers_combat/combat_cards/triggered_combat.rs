@@ -396,9 +396,9 @@ fn cmm_captain_ripley_vance_triggers_on_exactly_its_controllers_third_spell_each
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
             ),
         ));
     }

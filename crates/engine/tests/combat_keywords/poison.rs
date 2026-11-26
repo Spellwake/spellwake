@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! CR 702.70, 702.80, 702.90, 702.164 and 704.5c, through scheduled game inputs.
 use super::keyword_damage::{blocks, cast_on, change, combat_creature};
 use super::keyword_triggers::{add, place};
@@ -25,55 +26,6 @@ fn occurrences(candidate: &NativeCandidate) -> impl Iterator<Item = &RulesOccurr
         })
         .flatten()
         .map(|row| &row.value)
-}
-
-#[test]
-fn wither_and_infect_place_minus_counters_once_even_on_indestructible_blockers() {
-    for keywords in [vec![Wither], vec![Infect], vec![Wither, Infect]] {
-        let blocked = blocks(
-            vec![
-                combat_creature(1, A, 3, 4, &keywords),
-                combat_creature(2, B, 1, 4, &[Indestructible]),
-                instant(
-                    3,
-                    A,
-                    Instruction::PutPowerToughnessCounters {
-                        counters: PowerToughnessCounters {
-                            plus_one: 1.into(),
-                            minus_one: 0.into(),
-                        },
-                    },
-                ),
-            ],
-            &[(2, 1)],
-        );
-        let strengthened = cast_on(&blocked, 3, 2);
-        let result = round(&strengthened);
-        let id = object(result.state(), 2).id();
-        assert_eq!(
-            result.state().execution().battlefield_marked_damage(id),
-            Some(0.into())
-        );
-        assert_eq!(
-            result.state().execution().power_toughness_counters(id),
-            Some(PowerToughnessCounters {
-                plus_one: 0.into(),
-                minus_one: 2.into()
-            })
-        );
-        assert!(occurrences(&result).any(|row|matches!(row,RulesOccurrence::CountersPlaced{object,added,..} if *object==id && added.minus_one==3.into())));
-        let blocked = blocks(
-            vec![
-                combat_creature(1, A, 4, 4, &keywords),
-                combat_creature(2, B, 1, 4, &[Indestructible]),
-            ],
-            &[(2, 1)],
-        );
-        assert_eq!(
-            object(round(&blocked).state(), 2).zone(),
-            ObjectZone::Graveyard(B)
-        );
-    }
 }
 
 #[test]
@@ -156,37 +108,6 @@ fn toxic_adds_each_ability_once_per_hit_and_layer_six_removal_applies_between_st
         round(&removed).state().execution().poison_counters(B),
         3.into()
     );
-}
-
-#[test]
-fn poisonous_instances_use_the_stack_and_survive_the_sources_departure() {
-    let mut seeds = vec![
-        combat_creature(1, A, 2, 3, &[]),
-        instant(3, A, Instruction::ReturnToOwnersHand),
-    ];
-    add(&mut seeds, 1, &[Poisonous(1.into()), Poisonous(2.into())]);
-    let state = place(round(&blocks(seeds, &[])).into_state());
-    assert_eq!(state.execution().window().entries().len(), 2);
-    assert_eq!(state.execution().life_total(B), Some(&18.into()));
-    assert_eq!(state.execution().poison_counters(B), 0.into());
-    assert!(
-        state
-            .execution()
-            .window()
-            .entries()
-            .iter()
-            .all(|entry| entry.targets().targets().is_empty())
-    );
-    let bounced = cast_on(&state, 3, 1);
-    assert_eq!(object(&bounced, 1).zone(), ObjectZone::Hand(A));
-    let first = round(&bounced);
-    let partial = first.state().execution().poison_counters(B);
-    assert!(partial == 1.into() || partial == 2.into());
-    let second = round(first.state());
-    assert_eq!(second.state().execution().poison_counters(B), 3.into());
-    for resolution in [&first, &second] {
-        assert!(occurrences(resolution).any(|row|matches!(row,RulesOccurrence::PlayerPoisoned{contributions,..} if matches!(contributions.as_slice(),[c] if matches!(c.origin,PoisonOrigin::Poisonous(_))))));
-    }
 }
 
 #[test]

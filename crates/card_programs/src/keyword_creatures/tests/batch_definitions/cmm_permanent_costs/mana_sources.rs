@@ -864,7 +864,19 @@ fn cmm_chromatic_lantern_grants_each_controlled_land_all_colors_and_removes_the_
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &[(Colourless, 3)],
@@ -1377,11 +1389,13 @@ fn cmm_arcane_lighthouse_suppresses_opposing_hexproof_and_shroud_through_cleanup
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::ModifyGroupUntilEndOfTurn {
-                        group: Box::new(EffectSubject::Matching(ObjectFilter::creature())),
-                        power_toughness: None,
-                        keywords: [Hexproof, Shroud].into(),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::Matching(ObjectFilter::creature()),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        [Hexproof, Shroud].into(),
+                        std::collections::BTreeSet::new(),
+                    ),
                 ),
             ),
             remove_spell(6, A),
@@ -1906,7 +1920,19 @@ fn cmm_crash_of_rhino_beetles_and_molimo_recalculate_their_size_from_only_their_
                 4,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ];
         cards.extend((21..30).map(|n| {
@@ -1958,7 +1984,19 @@ fn cmm_filigree_attendant_counts_itself_and_other_controlled_artifacts_and_recal
             5,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
     ];
     let price = [(Colourless, 2), (Blue, 2)];
@@ -2004,7 +2042,19 @@ fn cmm_rampaging_brontodon_counts_its_controllers_lands_on_attack_resolution_and
             5,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
     ]);
     let price = [(Colourless, 5), (Green, 2)];
@@ -2142,7 +2192,19 @@ fn cmm_wayward_swordtooth_allows_a_second_land_play_and_can_attack_or_block_only
             6,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
     ]);
     cards.extend((25..31).map(|n| {

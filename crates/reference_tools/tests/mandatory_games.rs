@@ -205,7 +205,7 @@ fn mandatory_llanowar_control_change_is_a_separate_synthetic_mechanism() {
         mana::{ManaAbilityId, ManaAbilityRef, ManaCost, ManaType},
         object_identity::{CardId, ObjectDestination},
         priority::PriorityPhase,
-        program::{BodyTarget, ExecutableBody, Instruction, Program},
+        program::{BodyTarget, ExecutableBody, Program},
         stack_window::{StackWindowError, WindowPhase},
         targets::TargetRef,
         turn::{Step, TurnStart},
@@ -232,11 +232,30 @@ fn mandatory_llanowar_control_change_is_a_separate_synthetic_mechanism() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                        ControlRecipient::ResolvingController,
-                    )]),
-                    duration: ResolvedDuration::NoStatedDuration,
+                vec![{
+                    struct _Tmp {
+                        parts: spellwake_engine::characteristics::ResolvedPartsSpec,
+                        duration: spellwake_engine::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                            ControlRecipient::ResolvingController,
+                        )]),
+                        duration: ResolvedDuration::NoStatedDuration,
+                    };
+                    spellwake_engine::program::Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec {
+                            selector: Some(spellwake_engine::toolbox::ObjectQuery::Targets),
+                            payload: spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(
+                                Box::new(_t.parts),
+                            ),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 }],
             ),
         ),

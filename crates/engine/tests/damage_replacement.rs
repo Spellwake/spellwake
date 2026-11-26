@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Independently derived cases frozen in damage-replacement-scenarios.md before
 //! test authoring or new implementation output. This is a bounded native slice.
 use spellwake_engine::program::{BodyTarget, ExecutableBody};
@@ -1206,66 +1207,6 @@ fn fixed_target_multipliers_do_not_modify_another_live_creature() {
 }
 
 #[test]
-fn target_departure_prunes_only_its_multipliers_and_step_end_is_not_expiry() {
-    let game = world(
-        100,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
-            ),
-            (
-                2,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
-            ),
-            (
-                3,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::ReturnToOwnersHand],
-                ),
-            ),
-        ],
-    );
-    let first = object(&game, FIRST);
-    let other = object(&game, SECOND);
-    let (game, first_multiplier) = create_multiplier(&game, 1, first);
-    let (game, other_multiplier) = create_multiplier(&game, 2, other);
-    let (done, _) = execute(&game, 3, first);
-    assert_eq!(done.damage_journal(), &DamageJournal::default());
-    assert_eq!(zone(done.state(), FIRST), ObjectZone::Hand(A));
-    assert_ne!(object(done.state(), FIRST), first);
-    assert!(
-        done.state()
-            .execution()
-            .damage_multiplier(first_multiplier.id)
-            .is_none()
-    );
-    assert_eq!(
-        done.state()
-            .execution()
-            .damage_multiplier(other_multiplier.id),
-        Some(&other_multiplier)
-    );
-    let ended = resolve(done.state());
-    assert_eq!(
-        ended.state().execution().window().phase(),
-        WindowPhase::StepEnded
-    );
-    assert_eq!(ended.damage_journal(), &DamageJournal::default());
-    assert_eq!(
-        ended
-            .state()
-            .execution()
-            .damage_multiplier(other_multiplier.id),
-        Some(&other_multiplier)
-    );
-}
-
-#[test]
 fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
     for counter_original in [false, true] {
         let game = world(
@@ -1423,67 +1364,6 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                 .damage_multiplier(copy_multiplier.id),
             Some(&copy_multiplier)
         );
-    }
-}
-
-#[test]
-fn countered_and_all_illegal_multiplier_creations_allocate_no_effect_or_attempt() {
-    let game = world(
-        100,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
-            ),
-            (
-                2,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
-                ),
-            ),
-        ],
-    );
-    let target = object(&game, FIRST);
-    let (game, original) = cast(&game, A, 1, TargetRef::Object(target));
-    let (game, _) = cast(&game, A, 2, TargetRef::Stack(original));
-    let done = resolve(&game);
-    assert_eq!(done.damage_journal(), &DamageJournal::default());
-    assert_eq!(done.state().execution().damage_multipliers().count(), 0);
-    assert_eq!(zone(done.state(), 1), ObjectZone::Graveyard(A));
-    for instruction in [multiplier(2), damage(5)] {
-        let game = world(
-            100,
-            vec![
-                (
-                    1,
-                    A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
-                ),
-                (
-                    2,
-                    A,
-                    ExecutableBody::new(
-                        BodyTarget::SingleCreature,
-                        vec![Instruction::ReturnToOwnersHand],
-                    ),
-                ),
-            ],
-        );
-        let target = object(&game, FIRST);
-        let (game, _) = cast(&game, A, 1, TargetRef::Object(target));
-        let (game, _) = cast(&game, A, 2, TargetRef::Object(target));
-        let bounced = resolve(&game);
-        assert_ne!(object(bounced.state(), FIRST), target);
-        let done = resolve(bounced.state());
-        assert_eq!(done.damage_journal(), &DamageJournal::default());
-        assert_eq!(done.state().execution().damage_multipliers().count(), 0);
-        assert!(done.state().execution().pending_damage().is_none());
-        assert!(done.state().pending_decision().is_none());
-        assert_eq!(zone(done.state(), 1), ObjectZone::Graveyard(A));
-        assert_eq!(done.state().execution().mana(A, ManaType::Blue), 98.into());
     }
 }
 

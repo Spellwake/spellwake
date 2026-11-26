@@ -32,15 +32,19 @@ fn galvanizing_sawship_and_wurmwall_sweeper_use_the_contributors_last_battlefiel
         for (n, op) in [
             (
                 3,
-                Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
                         power: 2.into(),
                         toughness: 0.into(),
                     })]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
             ),
-            (4, Instruction::ReturnToOwnersHand),
+            (
+                4,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            ),
         ] {
             cards.push(SeedCard {
                 card: CardId(n),

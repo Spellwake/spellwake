@@ -207,9 +207,9 @@ fn predefined_artifact(
             let (source_cost, instruction) = match kind {
                 ArtifactSubtype::Clue => (
                     SourceCost::Sacrifice,
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                 ),
                 _ => (
                     SourceCost::TapSacrifice,

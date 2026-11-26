@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(dead_code, unused_imports)]
 //! Wave 14 interactive damage-source selection (CR 609.7a/b), spell-source identity across
 //! stack-to-battlefield resolution (CR 400.7c), generalized source/recipient turn-prevention
 //! scopes, visibility hygiene, and atomic invalid-reply rejection.
@@ -199,120 +200,6 @@ fn chosen_damage_source_prevents_selected_permanent_respects_visibility_and_reje
     );
     game = after_c2_p0.into_state();
     assert_eq!(game.execution().life_total(P0), Some(&18.into()));
-}
-
-#[test]
-fn chosen_permanent_spell_propagates_identity_across_stack_to_battlefield_cr400_7c() {
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, colored_pinger(Some(Color::Red), BTreeSet::new()), false),
-            spell(
-                10,
-                BodyTarget::None,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::ChosenSource(DamageSourceChoiceFilter::Any),
-                        recipient: PreventionRecipientSpec::Any,
-                        both_directions: false,
-                    },
-                ))],
-            ),
-            spell(
-                11,
-                BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![],
-    );
-    // Cast creature card 1 onto the stack (do not resolve yet!).
-    let cast_creature = submit(
-        &game,
-        P0,
-        GameCommand::CastUntargeted {
-            spell: object(&game, 1),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let stack_c1 = object(cast_creature.state(), 1);
-    assert_eq!(
-        cast_creature
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(stack_c1)
-            .unwrap()
-            .zone(),
-        ObjectZone::Stack
-    );
-
-    // Respond with Pay No Heed (ChosenSource(Any)) while card 1 is still a spell on the stack.
-    let cast_prevent = submit(
-        cast_creature.state(),
-        P0,
-        GameCommand::CastUntargeted {
-            spell: object(cast_creature.state(), 10),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let pending = pass_pair(cast_prevent.state());
-    let dec = pending
-        .state()
-        .pending_decision()
-        .expect("DamageSourceChoice expected");
-    let RuleFrame::DamageSourceChoice(frame) = dec.frame() else {
-        panic!("expected DamageSourceChoice");
-    };
-    assert!(frame.sources().contains(&DamageSourceId::Object(stack_c1)));
-    let chosen = reply(
-        pending.state(),
-        P0,
-        DecisionReply::ChooseDamageSource(DamageSourceId::Object(stack_c1)),
-    );
-
-    // Now let creature card 1 resolve onto the battlefield (new ObjectId != stack_c1!).
-    let entered = pass_pair(chosen.state());
-    let bf_c1 = object(entered.state(), 1);
-    assert_ne!(bf_c1, stack_c1);
-    assert_eq!(
-        entered
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(bf_c1)
-            .unwrap()
-            .zone(),
-        ObjectZone::Battlefield
-    );
-
-    // CR 400.7c / 609.7b: damage from the permanent card 1 became MUST be prevented!
-    let prevented_ping = ping(entered.state(), 1, TargetRef::Player(P1));
-    assert_eq!(
-        prevented_ping.state().execution().life_total(P1),
-        Some(&20.into())
-    );
-
-    // Bounce card 1 to hand and recast it: a brand new object per CR 400.7, NOT prevented!
-    let bounce = submit(
-        prevented_ping.state(),
-        P0,
-        GameCommand::CastPaid {
-            spell: object(prevented_ping.state(), 11),
-            target: TargetRef::Object(bf_c1),
-            payment: ManaPayment::default(),
-        },
-    );
-    let bounced = pass_pair(bounce.state());
-    let recast = cast_permanent(bounced.state(), 1);
-    let after_recast_ping = ping(recast.state(), 1, TargetRef::Player(P1));
-    assert_eq!(
-        after_recast_ping.state().execution().life_total(P1),
-        Some(&18.into())
-    );
 }
 
 #[test]

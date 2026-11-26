@@ -25,12 +25,25 @@ fn copy_origin_and_lki_composition_are_admitted_explicitly() {
     let v = creature_types::selected_vocabulary().unwrap();
     assert!(source(vec![copy()]).validate(&v).is_ok());
     assert!(
-        source(vec![copy(), Instruction::ReturnToOwnersHand])
-            .validate(&v)
-            .is_ok()
+        source(vec![
+            copy(),
+            crate::program::Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::Targets,
+                crate::toolbox::ZoneDest::Hand
+            )))
+        ])
+        .validate(&v)
+        .is_ok()
     );
     assert_eq!(
-        source(vec![Instruction::ReturnToOwnersHand, copy()]).validate(&v),
+        source(vec![
+            crate::program::Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::Targets,
+                crate::toolbox::ZoneDest::Hand
+            ))),
+            copy()
+        ])
+        .validate(&v),
         Err(DefinitionError::InvalidInstruction)
     );
     let body = ExecutableBody::new(BodyTarget::SinglePermanent, vec![copy()]);

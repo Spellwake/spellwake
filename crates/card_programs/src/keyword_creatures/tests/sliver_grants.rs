@@ -219,7 +219,10 @@ fn cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure() 
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
+                    ),
+                ],
             ),
         );
         let g = world(
@@ -371,7 +374,22 @@ fn cmm_sliver_keyword_grants_change_combat_and_destruction_rules() {
         if keyword == Indestructible {
             let destroy = Program::instant(
                 ManaCost::free(),
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![Instruction::DestroyTarget]),
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ],
+                ),
             );
             let game = world(
                 name,
@@ -656,7 +674,18 @@ fn crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::DestroyTarget],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ],
         ),
     );
     let sacrifice = Program::instant(
@@ -756,15 +785,18 @@ fn sliver_creature_grants_follow_host_type_changes() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
-                        land_subtypes: SubtypeOperation::Keep,
-                        supertypes: TypeOperation::Keep,
-                        types: TypeOperation::Set(types),
-                        subtypes: SubtypeOperation::Keep,
-                    })]),
-                    duration: ResolvedDuration::NoStatedDuration,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
+                            land_subtypes: SubtypeOperation::Keep,
+                            supertypes: TypeOperation::Keep,
+                            types: TypeOperation::Set(types),
+                            subtypes: SubtypeOperation::Keep,
+                        })]),
+                        ResolvedDuration::NoStatedDuration,
+                    ),
+                ],
             ),
         )
     };

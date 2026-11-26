@@ -725,7 +725,12 @@ pub(super) fn parse(
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(BodyTarget::None, vec![Instruction::UntapAbilitySource]),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::untap_ability_source(),
+                ],
+            ),
             restriction,
         ));
     }
@@ -736,7 +741,13 @@ pub(super) fn parse(
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(BodyTarget::None, vec![Instruction::ReturnSourceToHand]),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_to_hand(
+                    ),
+                ],
+            ),
             restriction,
         ));
     }
@@ -758,7 +769,10 @@ pub(super) fn parse(
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(target, vec![Instruction::RegenerateTarget]),
+            ExecutableBody::new(
+                target,
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_target()],
+            ),
             restriction,
         ));
     }
@@ -769,7 +783,10 @@ pub(super) fn parse(
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(BodyTarget::None, vec![Instruction::RegenerateSource]),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+            ),
             restriction,
         ));
     }
@@ -793,12 +810,13 @@ pub(super) fn parse(
                     Instruction::Damage {
                         amount: amount.into(),
                     },
-                    Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
                             BlockingRestriction::CannotBlock,
                         )]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    },
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
                 ],
             ),
             restriction,
@@ -816,7 +834,11 @@ pub(super) fn parse(
         if body.target != BodyTarget::SingleCreature
             || !matches!(
                 body.instructions.as_slice(),
-                [Instruction::CreateContinuousEffect { .. }]
+                [Instruction::ApplyContinuous(spec)]
+                    if matches!(
+                        spec.payload,
+                        spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(_)
+                    )
             )
         {
             return None;
@@ -900,7 +922,18 @@ pub(super) fn parse(
                 BodyTarget::FilteredPermanent(
                     ObjectFilter::creature().with_power(PowerFilter::AtMostX),
                 ),
-                vec![Instruction::DestroyTarget],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ],
             ),
             restriction,
         ));
@@ -911,7 +944,18 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()),
-                vec![Instruction::DestroyTarget],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ],
             ),
             restriction,
         ));
@@ -989,18 +1033,18 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ModifyGroupByAmount {
-                    group: Box::new(EffectSubject::AbilitySource),
-                    scale: PowerToughness {
-                        power: 1.into(),
-                        toughness: 0.into(),
-                    },
-                    amount: spellwake_engine::program::ValueExpr::object_stat(
-                        spellwake_engine::program::ValueObjectRef::SacrificedPermanent,
-                        spellwake_engine::program::ObjectStatKind::ManaValue,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::AbilitySource,
+                        spellwake_engine::program::ValueExpr::object_stat(
+                            spellwake_engine::program::ValueObjectRef::SacrificedPermanent,
+                            spellwake_engine::program::ObjectStatKind::ManaValue,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        Default::default(),
+                        Default::default(),
                     ),
-                    keywords: Default::default(),
-                }],
+                ],
             ),
             restriction,
         ));
@@ -1067,9 +1111,9 @@ pub(super) fn parse(
                 BodyTarget::None,
                 vec![
                     Instruction::AbilitySourceControllerLosesLife(amount.parse().ok()?),
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                 ],
             ),
             Some(ActivationRestriction::AnyPlayer),
@@ -1085,7 +1129,21 @@ pub(super) fn parse(
                 BodyTarget::None,
                 vec![
                     Instruction::ReturnOwnedCommandersToHand,
-                    Instruction::ShuffleOwnGraveyardIntoLibrary,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                )),
+                                spellwake_engine::program::ObjectFilter::any(),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::Library {
+                                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                            },
+                        ),
+                    ),
                 ],
             ),
             restriction,
@@ -1143,8 +1201,8 @@ pub(super) fn parse(
         })
     {
         use spellwake_engine::characteristics::{
-            InstructionSubtypeOperand, PowerToughnessCounters, ResolvedDuration, ResolvedPartSpec,
-            ResolvedPartsSpec, SubtypeOperation, TypeChangeSpec, TypeOperation,
+            InstructionSubtypeOperand, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
+            SubtypeOperation, TypeChangeSpec, TypeOperation,
         };
         let change = TypeChangeSpec {
             land_subtypes: SubtypeOperation::Keep,
@@ -1157,16 +1215,15 @@ pub(super) fn parse(
         let body = ExecutableBody::new(
             BodyTarget::FilteredPermanent(ObjectFilter::creature().legendary()),
             vec![
-                Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(change)]),
-                    duration: ResolvedDuration::NoStatedDuration,
-                },
-                Instruction::PutPowerToughnessCounters {
-                    counters: PowerToughnessCounters {
-                        plus_one: 1.into(),
-                        minus_one: 0.into(),
-                    },
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::Type(change)]),
+                    ResolvedDuration::NoStatedDuration,
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
             ],
         );
         return Some((mana_cost, source_cost, body, restriction));
@@ -1181,7 +1238,12 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::FilteredPermanent(target),
-                vec![Instruction::PutIndestructibleCounter],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        spellwake_engine::effects::CounterKind::Indestructible,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ],
             ),
             restriction,
         ));
@@ -1263,27 +1325,20 @@ pub(super) fn parse(
         && let Some(kind) = vocabulary.resolve_label(kind)
     {
         let synthetic = format!("All creatures get {modifier}");
-        let Instruction::ModifyGroupUntilEndOfTurn {
-            power_toughness,
-            keywords,
-            ..
-        } = super::spells::ordinary_effects::group_modifier(synthetic.strip_suffix('.')?)?
+        let Instruction::ApplyContinuous(mut spec) =
+            super::spells::ordinary_effects::group_modifier(synthetic.strip_suffix('.')?)?
         else {
             return None;
         };
+        spec.selector = Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+            Box::new(EffectSubject::Matching(
+                ObjectFilter::creature().with_subtype(kind),
+            )),
+        ));
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::Matching(
-                        ObjectFilter::creature().with_subtype(kind),
-                    )),
-                    power_toughness,
-                    keywords,
-                }],
-            ),
+            ExecutableBody::new(BodyTarget::None, vec![Instruction::ApplyContinuous(spec)]),
             restriction,
         ));
     }
@@ -1301,9 +1356,9 @@ pub(super) fn parse(
                     Instruction::AdjustControllerLife {
                         adjustment: spellwake_engine::life::LifeAdjustment::Gain(amount.into()),
                     },
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                 ],
             ),
             restriction,
@@ -1368,10 +1423,23 @@ pub(super) fn parse(
         source_cost,
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::BoostSource {
-                power_toughness: stats,
-                keywords,
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::AbilitySource,
+                    stats
+                        .as_ref()
+                        .map(|pt| spellwake_engine::program::ValueExpr::Literal(pt.power.clone()))
+                        .unwrap_or_else(|| spellwake_engine::program::ValueExpr::literal(0)),
+                    stats
+                        .as_ref()
+                        .map(|pt| {
+                            spellwake_engine::program::ValueExpr::Literal(pt.toughness.clone())
+                        })
+                        .unwrap_or_else(|| spellwake_engine::program::ValueExpr::literal(0)),
+                    keywords,
+                    BTreeSet::new(),
+                ),
+            ],
         ),
         restriction,
     ))

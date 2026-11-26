@@ -223,7 +223,19 @@ fn shared_split_spring_mind_combines_types_off_stack_and_casts_the_instant_after
                 6,
                 B,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &[(Colourless, 6), (Green, 1), (Blue, 2)],

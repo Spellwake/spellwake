@@ -1126,7 +1126,29 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                 &value_expr_uses_chosen_x,
             )
         }
-        Instruction::ForEachPlayerQuery { body, .. } => body_uses_chosen_x(body),
+        Instruction::ForEachPlayerQuery { body, .. } | Instruction::ForEach { body, .. } => {
+            body_uses_chosen_x(body)
+        }
+        Instruction::DrawCards(spec) => value_expr_uses_chosen_x(&spec.amount),
+        Instruction::MutateObject(spec) => match &spec.op {
+            spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. } => {
+                value_expr_uses_chosen_x(amount)
+            }
+            spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
+                amount.as_ref().is_some_and(value_expr_uses_chosen_x)
+            }
+            _ => false,
+        },
+        Instruction::ApplyContinuous(spec) => match &spec.payload {
+            spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                power, toughness, ..
+            } => value_expr_uses_chosen_x(power) || value_expr_uses_chosen_x(toughness),
+            spellwake_engine::toolbox::ContinuousPayload::SkipTurns { count, .. } => {
+                value_expr_uses_chosen_x(count)
+            }
+            _ => false,
+        },
         Instruction::DamageAmount(amount)
         | Instruction::DamageAmountThenExileIfDies(amount)
         | Instruction::DamageOpponentsAmount(amount)
@@ -1134,21 +1156,13 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::DrainOpponents(amount)
         | Instruction::DrainTargetAndGain(amount)
         | Instruction::OpponentsLoseAndControllerGains(amount)
-        | Instruction::ExileFromHandOrBattlefield(amount)
         | Instruction::BindResolutionX(amount) => value_expr_uses_chosen_x(amount),
         Instruction::DamageGroupAmount { amount, .. }
         | Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::PutCountersOnSubject { amount, .. }
-        | Instruction::PutNamedCounterOnTarget { amount, .. }
         | Instruction::AddPlayerCounter { amount, .. }
         | Instruction::CreateTokenCopy { count: amount, .. }
         | Instruction::CreateTokenCopyExt { count: amount, .. }
         | Instruction::RollDie { count: amount, .. }
-        | Instruction::DrawController { amount, .. }
-        | Instruction::DrawPlayer { amount, .. }
-        | Instruction::DrawTargetPlayer { amount, .. }
-        | Instruction::DrawEachPlayer { amount, .. }
-        | Instruction::DrawControllerAndTarget { amount, .. }
         | Instruction::GainControllerLife { amount, .. }
         | Instruction::AdjustPlayersLife { amount, .. }
         | Instruction::Mill { amount, .. }
@@ -1159,9 +1173,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
-        | Instruction::RevealTopTwoPiles { count: amount, .. }
-        | Instruction::ModifyGroupByAmount { amount, .. }
-        | Instruction::BoostTargetPower { amount, .. } => value_expr_uses_chosen_x(amount),
+        | Instruction::RevealTopTwoPiles { count: amount, .. } => value_expr_uses_chosen_x(amount),
 
         Instruction::ChooseObjects {
             min,
@@ -1175,8 +1187,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                     .as_ref()
                     .is_some_and(value_expr_uses_chosen_x)
         }
-        Instruction::RemoveCountersFromSubject { amount, .. }
-        | Instruction::MoveCounters { amount, .. } => {
+        Instruction::MoveCounters { amount, .. } => {
             amount.as_ref().is_some_and(value_expr_uses_chosen_x)
         }
         Instruction::CreateTokens { creations }
@@ -1261,12 +1272,13 @@ fn try_append_fixed_first_target_parts(
     let rest = &builder.instructions[1..];
     if !rest.iter().any(is_control_flow) {
         if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
-            first_body
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
+            first_body.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
                     parts,
-                    duration: dur,
-                });
+                    dur,
+                ),
+            );
             return true;
         }
         return false;
@@ -1286,12 +1298,13 @@ fn try_append_fixed_first_target_parts(
                 condition: cond_clone,
                 destination: next_dest,
             });
-            first_body
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
+            first_body.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
                     parts,
-                    duration: dur,
-                });
+                    dur,
+                ),
+            );
             return true;
         }
     }
@@ -1311,21 +1324,30 @@ fn last_instruction_created_tokens(ops: &[Instruction]) -> bool {
         )
     ) || matches!(
         ops.last(),
-        Some(
-            Instruction::ModifyGroupUntilEndOfTurn { group, .. }
-                | Instruction::ChangeGroup { group, .. }
-                | Instruction::ModifyGroupByAmount { group, .. }
-                | Instruction::SuppressGroupKeywords { group, .. }
-        ) if matches!(group.as_ref(), EffectSubject::CreatedTokens)
+        Some(Instruction::ChangeGroup { group, .. })
+            if matches!(group.as_ref(), EffectSubject::CreatedTokens)
     ) || matches!(
         ops.last(),
-        Some(
-            Instruction::PutCountersOnSubject { subject, .. }
-                | Instruction::RemoveCountersFromSubject { subject, .. }
-                | Instruction::SetSubjectTapped { subject, .. }
-                | Instruction::SkipNextUntap { subject }
-                | Instruction::RequireCombatAction { subject, .. }
-        ) if matches!(subject.as_ref(), EffectSubject::CreatedTokens)
+        Some(Instruction::MutateObject(spec))
+            if matches!(
+                spec.source,
+                spellwake_engine::toolbox::ObjectQuery::CreatedTokens
+            ) || matches!(
+                &spec.source,
+                spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+            )
+    ) || matches!(
+        ops.last(),
+        Some(Instruction::ApplyContinuous(spec))
+            if matches!(
+                spec.selector.as_ref(),
+                Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
+            ) || matches!(
+                spec.selector.as_ref(),
+                Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(s))
+                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+            )
     )
 }
 

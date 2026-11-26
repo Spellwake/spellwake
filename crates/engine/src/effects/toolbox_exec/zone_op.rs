@@ -69,24 +69,26 @@ impl EffectWindow {
     fn apply_exile_if_leaves_replacement(&self, moves: &mut [(ObjectId, ObjectDestination)]) {
         for (obj_id, dest) in moves {
             if !matches!(dest, ObjectDestination::Exile)
-                && self
+                && let Some(card) = self
                     .window
                     .cards()
                     .get(*obj_id)
-                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-                && self.temporary_rules.iter().any(|active| {
-                    matches!(
-                        active.rule,
-                        TemporaryRuleKind::ExileIfLeavesBattlefield { .. }
-                    ) && active.resolved_objects.contains(obj_id)
-                })
+                    .filter(|c| c.zone() == ObjectZone::Battlefield)
+                && (card.is_unearthed()
+                    || card.has_corpse_return()
+                    || self.temporary_rules.iter().any(|active| {
+                        matches!(
+                            active.rule,
+                            TemporaryRuleKind::ExileIfLeavesBattlefield { .. }
+                        ) && active.resolved_objects.contains(obj_id)
+                    }))
             {
                 *dest = ObjectDestination::Exile;
             }
         }
     }
 
-    pub(super) fn execute_zone_op(
+    pub(in crate::effects) fn execute_zone_op(
         &mut self,
         ctx: &mut RuleStepContext<'_>,
         entry: &StackEntry,

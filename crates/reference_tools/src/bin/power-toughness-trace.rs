@@ -5,7 +5,7 @@ use spellwake_engine::combat::CombatRules;
 use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    characteristics::{PowerToughness, PowerToughnessCounters, ResolvedPartSpec},
+    characteristics::{PowerToughness, ResolvedPartSpec},
     effects::{EffectError, Instruction, Program, SeedCard},
     game::{GameCommand, GameContext, GameError, GameId, GameInput, GameState},
     mana::{FloatingMana, ManaCost, ManaType},
@@ -334,10 +334,13 @@ fn run_scenario(
 }
 
 fn continuous(operation: ResolvedPartSpec) -> Instruction {
-    Instruction::CreateContinuousEffect {
-        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![operation]),
-        duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-    }
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            spellwake_engine::characteristics::ResolvedPartsSpec(vec![operation]),
+            spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+        ),
+    ))
 }
 
 fn pair(power: i64, toughness: i64) -> PowerToughness {
@@ -387,12 +390,15 @@ fn run(
                 (
                     "counter",
                     "after-counter",
-                    Instruction::PutPowerToughnessCounters {
-                        counters: PowerToughnessCounters {
-                            plus_one: 1.into(),
-                            minus_one: 0.into(),
-                        },
-                    },
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                                kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                amount: spellwake_engine::program::ValueExpr::literal(1),
+                            },
+                        ),
+                    )),
                 ),
                 (
                     "switch",

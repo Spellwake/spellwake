@@ -23,13 +23,15 @@ pub(super) fn compile(
             source_cost: spellwake_engine::activated::SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::BoostSource {
-                    power_toughness: Some(spellwake_engine::characteristics::PowerToughness {
-                        power: 1.into(),
-                        toughness: 0.into(),
-                    }),
-                    keywords: BTreeSet::new(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        spellwake_engine::program::EffectSubject::AbilitySource,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                ],
             ),
         });
         program.triggered.push(TriggeredAbility {

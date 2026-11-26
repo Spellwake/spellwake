@@ -573,7 +573,19 @@ fn cmm_omen_scry_and_solemn_death_draw() {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::DestroyTarget],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ],
                 ),
             ),
         };

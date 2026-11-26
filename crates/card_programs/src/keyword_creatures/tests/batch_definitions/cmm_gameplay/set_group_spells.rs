@@ -46,7 +46,10 @@ fn cmm_group_destruction_and_sacrifice_distinguish_types_color_and_regeneration(
             id: ActivatedAbilityId(0),
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
-            body: ExecutableBody::new(BodyTarget::None, vec![Instruction::RegenerateSource]),
+            body: ExecutableBody::new(
+                BodyTarget::None,
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+            ),
         });
         let setup = game(
             vec![A, B, C],
@@ -204,7 +207,19 @@ fn cmm_star_of_extinction_damages_creatures_and_planeswalkers_only_after_a_legal
                 7,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &[(Colourless, 6), (Red, 2), (Blue, 2)],

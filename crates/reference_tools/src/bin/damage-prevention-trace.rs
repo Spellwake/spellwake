@@ -1011,26 +1011,30 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
             vec![sequence(
                 2,
                 vec![
-                    Instruction::CreateContinuousEffect {
-                        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![
-                            ResolvedPartSpec::SetPT(PowerToughness {
-                                power: 1.into(),
-                                toughness: 0.into(),
-                            }),
-                        ]),
-                        duration:
+                    Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                                ResolvedPartSpec::SetPT(PowerToughness {
+                                    power: 1.into(),
+                                    toughness: 0.into(),
+                                }),
+                            ]),
                             spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-                    },
-                    Instruction::CreateContinuousEffect {
-                        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![
-                            ResolvedPartSpec::ModifyPT(PowerToughness {
-                                power: 0.into(),
-                                toughness: 2.into(),
-                            }),
-                        ]),
-                        duration:
+                        ),
+                    )),
+                    Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                                ResolvedPartSpec::ModifyPT(PowerToughness {
+                                    power: 0.into(),
+                                    toughness: 2.into(),
+                                }),
+                            ]),
                             spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-                    },
+                        ),
+                    )),
                 ],
                 &[],
             )],
@@ -1041,7 +1045,10 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
                 2,
                 vec![
                     Instruction::Damage { amount: 3.into() },
-                    Instruction::ReturnToOwnersHand,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ))),
                 ],
                 &[],
             )],
@@ -1077,7 +1084,10 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
             vec![sequence(
                 2,
                 vec![
-                    Instruction::ReturnToOwnersHand,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ))),
                     Instruction::Damage { amount: 3.into() },
                 ],
                 &[],

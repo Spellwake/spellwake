@@ -163,10 +163,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 rules.push(rule);
                             }
                             for rule in rules {
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(rule),
-                                    duration: dur,
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(rule, dur));
                             }
                             return Ok(());
                         }
@@ -183,14 +180,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     | "cant_be_countered"
                                     | "next_spell_cant_be_countered"
                             ) {
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::CantBeCountered {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                                         filter: flt_opt,
                                         controller_only: true,
                                         next_only: true,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                             if matches!(
@@ -202,14 +196,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     | "can be cast as though they had flash"
                                     | "cast_as_though_flash"
                             ) {
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::FilteredFlash {
                                         player: ResolvingPlayer::Controller,
                                         filter: flt_obj,
                                         next_only: true,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                             if matches!(
@@ -220,12 +211,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     | "can be cast without paying their mana costs"
                                     | "you may cast it without paying its mana cost"
                             ) {
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::NextSpellFree {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::NextSpellFree {
                                         filter: flt_opt,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                         }
@@ -242,14 +230,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     | "cant_be_countered"
                                     | "next_spell_cant_be_countered"
                             ) {
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::CantBeCountered {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                                         filter: flt_opt,
                                         controller_only: true,
                                         next_only: true,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                         }
@@ -266,14 +251,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 && scale_expr.is_none()
                                 && let Some(generic) = parse_generic_cost_reduction_delta(d_clean)
                             {
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::SpellCostReduction {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReduction {
                                         filter: flt_obj,
                                         generic,
                                         next_only: true,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                             if per.is_none()
@@ -293,14 +275,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         vocabulary,
                                     )?;
                                     let amt = scale_value_expr(base, unit);
-                                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                                        rule: Box::new(TemporaryRuleKind::SpellCostReductionExpr {
+                                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReductionExpr {
                                             filter: flt_obj,
                                             amount: Box::new(amt),
                                             next_only: true,
-                                        }),
-                                        duration: dur,
-                                    });
+                                        }, dur));
                                     return Ok(());
                                 }
                             }
@@ -329,14 +308,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 })
                             {
                                 let amt = scale_value_expr(base_val, unit);
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::SpellCostReductionExpr {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReductionExpr {
                                         filter: flt_obj,
                                         amount: Box::new(amt),
                                         next_only: true,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                             if per.is_none()
@@ -365,14 +341,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         Box::new(ValueExpr::Literal(fixed_generic)),
                                     );
                                 }
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::SpellCostReductionExpr {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReductionExpr {
                                         filter: flt_obj,
                                         amount: Box::new(amt),
                                         next_only: true,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                         }
@@ -386,12 +359,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 [CostAtomAst::PayMana(raw)] if raw.trim() == "{0}" || raw.trim() == "0"
                             ) =>
                         {
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::NextSpellFree {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::NextSpellFree {
                                     filter: flt_opt,
-                                }),
-                                duration: dur,
-                            });
+                                }, dur));
                             return Ok(());
                         }
                         _ => {}
@@ -673,14 +643,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::FilteredFlash {
                                 player: ResolvingPlayer::Controller,
                                 filter: obj,
                                 next_only: true,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if paired_rule.is_none()
@@ -739,13 +706,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                             }
                             _ => unreachable!(),
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::PlayerGrantKeyword {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PlayerGrantKeyword {
                                 players,
                                 keywords: ab.granted_keywords,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     let mut seq = vec![InstructionAst::GrantKeywords {
@@ -954,10 +918,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     ..
                 } => {
                     let dur = lower_duration(duration)?;
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::PreventAllCombatDamage),
-                        duration: dur,
-                    });
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PreventAllCombatDamage, dur));
                     return Ok(());
                 }
                 StaticAbilityAst::PlayOrCastPermission {
@@ -979,13 +940,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                     } else {
                         1
                     };
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::AdditionalLandPlay {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::AdditionalLandPlay {
                             player: ResolvingPlayer::Controller,
                             count,
-                        }),
-                        duration: dur,
-                    });
+                        }, dur));
                     return Ok(());
                 }
                 StaticAbilityAst::GrantAbilityText {
@@ -1016,14 +974,19 @@ pub(super) fn lower_restrictions_statics_instruction(
                         matches!(op, Instruction::GrantFlashback(_))
                             || matches!(
                                 op,
-                                Instruction::CreateTemporaryRule { rule, .. }
+                                Instruction::ApplyContinuous(spec)
                                     if matches!(
-                                        rule.as_ref(),
-                                        TemporaryRuleKind::ZoneCastPermission {
-                                            zone: SourceZoneFilter::Graveyard,
-                                            free: false,
-                                            ..
-                                        }
+                                        &spec.payload,
+                                        spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(
+                                            rule,
+                                        ) if matches!(
+                                            rule.as_ref(),
+                                            TemporaryRuleKind::ZoneCastPermission {
+                                                zone: SourceZoneFilter::Graveyard,
+                                                free: false,
+                                                ..
+                                            }
+                                        )
                                     )
                             )
                     });
@@ -1198,14 +1161,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                             mc.generic.to_usize().and_then(|v| u16::try_from(v).ok())
                         && generic > 0
                     {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::SpellCostIncrease {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostIncrease {
                                 players,
                                 filter: obj,
                                 generic,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                 }
@@ -1356,14 +1316,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 mc.generic.to_usize().and_then(|v| u16::try_from(v).ok())
                             && generic > 0
                         {
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::SpellCostReduction {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReduction {
                                     filter: obj,
                                     generic,
                                     next_only,
-                                }),
-                                duration: dur,
-                            });
+                                }, dur));
                             return Ok(());
                         }
                         if let Some(scale) = scale_expr {
@@ -1389,14 +1346,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     vocabulary,
                                 )?;
                                 let amount = scale_value_expr(base_val, unit);
-                                builder.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::SpellCostReductionExpr {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReductionExpr {
                                         filter: obj,
                                         amount: Box::new(amount),
                                         next_only,
-                                    }),
-                                    duration: dur,
-                                });
+                                    }, dur));
                                 return Ok(());
                             }
                         }
@@ -1425,14 +1379,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                             })
                         {
                             let amount = scale_value_expr(base_val, unit);
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::SpellCostReductionExpr {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReductionExpr {
                                     filter: obj,
                                     amount: Box::new(amount),
                                     next_only,
-                                }),
-                                duration: dur,
-                            });
+                                }, dur));
                             return Ok(());
                         }
                         if per.is_none()
@@ -1454,14 +1405,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     Box::new(ValueExpr::Literal(fixed.generic)),
                                 );
                             }
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::SpellCostReductionExpr {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::SpellCostReductionExpr {
                                     filter: obj,
                                     amount: Box::new(amount),
                                     next_only,
-                                }),
-                                duration: dur,
-                            });
+                                }, dur));
                             return Ok(());
                         }
                     }
@@ -1531,15 +1479,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                             } else {
                                 return Err("oracle:unsupported-temp-static");
                             };
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::CantBeCounteredByColors {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
                                     colors,
                                     filter: flt,
                                     controller_only,
                                     next_only: false,
-                                }),
-                                duration: eff_dur,
-                            });
+                                }, eff_dur));
                             return Ok(());
                         }
                     }
@@ -1581,14 +1526,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             (None, true)
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantBeCountered {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                                 filter: flt,
                                 controller_only,
                                 next_only: rule_low.contains("next "),
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if matches!(
@@ -1613,10 +1555,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                             None => AffectedPlayers::EachPlayer,
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantPlayLands { players }),
-                            duration: dur,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantPlayLands { players }, dur));
                         return Ok(());
                     }
                     if let Some((rule_body, eff_dur)) = strip_trailing_temp_duration(&rule_low, dur)
@@ -1657,13 +1596,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 }
                                 _ => return Err("oracle:unsupported-temp-static"),
                             };
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantActivateAbilities {
                                     players,
                                     nonmana_only,
-                                }),
-                                duration: eff_dur,
-                            });
+                                }, eff_dur));
                             return Ok(());
                         }
                         if subject.is_none()
@@ -1704,13 +1640,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 }
                                 p => lower_affected_players_in_context(p, builder, in_trigger)?,
                             };
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantActivateAbilities {
                                     players,
                                     nonmana_only,
-                                }),
-                                duration: eff_dur,
-                            });
+                                }, eff_dur));
                             return Ok(());
                         }
                         if filter.is_none()
@@ -1752,10 +1685,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                             None => AffectedPlayers::EachPlayer,
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::PlayerCantGainLife { players }),
-                            duration: dur,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PlayerCantGainLife { players }, dur));
                         return Ok(());
                     }
                     if matches!(
@@ -1791,17 +1721,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 _ => return Err("oracle:unsupported-temp-static"),
                             }
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::EventReplacement {
                                     id: ids.static_id(),
                                     event: ReplaceableEvent::LifeLoss { player: players },
                                     condition: None,
                                     action: StaticReplacementAction::Skip,
                                 },
-                            ))),
-                            duration: dur,
-                        });
+                            )), dur));
                         return Ok(());
                     }
                     if matches!(
@@ -1809,15 +1736,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                         "you can't lose the game and your opponents can't win the game"
                             | "you can't lose the game this turn and your opponents can't win the game this turn"
                     ) {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::Restriction {
                                     id: ids.static_id(),
                                     rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
                                 },
-                            ))),
-                            duration: dur,
-                        });
+                            )), dur));
                         return Ok(());
                     }
                     let rule_no_dot = rule_low.trim_end_matches('.').trim();
@@ -1852,15 +1776,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             dur
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::Restriction {
                                     id: ids.static_id(),
                                     rule: StaticRestriction::ControllerCantLoseGame,
                                 },
-                            ))),
-                            duration: eff_dur,
-                        });
+                            )), eff_dur));
                         return Ok(());
                     }
                     if matches!(
@@ -1870,24 +1791,18 @@ pub(super) fn lower_restrictions_statics_instruction(
                             | "players can't lose the game or win the game this turn"
                             | "players can't win the game or lose the game this turn"
                     ) {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::Restriction {
                                     id: ids.static_id(),
                                     rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
                                 },
-                            ))),
-                            duration: dur,
-                        });
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                            )), dur));
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::Restriction {
                                     id: ids.static_id(),
                                     rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
                                 },
-                            ))),
-                            duration: dur,
-                        });
+                            )), dur));
                         return Ok(());
                     }
                     if matches!(
@@ -1904,15 +1819,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             StaticDrawRule::PlayersCannotDraw
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::DrawRule {
                                     id: ids.static_id(),
                                     rule: draw_rule,
                                 },
-                            ))),
-                            duration: dur,
-                        });
+                            )), dur));
                         return Ok(());
                     }
                     if let Some((players, max_more)) = try_parse_cast_max_more_spells_this_turn(
@@ -1921,13 +1833,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                         builder,
                         in_trigger,
                     )? {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CastMaxMoreSpellsThisTurn {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CastMaxMoreSpellsThisTurn {
                                 players,
                                 max_more,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if rule_low == "cant_cast_additional_spells" {
@@ -1948,22 +1857,16 @@ pub(super) fn lower_restrictions_statics_instruction(
                             }
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantCastSpells {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantCastSpells {
                                 players,
                                 filter: None,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if rule_low.contains("damage can't be prevented")
                         || rule_low == "damage_cant_be_prevented"
                     {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::DamageCantBePrevented),
-                            duration: dur,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::DamageCantBePrevented, dur));
                         return Ok(());
                     }
                     if matches!(
@@ -1990,20 +1893,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                             None => AffectedPlayers::EachOpponent,
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantCastSpells {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantCastSpells {
                                 players,
                                 filter: None,
-                            }),
-                            duration: dur,
-                        });
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                            }, dur));
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantActivateAbilities {
                                 players,
                                 nonmana_only: false,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if let Some(res) = try_lower_cant_cast_from_zone(
@@ -2121,13 +2018,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                             })
                             .transpose()?
                             .flatten();
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantCastSpells {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantCastSpells {
                                 players,
                                 filter: flt,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if let Some(subj) = subject.as_deref()
@@ -2263,14 +2157,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::FilteredFlash {
                                 player: ResolvingPlayer::Controller,
                                 filter: obj,
                                 next_only: true,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if p_low == "can be cast without paying its mana cost" {
@@ -2282,10 +2173,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             Some(lower_object_filter(&inner, vocabulary)?)
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::NextSpellFree { filter: flt }),
-                            duration: dur,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::NextSpellFree { filter: flt }, dur));
                         return Ok(());
                     }
                     if p_low == "can't be countered" {
@@ -2297,14 +2185,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         } else {
                             Some(lower_object_filter(&inner, vocabulary)?)
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::CantBeCountered {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                                 filter: flt,
                                 controller_only: true,
                                 next_only: true,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     if matches!(
@@ -2314,21 +2199,25 @@ pub(super) fn lower_restrictions_statics_instruction(
                         if matches!(duration, DurationAst::UntilEndOfTurn)
                             && is_unrestricted_filter(filter)
                         {
-                            builder
-                                .instructions
-                                .push(Instruction::GrantControllerFlashUntilCleanup);
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                                    TemporaryRuleKind::FilteredFlash {
+                                        player: ResolvingPlayer::Controller,
+                                        filter: ObjectFilter::any(),
+                                        next_only: false,
+                                    },
+                                    ResolvedDuration::UntilEndOfTurn,
+                                ),
+                            );
                             return Ok(());
                         }
                         let dur = lower_duration(duration)?;
                         let obj = lower_object_filter(filter, vocabulary)?;
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::FilteredFlash {
                                 player: ResolvingPlayer::Controller,
                                 filter: obj,
                                 next_only: false,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                     let zone_opt = if p_low.contains("from your hand or graveyard")
@@ -2370,8 +2259,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         let once = p_low.contains("once")
                             || p_low.contains("a spell")
                             || p_low.contains("one ");
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::ZoneCastPermission {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::ZoneCastPermission {
                                 player: ResolvingPlayer::Controller,
                                 zone,
                                 filter: flt,
@@ -2380,9 +2268,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 any_color,
                                 once,
                                 sorcery_only: false,
-                            }),
-                            duration: dur,
-                        });
+                            }, dur));
                         return Ok(());
                     }
                 }
@@ -2735,8 +2621,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 ) {
                                     if !is_bf {
                                         for op in &mut ops {
-                                            if let Instruction::CreateTemporaryRule { rule, .. } =
-                                                op
+                                            if let Instruction::ApplyContinuous(spec) = op
+                                                && let spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(
+                                                    rule,
+                                                ) = &mut spec.payload
                                                 && let TemporaryRuleKind::TemporaryStatic(inner) =
                                                     rule.as_ref()
                                             {
@@ -2775,12 +2663,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                         }
                         if all_ok {
                             for zr in zone_repls {
-                                emitted.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(
+                                emitted.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryZoneReplacement(
                                         Box::new(zr),
-                                    )),
-                                    duration: dur,
-                                });
+                                    ), dur));
                             }
                             if !emitted.is_empty() {
                                 builder.instructions.extend(emitted);
@@ -2842,24 +2727,30 @@ pub(super) fn lower_restrictions_statics_instruction(
                 {
                     let prior_cast_player =
                         builder.instructions.iter().rev().find_map(|op| match op {
-                            Instruction::GrantCardPlayPermission { player, .. } => Some(*player),
-                            Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
-                                TemporaryRuleKind::ZoneCastPermission { player, .. } => {
-                                    Some(*player)
-                                }
+                            Instruction::ApplyContinuous(spec) => match &spec.payload {
+                                spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                                    player:
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                    ..
+                                } => Some(*rp),
+                                spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(
+                                    rule,
+                                ) => match rule.as_ref() {
+                                    TemporaryRuleKind::ZoneCastPermission { player, .. } => {
+                                        Some(*player)
+                                    }
+                                    _ => None,
+                                },
                                 _ => None,
                             },
                             _ => None,
                         });
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::ExileSpellOnResolve {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::ExileSpellOnResolve {
                             filter: None,
                             players: AffectedPlayers::One(
                                 prior_cast_player.unwrap_or(ResolvingPlayer::Controller),
                             ),
-                        }),
-                        duration: dur,
-                    });
+                        }, dur));
                     return Ok(());
                 }
                 if try_lower_temp_exile_replacement(
@@ -2909,10 +2800,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         _ => None,
                     };
                     if let Some(players) = players_opt {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::PlayerCantGainLife { players }),
-                            duration: dur,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PlayerCantGainLife { players }, dur));
                         return Ok(());
                     }
                 }
@@ -2931,17 +2819,19 @@ pub(super) fn lower_restrictions_statics_instruction(
                 ) {
                     res?;
                     if trial.instructions.len() == before_len + 1
-                        && let Some(Instruction::CreateTemporaryRule {
-                            rule,
-                            duration: rule_dur,
-                        }) = trial.instructions.last_mut()
+                        && let Some(Instruction::ApplyContinuous(spec)) =
+                            trial.instructions.last_mut()
                         && matches!(
-                            rule.as_ref(),
-                            TemporaryRuleKind::RedirectNextDamage { .. }
-                                | TemporaryRuleKind::RedirectNextDamageExpr { .. }
+                            &spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
+                                if matches!(
+                                    rule.as_ref(),
+                                    TemporaryRuleKind::RedirectNextDamage { .. }
+                                        | TemporaryRuleKind::RedirectNextDamageExpr { .. }
+                                )
                         )
                     {
-                        *rule_dur = dur;
+                        spec.duration = dur;
                         *builder = trial;
                         return Ok(());
                     }
@@ -3053,12 +2943,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                     };
                     if abilities_ok {
                         for zr in zone_repls {
-                            emitted.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(
+                            emitted.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryZoneReplacement(
                                     Box::new(zr),
-                                )),
-                                duration: dur,
-                            });
+                                ), dur));
                         }
                         if !emitted.is_empty() {
                             builder.instructions.extend(emitted);
@@ -3148,15 +3035,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                             }
                         );
                     if recipient_ok {
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::DamageRule {
                                     id: ids.static_id(),
                                     rule,
                                 },
-                            ))),
-                            duration: dur,
-                        });
+                            )), dur));
                         return Ok(());
                     }
                 }
@@ -3214,12 +3098,17 @@ pub(super) fn lower_restrictions_statics_instruction(
             )
         } && matches!(
             builder.instructions.last(),
-            Some(Instruction::CreateTemporaryRule { rule, .. })
-                if matches!(rule.as_ref(), TemporaryRuleKind::ZoneCastPermission { .. })
+            Some(Instruction::ApplyContinuous(spec))
+                if matches!(
+                    &spec.payload,
+                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
+                        if matches!(rule.as_ref(), TemporaryRuleKind::ZoneCastPermission { .. })
+                )
         ) =>
         {
-            if let Some(Instruction::CreateTemporaryRule { rule, .. }) =
-                builder.instructions.last_mut()
+            if let Some(Instruction::ApplyContinuous(spec)) = builder.instructions.last_mut()
+                && let spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) =
+                    &mut spec.payload
                 && let TemporaryRuleKind::ZoneCastPermission { sorcery_only, .. } = rule.as_mut()
             {
                 *sorcery_only = true;
@@ -3268,10 +3157,12 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 ResolvedDuration::UntilEndOfTurn
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::PlayerCantGainLife { players }),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::PlayerCantGainLife { players },
+                    dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3309,17 +3200,19 @@ pub(super) fn lower_restrictions_statics_instruction(
                 )?;
                 AffectedPlayers::One(rp)
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::EventReplacement {
-                        id: ids.static_id(),
-                        event: ReplaceableEvent::LifeLoss { player },
-                        condition: None,
-                        action: StaticReplacementAction::Skip,
-                    },
-                ))),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::EventReplacement {
+                            id: ids.static_id(),
+                            event: ReplaceableEvent::LifeLoss { player },
+                            condition: None,
+                            action: StaticReplacementAction::Skip,
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3363,13 +3256,15 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 AffectedPlayers::EachOpponent
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::CantCastSpells {
-                    players,
-                    filter: None,
-                }),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::CantCastSpells {
+                        players,
+                        filter: None,
+                    },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3408,10 +3303,12 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 AffectedPlayers::EachOpponent
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::CantPlayLands { players }),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::CantPlayLands { players },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3478,13 +3375,15 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 return Err("oracle:unsupported-instruction");
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
-                    players,
-                    nonmana_only,
-                }),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::CantActivateAbilities {
+                        players,
+                        nonmana_only,
+                    },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3504,24 +3403,28 @@ pub(super) fn lower_restrictions_statics_instruction(
             )
         } =>
         {
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                    },
-                ))),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                    },
-                ))),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3550,15 +3453,17 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 ResolvedDuration::UntilEndOfTurn
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                    },
-                ))),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        },
+                    )),
+                    dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3587,12 +3492,14 @@ pub(super) fn lower_restrictions_statics_instruction(
             };
             let rp =
                 lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)?;
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::PlayerCantGainLife {
-                    players: AffectedPlayers::One(rp),
-                }),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::PlayerCantGainLife {
+                        players: AffectedPlayers::One(rp),
+                    },
+                    dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3603,15 +3510,17 @@ pub(super) fn lower_restrictions_statics_instruction(
             .trim_end_matches('.')
             .eq_ignore_ascii_case("permanents enter tapped this turn") =>
         {
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::OthersEnterTapped(Box::default()),
-                    },
-                ))),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::OthersEnterTapped(Box::default()),
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3648,10 +3557,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                 .iter()
                 .any(|op| matches!(op, Instruction::TakeExtraTurn))
             {
-                builder.instructions.push(Instruction::SkipNextStep {
-                    player: ResolvingPlayer::Controller,
-                    step: Step::Untap,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
+                        ResolvingPlayer::Controller,
+                        Step::Untap,
+                    ),
+                );
                 Ok(())
             } else {
                 Err("oracle:unsupported-instruction")
@@ -3747,8 +3658,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     }
                     Ok(())
                 }
-                Some(Instruction::PutHandPermanentsOntoBattlefield { tapped, .. })
-                | Some(Instruction::ReturnSourceGraveyardToBattlefield { tapped }) => {
+                Some(Instruction::PutHandPermanentsOntoBattlefield { tapped, .. }) => {
                     *tapped = true;
                     Ok(())
                 }
@@ -3801,24 +3711,34 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 ResolvedDuration::UntilEndOfTurn
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::ControllerCantLoseGame,
-                    },
-                ))),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseGame,
+                        },
+                    )),
+                    dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
         } if restriction.eq_ignore_ascii_case("NoMaxHandSizeRestOfGame") => {
-            builder
-                .instructions
-                .push(Instruction::GrantNoMaxHandSizeRestOfGame);
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::DrawRule {
+                            id: ids.static_id(),
+                            rule: StaticDrawRule::NoMaximumHandSize,
+                        },
+                    )),
+                    ResolvedDuration::NoStatedDuration,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3829,14 +3749,18 @@ pub(super) fn lower_restrictions_statics_instruction(
                 matches!(op, Instruction::GrantFlashback(_))
                     || matches!(
                         op,
-                        Instruction::CreateTemporaryRule { rule, .. }
+                        Instruction::ApplyContinuous(spec)
                             if matches!(
-                                rule.as_ref(),
-                                TemporaryRuleKind::ZoneCastPermission {
-                                    zone: SourceZoneFilter::Graveyard,
-                                    free: false,
-                                    ..
-                                }
+                                &spec.payload,
+                                spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
+                                    if matches!(
+                                        rule.as_ref(),
+                                        TemporaryRuleKind::ZoneCastPermission {
+                                            zone: SourceZoneFilter::Graveyard,
+                                            free: false,
+                                            ..
+                                        }
+                                    )
                             )
                     )
             });
@@ -3859,8 +3783,17 @@ pub(super) fn lower_restrictions_statics_instruction(
                     matches!(
                         op,
                         Instruction::AffectPermanentTargets { .. }
-                            | Instruction::DoubleCountersOnTargets
                             | Instruction::ModifyAnyNumberOfPermanents { .. }
+                    ) || matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.source,
+                                spellwake_engine::toolbox::ObjectQuery::Targets
+                            ) && matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::DoubleCounters { .. }
+                            )
                     )
                 });
                 if !builder.instructions.is_empty() && !has_whole_body_target_op {
@@ -3911,13 +3844,12 @@ pub(super) fn lower_restrictions_statics_instruction(
             if let Some((players, max_more)) =
                 try_parse_cast_max_more_spells_this_turn(&r_low, None, builder, in_trigger)?
             {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::CastMaxMoreSpellsThisTurn {
-                        players,
-                        max_more,
-                    }),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, max_more },
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                );
                 return Ok(());
             }
             Err("oracle:unsupported-instruction")
@@ -4202,8 +4134,13 @@ pub(super) fn lower_restrictions_statics_instruction(
             if let Some(op) = builder.instructions.last_mut() {
                 let parts = match op {
                     Instruction::ChangeAbilitySource { parts, .. }
-                    | Instruction::CreateContinuousEffect { parts, .. }
                     | Instruction::ChangeGroup { parts, .. } => Some(parts),
+                    Instruction::ApplyContinuous(spec) => match &mut spec.payload {
+                        spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                            Some(parts.as_mut())
+                        }
+                        _ => None,
+                    },
                     Instruction::AffectPermanentTargets {
                         action: PermanentTargetAction::Modify { parts, .. },
                         ..
@@ -4313,10 +4250,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         subject: Box::new(es),
                     }
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(rule),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        rule, dur,
+                    ),
+                );
                 return Ok(());
             }
             let Some(compiled_face) = compiled.as_deref() else {
@@ -4360,12 +4298,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     )?;
                     builder.bind_target(bt)?;
                     for part in parts {
-                        builder
-                            .instructions
-                            .push(Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![part]),
-                                duration: dur,
-                            });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4422,12 +4361,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     )?;
                     builder.bind_target(bt)?;
                     for part in parts {
-                        builder
-                            .instructions
-                            .push(Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![part]),
-                                duration: dur,
-                            });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4513,12 +4453,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     if is_permanent_body_target(builder.target) =>
                 {
                     for part in parts {
-                        builder
-                            .instructions
-                            .push(Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![part]),
-                                duration: dur,
-                            });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4641,13 +4582,15 @@ pub(super) fn lower_restrictions_statics_instruction(
         }
         InstructionAst::AdditionalLandPlay { count, duration } if *count > 0 => {
             let dur = lower_duration(duration)?;
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::AdditionalLandPlay {
-                    player: ResolvingPlayer::Controller,
-                    count: *count,
-                }),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::AdditionalLandPlay {
+                        player: ResolvingPlayer::Controller,
+                        count: *count,
+                    },
+                    dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::OneShotReplacement {
@@ -4783,14 +4726,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                             flags: dmg_flag,
                             ..ObjectClause::any()
                         };
-                        builder.instructions.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::ExileIfDies {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::ExileIfDies {
                                 subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
                                     clause,
                                 ))),
-                            }),
-                            duration: ResolvedDuration::UntilEndOfTurn,
-                        });
+                            }, ResolvedDuration::UntilEndOfTurn));
                         return Ok(());
                     }
                 }
@@ -4850,8 +4790,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         | StaticDamageRecipient::TargetAny
                                 ))
                         {
-                            trial.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
+                            trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PreventNextTimeDamage {
                                     source,
                                     source_chosen_color,
                                     source_chosen_type,
@@ -4859,9 +4798,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     half_round_down,
                                     recipient,
                                     combat_only,
-                                }),
-                                duration: ResolvedDuration::UntilEndOfTurn,
-                            });
+                                }, ResolvedDuration::UntilEndOfTurn));
                             *builder = trial;
                             return Ok(());
                         }
@@ -4909,8 +4846,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 && !source_chosen_type
                                 && !source_is_target
                             {
-                                trial.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                                trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                         StaticContinuousAbility::DamageRule {
                                             id: ids.static_id(),
                                             rule: StaticDamageRule::ModifyDamage {
@@ -4928,12 +4864,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                                 },
                                             },
                                         },
-                                    ))),
-                                    duration: ResolvedDuration::UntilEndOfTurn,
-                                });
+                                    )), ResolvedDuration::UntilEndOfTurn));
                             } else if !is_deflecting_palm_rep {
-                                trial.instructions.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::PreventNextTimeDamage {
+                                trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PreventNextTimeDamage {
                                         source,
                                         source_chosen_color,
                                         source_chosen_type,
@@ -4941,9 +4874,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         half_round_down,
                                         recipient,
                                         combat_only,
-                                    }),
-                                    duration: ResolvedDuration::UntilEndOfTurn,
-                                });
+                                    }, ResolvedDuration::UntilEndOfTurn));
                             } else {
                                 return Err("oracle:unsupported-oneshot-replacement");
                             }
@@ -5021,22 +4952,21 @@ pub(super) fn lower_restrictions_statics_instruction(
                             _ => false,
                         };
                         if one_shot_ready && ab.validate(vocabulary).is_ok() {
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::OneShotEventReplacement(
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::OneShotEventReplacement(
                                     Box::new(ab),
-                                )),
-                                duration: ResolvedDuration::UntilEndOfTurn,
-                            });
+                                ), ResolvedDuration::UntilEndOfTurn));
                             return Ok(());
                         }
                     }
                 }
             }
             if ev_low.contains("combat damage") && rep_low.contains("prevent") {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::PreventAllCombatDamage),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::PreventAllCombatDamage,
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                );
                 return Ok(());
             }
             if is_exile
@@ -5074,12 +5004,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                     None
                 };
                 if let Some(eff_subj) = eff_subj {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::ExileIfLeavesBattlefield {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::ExileIfLeavesBattlefield {
                             subject: Box::new(eff_subj),
-                        }),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    });
+                        }, ResolvedDuration::UntilEndOfTurn));
                     return Ok(());
                 }
             }
@@ -5091,9 +5018,19 @@ pub(super) fn lower_restrictions_statics_instruction(
                             || subj_low.contains("cast this way"))))
             {
                 let prior_cast_player = builder.instructions.iter().rev().find_map(|op| match op {
-                    Instruction::GrantCardPlayPermission { player, .. } => Some(*player),
-                    Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
-                        TemporaryRuleKind::ZoneCastPermission { player, .. } => Some(*player),
+                    Instruction::ApplyContinuous(spec) => match &spec.payload {
+                        spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                            player: spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                            ..
+                        } => Some(*rp),
+                        spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) => {
+                            match rule.as_ref() {
+                                TemporaryRuleKind::ZoneCastPermission { player, .. } => {
+                                    Some(*player)
+                                }
+                                _ => None,
+                            }
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -5121,10 +5058,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                 } else {
                     None
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::ExileSpellOnResolve { filter, players }),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::ExileSpellOnResolve { filter, players },
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                );
                 return Ok(());
             }
             if rep_low.starts_with("prevent the next ") || ev_low.starts_with("the next ") {
@@ -5166,29 +5105,23 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 )?,
                                 None => ValueExpr::chosen_x(),
                             };
-                            trial.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::PreventNextDamageExpr {
+                            trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PreventNextDamageExpr {
                                     amount: Box::new(x_expr),
                                     source: None,
                                     recipient,
                                     combat_only,
-                                }),
-                                duration: ResolvedDuration::UntilEndOfTurn,
-                            });
+                                }, ResolvedDuration::UntilEndOfTurn));
                             *builder = trial;
                             return Ok(());
                         } else if let Some(n) = parse_small_number_word(amt_tok)
                             && n > 0
                         {
-                            trial.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::PreventNextDamage {
+                            trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PreventNextDamage {
                                     amount: i64::from(n).into(),
                                     source: None,
                                     recipient,
                                     combat_only,
-                                }),
-                                duration: ResolvedDuration::UntilEndOfTurn,
-                            });
+                                }, ResolvedDuration::UntilEndOfTurn));
                             *builder = trial;
                             return Ok(());
                         }
@@ -5224,20 +5157,22 @@ pub(super) fn lower_restrictions_statics_instruction(
                 } else {
                     ZoneReplacementSubject::AnyObject
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(Box::new(
-                        ZoneReplacementAbility {
-                            id: ZoneReplacementAbilityId(ids.static_id().0),
-                            actions: ZoneActionPredicate::Any,
-                            objects,
-                            subject: zr_subject,
-                            destination: PublicZoneDestination::Graveyard,
-                            replace_with: PublicZoneDestination::Exile,
-                            choice: ZoneReplacementChoice::Mandatory,
-                        },
-                    ))),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryZoneReplacement(Box::new(
+                            ZoneReplacementAbility {
+                                id: ZoneReplacementAbilityId(ids.static_id().0),
+                                actions: ZoneActionPredicate::Any,
+                                objects,
+                                subject: zr_subject,
+                                destination: PublicZoneDestination::Graveyard,
+                                replace_with: PublicZoneDestination::Exile,
+                                choice: ZoneReplacementChoice::Mandatory,
+                            },
+                        )),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                );
                 return Ok(());
             }
             if (ev_low.contains("die") || ev_low.contains("graveyard")) && is_exile {
@@ -5297,12 +5232,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                     None
                 };
                 if let Some(eff_subj) = eff_subj {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::ExileIfDies {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::ExileIfDies {
                             subject: Box::new(eff_subj),
-                        }),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    });
+                        }, ResolvedDuration::UntilEndOfTurn));
                     return Ok(());
                 }
             }
@@ -5373,15 +5305,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                         }
                     );
                 if recipient_ok {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                             StaticContinuousAbility::DamageRule {
                                 id: ids.static_id(),
                                 rule,
                             },
-                        ))),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    });
+                        )), ResolvedDuration::UntilEndOfTurn));
                     return Ok(());
                 }
             }
@@ -5477,12 +5406,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                         };
                         if abilities_ok {
                             for zr in zone_repls {
-                                emitted.push(Instruction::CreateTemporaryRule {
-                                    rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(
+                                emitted.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryZoneReplacement(
                                         Box::new(zr),
-                                    )),
-                                    duration: ResolvedDuration::UntilEndOfTurn,
-                                });
+                                    ), ResolvedDuration::UntilEndOfTurn));
                             }
                             if !emitted.is_empty() {
                                 builder.instructions.extend(emitted);
@@ -5557,15 +5483,17 @@ pub(super) fn lower_restrictions_statics_instruction(
         } => {
             let dur = lower_duration(duration)?;
             let sel = lower_subject_to_permanent_selector(subject, vocabulary)?;
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::Restriction {
-                        id: ids.static_id(),
-                        rule: StaticRestriction::OthersEnterTapped(Box::new(sel)),
-                    },
-                ))),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::OthersEnterTapped(Box::new(sel)),
+                        },
+                    )),
+                    dur,
+                ),
+            );
             Ok(())
         }
         InstructionAst::ForAsLongAs { condition, body } => {
@@ -6059,19 +5987,20 @@ pub(super) fn lower_restrictions_statics_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::SkipNextTurns {
-                        player: ResolvingPlayer::LoopPlayer,
-                        count: 1,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_turns(
+                            ResolvingPlayer::LoopPlayer,
+                            1,
+                        ),
+                    ],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::SkipNextTurns {
-                player: rp,
-                count: 1,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_turns(rp, 1),
+            );
             Ok(())
         }
         InstructionAst::SkipNextStep { player, step } => {
@@ -6092,19 +6021,23 @@ pub(super) fn lower_restrictions_statics_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::SkipNextStep {
-                        player: ResolvingPlayer::LoopPlayer,
-                        step: engine_step,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
+                            ResolvingPlayer::LoopPlayer,
+                            engine_step,
+                        ),
+                    ],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::SkipNextStep {
-                player: rp,
-                step: engine_step,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
+                    rp,
+                    engine_step,
+                ),
+            );
             Ok(())
         }
         InstructionAst::SkipNextTurns { player, count } => {
@@ -6114,19 +6047,22 @@ pub(super) fn lower_restrictions_statics_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::SkipNextTurns {
-                        player: ResolvingPlayer::LoopPlayer,
-                        count: *count,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_turns(
+                            ResolvingPlayer::LoopPlayer,
+                            *count,
+                        ),
+                    ],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::SkipNextTurns {
-                player: rp,
-                count: *count,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_turns(
+                    rp, *count,
+                ),
+            );
             Ok(())
         }
         InstructionAst::ScopedDurationText {
@@ -6253,15 +6189,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                     _ => false,
                 };
                 if ctrl_ok {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule: StaticRestriction::CannotBeSacrificed(Box::new(sel)),
                             },
-                        ))),
-                        duration: dur,
-                    });
+                        )), dur));
                     return Ok(());
                 }
                 return Err("oracle:unsupported-temp-player-restriction");
@@ -6284,22 +6217,143 @@ pub(super) fn lower_restrictions_statics_instruction(
                     _ => None,
                 };
                 if let Some(permission) = perm_opt {
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                             StaticContinuousAbility::CastPermission {
                                 id: ids.static_id(),
                                 permission,
                             },
-                        ))),
-                        duration: dur,
-                    });
+                        )), dur));
                     return Ok(());
                 }
                 return Err("oracle:unsupported-temp-player-restriction");
             }
+            if matches!(
+                rule_low.as_str(),
+                "cant_draw_cards" | "can't draw cards" | "cant_draw"
+            ) {
+                let draw_rule = match *player {
+                    PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer => {
+                        Some(StaticDrawRule::PlayersCannotDraw)
+                    }
+                    PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent => {
+                        Some(StaticDrawRule::OpponentsCannotDraw)
+                    }
+                    _ => None,
+                };
+                if let Some(rule) = draw_rule {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::TemporaryStatic(Box::new(
+                                StaticContinuousAbility::DrawRule {
+                                    id: ids.static_id(),
+                                    rule,
+                                },
+                            )),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if matches!(
+                rule_low.as_str(),
+                "no_max_hand_size" | "no_maximum_hand_size"
+            ) {
+                let draw_rule = match *player {
+                    PlayerRefAst::You => Some(StaticDrawRule::NoMaximumHandSize),
+                    PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer => {
+                        Some(StaticDrawRule::AllPlayersNoMaximumHandSize)
+                    }
+                    _ => None,
+                };
+                if let Some(rule) = draw_rule {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::TemporaryStatic(Box::new(
+                                StaticContinuousAbility::DrawRule {
+                                    id: ids.static_id(),
+                                    rule,
+                                },
+                            )),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if matches!(rule_low.as_str(), "cant_lose_the_game" | "cant_lose_game")
+                && matches!(*player, PlayerRefAst::You)
+            {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerCantLoseGame,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                rule_low.as_str(),
+                "life_total_cant_change" | "life total can't change"
+            ) && matches!(*player, PlayerRefAst::You)
+            {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerLifeTotalCantChange,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                rule_low.as_str(),
+                "cant_search_libraries" | "can't search libraries"
+            ) {
+                let rel = match *player {
+                    PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer => {
+                        Some(PlayerRelation::AnyParticipant)
+                    }
+                    PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent => {
+                        Some(PlayerRelation::Opponent)
+                    }
+                    _ => None,
+                };
+                if let Some(relation) = rel {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::TemporaryStatic(Box::new(
+                                StaticContinuousAbility::Restriction {
+                                    id: ids.static_id(),
+                                    rule: StaticRestriction::PlayersCantSearchLibraries(relation),
+                                },
+                            )),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
             let kind = match rule_low.as_str() {
                 "cant_gain_life" => TemporaryRuleKind::PlayerCantGainLife { players },
+                "cant_lose_life" | "can't lose life" => TemporaryRuleKind::TemporaryStatic(
+                    Box::new(StaticContinuousAbility::EventReplacement {
+                        id: ids.static_id(),
+                        event: ReplaceableEvent::LifeLoss { player: players },
+                        condition: None,
+                        action: StaticReplacementAction::Skip,
+                    }),
+                ),
                 "cant_play_lands" => TemporaryRuleKind::CantPlayLands { players },
                 "cant_cast_spells" => TemporaryRuleKind::CantCastSpells {
                     players,
@@ -6315,10 +6369,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                 },
                 _ => return Err("oracle:unsupported-temp-player-restriction"),
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(kind),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    kind, dur,
+                ),
+            );
             Ok(())
         }
         _ => Err("oracle:unsupported-instruction"),
@@ -6444,12 +6499,16 @@ fn try_lower_temp_exile_replacement(
                     flags: dmg_flag,
                     ..ObjectClause::any()
                 };
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::ExileIfDies {
-                        subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
-                    }),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::ExileIfDies {
+                            subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+                                clause,
+                            ))),
+                        },
+                        dur,
+                    ),
+                );
                 return true;
             }
         }
@@ -6530,10 +6589,11 @@ fn try_lower_temp_exile_replacement(
                     subject: Box::new(eff_subj),
                 }
             };
-            builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(rule),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    rule, dur,
+                ),
+            );
             return true;
         }
     }
@@ -6667,10 +6727,7 @@ pub(super) fn lower_temp_static_abilities_to_ops(
                     lowered_ops.push(op);
                 } else {
                     if selector_allowed(selector) {
-                        lowered_ops.push(Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(ab))),
-                            duration: dur,
-                        });
+                        lowered_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(ab)), dur));
                     } else {
                         return None;
                     }
@@ -6697,8 +6754,7 @@ pub(super) fn lower_temp_static_abilities_to_ops(
                     && (*to != DamageRedirectTarget::TargetObject
                         || is_permanent_body_target(builder.target));
                 if ok {
-                    lowered_ops.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::RedirectNextDamage {
+                    lowered_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::RedirectNextDamage {
                             source: *source,
                             source_is_target: false,
                             from: *from,
@@ -6706,9 +6762,7 @@ pub(super) fn lower_temp_static_abilities_to_ops(
                             combat_only: *combat_only,
                             amount: None,
                             one_shot: false,
-                        }),
-                        duration: dur,
-                    });
+                        }, dur));
                 } else {
                     return None;
                 }
@@ -6810,10 +6864,7 @@ pub(super) fn lower_temp_static_abilities_to_ops(
                     | StaticContinuousAbility::CommandZoneActive { .. } => false,
                 };
                 if ok {
-                    lowered_ops.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(ab))),
-                        duration: dur,
-                    });
+                    lowered_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(ab)), dur));
                 } else {
                     return None;
                 }
@@ -6842,25 +6893,25 @@ fn event_replacement_uses_source(ability: &StaticContinuousAbility) -> bool {
     body.instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::PutCountersOnSource { .. }
-                | Instruction::PutChargeCounterOnSource
-                | Instruction::PutBlessingCounterOnSource
-                | Instruction::PutQuestCounterOnSource
-                | Instruction::PutStorageCounterOnSource
-                | Instruction::PutNamedCounterOnSource { .. }
-                | Instruction::RemoveCountersFromPermanent {
-                    target_self: true,
-                    ..
-                }
+            Instruction::RemoveCountersFromPermanent {
+                target_self: true,
+                ..
+            }
         ) || matches!(
             op,
             Instruction::ZoneOp(spec)
                 if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
         ) || matches!(
             op,
-            Instruction::PutCountersOnSubject { subject, .. }
-                | Instruction::RemoveCountersFromSubject { subject, .. }
-                if matches!(subject.as_ref(), EffectSubject::AbilitySource)
+            Instruction::MutateObject(spec)
+                if matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::Source
+                ) || matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                        if matches!(s.as_ref(), EffectSubject::AbilitySource)
+                )
         )
     })
 }
@@ -8551,14 +8602,16 @@ pub(super) fn try_lower_cant_cast_from_zone(
             }
         };
         for zone in zones {
-            trial.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::CantCastFromZone {
-                    players,
-                    zone,
-                    filter: flt,
-                }),
-                duration: dur,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::CantCastFromZone {
+                        players,
+                        zone,
+                        filter: flt,
+                    },
+                    dur,
+                ),
+            );
         }
         *builder = trial;
         return Some(Ok(()));
@@ -8677,14 +8730,16 @@ pub(super) fn try_lower_cant_cast_from_zone(
             }
         };
         for zone in zones {
-            trial.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::CantCastFromZone {
-                    players,
-                    zone,
-                    filter: flt,
-                }),
-                duration: eff_dur,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::CantCastFromZone {
+                        players,
+                        zone,
+                        filter: flt,
+                    },
+                    eff_dur,
+                ),
+            );
         }
         *builder = trial;
         return Some(Ok(()));
@@ -8986,11 +9041,14 @@ mod wave10_static_tests {
         ))
         .expect("filtered casting restriction");
         assert_eq!(builder.target, BodyTarget::SinglePlayer);
-        let [Instruction::CreateTemporaryRule { rule, duration }] = builder.instructions.as_slice()
-        else {
+        let [Instruction::ApplyContinuous(spec)] = builder.instructions.as_slice() else {
             panic!("expected one temporary rule");
         };
-        assert_eq!(*duration, ResolvedDuration::UntilEndOfTurn);
+        let spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) = &spec.payload
+        else {
+            panic!("expected temporary rule payload");
+        };
+        assert_eq!(spec.duration, ResolvedDuration::UntilEndOfTurn);
         assert_eq!(
             rule.as_ref(),
             &TemporaryRuleKind::CantCastSpells {
@@ -9029,11 +9087,11 @@ mod wave10_static_tests {
         .expect("opponent casting restriction");
         assert_eq!(builder.target, BodyTarget::SingleOpponent);
         assert!(matches!(builder.instructions.as_slice(),
-            [Instruction::CreateTemporaryRule { rule, .. }]
-                if matches!(rule.as_ref(), TemporaryRuleKind::CantCastSpells {
+            [Instruction::ApplyContinuous(spec)]
+                if matches!(&spec.payload, spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) if matches!(rule.as_ref(), TemporaryRuleKind::CantCastSpells {
                     players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                     filter: None,
-                })
+                }))
         ));
     }
 
@@ -9057,12 +9115,12 @@ mod wave10_static_tests {
         };
         let builder = lower(next_flash(filter.clone(), filter)).expect("next creature flash");
         assert!(matches!(builder.instructions.as_slice(),
-            [Instruction::CreateTemporaryRule { rule, .. }]
-                if matches!(rule.as_ref(), TemporaryRuleKind::FilteredFlash {
+            [Instruction::ApplyContinuous(spec)]
+                if matches!(&spec.payload, spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) if matches!(rule.as_ref(), TemporaryRuleKind::FilteredFlash {
                     player: ResolvingPlayer::Controller,
                     filter,
                     next_only: true,
-                } if *filter == ObjectFilter::creature())
+                } if *filter == ObjectFilter::creature()))
         ));
         assert!(
             lower(next_flash(
@@ -9334,9 +9392,11 @@ mod wave10_static_tests {
                 .map(|ability| &ability.body)
                 .chain(program.triggered.iter().map(|ability| &ability.body));
             assert!(bodies.flat_map(|body| &body.instructions).any(|instruction|
-                matches!(instruction, Instruction::CreateTemporaryRule { rule, duration: ResolvedDuration::UntilEndOfTurn }
-                    if matches!(rule.as_ref(), TemporaryRuleKind::NextSpellKeyword { filter, keyword: actual }
-                        if *actual == keyword && *filter == ObjectFilter::any()))), "{name}");
+                matches!(instruction, Instruction::ApplyContinuous(spec)
+                    if spec.duration == ResolvedDuration::UntilEndOfTurn
+                        && matches!(&spec.payload, spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
+                            if matches!(rule.as_ref(), TemporaryRuleKind::NextSpellKeyword { filter, keyword: actual }
+                                if *actual == keyword && *filter == ObjectFilter::any())))), "{name}");
         }
     }
 }

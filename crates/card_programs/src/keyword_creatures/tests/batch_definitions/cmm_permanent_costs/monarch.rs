@@ -249,7 +249,20 @@ fn cmm_loyal_apprentice_drake_guardian_and_subordinate_check_their_own_commander
                     3,
                     A,
                     ObjectDestination::LibraryBottom,
-                    free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                    free_instant(
+                        BodyTarget::SingleCreature,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ),
                 ),
                 seed(
                     4,
@@ -348,7 +361,19 @@ fn cmm_angelic_field_marshal_gains_two_power_and_toughness_and_grants_vigilance_
                 3,
                 A,
                 ObjectDestination::LibraryBottom,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(
                 4,
@@ -750,7 +775,19 @@ fn partners_with_campfire() -> GameState {
                 3,
                 A,
                 ObjectDestination::LibraryBottom,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(
                 4,

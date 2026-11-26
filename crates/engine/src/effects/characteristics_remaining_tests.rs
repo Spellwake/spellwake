@@ -47,7 +47,12 @@ fn activation(source_cost: SourceCost) -> ActivatedAbility {
         source_cost,
         body: body(
             BodyTarget::SingleCreature,
-            vec![Instruction::ReturnToOwnersHand],
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::move_all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ZoneDest::Hand,
+                ),
+            ))],
         ),
     }
 }
@@ -525,13 +530,39 @@ fn cl_target_depart_return() {
         body: body(
             BodyTarget::SingleCreature,
             vec![
-                Instruction::ReturnToOwnersHand,
-                Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
-                        power: 1.into(),
-                        toughness: 1.into(),
-                    })]),
-                    duration: ResolvedDuration::NoStatedDuration,
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                )),
+                {
+                    struct _Tmp {
+                        parts: crate::characteristics::ResolvedPartsSpec,
+                        duration: crate::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(
+                            PowerToughness {
+                                power: 1.into(),
+                                toughness: 1.into(),
+                            },
+                        )]),
+                        duration: ResolvedDuration::NoStatedDuration,
+                    };
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: Some(crate::toolbox::ObjectQuery::Targets),
+                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                                _t.parts,
+                            )),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 },
                 Instruction::Damage { amount: 2.into() },
             ],
@@ -625,17 +656,20 @@ fn cl_target_depart_return() {
         values: BTreeMap::new(),
     }));
     let mut damage = DamageJournal::default();
+    let mut draws = crate::effects::DrawJournal::default();
     let mut append = RulesJournal::default();
+    let bounce_spec = crate::toolbox::ZoneOpSpec::move_all(
+        crate::toolbox::ObjectQuery::Targets,
+        crate::toolbox::ZoneDest::Hand,
+    );
+    let mut ctx = crate::effects::progress_rules::RuleStepContext {
+        journal: &mut damage,
+        draws: &mut draws,
+        append: &mut append,
+    };
     state
-        .apply_instruction(
-            entry.clone(),
-            Instruction::ReturnToOwnersHand,
-            None,
-            &mut damage,
-            &mut append,
-        )
+        .execute_zone_op(&mut ctx, &entry, 0, &bounce_spec)
         .unwrap();
-    state.advance_instruction().unwrap();
     let hand = state.window.cards().current_identity(CardId(1)).unwrap();
     assert_ne!(hand, old);
     let before = state.rules_snapshot(None).unwrap();

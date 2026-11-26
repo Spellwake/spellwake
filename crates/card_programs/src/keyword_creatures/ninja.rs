@@ -51,9 +51,9 @@ pub(super) fn compile(
                     amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
                 }],
                 "you draw a card and lose 1 life." => vec![
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                     Instruction::AdjustControllerLife {
                         adjustment: spellwake_engine::life::LifeAdjustment::Lose(1.into()),
                     },

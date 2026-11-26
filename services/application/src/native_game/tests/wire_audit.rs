@@ -200,8 +200,32 @@ fn entry_tap_wire_supported(tap: EntryTap) -> bool {
 fn collect_body_counter_kinds(body: &ExecutableBody, out: &mut Vec<CounterKind>) {
     for op in &body.instructions {
         match op {
-            Instruction::PutNamedCounterOnTarget { kind, .. }
-            | Instruction::PutCountersOnSubject { kind, .. } => out.push(*kind),
+            Instruction::MutateObject(spec) => match &spec.op {
+                spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, .. } => {
+                    out.push(*kind);
+                }
+                spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
+                    kind: Some(kind),
+                    ..
+                }
+                | spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind: Some(kind) }
+                | spellwake_engine::toolbox::ObjectMutation::DoubleCounters { kind: Some(kind) }
+                | spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                    kind: Some(kind),
+                    ..
+                } => out.push(*kind),
+                _ => {}
+            },
+            Instruction::ZoneOp(spec) => {
+                if let spellwake_engine::toolbox::ZoneDest::Battlefield {
+                    entering_counters, ..
+                } = &spec.destination
+                {
+                    for (kind, _) in entering_counters {
+                        out.push(*kind);
+                    }
+                }
+            }
             Instruction::AffectPermanentTargets {
                 action: spellwake_engine::program::PermanentTargetAction::PutCounters { kind, .. },
                 ..
@@ -215,7 +239,9 @@ fn collect_body_counter_kinds(body: &ExecutableBody, out: &mut Vec<CounterKind>)
             Instruction::FixedTargetClause(inner)
             | Instruction::EmitReflexiveTrigger { body: inner }
             | Instruction::ScheduleDelayedStepTrigger { body: inner, .. }
-            | Instruction::ScheduleDelayedEventTrigger { body: inner, .. } => {
+            | Instruction::ScheduleDelayedEventTrigger { body: inner, .. }
+            | Instruction::ForEach { body: inner, .. }
+            | Instruction::ForEachPlayerQuery { body: inner, .. } => {
                 collect_body_counter_kinds(inner, out);
             }
             Instruction::ChooseOption { options, .. } => {

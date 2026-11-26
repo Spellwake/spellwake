@@ -188,11 +188,11 @@ fn wave14_wave_goodbye_bounces_only_creatures_without_plus_one_counter() {
     let put_counter_spell = spell(
         10,
         BodyTarget::SingleCreature,
-        vec![Instruction::PutCountersOnSubject {
-            subject: Box::new(spellwake_engine::program::EffectSubject::TargetObject),
-            kind: CounterKind::PlusOne,
-            amount: ValueExpr::literal(1),
-        }],
+        vec![super::toolbox_emit::put_counters_on_subject(
+            spellwake_engine::program::EffectSubject::TargetObject,
+            CounterKind::PlusOne,
+            ValueExpr::literal(1),
+        )],
     );
 
     let game = world(
@@ -283,20 +283,20 @@ fn wave14_oil_gorger_troll_requires_exact_oil_counter_not_plus_one() {
     let put_plus_one = spell(
         10,
         BodyTarget::SingleCreature,
-        vec![Instruction::PutCountersOnSubject {
-            subject: Box::new(spellwake_engine::program::EffectSubject::TargetObject),
-            kind: CounterKind::PlusOne,
-            amount: ValueExpr::literal(1),
-        }],
+        vec![super::toolbox_emit::put_counters_on_subject(
+            spellwake_engine::program::EffectSubject::TargetObject,
+            CounterKind::PlusOne,
+            ValueExpr::literal(1),
+        )],
     );
     let put_oil = spell(
         11,
         BodyTarget::SingleCreature,
-        vec![Instruction::PutCountersOnSubject {
-            subject: Box::new(spellwake_engine::program::EffectSubject::TargetObject),
-            kind: CounterKind::Oil,
-            amount: ValueExpr::literal(1),
-        }],
+        vec![super::toolbox_emit::put_counters_on_subject(
+            spellwake_engine::program::EffectSubject::TargetObject,
+            CounterKind::Oil,
+            ValueExpr::literal(1),
+        )],
     );
 
     let base_cards = |troll_prog: Program| {

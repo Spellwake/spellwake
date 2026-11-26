@@ -8,31 +8,6 @@ use crate::{
     stack_window::StackEntry,
 };
 impl EffectWindow {
-    pub(super) fn resolve_source_boost(
-        &mut self,
-        entry: &StackEntry,
-        index: usize,
-        stats: Option<PowerToughness>,
-        keywords: BTreeSet<KeywordAbility>,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let (StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source }) =
-            entry.kind()
-        else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let id = source.id();
-        if !self
-            .window
-            .cards()
-            .get(id)
-            .is_some_and(|o| o.zone() == ObjectZone::Battlefield)
-        {
-            return Ok(());
-        }
-        self.modify_objects(entry, index, [id].into(), stats, keywords, append)
-    }
-
     pub(super) fn modify_group(
         &mut self,
         entry: &StackEntry,

@@ -422,7 +422,12 @@ fn moved_donor_definition() {
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::ReturnToOwnersHand,
+                    crate::program::Instruction::ZoneOp(Box::new(
+                        crate::toolbox::ZoneOpSpec::move_all(
+                            crate::toolbox::ObjectQuery::Targets,
+                            crate::toolbox::ZoneDest::Hand,
+                        ),
+                    )),
                     Instruction::CopyTargetToSource {
                         duration: ResolvedDuration::UntilEndOfTurn,
                         power_toughness: None,

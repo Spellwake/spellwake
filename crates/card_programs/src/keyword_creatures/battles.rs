@@ -73,9 +73,9 @@ pub(super) fn compile(
                     Instruction::AdjustControllerLife {
                         adjustment: LifeAdjustment::Gain(i64::from(life).into()),
                     },
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                 ],
             ),
         },

@@ -1305,21 +1305,30 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
         )
     ) || matches!(
         ops.last(),
-        Some(
-            Instruction::ModifyGroupUntilEndOfTurn { group, .. }
-                | Instruction::ChangeGroup { group, .. }
-                | Instruction::ModifyGroupByAmount { group, .. }
-                | Instruction::SuppressGroupKeywords { group, .. }
-        ) if matches!(group.as_ref(), EffectSubject::CreatedTokens)
+        Some(Instruction::ChangeGroup { group, .. })
+            if matches!(group.as_ref(), EffectSubject::CreatedTokens)
     ) || matches!(
         ops.last(),
-        Some(
-            Instruction::PutCountersOnSubject { subject, .. }
-                | Instruction::RemoveCountersFromSubject { subject, .. }
-                | Instruction::SetSubjectTapped { subject, .. }
-                | Instruction::SkipNextUntap { subject }
-                | Instruction::RequireCombatAction { subject, .. }
-        ) if matches!(subject.as_ref(), EffectSubject::CreatedTokens)
+        Some(Instruction::MutateObject(spec))
+            if matches!(
+                spec.source,
+                spellwake_engine::toolbox::ObjectQuery::CreatedTokens
+            ) || matches!(
+                &spec.source,
+                spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+            )
+    ) || matches!(
+        ops.last(),
+        Some(Instruction::ApplyContinuous(spec))
+            if matches!(
+                spec.selector.as_ref(),
+                Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
+            ) || matches!(
+                spec.selector.as_ref(),
+                Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(s))
+                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+            )
     )
 }
 
@@ -1795,12 +1804,13 @@ pub(super) fn lower_modify_pt_part(
                 filter, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1891,12 +1901,13 @@ pub(super) fn lower_modify_pt_part(
                 options, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -2018,12 +2029,13 @@ pub(super) fn lower_modify_pt_part(
                         duration: dur,
                     });
             } else {
-                builder
-                    .instructions
-                    .push(Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                );
             }
             Ok(())
         }
@@ -2103,20 +2115,27 @@ pub(super) fn lower_modify_pt_target(
             && dur == ResolvedDuration::UntilEndOfTurn =>
         {
             if in_trigger {
-                builder
-                    .instructions
-                    .push(Instruction::ModifyGroupUntilEndOfTurn {
-                        group: Box::new(EffectSubject::AbilitySource),
-                        power_toughness: Some(pt),
-                        keywords: BTreeSet::new(),
-                    });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::AbilitySource,
+                        ValueExpr::Literal(pt.power),
+                        ValueExpr::Literal(pt.toughness),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                );
             } else if !self_pronoun_valid {
                 return Err("oracle:spell-cannot-modify-self");
             } else {
-                builder.instructions.push(Instruction::BoostSource {
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::AbilitySource,
+                        ValueExpr::Literal(pt.power),
+                        ValueExpr::Literal(pt.toughness),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                );
             }
             Ok(())
         }
@@ -2128,13 +2147,15 @@ pub(super) fn lower_modify_pt_target(
                 try_extract_compound_target_relation(items, builder, in_trigger, vocabulary)?
             {
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::ModifyGroupUntilEndOfTurn {
-                        group: Box::new(group),
-                        power_toughness: Some(pt),
-                        keywords: BTreeSet::new(),
-                    });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        group,
+                        ValueExpr::Literal(pt.power),
+                        ValueExpr::Literal(pt.toughness),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                );
                 return Ok(());
             }
             let mut trial = builder.clone();
@@ -2164,13 +2185,15 @@ pub(super) fn lower_modify_pt_target(
             Ok(())
         }
         SubjectRefAst::TriggerSubject if in_trigger && dur == ResolvedDuration::UntilEndOfTurn => {
-            builder
-                .instructions
-                .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::TriggerSubject),
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::TriggerSubject,
+                    ValueExpr::Literal(pt.power),
+                    ValueExpr::Literal(pt.toughness),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(raw)
@@ -2179,13 +2202,15 @@ pub(super) fn lower_modify_pt_target(
                 && (!is_permanent_body_target(builder.target)
                     || raw.to_ascii_lowercase().contains("token")) =>
         {
-            builder
-                .instructions
-                .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::CreatedTokens),
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::CreatedTokens,
+                    ValueExpr::Literal(pt.power),
+                    ValueExpr::Literal(pt.toughness),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_)
@@ -2193,13 +2218,15 @@ pub(super) fn lower_modify_pt_target(
                 && dur == ResolvedDuration::UntilEndOfTurn
                 && let Some(group_obj) = builder.last_group_filter =>
         {
-            builder
-                .instructions
-                .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::Matching(group_obj)),
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::Matching(group_obj),
+                    ValueExpr::Literal(pt.power),
+                    ValueExpr::Literal(pt.toughness),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(raw)
@@ -2208,25 +2235,29 @@ pub(super) fn lower_modify_pt_target(
                 && builder.target == BodyTarget::None
                 && dur == ResolvedDuration::UntilEndOfTurn =>
         {
-            builder
-                .instructions
-                .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::TriggerSubject),
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::TriggerSubject,
+                    ValueExpr::Literal(pt.power),
+                    ValueExpr::Literal(pt.toughness),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::AttachedHost(_) if dur == ResolvedDuration::UntilEndOfTurn => {
-            builder
-                .instructions
-                .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::Matching(ObjectFilter::Clause(
                         ObjectClause::any().attached_to_self(),
-                    ))),
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+                    )),
+                    ValueExpr::Literal(pt.power),
+                    ValueExpr::Literal(pt.toughness),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -2239,13 +2270,15 @@ pub(super) fn lower_modify_pt_target(
                 in_trigger,
                 self_pronoun_valid,
             )?;
-            builder
-                .instructions
-                .push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(group),
-                    power_toughness: Some(pt),
-                    keywords: BTreeSet::new(),
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    group,
+                    ValueExpr::Literal(pt.power),
+                    ValueExpr::Literal(pt.toughness),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ),
+            );
             Ok(())
         }
         _ => lower_modify_pt_part(
@@ -2480,11 +2513,17 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 amount: amt,
             }])
         }
-        CostAtomAst::SacrificeSelf => Ok(vec![Instruction::SacrificeStateTriggerSource]),
+        CostAtomAst::SacrificeSelf => Ok(vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                EffectSubject::AbilitySource,
+            ),
+        ]),
         CostAtomAst::ExileSelf { .. } => Ok(vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source(),
         ]),
-        CostAtomAst::ExertSelf => Ok(vec![Instruction::ExertAbilitySource]),
+        CostAtomAst::ExertSelf => Ok(vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::exert_source(),
+        ]),
         CostAtomAst::Behold(filter) => {
             let obj = lower_filter_any(filter)?;
             Ok(vec![Instruction::Behold {
@@ -2663,7 +2702,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
             ])
         }
         CostAtomAst::BounceToHand(subject) => match subject.as_ref() {
-            SubjectRefAst::SelfObject => Ok(vec![Instruction::ReturnSourceToHand]),
+            SubjectRefAst::SelfObject => Ok(vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_to_hand(),
+            ]),
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                 let ptf = lower_permanent_type_filter(f, vocabulary)?;
                 Ok(vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_controlled_permanents(AffectedPlayers::One(player), ValueExpr::literal(1), ptf)])
@@ -4666,9 +4707,9 @@ pub(super) fn predefined_token_def(
                     source_cost: SourceCost::Sacrifice,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::DrawController {
-                            amount: ValueExpr::literal(1),
-                        }],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            ValueExpr::literal(1),
+                        )],
                     ),
                 }],
             );
@@ -4745,9 +4786,9 @@ pub(super) fn predefined_token_def(
                     },
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::DrawController {
-                            amount: ValueExpr::literal(1),
-                        }],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            ValueExpr::literal(1),
+                        )],
                     ),
                 }],
             );
@@ -4804,9 +4845,9 @@ pub(super) fn predefined_token_def(
                             player: ResolvingPlayer::Controller,
                             amount: ValueExpr::literal(1),
                         },
-                        Instruction::DrawController {
-                            amount: ValueExpr::literal(1),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            ValueExpr::literal(1),
+                        ),
                     ],
                 ),
             });
@@ -4930,7 +4971,10 @@ pub(super) fn predefined_token_def(
                     id: ids.activated(),
                     mana_cost: ManaCost::generic(2.into()),
                     source_cost: SourceCost::None,
-                    body: ExecutableBody::new(BodyTarget::None, vec![Instruction::TransformSource]),
+                    body: ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+                    ),
                 }],
             );
             p.artifact_subtypes.insert(ArtifactSubtype::Incubator);
@@ -5151,7 +5195,10 @@ pub(super) fn predefined_token_def(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                                CounterKind::PlusOne,
+                                ValueExpr::literal(1),
+                            )],
                         ),
                     };
                     push_static_ability(

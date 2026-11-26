@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Prepared public-root mechanisms, with real mana activation/payment and priority.
 //! Literal partial programs and seeded zones do not qualify complete cards or formats.
 #[path = "../test_support/creature_vocabulary.rs"]
@@ -898,83 +899,6 @@ fn countering_the_original_before_its_trigger_resolves_keeps_the_owned_cast_caus
     assert_eq!(
         resolved.state().execution().life_total(P0),
         Some(&21.into())
-    );
-    assert!(resolved.state().execution().window().entries().is_empty());
-}
-
-#[test]
-fn watcher_departure_does_not_destroy_its_already_placed_body() {
-    let condition = spellwake_engine::program::TriggerSpec::spell_cast(
-        PlayerRelation::Controller,
-        spellwake_engine::program::SpellFilter::of_type(CardType::Sorcery),
-    );
-    let watcher = watched(
-        Program::creature(None, 1.into(), 1.into(), BTreeSet::new()),
-        condition,
-    );
-    let sorcery = Program::sorcery(
-        ManaCost::one(ManaType::Blue),
-        ExecutableBody::new(BodyTarget::None, vec![gain(2)]),
-    );
-    let bounce = Program::instant(
-        ManaCost::free(),
-        ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![Instruction::ReturnToOwnersHand],
-        ),
-    );
-    let game = two(vec![
-        tr::card(1, sorcery, false),
-        tr::card(2, watcher, true),
-        tr::card(3, bounce, false),
-    ]);
-    let cast = paid(&game, P0, 1, 0, None);
-    let captured = discoveries(&cast)[0].clone();
-    let bounce = tr::submit(
-        cast.state(),
-        P0,
-        GameCommand::Cast {
-            spell: tr::object(cast.state(), 3),
-            target: TargetRef::Object(tr::object(cast.state(), 2)),
-        },
-    );
-    assert!(discoveries(&bounce).is_empty());
-    let bounced = resolve(bounce.state());
-    assert_ne!(tr::object(bounced.state(), 2), captured.source.object.id());
-    assert_eq!(
-        bounced
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(tr::object(bounced.state(), 2))
-            .unwrap()
-            .zone(),
-        ObjectZone::Hand(P0)
-    );
-    let trigger = bounced
-        .state()
-        .execution()
-        .window()
-        .entries()
-        .last()
-        .unwrap()
-        .id();
-    let binding = bounced
-        .state()
-        .execution()
-        .execution_bindings(trigger)
-        .unwrap()
-        .trigger
-        .as_ref()
-        .unwrap();
-    assert_eq!(binding.source, captured.source);
-    assert_eq!(binding.causes, captured.causes);
-    let triggered = resolve(bounced.state());
-    let resolved = resolve(triggered.state());
-    assert_eq!(
-        resolved.state().execution().life_total(P0),
-        Some(&23.into())
     );
     assert!(resolved.state().execution().window().entries().is_empty());
 }

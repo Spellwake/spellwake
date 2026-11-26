@@ -67,9 +67,9 @@ pub(super) fn compile(
                             Instruction::OptionalEffect {
                                 chooser: ResolvingPlayer::Controller,
                             },
-                            Instruction::DrawController {
-                                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                            },
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                                spellwake_engine::program::ValueExpr::Literal(2.into()),
+                            ),
                         ],
                     ),
                 })));
@@ -85,30 +85,43 @@ pub(super) fn compile(
             spellwake_engine::program::InterveningCondition::OwnCommander,
         )];
         match effect {
-            "draw a card." => body.push(Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            }),
+            "draw a card." => body.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            ),
             "each opponent loses 3 life." => body.push(Instruction::AdjustEachOpponentLife {
                 adjustment: LifeAdjustment::Lose(3.into()),
                 controller_adjustment: None,
             }),
-            "put a +1/+1 counter on each creature you control." => {
-                body.push(Instruction::PutCountersOnControlledCreatures)
-            }
+            "put a +1/+1 counter on each creature you control." => body.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Battlefield,
+                        ObjectFilter::creature().controlled(),
+                    ),
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ),
             "prevent all combat damage that would be dealt to creatures you control this turn. Other creatures you control gain vigilance until end of turn." =>
             {
                 body.push(Instruction::PreventDamageThisTurn(
                     spellwake_engine::damage::TurnPreventionFilter::CombatToControlledCreatures,
                 ));
-                body.push(Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::Matching(
-                        ObjectFilter::creature()
-                            .controlled()
-                            .other_than_ability_source(),
-                    )),
-                    power_toughness: None,
-                    keywords: [KeywordAbility::Vigilance].into(),
-                });
+                body.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::Matching(
+                            ObjectFilter::creature()
+                                .controlled()
+                                .other_than_ability_source(),
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        [KeywordAbility::Vigilance].into(),
+                        std::collections::BTreeSet::new(),
+                    ),
+                );
             }
             _ => {
                 let token = effect

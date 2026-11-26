@@ -47,9 +47,9 @@ pub(super) fn great_henge(card: &InventoryCard, profile: Profile) -> Option<Prog
             BodyTarget::None,
             vec![
                 Instruction::PutCounterOnRelatedPermanent,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
             ],
         ),
     });
@@ -446,9 +446,11 @@ fn draw_activation(line: &str) -> Option<ActivatedAbility> {
         source_cost: spellwake_engine::activated::SourceCost::TapSacrifice,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(count.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(count.into()),
+                ),
+            ],
         ),
     })
 }

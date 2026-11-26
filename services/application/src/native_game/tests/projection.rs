@@ -946,7 +946,12 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1288,8 +1293,8 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
     use spellwake_contracts::names::{EnglishCardName, ObjectNames};
     use spellwake_engine::characteristics::{
         AbilityChange, Color, ControlRecipient, KeywordAbility, PermanentSelector,
-        PowerToughnessCounters, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
-        StaticAbilityId, StaticContinuousAbility, StaticPart, StaticParts,
+        ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec, StaticAbilityId,
+        StaticContinuousAbility, StaticPart, StaticParts,
     };
     use spellwake_engine::program::{
         CardType, Supertype, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
@@ -1358,12 +1363,15 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                        ControlRecipient::ResolvingController,
-                    )]),
-                    duration: ResolvedDuration::NoStatedDuration,
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                            ControlRecipient::ResolvingController,
+                        )]),
+                        ResolvedDuration::NoStatedDuration,
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1372,12 +1380,15 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::PutPowerToughnessCounters {
-                    counters: PowerToughnessCounters {
-                        plus_one: 2.into(),
-                        minus_one: 0.into(),
-                    },
-                }],
+                vec![Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                            kind: spellwake_engine::effects::CounterKind::PlusOne,
+                            amount: spellwake_engine::program::ValueExpr::literal(2),
+                        },
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1570,7 +1581,12 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1925,7 +1941,12 @@ fn check_triggered_exile_cast(rebound: bool) {
     };
     let mut spell = instant(
         BodyTarget::SinglePermanent,
-        vec![Instruction::ReturnToOwnersHand],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Hand,
+            ),
+        ))],
     );
     if rebound {
         spell

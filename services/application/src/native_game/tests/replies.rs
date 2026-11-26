@@ -2158,13 +2158,13 @@ fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_inva
 
     let prevent_spell = instant(
         BodyTarget::None,
-        vec![Instruction::PreventDamageSpec(Box::new(
-            TurnPreventionSpec {
+        vec![Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
                 combat_only: false,
                 source: PreventionSourceSpec::ChosenSource(DamageSourceChoiceFilter::Any),
                 recipient: PreventionRecipientSpec::Controller,
                 both_directions: false,
-            },
+            }),
         ))],
     );
 

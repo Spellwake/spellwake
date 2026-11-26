@@ -434,12 +434,24 @@ fn concession_combined_complete_sba_copy_token_counter_loss_work_is_frozen() {
                     object_filter: None,
                 },
             },
-            Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 1.into(),
-                },
-            },
+            crate::program::Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: crate::effects::CounterKind::PlusOne,
+                        amount: crate::program::ValueExpr::Literal(1.into()),
+                    },
+                ),
+            )),
+            crate::program::Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: crate::effects::CounterKind::MinusOne,
+                        amount: crate::program::ValueExpr::Literal(1.into()),
+                    },
+                ),
+            )),
             Instruction::Damage { amount: 2.into() },
             Instruction::AdjustControllerLife {
                 adjustment: LifeAdjustment::Lose(20.into()),

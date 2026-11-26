@@ -98,7 +98,19 @@ fn cmm_zones_corpse_augur_counts_the_target_players_creature_cards_on_resolution
                 7,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -370,9 +382,9 @@ fn cmm_zones_fists_of_flame_counts_its_own_draw_and_earlier_draws_and_grants_tra
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
                 ),
             ),
             named("Mountain", 4, A, ObjectDestination::LibraryBottom),
@@ -446,7 +458,19 @@ fn cmm_zones_shelter_restricts_the_target_and_protects_it_from_the_chosen_color_
                     ManaCost::one(Red),
                     ExecutableBody::new(
                         BodyTarget::SingleCreature,
-                        vec![Instruction::DestroyTarget],
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                        semantics:
+                                            spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                                allow_regenerate: true,
+                                            },
+                                    },
+                                ),
+                            ),
+                        ],
                     ),
                 ),
             ),

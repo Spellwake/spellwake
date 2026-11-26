@@ -295,9 +295,11 @@ fn cmm_warping_wail_exiles_either_low_stat_counters_only_a_sorcery_or_makes_a_sc
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ],
                 ),
             ),
         ),
@@ -307,9 +309,9 @@ fn cmm_warping_wail_exiles_either_low_stat_counters_only_a_sorcery_or_makes_a_sc
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
             ),
         ),
     ];
@@ -509,7 +511,19 @@ fn cmm_grasp_of_fate_exiles_up_to_one_nonland_per_opponent_and_returns_the_exact
             6,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
     ];
     let initial = game(vec![A, B, C], cards, &price, Step::PrecombatMain);

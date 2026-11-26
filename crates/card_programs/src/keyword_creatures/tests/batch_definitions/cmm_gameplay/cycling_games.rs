@@ -118,7 +118,19 @@ fn cmm_zones_twisted_abomination_can_regenerate_once_before_a_second_destruction
             n,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ));
     }
     let state = game(
@@ -438,7 +450,19 @@ fn cmm_zones_cast_out_flashes_in_and_releases_the_opponents_nonland_or_can_cycle
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -533,7 +557,10 @@ fn cmm_zones_decree_of_pain_counts_destroyed_creatures_and_cycling_shrinks_even_
         id: ActivatedAbilityId(0),
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::RegenerateSource]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+        ),
     });
     let initial = game(
         vec![A, B],

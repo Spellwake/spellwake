@@ -1,6 +1,6 @@
 //! Drawing cards from entering permanents and controlled battlefield characteristics.
 use super::*;
-use spellwake_engine::{characteristics::PowerToughnessCounters, effects::CounterKind};
+use spellwake_engine::effects::CounterKind;
 
 #[test]
 #[ignore = "requires dated Oracle source and creature vocabulary"]
@@ -21,12 +21,10 @@ fn cmm_zones_armorcraft_judge_counts_own_counter_bearing_creatures_once_each() {
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::PutPowerToughnessCounters {
-                    counters: PowerToughnessCounters {
-                        plus_one: count.into(),
-                        minus_one: 0.into(),
-                    },
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::Literal(count.into()),
+                ),
             ),
         ));
     }
@@ -219,9 +217,9 @@ fn cmm_zones_abundance_allows_a_failed_search_without_an_actual_draw() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                 ),
             ),
             named("Sol Ring", 3, A, ObjectDestination::LibraryBottom),
@@ -281,9 +279,9 @@ fn cmm_zones_alms_collector_leaves_single_draws_and_allows_the_affected_player_t
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SinglePlayer,
-                Instruction::DrawTargetPlayer {
-                    amount: spellwake_engine::program::ValueExpr::Literal(count.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                    spellwake_engine::program::ValueExpr::Literal(count.into()),
+                ),
             ),
         ));
     }

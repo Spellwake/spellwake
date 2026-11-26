@@ -3,7 +3,7 @@ use super::*;
 use spellwake_engine::{
     game::{DecisionReply, RuleFrame},
     object_identity::ObjectId,
-    program::{BodyTarget, ExecutableBody, Instruction},
+    program::{BodyTarget, ExecutableBody},
 };
 const A: SeatId = SeatId(0);
 const B: SeatId = SeatId(1);
@@ -114,9 +114,11 @@ fn game(name: &str, active: SeatId, cast_source: bool) -> GameState {
     let body = || {
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            ],
         )
     };
     let mut cards = vec![

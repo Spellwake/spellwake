@@ -132,14 +132,33 @@ fn accepted_first_choice() -> GameState {
                     into: q1,
                     excluding: BTreeSet::new(),
                 },
-                Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
-                        land_subtypes: SubtypeOperation::Keep,
-                        supertypes: TypeOperation::Keep,
-                        types: TypeOperation::Keep,
-                        subtypes: SubtypeOperation::Set(InstructionSubtypeOperand::Chosen(q0)),
-                    })]),
-                    duration: ResolvedDuration::NoStatedDuration,
+                {
+                    struct _Tmp {
+                        parts: crate::characteristics::ResolvedPartsSpec,
+                        duration: crate::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
+                            land_subtypes: SubtypeOperation::Keep,
+                            supertypes: TypeOperation::Keep,
+                            types: TypeOperation::Keep,
+                            subtypes: SubtypeOperation::Set(InstructionSubtypeOperand::Chosen(q0)),
+                        })]),
+                        duration: ResolvedDuration::NoStatedDuration,
+                    };
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: Some(crate::toolbox::ObjectQuery::Targets),
+                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                                _t.parts,
+                            )),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 },
             ],
         ),

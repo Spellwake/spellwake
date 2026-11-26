@@ -84,7 +84,19 @@ fn cmm_calix_filters_enchantments_links_exile_to_one_enchantment_and_returns_onl
             8,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
     ];
     for n in 10..=14 {
@@ -140,9 +152,9 @@ fn cmm_narset_parter_limits_each_opponents_draws_by_turn_and_finds_only_noncreat
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
             ),
         ),
         seed(
@@ -151,9 +163,9 @@ fn cmm_narset_parter_limits_each_opponents_draws_by_turn_and_finds_only_noncreat
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
             ),
         ),
         seed(
@@ -162,9 +174,9 @@ fn cmm_narset_parter_limits_each_opponents_draws_by_turn_and_finds_only_noncreat
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
             ),
         ),
         seed(
@@ -173,9 +185,9 @@ fn cmm_narset_parter_limits_each_opponents_draws_by_turn_and_finds_only_noncreat
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
             ),
         ),
         named("Plains", 10, A, ObjectDestination::LibraryBottom),
@@ -280,7 +292,19 @@ fn cmm_daretti_discards_the_chosen_number_trades_an_artifact_and_delays_returns_
             8,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
         seed(9, B, battlefield(B), Program::artifact(None, vec![])),
     ];

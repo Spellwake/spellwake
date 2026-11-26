@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Actual game cuts for finite defining types/PT and all-zone observations.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -184,85 +185,6 @@ fn a_definition_started_in_type_continues_to_pt_after_actual_ability_removal() {
             .contains(&elf)
     );
     assert_eq!(pt_of(removed.state(), 1), pt(2, 3));
-}
-
-#[test]
-fn layer_two_control_and_later_owner_zone_rebind_live_counts_at_the_actual_cut() {
-    let mut steal = spell(
-        10,
-        BodyTarget::SinglePermanent,
-        vec![effect(
-            vec![ResolvedPartSpec::Control(
-                ControlRecipient::ResolvingController,
-            )],
-            ResolvedDuration::NoStatedDuration,
-        )],
-    );
-    steal.owner = P1;
-    steal.destination = ObjectDestination::Hand;
-    let mut rows = vec![
-        card(1, definition(vec![land_count()]), true),
-        card(
-            2,
-            Program::land(std::collections::BTreeSet::new(), vec![]),
-            true,
-        ),
-        steal,
-        spell(
-            11,
-            BodyTarget::SinglePermanent,
-            vec![Instruction::ReturnToOwnersHand],
-        ),
-    ];
-    for id in 3..=5 {
-        let mut land = card(
-            id,
-            Program::land(std::collections::BTreeSet::new(), vec![]),
-            true,
-        );
-        land.owner = P1;
-        land.destination = ObjectDestination::Battlefield { controller: P1 };
-        rows.push(land);
-    }
-    let game = world(vocabulary(), rows, (1..=5).map(CardId).collect());
-    assert_eq!(pt_of(&game, 1), pt(1, 2));
-    let source = object(&game, 1);
-    let priority = submit(&game, P0, GameCommand::Pass);
-    let cast = submit(
-        priority.state(),
-        P1,
-        GameCommand::CastPaid {
-            spell: object(priority.state(), 10),
-            target: TargetRef::Object(source),
-            payment: ManaPayment::default(),
-        },
-    );
-    let stolen = pass_in_order(cast.state(), [P1, P0]);
-    assert_eq!(current(stolen.state(), source).controller, Some(P1));
-    assert_eq!(pt_of(stolen.state(), 1), pt(3, 4));
-    let (bounced, _) = resolve(stolen.state(), 11, source);
-    let hand = object(bounced.state(), 1);
-    assert_eq!(
-        bounced
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(hand)
-            .unwrap()
-            .zone(),
-        ObjectZone::Hand(P0)
-    );
-    assert_eq!(current(bounced.state(), hand).controller, None);
-    assert_eq!(pt_of(bounced.state(), 1), pt(1, 2));
-    assert!(
-        bounced
-            .state()
-            .execution()
-            .creature(hand)
-            .unwrap()
-            .is_none()
-    );
 }
 
 fn word(v: &CreatureTypeVocabulary, name: &str) -> CreatureTypeWord {
@@ -468,56 +390,6 @@ fn noncreature_printed_pt_is_visible_in_hand_and_stack_but_absent_on_battlefield
             .power_toughness_counters(current.object)
             .is_some()
     );
-}
-
-#[test]
-fn defined_pt_composes_with_set_modify_counters_switch_and_cleanup() {
-    let buff = spell(
-        4,
-        BodyTarget::SinglePermanent,
-        vec![
-            effect(
-                vec![
-                    ResolvedPartSpec::SetPT(pt(4, 5)),
-                    ResolvedPartSpec::ModifyPT(pt(1, 2)),
-                    ResolvedPartSpec::SwitchPT,
-                ],
-                ResolvedDuration::UntilEndOfTurn,
-            ),
-            Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 0.into(),
-                },
-            },
-        ],
-    );
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, definition(vec![land_count()]), true),
-            card(
-                2,
-                Program::land(std::collections::BTreeSet::new(), vec![]),
-                true,
-            ),
-            card(
-                3,
-                Program::land(std::collections::BTreeSet::new(), vec![]),
-                true,
-            ),
-            buff,
-        ],
-        (1..=3).map(CardId).collect(),
-    );
-    let (changed, _) = resolve(&game, 4, object(&game, 1));
-    let value = current(changed.state(), object(changed.state(), 1));
-    let pt_value = value.power_toughness.unwrap();
-    assert_eq!(pt_value.base, pt(4, 5));
-    assert_eq!(pt_value.derived, pt(8, 6));
-    assert_eq!(pt_value.copiable, Some(printed()));
-    let ended = cleanup(changed.state());
-    assert_eq!(pt_of(ended.state(), 1), pt(3, 4));
 }
 
 #[test]

@@ -46,7 +46,12 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         }],
     );
@@ -54,7 +59,12 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
     let mut original = tr::spell(
         3,
         BodyTarget::SinglePermanent,
-        vec![Instruction::ReturnToOwnersHand],
+        vec![Instruction::ZoneOp(Box::new(
+            crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::Targets,
+                crate::toolbox::ZoneDest::Hand,
+            ),
+        ))],
     );
     original.program.supertypes = BTreeSet::from([Supertype::Snow]);
     let game = tr::world(

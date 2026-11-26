@@ -121,7 +121,7 @@ pub(super) fn compile(
             },
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ReturnSourceGraveyardToHand],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand()],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -135,7 +135,7 @@ pub(super) fn compile(
             source_cost: spellwake_engine::activated::SourceCost::GraveyardSelf { unearth: false },
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ReturnSourceGraveyardToBattlefield { tapped: true }],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(true)],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -159,7 +159,7 @@ pub(super) fn compile(
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::ReturnSourceGraveyardToHand,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
                 ],
             ),
         });

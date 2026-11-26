@@ -375,9 +375,11 @@ fn original_werewolf_upkeeps_count_the_spells_of_each_player() {
             spellwake_engine::mana::ManaCost::free(),
             spellwake_engine::program::ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::None,
-                vec![spellwake_engine::program::Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    ),
+                ],
             ),
         ),
     };

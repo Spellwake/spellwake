@@ -336,10 +336,15 @@ fn replace_compound_it_with_self(ev: &TriggerEventAst) -> TriggerEventAst {
 
 fn body_contains_graveyard_self_return_instruction(body: &ExecutableBody) -> bool {
     body.instructions.iter().any(|op| {
-        matches!(
-            op,
-            Instruction::ReturnSourceGraveyardToBattlefield { .. }
-                | Instruction::ReturnSourceGraveyardToHand
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+            |spec| {
+                matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
+                    && matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                            | spellwake_engine::toolbox::ZoneDest::Hand
+                    )
+            },
         )
     })
 }
@@ -1369,8 +1374,7 @@ fn rewrite_instructions_unique_related_player(
                     }
                 }
             }
-            Instruction::DrawPlayer { players, .. }
-            | Instruction::AdjustPlayersLife { players, .. }
+            Instruction::AdjustPlayersLife { players, .. }
             | Instruction::Discard { players, .. }
             | Instruction::Sacrifice { players, .. }
             | Instruction::AddPlayerCounter { players, .. }
@@ -1384,6 +1388,84 @@ fn rewrite_instructions_unique_related_player(
                     &|ap| rewrite_affected_players_if_unique(ap, replacement),
                     &|_| {},
                 );
+            }
+            Instruction::DrawCards(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+            }
+            Instruction::MutateObject(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    &mut spec.source,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+                match &mut spec.op {
+                    spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            by,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            host,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::GainControl {
+                        controller, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            controller,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::ApplyContinuous(spec) => {
+                if let Some(sel) = &mut spec.selector {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                        sel,
+                        &|p| rewrite_resolving_player_if_unique(p, replacement),
+                        &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                        &|_| {},
+                    );
+                }
+                match &mut spec.payload {
+                    spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                        player, ..
+                    }
+                    | spellwake_engine::toolbox::ContinuousPayload::SkipTurns { player, .. }
+                    | spellwake_engine::toolbox::ContinuousPayload::SkipStep { player, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    _ => {}
+                }
             }
             Instruction::ForEachPlayerQuery { selector, body, .. } => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
@@ -1402,7 +1484,6 @@ fn rewrite_instructions_unique_related_player(
             | Instruction::PayEnergy { player, .. }
             | Instruction::Blight { player, .. }
             | Instruction::CollectEvidence { player, .. }
-            | Instruction::ExileLibraryTop { player, .. }
             | Instruction::LookTopChoose {
                 library_owner: player,
                 ..

@@ -1220,7 +1220,19 @@ fn cmm_endless_one_and_stonecoil_serpent_enter_with_exactly_their_chosen_x_and_p
         ProtectionFromMulticolored, Reach, Trample,
     };
     for (name, serpent) in [("Endless One", false), ("Stonecoil Serpent", true)] {
-        let mut colored = free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget);
+        let mut colored = free_instant(
+            BodyTarget::SingleCreature,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        );
         colored.color_indicator = Some([Color::Red, Color::Green].into());
         let start = game(
             vec![A, B],
@@ -1340,11 +1352,13 @@ fn cmm_lifeblood_hydra_gains_and_draws_using_final_power_including_effects_other
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::BoostTargetPower {
-                    also_toughness: false,
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    keywords: [Trample].into(),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    spellwake_engine::program::EffectSubject::TargetObject,
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    spellwake_engine::program::ValueExpr::literal(0),
+                    [Trample].into(),
+                    std::collections::BTreeSet::new(),
+                ),
             ),
         ),
     ]);
@@ -1429,12 +1443,10 @@ fn cmm_yargle_casts_for_four_and_black_and_attacks_as_a_nine_three_legendary_fro
 pub(super) fn plus_counters_spell(count: i64) -> Program {
     free_instant(
         BodyTarget::SingleCreature,
-        Instruction::PutPowerToughnessCounters {
-            counters: spellwake_engine::characteristics::PowerToughnessCounters {
-                plus_one: count.into(),
-                minus_one: 0.into(),
-            },
-        },
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+            spellwake_engine::effects::CounterKind::PlusOne,
+            spellwake_engine::program::ValueExpr::Literal(count.into()),
+        ),
     )
 }
 
@@ -1621,7 +1633,10 @@ fn cmm_rishkar_targets_zero_to_two_creatures_and_grants_green_mana_to_each_contr
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleCreature,
-                    Instruction::PutIndestructibleCounter,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        spellwake_engine::effects::CounterKind::Indestructible,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
                 ),
             ),
             remove_spell(6, A),
@@ -1710,7 +1725,10 @@ fn cmm_omarthis_optionally_grows_once_per_counter_placement_on_another_colorless
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::PutIndestructibleCounter,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    spellwake_engine::effects::CounterKind::Indestructible,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
             ),
         ),
         named(

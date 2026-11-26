@@ -39,12 +39,6 @@ impl EffectWindow {
                 effect: Option<ResolvedContinuousEffect>,
             },
             Continuous(ResolvedContinuousEffect),
-            Counters {
-                object: ObjectId,
-                before: PowerToughnessCounters,
-                added: PowerToughnessCounters,
-                after: PowerToughnessCounters,
-            },
         }
         let mut cause = EventCause::Instruction {
             entry: entry.id(),
@@ -118,17 +112,12 @@ impl EffectWindow {
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
-            | Instruction::RegenerateTarget
-            | Instruction::GoadTarget
-            | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::RemoveSubjectFromCombat(_)
-            | Instruction::GoadOtherPlayersCreatures
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
             | Instruction::DisallowDamagePreventionThisTurn
-            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::PreventDamageSpec(_)
             | Instruction::PutOwnHandCardOnLibraryBottom
@@ -139,14 +128,11 @@ impl EffectWindow {
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Instruction::ReturnSourceGraveyardToBattlefield { .. }
-            | Instruction::ReturnSourceGraveyardToHand
             | Instruction::ReturnOwnedCommandersToHand
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::EndControllerTurn
-            | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -157,43 +143,22 @@ impl EffectWindow {
             | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
-            | Instruction::ReturnSourceToHand
             | Instruction::PutCounterOnRelatedPermanent
-            | Instruction::PutCountersOnControlledCreatures
-            | Instruction::PutCountersOnControlledSubtype(_)
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-            | Instruction::PutCountersOnOtherCreatures
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::PutChargeCounterOnSource
-            | Instruction::PutBlessingCounterOnSource
-            | Instruction::PutNamedCounterOnSource { .. }
-            | Instruction::PutCountersOnSubject { .. }
-            | Instruction::PutQuestCounterOnSource
-            | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
             | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::FightSourceWithTarget
-            | Instruction::ClearSourceCounters(_)
-            | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
-            | Instruction::UntapAbilitySource
-            | Instruction::TapAbilitySource
-            | Instruction::RegenerateSource
-            | Instruction::RegenerateControlledSubtype(_)
-            | Instruction::DoubleCountersOnTargets
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::UntapControlledLands
-            | Instruction::UntapControlledCreatures
-            | Instruction::SetGroupTapped { .. }
-            | Instruction::SetSubjectTapped { .. }
             | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::AttachOnEntry { .. }
             | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -216,7 +181,6 @@ impl EffectWindow {
             | Instruction::SetPlayersLife { .. }
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
@@ -226,12 +190,9 @@ impl EffectWindow {
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
-            | Instruction::DoublePowerToughnessSubject { .. }
-            | Instruction::DoubleCountersOnSubject { .. }
             | Instruction::WinGame(_)
             | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -259,13 +220,10 @@ impl EffectWindow {
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
-            | Instruction::AttachPermanent { .. }
-            | Instruction::UnattachSubject { .. }
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::SkipNextUntap { .. }
-            | Instruction::RequireCombatAction { .. }
-            | Instruction::CreateTemporaryRule { .. }
             | Instruction::ZoneOp(_)
+            | Instruction::DrawCards(_)
+            | Instruction::MutateObject(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
@@ -275,7 +233,6 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::SetDayNight(_)
@@ -287,14 +244,12 @@ impl EffectWindow {
             | Instruction::PayLife { .. }
             | Instruction::PayEnergy { .. }
             | Instruction::TapOrUntapControlled { .. }
-            | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
             | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
-            | Instruction::RemoveCountersFromSubject { .. }
             | Instruction::UntapOrTapSelect { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
@@ -302,25 +257,13 @@ impl EffectWindow {
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. }
-            | Instruction::TurnFaceDownSubject { .. }
-            | Instruction::TransformSubject { .. }
             | Instruction::EmpowerJace { .. }
-            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
-            | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
-            | Instruction::GrantControllerFlashUntilCleanup
-            | Instruction::RequireOpponentsCreaturesBlockThisTurn
-            | Instruction::RequireBlocksAgainstTargetThisTurn
-            | Instruction::SuppressGroupKeywords { .. }
-            | Instruction::ModifyGroupUntilEndOfTurn { .. }
-            | Instruction::BoostSource { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
-            | Instruction::PutCountersOnSource { .. }
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::Unattach
             | Instruction::CreateTokenAndAttach { .. }
@@ -375,7 +318,6 @@ impl EffectWindow {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ExileRelatedPermanents(_)
-            | Instruction::ExileTargetWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
@@ -388,14 +330,10 @@ impl EffectWindow {
             | Instruction::ReturnTokenLinkedExile
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::RegenerateSubject { .. }
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
-            | Instruction::SkipNextTurns { .. }
-            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::AttachPermanentToPlayer { .. }
             | Instruction::AttachChoosingPermanent { .. }
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
@@ -406,7 +344,6 @@ impl EffectWindow {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOut(_)
             | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
             | Instruction::WeakenDelayedAttacker(_)
@@ -419,7 +356,6 @@ impl EffectWindow {
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
             | Instruction::DamageGroupAmount { .. }
-            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -464,14 +400,11 @@ impl EffectWindow {
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
-            | Instruction::DrawTargetPlayer { .. }
-            | Instruction::DrawPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
-            | Instruction::DrawEachPlayer { .. }
             | Instruction::DrawPlayersControllingName(_)
             | Instruction::DrawController { .. }
             | Instruction::GainControllerLife { .. }
@@ -497,7 +430,6 @@ impl EffectWindow {
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
             | Instruction::ExileOrderedPermanent(_)
-            | Instruction::ExileLibraryTop { .. }
             | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
             | Instruction::LookOpponentExileForCast { .. }
             | Instruction::ExileFromTargetLibrary
@@ -916,68 +848,6 @@ impl EffectWindow {
                     ResolvedDuration::UntilEndOfTurn,
                 )?)
             }
-            Instruction::BoostTargetPower {
-                amount,
-                also_toughness,
-                keywords,
-            } => {
-                use crate::characteristics::{
-                    AbilityChange, PowerToughness, ResolvedDuration, ResolvedPart, ResolvedParts,
-                };
-                let TargetRef::Object(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let power = self.resolve_value_expr(entry.controller(), &amount)?;
-                let toughness = if also_toughness {
-                    power.clone()
-                } else {
-                    0.into()
-                };
-                InstructionCut::Continuous(self.characteristics.add_effect(
-                    entry.id(),
-                    target,
-                    ResolvedParts(vec![
-                        ResolvedPart::Abilities(AbilityChange::grant_keywords(keywords)),
-                        ResolvedPart::ModifyPT(PowerToughness { power, toughness }),
-                    ]),
-                    ResolvedDuration::UntilEndOfTurn,
-                )?)
-            }
-            Instruction::CreateContinuousEffect { parts, duration } => {
-                let TargetRef::Object(target) = target else {
-                    return Ok(());
-                };
-                let Some(card) = self
-                    .window
-                    .cards()
-                    .get(target)
-                    .filter(|card| card.zone() == ObjectZone::Battlefield)
-                else {
-                    return Ok(());
-                };
-                let owner = card.owner();
-                let Some(duration) = self.resolve_duration(&entry, duration)? else {
-                    return Ok(());
-                };
-                let locals = self
-                    .resolution_state()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .locals()
-                    .clone();
-                let source_object = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    _ => None,
-                };
-                let parts =
-                    self.materialize_resolved_parts(&entry, &parts, &locals, owner, source_object)?;
-                InstructionCut::Continuous(self.characteristics.add_effect(
-                    entry.id(),
-                    target,
-                    parts,
-                    duration,
-                )?)
-            }
             Instruction::CopyTargetToSource {
                 duration,
                 power_toughness,
@@ -1027,143 +897,6 @@ impl EffectWindow {
             }
             Instruction::GrantProtectionChosenColor(_) => {
                 return Err(EffectError::InconsistentProgram);
-            }
-            Instruction::PutIndestructibleCounter => {
-                let TargetRef::Object(object) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let kind = CounterKind::Indestructible;
-                let previous = self.counters_of_kind(object, kind);
-                let added =
-                    permanent_counters::effect_counter_multiplier(&before.view().evaluated, object);
-                let after = previous.plus(&added);
-                self.characteristics
-                    .indestructible_counters
-                    .insert(object, after.clone());
-                self.characteristics
-                    .refresh_indestructible_counter_grant(entry.id(), object)?;
-                InstructionCut::Ready(RulesOccurrence::PermanentCounterChanged {
-                    object,
-                    kind,
-                    before: previous,
-                    after,
-                })
-            }
-            Instruction::PutLoyaltyCounter => {
-                let TargetRef::Object(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let old = self
-                    .characteristics
-                    .loyalty
-                    .get(&target)
-                    .cloned()
-                    .unwrap_or_else(|| 0.into());
-                let added =
-                    permanent_counters::effect_counter_multiplier(&before.view().evaluated, target);
-                let new = old.plus(&added);
-                self.characteristics.loyalty.insert(target, new.clone());
-                InstructionCut::Ready(RulesOccurrence::LoyaltyCountersChanged {
-                    object: target,
-                    before: old,
-                    after: new,
-                })
-            }
-            Instruction::PutNamedCounterOnTarget { kind, amount } => {
-                let TargetRef::Object(object) = target else {
-                    return Ok(());
-                };
-                let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
-                if !resolved.is_positive() {
-                    return Ok(());
-                }
-                if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
-                    let raw = if kind == CounterKind::PlusOne {
-                        PowerToughnessCounters {
-                            plus_one: resolved,
-                            minus_one: 0.into(),
-                        }
-                    } else {
-                        PowerToughnessCounters {
-                            plus_one: 0.into(),
-                            minus_one: resolved,
-                        }
-                    };
-                    let counters =
-                        self.adjusted_pt_counters(&before.view().evaluated, object, raw, None)?;
-                    if !counters.valid_placement() {
-                        return Ok(());
-                    }
-                    let previous = self.characteristics.counters(object);
-                    self.characteristics.place_counters(object, &counters)?;
-                    InstructionCut::Counters {
-                        object,
-                        before: previous,
-                        added: counters,
-                        after: self.characteristics.counters(object),
-                    }
-                } else {
-                    let old = self.counters_of_kind(object, kind);
-                    let multiplied = permanent_counters::effect_counter_multiplier(
-                        &before.view().evaluated,
-                        object,
-                    )
-                    .times(&resolved);
-                    let added = self.apply_static_counter_modifiers(
-                        &before.view().evaluated,
-                        object,
-                        kind,
-                        multiplied,
-                    );
-                    if !added.is_positive() {
-                        return Ok(());
-                    }
-                    let after = old.plus(&added);
-                    self.characteristics
-                        .named_permanent_counters_mut(kind)
-                        .ok_or(EffectError::InconsistentProgram)?
-                        .insert(object, after.clone());
-                    if kind.keyword_counter_ability().is_some() {
-                        self.characteristics.refresh_keyword_counter_grant(
-                            entry.id(),
-                            object,
-                            kind,
-                        )?;
-                    }
-                    let occ = if kind == CounterKind::Loyalty {
-                        RulesOccurrence::LoyaltyCountersChanged {
-                            object,
-                            before: old,
-                            after,
-                        }
-                    } else {
-                        RulesOccurrence::PermanentCounterChanged {
-                            object,
-                            kind,
-                            before: old,
-                            after,
-                        }
-                    };
-                    InstructionCut::Ready(occ)
-                }
-            }
-            Instruction::PutPowerToughnessCounters { counters } => {
-                let TargetRef::Object(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let counters =
-                    self.adjusted_pt_counters(&before.view().evaluated, target, counters, None)?;
-                if !counters.valid_placement() {
-                    return Ok(());
-                }
-                let previous = self.characteristics.counters(target);
-                self.characteristics.place_counters(target, &counters)?;
-                InstructionCut::Counters {
-                    object: target,
-                    before: previous,
-                    added: counters,
-                    after: self.characteristics.counters(target),
-                }
             }
             Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_) => {
                 let enters_tapped = false;
@@ -1245,28 +978,8 @@ impl EffectWindow {
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilSourceLeaves
-            | Instruction::ExileTargetUntilOpponentMonarch
-            | Instruction::ReturnToOwnersHand => {
-                let linked_source = if instruction == Instruction::ExileTargetUntilSourceLeaves {
-                    let (StackKind::TriggeredAbility { source }
-                    | StackKind::ActivatedAbility { source }) = entry.kind()
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    let source = source.id();
-                    if self
-                        .window
-                        .cards()
-                        .get(source)
-                        .is_none_or(|object| object.zone() != ObjectZone::Battlefield)
-                    {
-                        return Ok(());
-                    }
-                    Some(source)
-                } else {
-                    None
-                };
+            | Instruction::ExileTargetUntilOpponentMonarch => {
+                let linked_source: Option<ObjectId> = None;
                 let (destination, reason) = match instruction {
                     Instruction::DestroyTarget => {
                         (ObjectDestination::Graveyard, ZoneReason::Destroyed)
@@ -1274,7 +987,6 @@ impl EffectWindow {
                     Instruction::ImprintTargetLand
                     | Instruction::ImprintTargetCreature
                     | Instruction::ExileTargetAsAbilityDonor
-                    | Instruction::ExileTargetUntilSourceLeaves
                     | Instruction::ExileTargetUntilOpponentMonarch => {
                         (ObjectDestination::Exile, ZoneReason::ExiledByEffect)
                     }
@@ -1416,27 +1128,6 @@ impl EffectWindow {
                             appearances,
                         }
                     }
-                    InstructionCut::Counters {
-                        object,
-                        before,
-                        added,
-                        after,
-                    } => RulesOccurrence::CountersPlaced {
-                        object,
-                        before,
-                        added,
-                        after,
-                        before_appearance: Box::new(
-                            previous
-                                .appearance(object)
-                                .ok_or(EffectError::InconsistentProgram)?,
-                        ),
-                        after_appearance: Box::new(
-                            current
-                                .appearance(object)
-                                .ok_or(EffectError::InconsistentProgram)?,
-                        ),
-                    },
                 };
                 let mut rows = vec![occurrence];
                 if let Some(effect) = entry_effect {

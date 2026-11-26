@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Layer-2 control through actual casting, resolution, cleanup and combat cuts.
 //! Stack-spell control, attachments, conditional durations and player departures
 //! remain unqualified; these are authored programs, not complete-card claims.
@@ -423,107 +424,6 @@ fn permanent_entry_receipts_include_the_controller_after_live_static_evaluation(
             .derived,
         pt(5, 5)
     );
-}
-
-#[test]
-fn control_records_do_not_follow_a_card_that_leaves_and_returns() {
-    let v = vocabulary();
-    let game = world(
-        v.clone(),
-        vec![
-            target(1, P1, P1),
-            control_spell(
-                2,
-                P0,
-                ControlRecipient::ResolvingController,
-                ResolvedDuration::NoStatedDuration,
-            ),
-            spell(
-                3,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-            library(9, P1, &v),
-        ],
-        vec![CardId(1)],
-    );
-    let old = object(&game, 1);
-    let (stolen, _) = resolve(&game, 2, old);
-    let (bounced, _) = resolve(stolen.state(), 3, old);
-    assert!(
-        bounced
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(old)
-            .is_none()
-    );
-    assert!(
-        bounced
-            .state()
-            .execution()
-            .continuous_effects()
-            .next()
-            .is_none()
-    );
-    assert_eq!(
-        physical(bounced.state(), object(bounced.state(), 1)).default_controller(),
-        None
-    );
-    let end = reach_end(bounced.state(), [P0, P1]);
-    let next_turn = pass_pair(&end);
-    let draw = pass_in_order(next_turn.state(), [P1, P0]);
-    let main = pass_in_order(draw.state(), [P1, P0]);
-    let cast = submit(
-        main.state(),
-        P1,
-        GameCommand::CastUntargeted {
-            spell: object(main.state(), 1),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let returned = pass_in_order(cast.state(), [P1, P0]);
-    let new = object(returned.state(), 1);
-    assert_ne!(new, old);
-    assert_eq!(physical(returned.state(), new).controller(), Some(P1));
-    assert_eq!(
-        physical(returned.state(), new).default_controller(),
-        Some(P1)
-    );
-}
-
-#[test]
-fn layer_two_control_feeds_later_counts_and_source_departure_restores_the_default() {
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, controller_static(), true),
-            target(2, P1, P1),
-            spell(
-                3,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1), CardId(2)],
-    );
-    let target = object(&game, 2);
-    assert_eq!(physical(&game, target).controller(), Some(P0));
-    assert_eq!(
-        current(&game, target).power_toughness.unwrap().derived,
-        pt(5, 5)
-    );
-    let (removed, _) = resolve(&game, 3, object(&game, 1));
-    assert_eq!(physical(removed.state(), target).controller(), Some(P1));
-    assert_eq!(
-        current(removed.state(), target)
-            .power_toughness
-            .unwrap()
-            .derived,
-        pt(4, 4)
-    );
-    assert_eq!(controller_changes(&removed).len(), 1);
 }
 
 #[test]

@@ -96,7 +96,13 @@ fn optional_accepts_each_primitive_with_its_real_operand_contract() {
             BodyTarget::SingleCreature,
             Instruction::CreateDamageMultiplier { factor: 2.into() },
         ),
-        (BodyTarget::SinglePermanent, Instruction::ReturnToOwnersHand),
+        (
+            BodyTarget::SinglePermanent,
+            crate::program::Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::Targets,
+                crate::toolbox::ZoneDest::Hand,
+            ))),
+        ),
         (
             BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
             Instruction::CounterSpell,
@@ -112,22 +118,52 @@ fn optional_accepts_each_primitive_with_its_real_operand_contract() {
                 power_toughness: None,
             },
         ),
-        (
-            BodyTarget::SinglePermanent,
-            Instruction::CreateContinuousEffect {
+        (BodyTarget::SinglePermanent, {
+            struct _Tmp {
+                parts: crate::characteristics::ResolvedPartsSpec,
+                duration: crate::characteristics::ResolvedDuration,
+            }
+            let _t = _Tmp {
                 parts: ResolvedPartsSpec(vec![ResolvedPartSpec::SwitchPT]),
                 duration: ResolvedDuration::UntilEndOfTurn,
-            },
-        ),
-        (
-            BodyTarget::SingleCreature,
-            Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
+            };
+            crate::program::Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec {
+                    selector: Some(crate::toolbox::ObjectQuery::Targets),
+                    payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                    duration: _t.duration,
+                    condition: None,
+                    one_shot: false,
+                    as_emblem: None,
+                    emblem_label: None,
+                },
+            ))
+        }),
+        (BodyTarget::SingleCreature, {
+            struct _Tmp {
+                counters: crate::characteristics::PowerToughnessCounters,
+            }
+            let _t = _Tmp {
+                counters: crate::characteristics::PowerToughnessCounters {
                     plus_one: 1.into(),
                     minus_one: 0.into(),
                 },
-            },
-        ),
+            };
+            let (_k, _a) = if _t.counters.minus_one.is_positive() {
+                (crate::effects::CounterKind::MinusOne, _t.counters.minus_one)
+            } else {
+                (crate::effects::CounterKind::PlusOne, _t.counters.plus_one)
+            };
+            crate::program::Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: _k,
+                        amount: crate::program::ValueExpr::Literal(_a),
+                    },
+                ),
+            ))
+        }),
         (
             BodyTarget::None,
             Instruction::DrawController {
@@ -206,7 +242,12 @@ fn optional_preserves_the_following_primitives_validation() {
             BodyTarget::SinglePlayer,
             vec![
                 optional(ResolvingPlayer::Controller),
-                Instruction::ReturnToOwnersHand
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                ))
             ]
         ),
         Err(DefinitionError::OperandFamily)
@@ -607,7 +648,12 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
             BodyTarget::SinglePermanent,
             vec![
                 optional(ResolvingPlayer::Controller),
-                Instruction::ReturnToOwnersHand,
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                )),
                 copy()
             ]
         ),
@@ -619,7 +665,12 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
                 BodyTarget::SinglePermanent,
                 vec![
                     offer(ResolvingPlayer::Controller, paid, declined),
-                    Instruction::ReturnToOwnersHand,
+                    crate::program::Instruction::ZoneOp(Box::new(
+                        crate::toolbox::ZoneOpSpec::move_all(
+                            crate::toolbox::ObjectQuery::Targets,
+                            crate::toolbox::ZoneDest::Hand
+                        )
+                    )),
                     copy()
                 ]
             ),
@@ -631,7 +682,12 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
             BodyTarget::SinglePermanent,
             vec![
                 offer(ResolvingPlayer::Controller, 1, 3),
-                Instruction::ReturnToOwnersHand,
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                )),
                 Instruction::Jump { destination: 4 },
                 copy(),
                 gain()

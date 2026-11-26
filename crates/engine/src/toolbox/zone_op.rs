@@ -52,6 +52,43 @@ pub enum ZoneSelection {
     },
 }
 
+impl ZoneSelection {
+    #[must_use]
+    pub fn uses_target(&self) -> bool {
+        match self {
+            Self::All => false,
+            Self::Random { count, chooser } => count.uses_target() || chooser.uses_target(),
+            Self::Prompt {
+                chooser, min, max, ..
+            } => chooser.uses_target() || min.uses_target() || max.uses_target(),
+        }
+    }
+
+    pub(crate) fn validate_vocabulary(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        match self {
+            Self::All => Ok(()),
+            Self::Random { count, chooser } => {
+                count
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                chooser.validate_vocabulary(vocabulary)
+            }
+            Self::Prompt {
+                chooser, min, max, ..
+            } => {
+                chooser.validate_vocabulary(vocabulary)?;
+                min.validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                max.validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)
+            }
+        }
+    }
+}
+
 /// Controller under which an object enters the battlefield.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZoneController {

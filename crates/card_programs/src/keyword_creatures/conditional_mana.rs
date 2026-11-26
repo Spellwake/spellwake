@@ -98,7 +98,12 @@ pub(super) fn mage_ring(card: &InventoryCard, profile: Profile) -> Option<Progra
         source_cost: spellwake_engine::activated::SourceCost::Tap,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::PutStorageCounterOnSource],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    spellwake_engine::effects::CounterKind::Storage,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
         ),
     });
     Some(program)

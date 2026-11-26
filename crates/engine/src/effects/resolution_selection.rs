@@ -1697,23 +1697,6 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::ReturnSourceToHand => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let object = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => source.id(),
-                    _ => return Err(EffectError::InconsistentProgram),
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ReturnSingle { object },
-                )
-            }
             Instruction::DestroyCapturedCombatCreature { .. } => {
                 let entry = self
                     .window
@@ -1762,30 +1745,9 @@ impl EffectWindow {
                     ResolutionSelectionOperation::DestroySingle { object },
                 )
             }
-            Instruction::ExileTargetWithLink(_) => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileSingle {
-                        object,
-                        source: None,
-                        monarch_controller: None,
-                    },
-                )
-            }
             Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilSourceLeaves
             | Instruction::ExileTargetUntilOpponentMonarch => {
                 if self.zone_replacement_sources()?.sources.is_empty() {
                     return Ok(false);
@@ -1798,24 +1760,7 @@ impl EffectWindow {
                 let TargetRef::Object(object) = target else {
                     return Err(EffectError::InconsistentProgram);
                 };
-                let source = if matches!(instruction, Instruction::ExileTargetUntilSourceLeaves) {
-                    let (StackKind::TriggeredAbility { source }
-                    | StackKind::ActivatedAbility { source }) = entry.kind()
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    if self
-                        .window
-                        .cards()
-                        .get(source.id())
-                        .is_none_or(|value| value.zone() != ObjectZone::Battlefield)
-                    {
-                        return Ok(false);
-                    }
-                    Some(source.id())
-                } else {
-                    None
-                };
+                let source: Option<ObjectId> = None;
                 let monarch_controller =
                     matches!(instruction, Instruction::ExileTargetUntilOpponentMonarch)
                         .then_some(entry.controller());
@@ -1958,34 +1903,6 @@ impl EffectWindow {
                         object,
                         source: None,
                         monarch_controller: None,
-                    },
-                )
-            }
-            Instruction::ExileLibraryTop { player, amount } => {
-                if *player == ResolvingPlayer::UniqueRelatedPlayer
-                    && !self
-                        .window
-                        .participants()
-                        .contains(&self.captured_related_player()?)
-                {
-                    self.advance_instruction()?;
-                    return Ok(true);
-                }
-                let seat = self.resolving_player(*player)?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.moved_library_types.clear();
-                    cursor.results.revealed_top_types.clear();
-                    cursor.results.revealed_top_card = None;
-                }
-                let library = self.window.cards().library(seat);
-                let cards = library[..usize::from(*amount).min(library.len())].to_vec();
-                all = ValueExpr::Literal(RulesInteger::from_usize(cards.len()));
-                (
-                    AffectedPlayers::One(*player),
-                    &all,
-                    ResolutionSelectionOperation::ExileLibrarySegment {
-                        player: seat,
-                        cards,
                     },
                 )
             }
@@ -2670,11 +2587,9 @@ impl EffectWindow {
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::PayLife { .. }
             | Instruction::PayEnergy { .. }
-            | Instruction::ExertAbilitySource
             | Instruction::ChooseOption { .. }
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
@@ -2682,12 +2597,9 @@ impl EffectWindow {
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
-            | Instruction::DoublePowerToughnessSubject { .. }
-            | Instruction::DoubleCountersOnSubject { .. }
             | Instruction::WinGame(_)
             | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -2715,12 +2627,7 @@ impl EffectWindow {
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
-            | Instruction::AttachPermanent { .. }
-            | Instruction::UnattachSubject { .. }
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::SkipNextUntap { .. }
-            | Instruction::RequireCombatAction { .. }
-            | Instruction::CreateTemporaryRule { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -2731,7 +2638,6 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::SetDayNight(_)
@@ -2741,15 +2647,8 @@ impl EffectWindow {
             | Instruction::RepeatLoop { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
-            | Instruction::GrantControllerFlashUntilCleanup
-            | Instruction::RequireOpponentsCreaturesBlockThisTurn
-            | Instruction::RequireBlocksAgainstTargetThisTurn
-            | Instruction::SuppressGroupKeywords { .. }
-            | Instruction::ModifyGroupUntilEndOfTurn { .. }
-            | Instruction::BoostSource { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
-            | Instruction::PutCountersOnSource { .. }
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::Unattach
             | Instruction::CreateTokenAndAttach { .. }
@@ -2777,20 +2676,13 @@ impl EffectWindow {
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
-            | Instruction::GoadOtherPlayersCreatures
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
             | Instruction::DisallowDamagePreventionThisTurn
-            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::PreventDamageSpec(_)
-            | Instruction::DoubleCountersOnTargets
             | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::UntapControlledLands
-            | Instruction::UntapControlledCreatures
-            | Instruction::SetGroupTapped { .. }
-            | Instruction::SetSubjectTapped { .. }
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
@@ -2924,7 +2816,6 @@ impl EffectWindow {
             | Instruction::ChooseMeldPartner(_)
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOut(_)
             | Instruction::PhaseOutObjects(_)
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
@@ -2936,7 +2827,6 @@ impl EffectWindow {
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
             | Instruction::DamageGroupAmount { .. }
-            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -2981,46 +2871,25 @@ impl EffectWindow {
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
             | Instruction::PutCounterOnRelatedPermanent
-            | Instruction::PutCountersOnControlledCreatures
-            | Instruction::PutCountersOnControlledSubtype(_)
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-            | Instruction::PutCountersOnOtherCreatures
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::PutChargeCounterOnSource
-            | Instruction::PutBlessingCounterOnSource
-            | Instruction::PutNamedCounterOnSource { .. }
-            | Instruction::PutCountersOnSubject { .. }
-            | Instruction::PutQuestCounterOnSource
-            | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
             | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::FightSourceWithTarget
-            | Instruction::ClearSourceCounters(_)
-            | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
-            | Instruction::UntapAbilitySource
-            | Instruction::TapAbilitySource
-            | Instruction::RegenerateSource
-            | Instruction::RegenerateControlledSubtype(_)
-            | Instruction::RegenerateTarget
-            | Instruction::GoadTarget
-            | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::RemoveSubjectFromCombat(_)
-            | Instruction::ReturnSourceGraveyardToBattlefield { .. }
             | Instruction::ReturnUpToOneRecentGraveyardCard
-            | Instruction::ReturnSourceGraveyardToHand
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::EndControllerTurn
-            | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::LoseLifeAndScryForSubtype(_)
@@ -3038,7 +2907,6 @@ impl EffectWindow {
             | Instruction::PutChosenXChargeCounters
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::RemoveCountersFromPermanent { .. }
-            | Instruction::ReturnToOwnersHand
             | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
@@ -3051,26 +2919,17 @@ impl EffectWindow {
             | Instruction::CopySpell
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::CopyTargetToSource { .. }
-            | Instruction::CreateContinuousEffect { .. }
             | Instruction::WeakenTargetByChosenX
-            | Instruction::BoostTargetPower { .. }
             | Instruction::AnimateTargetAsCountedCreature { .. }
             | Instruction::GrantProtectionChosenColor(_)
-            | Instruction::PutIndestructibleCounter
-            | Instruction::PutLoyaltyCounter
-            | Instruction::PutNamedCounterOnTarget { .. }
-            | Instruction::PutPowerToughnessCounters { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::DrawTargetPlayer { .. }
-            | Instruction::DrawPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
-            | Instruction::DrawEachPlayer { .. }
             | Instruction::DrawPlayersControllingName(_)
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
@@ -3081,30 +2940,22 @@ impl EffectWindow {
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
-            | Instruction::RemoveCountersFromSubject { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. }
-            | Instruction::TurnFaceDownSubject { .. }
-            | Instruction::TransformSubject { .. }
             | Instruction::EmpowerJace { .. }
-            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
-            | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::RegenerateSubject { .. }
             | Instruction::AddManaForPlayer { .. }
-            | Instruction::SkipNextTurns { .. }
-            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::AttachPermanentToPlayer { .. } => return Ok(false),
+            | Instruction::DrawCards(_)
+            | Instruction::MutateObject(_) => return Ok(false),
         };
         let entry = self
             .window
@@ -5010,13 +4861,7 @@ impl EffectWindow {
         let inherit_from_exile = *actual == Instruction::ExileTargetAsAbilityDonor;
         let play_exiled_card =
             (*actual == Instruction::ExileRelatedHandCardForPlay).then(|| entry.controller());
-        let independent_link = match (actual, entry.kind()) {
-            (
-                Instruction::ExileTargetWithLink(link),
-                StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source },
-            ) => Some((source.id(), *link)),
-            _ => None,
-        };
+        let independent_link: Option<(ObjectId, crate::program::LinkedExileGroup)> = None;
         let players = match (operation, actual) {
             (
                 ResolutionSelectionOperation::PayLifeToSaveCreatures { cost, .. },
@@ -5090,19 +4935,6 @@ impl EffectWindow {
                 ResolutionSelectionOperation::GraveyardCreatureToHand,
                 Instruction::ReturnUpToOneOwnGraveyardCreatureToHand,
             ) => AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-            (
-                ResolutionSelectionOperation::ExileLibrarySegment { player, cards },
-                Instruction::ExileLibraryTop {
-                    player: role,
-                    amount,
-                },
-            ) if self.resolving_player_at(*role, Some(cursor))? == *player && {
-                let library = self.window.cards().library(*player);
-                cards == &library[..usize::from(*amount).min(library.len())]
-            } =>
-            {
-                AffectedPlayers::One(*role)
-            }
             (
                 ResolutionSelectionOperation::LibraryCohortToGraveyard { player, cards },
                 Instruction::PutLibraryCohortIntoGraveyard(cohort),
@@ -5238,12 +5070,6 @@ impl EffectWindow {
                 Instruction::ReturnDelayedPermanentToHand(expected),
             ) if object == expected => AffectedPlayers::EachPlayer,
             (
-                ResolutionSelectionOperation::ReturnSingle { object },
-                Instruction::ReturnSourceToHand,
-            ) if matches!(entry.kind(), StackKind::ActivatedAbility {source} | StackKind::TriggeredAbility {source} if source.id() == *object) => {
-                AffectedPlayers::EachPlayer
-            }
-            (
                 ResolutionSelectionOperation::DestroySingle { object },
                 Instruction::DestroyCapturedCombatCreature { .. },
             ) if *object == self.captured_combatant(entry.id())? => AffectedPlayers::EachPlayer,
@@ -5270,22 +5096,6 @@ impl EffectWindow {
                 Instruction::ExileUntilOtherTargetLeaves,
             ) if monarch_controller.is_none()
                 && self.legal_linked_targets()? == source.map(|source| (*object, source)) =>
-            {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::ExileSingle {
-                    object,
-                    source: None,
-                    monarch_controller: None,
-                },
-                Instruction::ExileTargetWithLink(_),
-            ) if self
-                .instruction_target_at(entry, Some(cursor.instruction))?
-                .choice()
-                .target
-                == TargetRef::Object(*object)
-                && independent_link.is_some() =>
             {
                 AffectedPlayers::EachPlayer
             }
@@ -5418,7 +5228,6 @@ impl EffectWindow {
                 Instruction::ImprintTargetLand
                 | Instruction::ImprintTargetCreature
                 | Instruction::ExileTargetAsAbilityDonor
-                | Instruction::ExileTargetUntilSourceLeaves
                 | Instruction::ExileTargetUntilOpponentMonarch,
             ) if self
                 .instruction_target_at(entry, Some(cursor.instruction))?
@@ -5426,10 +5235,6 @@ impl EffectWindow {
                 .target
                 == TargetRef::Object(*object)
                 && match actual {
-                    Instruction::ExileTargetUntilSourceLeaves => {
-                        monarch_controller.is_none()
-                            && matches!(entry.kind(), StackKind::TriggeredAbility { source: actual } if Some(actual.id()) == *source)
-                    }
                     Instruction::ImprintTargetLand
                     | Instruction::ImprintTargetCreature
                     | Instruction::ExileTargetAsAbilityDonor => {

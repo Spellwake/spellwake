@@ -76,7 +76,12 @@ fn printed_land() -> Program {
         source_cost: crate::activated::SourceCost::None,
         body: crate::program::ExecutableBody::new(
             crate::program::BodyTarget::SinglePermanent,
-            vec![crate::program::Instruction::ReturnToOwnersHand],
+            vec![crate::program::Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::move_all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ZoneDest::Hand,
+                ),
+            ))],
         ),
     }];
     program.triggered = vec![crate::program::TriggeredAbility {

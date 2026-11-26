@@ -487,7 +487,16 @@ fn exact_zero_sacrifice_preserves_both_false_and_true_incoming_movement_facts() 
     assert_eq!(
         check(
             BodyTarget::SinglePermanent,
-            vec![Instruction::ReturnToOwnersHand, zero.clone(), copy()]
+            vec![
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                )),
+                zero.clone(),
+                copy()
+            ]
         ),
         Err(DefinitionError::InvalidInstruction)
     );

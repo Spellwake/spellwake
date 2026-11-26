@@ -571,9 +571,9 @@ fn triggered(
                         Instruction::OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
                     ],
                 ),
             ));

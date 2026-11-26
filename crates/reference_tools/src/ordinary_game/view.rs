@@ -1914,20 +1914,42 @@ fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
             if program.has_type(CardType::Instant) || program.has_type(CardType::Sorcery) =>
         {
             match (spell.body.target, spell.body.instructions.as_slice()) {
-                (BodyTarget::SingleCreature, [Instruction::ReturnToOwnersHand]) => true,
+                (BodyTarget::SingleCreature, [Instruction::ZoneOp(spec)])
+                    if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                        && matches!(
+                            spec.selection,
+                            spellwake_engine::toolbox::ZoneSelection::All
+                        )
+                        && matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Hand
+                        )
+                        && spec.shuffle_library.is_none() =>
+                {
+                    true
+                }
                 (BodyTarget::SingleSpell(filter), [Instruction::CounterSpell])
                     if filter == spellwake_engine::program::SpellFilter::any() =>
                 {
                     true
                 }
-                (
-                    BodyTarget::None,
-                    [
-                        Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::Literal(amount),
-                        },
-                    ],
-                ) => *amount == 2.into(),
+                (BodyTarget::None, [Instruction::DrawCards(spec)])
+                    if matches!(
+                        spec.players,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller
+                        ) | spellwake_engine::toolbox::PlayerSelector::Group(
+                            spellwake_engine::program::AffectedPlayers::One(
+                                spellwake_engine::program::ResolvingPlayer::Controller
+                            )
+                        )
+                    ) =>
+                {
+                    matches!(
+                        &spec.amount,
+                        spellwake_engine::program::ValueExpr::Literal(amount) if *amount == 2.into()
+                    )
+                }
                 _ => false,
             }
         }
@@ -2284,9 +2306,14 @@ mod tests {
                 body: ExecutableBody::new(
                     target,
                     vec![match target {
-                        BodyTarget::None => Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        BodyTarget::None => Instruction::DrawCards(Box::new(
+                            spellwake_engine::toolbox::DrawCardsSpec::simple(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(1.into()),
+                            ),
+                        )),
                         BodyTarget::SingleOpponent | BodyTarget::SinglePlayer => {
                             Instruction::AdjustTargetLife {
                                 adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),

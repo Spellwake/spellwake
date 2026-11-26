@@ -104,7 +104,12 @@ fn unreachable_code_cannot_supply_target_consumption_or_hide_invalid_syntax() {
             BodyTarget::SinglePermanent,
             vec![
                 Instruction::Jump { destination: 2 },
-                Instruction::ReturnToOwnersHand
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                ))
             ]
         ),
         Err(DefinitionError::PhantomTarget)
@@ -141,7 +146,16 @@ fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
     assert_eq!(
         check(
             BodyTarget::SinglePermanent,
-            vec![branch(2), Instruction::ReturnToOwnersHand, copy.clone()]
+            vec![
+                branch(2),
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                )),
+                copy.clone()
+            ]
         ),
         Err(DefinitionError::InvalidInstruction)
     );
@@ -150,7 +164,12 @@ fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
             BodyTarget::SinglePermanent,
             vec![
                 branch(3),
-                Instruction::ReturnToOwnersHand,
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand
+                    )
+                )),
                 Instruction::Jump { destination: 4 },
                 copy,
                 gain()
@@ -284,12 +303,29 @@ fn nested_continuous_effect_slot_reads_use_the_same_definite_join() {
         .unwrap()
         .resolve_label("Human")
         .unwrap();
-    let effect = || Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Text(CreatureTypeTextChangeSpec {
-            from: CreatureTypeWord::Chosen(CreatureTypeSlot::new(0)),
-            to: CreatureTypeWord::Literal(human),
-        })]),
-        duration: ResolvedDuration::UntilEndOfTurn,
+    let effect = || {
+        struct _Tmp {
+            parts: crate::characteristics::ResolvedPartsSpec,
+            duration: crate::characteristics::ResolvedDuration,
+        }
+        let _t = _Tmp {
+            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Text(CreatureTypeTextChangeSpec {
+                from: CreatureTypeWord::Chosen(CreatureTypeSlot::new(0)),
+                to: CreatureTypeWord::Literal(human),
+            })]),
+            duration: ResolvedDuration::UntilEndOfTurn,
+        };
+        crate::program::Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec {
+                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                duration: _t.duration,
+                condition: None,
+                one_shot: false,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        ))
     };
     assert_eq!(
         check(

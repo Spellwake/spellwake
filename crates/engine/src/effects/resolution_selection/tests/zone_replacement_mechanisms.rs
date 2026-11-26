@@ -463,7 +463,12 @@ fn copied_sources_keep_recipient_instance_identity_after_donor_departure() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::ReturnToOwnersHand],
+            vec![crate::program::Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::move_all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ZoneDest::Hand,
+                ),
+            ))],
         ),
     );
     let mut t = Trace::new(fixture(
@@ -517,11 +522,30 @@ fn removed_replacement_abilities_do_not_execute_retained_printed_text() {
             false,
         )]);
         let body = vec![
-            Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
-                    removal,
-                ))]),
-                duration: ResolvedDuration::UntilEndOfTurn,
+            {
+                struct _Tmp {
+                    parts: crate::characteristics::ResolvedPartsSpec,
+                    duration: crate::characteristics::ResolvedDuration,
+                }
+                let _t = _Tmp {
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                        AbilityChange::remove(removal),
+                    )]),
+                    duration: ResolvedDuration::UntilEndOfTurn,
+                };
+                crate::program::Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: Some(crate::toolbox::ObjectQuery::Targets),
+                        payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                            _t.parts,
+                        )),
+                        duration: _t.duration,
+                        condition: None,
+                        one_shot: false,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))
             },
             sacrifice(AffectedPlayers::One(ResolvingPlayer::Controller), 1.into()),
         ];
@@ -1022,11 +1046,30 @@ fn captured_activated_body_replaces_sacrifice_after_its_real_source_cost() {
             body: ExecutableBody::new(
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::PutPowerToughnessCounters {
-                        counters: crate::characteristics::PowerToughnessCounters {
-                            plus_one: 1.into(),
-                            minus_one: 0.into(),
-                        },
+                    {
+                        struct _Tmp {
+                            counters: crate::characteristics::PowerToughnessCounters,
+                        }
+                        let _t = _Tmp {
+                            counters: crate::characteristics::PowerToughnessCounters {
+                                plus_one: 1.into(),
+                                minus_one: 0.into(),
+                            },
+                        };
+                        let (_k, _a) = if _t.counters.minus_one.is_positive() {
+                            (crate::effects::CounterKind::MinusOne, _t.counters.minus_one)
+                        } else {
+                            (crate::effects::CounterKind::PlusOne, _t.counters.plus_one)
+                        };
+                        crate::program::Instruction::MutateObject(Box::new(
+                            crate::toolbox::MutateObjectSpec::all(
+                                crate::toolbox::ObjectQuery::Targets,
+                                crate::toolbox::ObjectMutation::AddCounters {
+                                    kind: _k,
+                                    amount: crate::program::ValueExpr::Literal(_a),
+                                },
+                            ),
+                        ))
                     },
                     sacrifice(AffectedPlayers::One(ResolvingPlayer::Controller), 1.into()),
                     gain(4),

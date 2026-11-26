@@ -671,7 +671,12 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
         let state = fixture(
             BodyTarget::SinglePermanent,
             vec![
-                Instruction::ReturnToOwnersHand,
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                )),
                 Instruction::Discard {
                     players: AffectedPlayers::One(ResolvingPlayer::Controller),
                     amount: crate::program::ValueExpr::Literal(1.into()),
@@ -1029,14 +1034,33 @@ fn current_evaluated_type_filter_is_independent_of_printed_types_and_zone_contro
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
-                    land_subtypes: SubtypeOperation::Keep,
-                    supertypes: TypeOperation::Keep,
-                    types: TypeOperation::Remove(BTreeSet::from([CardType::Artifact])),
-                    subtypes: SubtypeOperation::Keep,
-                })]),
-                duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+            vec![{
+                struct _Tmp {
+                    parts: crate::characteristics::ResolvedPartsSpec,
+                    duration: crate::characteristics::ResolvedDuration,
+                }
+                let _t = _Tmp {
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
+                        land_subtypes: SubtypeOperation::Keep,
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Remove(BTreeSet::from([CardType::Artifact])),
+                        subtypes: SubtypeOperation::Keep,
+                    })]),
+                    duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                };
+                crate::program::Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: Some(crate::toolbox::ObjectQuery::Targets),
+                        payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                            _t.parts,
+                        )),
+                        duration: _t.duration,
+                        condition: None,
+                        one_shot: false,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))
             }],
         ),
     );

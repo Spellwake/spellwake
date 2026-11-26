@@ -961,12 +961,7 @@ impl EffectWindow {
     }
 
     pub(super) fn proliferate_choice(&self) -> Result<ProliferateChoice, EffectError> {
-        if !matches!(
-            self.current_instruction()?,
-            Instruction::Proliferate
-                | Instruction::DoubleCountersOnTargets
-                | Instruction::DoubleCountersOnSubject { .. }
-        ) {
+        if !matches!(self.current_instruction()?, Instruction::Proliferate) {
             return Err(EffectError::WrongResolutionFrame);
         }
         let cursor = self
@@ -1023,39 +1018,6 @@ impl EffectWindow {
         journal: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         self.increase_existing_counters(frame, chosen, false, None, journal)
-    }
-
-    pub(super) fn double_target_counters(
-        &mut self,
-        journal: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let frame = self.proliferate_choice()?;
-        let chosen = self
-            .legal_permanent_targets()?
-            .into_iter()
-            .map(TargetRef::Object)
-            .filter(|target| frame.domain.contains_key(target))
-            .collect();
-        self.increase_existing_counters(&frame, chosen, true, None, journal)
-    }
-
-    pub(super) fn double_subject_counters(
-        &mut self,
-        objects: Vec<ObjectId>,
-        kind_filter: Option<CounterKind>,
-        journal: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let frame = self.proliferate_choice()?;
-        let chosen = objects
-            .into_iter()
-            .map(TargetRef::Object)
-            .filter(|target| {
-                frame.domain.get(target).is_some_and(|kinds| {
-                    kind_filter.map_or(!kinds.is_empty(), |k| kinds.contains(&k))
-                })
-            })
-            .collect();
-        self.increase_existing_counters(&frame, chosen, true, kind_filter, journal)
     }
 
     fn increase_existing_counters(

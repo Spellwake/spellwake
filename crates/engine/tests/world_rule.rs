@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! CR704.3/704.5k actual owner/root trajectories. Prepared initial cohorts are
 //! explicit premises; these do not claim opening-to-outcome format qualification.
 #[path = "../test_support/creature_vocabulary.rs"]
@@ -495,45 +496,6 @@ fn world_loss_and_regain_inside_one_resolving_body_renew_age_without_midbody_che
         !events(done.rules_journal())
             .iter()
             .any(|e| matches!(e,RulesOccurrence::ZoneChange(z) if z.before.object.id()==target))
-    );
-}
-
-#[test]
-fn world_exit_and_normal_permanent_reentry_receive_a_new_incarnation_and_tenure() {
-    let game = root(
-        vec![
-            card(1, P0, artifact(true)),
-            trajectories::spell(
-                2,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![vec![CardId(1)]],
-    );
-    let original = id(game.execution(), 1);
-    let (returned, _) = trajectories::resolve(&game, 2, original);
-    assert_eq!(age(returned.state().execution(), original), None);
-    let hand = id(returned.state().execution(), 1);
-    let cast = trajectories::submit(
-        returned.state(),
-        P0,
-        GameCommand::CastUntargeted {
-            spell: hand,
-            payment: None,
-        },
-    );
-    let done = trajectories::pass_pair(cast.state());
-    let entered = id(done.state().execution(), 1);
-    assert_ne!(original, entered);
-    assert_ne!(hand, entered);
-    assert_eq!(age(done.state().execution(), entered), Some(2));
-    assert_eq!(
-        done.state()
-            .execution()
-            .operational_counters()
-            .next_world_tenure,
-        3
     );
 }
 

@@ -130,7 +130,22 @@ fn named_ordinary_permanents_settle_their_full_entry_and_death_triggers() {
             destination: ObjectDestination::Hand,
             program: Program::instant(
                 ManaCost::free(),
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![Instruction::DestroyTarget]),
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ],
+                ),
             ),
         });
         for n in 10..14 {

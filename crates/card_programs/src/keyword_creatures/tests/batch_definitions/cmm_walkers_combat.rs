@@ -65,7 +65,19 @@ fn cmm_ugin_chain_veil_and_oath_of_gideon_preserve_linked_cards_and_loyalty_allo
             5,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
         seed(
             6,

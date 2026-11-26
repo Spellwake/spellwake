@@ -298,7 +298,6 @@ native!(ExecutableBody, self, {
         | Instruction::PayLife { .. }
         | Instruction::PayEnergy { .. }
         | Instruction::TapOrUntapControlled { .. }
-        | Instruction::ExertAbilitySource
         | Instruction::CollectEvidence { .. }
         | Instruction::Blight { .. }
         | Instruction::Populate
@@ -307,21 +306,12 @@ native!(ExecutableBody, self, {
         | Instruction::DealDamageFrom { .. }
         | Instruction::DivideDamageAmongTargets { .. }
         | Instruction::DivideDamageExprAmongTargets { .. }
-        | Instruction::GainControlOfPermanent { .. }
         | Instruction::GiveFixedTargetControl { .. }
         | Instruction::BecomeCopy { .. }
         | Instruction::BecomeCopyFixedTargets { .. }
-        | Instruction::DoublePowerToughnessSubject { .. }
-        | Instruction::DoubleCountersOnSubject { .. }
         | Instruction::WinGame(_)
         | Instruction::LoseGame(_)
         | Instruction::DistributeCountersAmongTargets { .. }
-        | Instruction::AttachPermanent { .. }
-        | Instruction::SkipNextUntap { .. }
-        | Instruction::RequireCombatAction { .. }
-        | Instruction::CreateTemporaryRule { .. }
-        | Instruction::ZoneOp(_)
-        | Instruction::ApplyContinuous(_)
         | Instruction::PromptChoice(_)
         | Instruction::BranchCondition { .. }
         | Instruction::ForEach { .. }
@@ -337,12 +327,8 @@ native!(ExecutableBody, self, {
         | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
         | Instruction::CounterSpellToExile
-        | Instruction::UntapControlledCreatures
-        | Instruction::SetGroupTapped { .. }
         | Instruction::TapAttackersAndSkipNextUntap
         | Instruction::FightSourceWithTarget
-        | Instruction::ClearSourceCounters(_)
-        | Instruction::TransformSource
         | Instruction::TransformSourceAndAttachToTarget
         | Instruction::AdvanceClassLevel(_)
         | Instruction::SolveSourceCase
@@ -350,7 +336,6 @@ native!(ExecutableBody, self, {
         | Instruction::TransformSubtype(_)
         | Instruction::ModifyAnyNumberOfPermanents { .. }
         | Instruction::WeakenTargetByChosenX
-        | Instruction::BoostTargetPower { .. }
         | Instruction::OfferSourceCounters { .. }
         | Instruction::OptionalSequence { .. }
         | Instruction::ImpulseCastOrDamage(_)
@@ -375,7 +360,6 @@ native!(ExecutableBody, self, {
         | Instruction::ScheduleCreatedTokenSacrifice
         | Instruction::ExileDelayedObjects(_)
         | Instruction::ExileRelatedPermanents(_)
-        | Instruction::ExileTargetWithLink(_)
         | Instruction::ChooseAndReturnOwnGraveyardCardsByType
         | Instruction::TargetDamagesItsControllersOtherCreatures
         | Instruction::OtherCreaturesReturnPowerDamage
@@ -435,35 +419,16 @@ native!(ExecutableBody, self, {
         | Instruction::ResolveTransfer(_)
         | Instruction::ExileDefeatedSiege
         | Instruction::ExileSourceAndGainLife(_)
-        | Instruction::ReturnSourceToHand
         | Instruction::PutCounterOnRelatedPermanent
-        | Instruction::PutCountersOnControlledCreatures
-        | Instruction::PutCountersOnControlledSubtype(_)
         | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-        | Instruction::PutCountersOnOtherCreatures
         | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-        | Instruction::PutChargeCounterOnSource
-        | Instruction::PutBlessingCounterOnSource
-        | Instruction::PutNamedCounterOnSource { .. }
-        | Instruction::PutCountersOnSubject { .. }
-        | Instruction::PutQuestCounterOnSource
-        | Instruction::PutStorageCounterOnSource
         | Instruction::AbilitySourceControllerLosesLife(_)
         | Instruction::RelatedPlayerLosesLife(_)
         | Instruction::LinkedPlayerLosesDamageAmount
         | Instruction::RelatedPlayerLosesHalfLife
-        | Instruction::UntapAbilitySource
-        | Instruction::TapAbilitySource
-        | Instruction::RegenerateSource
-        | Instruction::RegenerateControlledSubtype(_)
-        | Instruction::RegenerateTarget
-        | Instruction::GoadTarget
-        | Instruction::RequireTargetAttack
         | Instruction::RemoveTargetFromCombat
         | Instruction::RemoveSubjectFromCombat(_)
-        | Instruction::GoadOtherPlayersCreatures
         | Instruction::SetControlledCreatureSizeToHand
-        | Instruction::ModifyGroupByAmount { .. }
         | Instruction::DamageFromPower(_)
         | Instruction::CreatureDealsPowerDamageToOther { .. }
         | Instruction::DamageAmount(_)
@@ -479,8 +444,6 @@ native!(ExecutableBody, self, {
         | Instruction::CounterWardSource
         | Instruction::ResolveKeywordTrigger(_)
         | Instruction::GrantProtectionChosenColor(_)
-        | Instruction::PutIndestructibleCounter
-        | Instruction::PutLoyaltyCounter
         | Instruction::AnimateTargetAsCountedCreature { .. }
         | Instruction::OfferVariablePayment { .. }
         | Instruction::DrawEachPlayerForPayments
@@ -539,7 +502,6 @@ native!(ExecutableBody, self, {
         | Instruction::FightFixedTargets
         | Instruction::BindOrderedPermanents { .. }
         | Instruction::ExileOrderedPermanent(_)
-        | Instruction::ExileLibraryTop { .. }
         | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
         | Instruction::LookOpponentExileForCast { .. }
         | Instruction::ExileFromTargetLibrary
@@ -551,11 +513,6 @@ native!(ExecutableBody, self, {
         | Instruction::BoostSaddledAttacker { .. }
         | Instruction::AddExperienceCounter
         | Instruction::ControlManaSourceThroughNextTurn
-        | Instruction::GrantControllerFlashUntilCleanup
-        | Instruction::RequireOpponentsCreaturesBlockThisTurn
-        | Instruction::RequireBlocksAgainstTargetThisTurn
-        | Instruction::SuppressGroupKeywords { .. }
-        | Instruction::ModifyGroupUntilEndOfTurn { .. }
         | Instruction::AddMana(_)
         | Instruction::AbandonSourceScheme
         | Instruction::TabletopHonorAction { .. }
@@ -566,7 +523,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileMeldPair
         | Instruction::MeldExiledPair(_)
         | Instruction::PairWithCreature { .. }
-        | Instruction::PhaseOut(_)
         | Instruction::PhaseOutObjects(_)
         | Instruction::ReturnOneNonlandPerOpponent
         | Instruction::WeakenDelayedAttacker(_)
@@ -585,13 +541,8 @@ native!(ExecutableBody, self, {
         | Instruction::DrawRelatedPlayer
         | Instruction::DrawCombatDamageSourceController
         | Instruction::DrawControllerAndTarget { .. }
-        | Instruction::DrawEachPlayer { .. }
         | Instruction::DrawPlayersControllingName(_)
-        | Instruction::DrawTargetPlayer { .. }
-        | Instruction::DrawPlayer { .. }
-        | Instruction::ReturnSourceGraveyardToBattlefield { .. }
         | Instruction::ReturnUpToOneRecentGraveyardCard
-        | Instruction::ReturnSourceGraveyardToHand
         | Instruction::ExileUpToTwoGraveyardTargetsGainLife
         | Instruction::ChooseRevealedHandCard { .. }
         | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
@@ -600,7 +551,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileTargetUntilNonlandForFreeCast
         | Instruction::ExileTopRepeatOnPermanentEntry
         | Instruction::EndControllerTurn
-        | Instruction::ShuffleOwnGraveyardIntoLibrary
         | Instruction::ShuffleTargetGraveyardCards { .. }
         | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
         | Instruction::CastLinkedSpellMatchingX
@@ -612,7 +562,6 @@ native!(ExecutableBody, self, {
         | Instruction::ImprintTargetLand
         | Instruction::ImprintTargetCreature
         | Instruction::ExileTargetAsAbilityDonor
-        | Instruction::ExileTargetUntilSourceLeaves
         | Instruction::ExileTargetUntilOpponentMonarch
         | Instruction::RememberPermanentTarget
         | Instruction::ControllerLosesRememberedManaValue
@@ -634,11 +583,9 @@ native!(ExecutableBody, self, {
         | Instruction::ExileCapturedGraveyardCard
         | Instruction::GrantGraveyardCastAndWatchAbilities
         | Instruction::GainCastCardAbilities { .. }
-        | Instruction::DoubleCountersOnTargets
         | Instruction::ExileCombatDamagedCreature
         | Instruction::DestroyCapturedDamageSource
         | Instruction::RemoveCreatureCounters { .. }
-        | Instruction::UntapControlledLands
         | Instruction::AttachOnEntry { .. }
         | Instruction::ControlledSubtypeDamagesAttacker(_)
         | Instruction::RevealTopAndRemoveAttackerIfForest
@@ -653,9 +600,7 @@ native!(ExecutableBody, self, {
         | Instruction::DamageGroup { .. }
         | Instruction::DamageTargetControllersCreatures { .. }
         | Instruction::DrawAndDamageOpponents { .. }
-        | Instruction::BoostSource { .. }
         | Instruction::ResolvePowerAbility(_)
-        | Instruction::PutCountersOnSource { .. }
         | Instruction::UnattachEquipmentAndProtectHost
         | Instruction::Unattach
         | Instruction::Attach(_)
@@ -702,11 +647,6 @@ native!(ExecutableBody, self, {
         | Instruction::SacrificeToContinue { .. }
         | Instruction::SacrificeMatching(_)
         | Instruction::Discard { .. } => Err(ApplicabilityError),
-        Instruction::ReturnToOwnersHand
-            if self.target == spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard =>
-        {
-            Err(ApplicabilityError)
-        }
         Instruction::CreatePreventionShield { .. }
             if matches!(
                 self.target,
@@ -727,15 +667,47 @@ native!(ExecutableBody, self, {
         | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()
             .try_for_each(|creation| creation.definition.program().check_current10()),
-        Instruction::CreateContinuousEffect { parts, .. } => parts.0.iter().try_for_each(|part| {
-            if matches!(part, ResolvedPartSpec::BlockingRestriction(_)) {
+        Instruction::ZoneOp(spec) => {
+            if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                && matches!(
+                    spec.selection,
+                    spellwake_engine::toolbox::ZoneSelection::All
+                )
+                && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
+                && spec.shuffle_library.is_none()
+                && self.target != spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard
+            {
+                Ok(())
+            } else {
+                Err(ApplicabilityError)
+            }
+        }
+        Instruction::ApplyContinuous(spec) => {
+            if spec.condition.is_some() || spec.as_emblem.is_some() {
                 return Err(ApplicabilityError);
             }
-            if let ResolvedPartSpec::Abilities(change) = part {
-                change.check_current10()?;
+            match &spec.payload {
+                spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts)
+                    if matches!(
+                        spec.selector.as_ref(),
+                        Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                    ) =>
+                {
+                    parts.0.iter().try_for_each(|part| {
+                        if matches!(part, ResolvedPartSpec::BlockingRestriction(_)) {
+                            return Err(ApplicabilityError);
+                        }
+                        if let ResolvedPartSpec::Abilities(change) = part {
+                            change.check_current10()?;
+                        }
+                        Ok(())
+                    })
+                }
+                spellwake_engine::toolbox::ContinuousPayload::DoublePt { .. }
+                | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. } => Ok(()),
+                _ => Err(ApplicabilityError),
             }
-            Ok(())
-        }),
+        }
         Instruction::BranchIfFalse { condition, .. }
             if [&condition.left, &condition.right].iter().any(|value| {
                 matches!(
@@ -764,12 +736,9 @@ native!(ExecutableBody, self, {
         | Instruction::CreatePreventionShield { .. }
         | Instruction::CreateReflectingShield
         | Instruction::CreateDamageMultiplier { .. }
-        | Instruction::ReturnToOwnersHand
         | Instruction::CounterSpell
         | Instruction::CopySpell
         | Instruction::CopyTargetToSource { .. }
-        | Instruction::PutPowerToughnessCounters { .. }
-        | Instruction::PutNamedCounterOnTarget { .. }
         | Instruction::AddPlayerCounter { .. }
         | Instruction::ExileTopPlay { .. }
         | Instruction::LookTopChoose { .. }
@@ -778,10 +747,7 @@ native!(ExecutableBody, self, {
         | Instruction::PayControllerEnergy(_)
         | Instruction::RemoveCountersFromPermanent { .. }
         | Instruction::DamageGroupAmount { .. }
-        | Instruction::DoublePowerToughness { .. }
         | Instruction::DisallowDamagePreventionThisTurn
-        | Instruction::GrantNoMaxHandSizeRestOfGame
-        | Instruction::GrantCardPlayPermission { .. }
         | Instruction::DrawController { .. }
         | Instruction::RollDie { .. }
         | Instruction::FlipCoins { .. }
@@ -809,12 +775,10 @@ native!(ExecutableBody, self, {
         | Instruction::Enlist
         | Instruction::CounterSpellToLibrary { .. }
         | Instruction::CounterTriggeringStackObject
-        | Instruction::SetSubjectTapped { .. }
         | Instruction::ForEachPlayer { .. }
         | Instruction::OfferAnyPlayer { .. }
         | Instruction::DealDamageToAnnouncedTargets { .. }
         | Instruction::GrantChosenProtection { .. }
-        | Instruction::RemoveCountersFromSubject { .. }
         | Instruction::UntapOrTapSelect { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealTopTwoPiles { .. }
@@ -822,27 +786,19 @@ native!(ExecutableBody, self, {
         | Instruction::CreateTokenCopyExt { .. }
         | Instruction::MoveCounters { .. }
         | Instruction::DrawGame
-        | Instruction::TurnFaceUpSubject { .. }
-        | Instruction::TurnFaceDownSubject { .. }
         | Instruction::EmpowerJace { .. }
-        | Instruction::AddOneOfEachCounterKindOnSubject { .. }
-        | Instruction::GrantLastMovedPlayPermission { .. }
         | Instruction::CounterMatchingStackObjects { .. }
         | Instruction::TransferAllCountersFromTriggeringLki { .. }
         | Instruction::Earthbend { .. }
         | Instruction::ReturnEarthbentCard
-        | Instruction::RegenerateSubject { .. }
         | Instruction::AddManaForPlayer { .. }
-        | Instruction::SkipNextTurns { .. }
-        | Instruction::SkipNextStep { .. }
         | Instruction::SelectExtremeLifePlayer { .. }
         | Instruction::AttachFixedTargets
-        | Instruction::AttachPermanentToPlayer { .. }
         | Instruction::AttachChoosingPermanent { .. }
-        | Instruction::UnattachSubject { .. }
         | Instruction::ChooseOneLastMoved { .. }
-        | Instruction::TransformSubject { .. }
-        | Instruction::SetPlayersLife { .. } => Ok(()),
+        | Instruction::SetPlayersLife { .. }
+        | Instruction::DrawCards(_)
+        | Instruction::MutateObject(_) => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

@@ -159,7 +159,20 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
                 reveal_only: true,
                 ..
             } | Instruction::MayRevealLibraryTop
-                | Instruction::ExileLibraryTop { .. }
+        ) || matches!(
+            op,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        slice: spellwake_engine::toolbox::QuerySlice::Top(_),
+                        ..
+                    }
+                ) && matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                )
         ) {
             saw_reveal_top = true;
         }

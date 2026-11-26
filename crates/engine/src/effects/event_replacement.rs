@@ -29,15 +29,9 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         | Instruction::SetPlayersLife { .. }
         | Instruction::DrainOpponents(_)
         | Instruction::DrawController { .. }
-        | Instruction::DrawPlayer { .. }
+        | Instruction::DrawCards(_)
         | Instruction::Mill { .. }
         | Instruction::MillEachPlayer(_)
-        | Instruction::PutCountersOnSource { .. }
-        | Instruction::PutChargeCounterOnSource
-        | Instruction::PutBlessingCounterOnSource
-        | Instruction::PutQuestCounterOnSource
-        | Instruction::PutStorageCounterOnSource
-        | Instruction::PutNamedCounterOnSource { .. }
         | Instruction::AddExperienceCounter
         | Instruction::AddPlayerCounter { .. }
         | Instruction::WinGame(_)
@@ -45,8 +39,6 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         | Instruction::TakeExtraTurn
         | Instruction::BecomeMonarch(_)
         | Instruction::DisallowDamagePreventionThisTurn
-        | Instruction::GrantNoMaxHandSizeRestOfGame
-        | Instruction::SetGroupTapped { .. }
         | Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(spec) => {
             matches!(spec.selection, crate::toolbox::ZoneSelection::All)
@@ -87,24 +79,48 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
                     )
                 ))
         }
-        Instruction::PutCountersOnSubject { subject, .. } => {
-            matches!(
-                subject.as_ref(),
-                EffectSubject::AbilitySource | EffectSubject::Matching(_)
-            )
-        }
         Instruction::RemoveCountersFromPermanent {
             target_self: true,
             kind: Some(_),
             ..
         } => true,
-        Instruction::RemoveCountersFromSubject {
-            subject,
-            kind: Some(_),
-            ..
-        } => matches!(
-            subject.as_ref(),
-            EffectSubject::AbilitySource | EffectSubject::Matching(_)
+        Instruction::MutateObject(spec) => {
+            let valid_src = match &spec.source {
+                crate::toolbox::ObjectQuery::Source
+                | crate::toolbox::ObjectQuery::ZoneScan {
+                    zone: crate::toolbox::QueryZone::Battlefield,
+                    ..
+                } => true,
+                crate::toolbox::ObjectQuery::EffectSubject(subject) => matches!(
+                    subject.as_ref(),
+                    EffectSubject::AbilitySource | EffectSubject::Matching(_)
+                ),
+                _ => false,
+            };
+            matches!(spec.selection, crate::toolbox::ZoneSelection::All)
+                && valid_src
+                && matches!(
+                    &spec.op,
+                    crate::toolbox::ObjectMutation::AddCounters { .. }
+                        | crate::toolbox::ObjectMutation::SetTapped(_)
+                        | crate::toolbox::ObjectMutation::RemoveCounters { kind: Some(_), .. }
+                        | crate::toolbox::ObjectMutation::ClearCounters { kind: Some(_) }
+                )
+        }
+        Instruction::ApplyContinuous(spec) => matches!(
+            &spec.payload,
+            crate::toolbox::ContinuousPayload::TemporaryRule(rule)
+                if matches!(
+                    rule.as_ref(),
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ability)
+                        if matches!(
+                            ability.as_ref(),
+                            StaticContinuousAbility::DrawRule {
+                                rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                                ..
+                            }
+                        )
+                )
         ),
         Instruction::CreateTokens { creations } => creations.iter().all(|c| {
             c.base_size.is_none()
@@ -1283,22 +1299,205 @@ impl EffectWindow {
                         )?;
                     }
                 }
-                Instruction::DrawPlayer { players, amount } => {
+                Instruction::DrawCards(spec) => {
                     let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
+                        .resolve_inline_value_expr(rep, &spec.amount, event_amount)?
                         .max(0.into());
                     if val.is_positive() {
-                        for seat in self.resolve_replacement_players(players, rep)? {
-                            let _ = self.draw_at_cuts(
-                                seat,
-                                val.clone(),
-                                DrawOrigin::Instruction {
-                                    entry: synthetic_entry,
-                                    instruction: synthetic_index,
-                                },
+                        let seats: Vec<SeatId> = match spec.players {
+                            crate::toolbox::PlayerSelector::Resolving(role)
+                            | crate::toolbox::PlayerSelector::Group(AffectedPlayers::One(role)) => {
+                                vec![self.resolve_replacement_player(role, rep)?]
+                            }
+                            crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer) => {
+                                self.window.apnap_players()?.collect()
+                            }
+                            crate::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::EachOpponent,
+                            ) => self
+                                .window
+                                .apnap_players()?
+                                .filter(|seat| *seat != rep.controller)
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        for seat in seats {
+                            if self.window.participants().contains(&seat) {
+                                let _ = self.draw_at_cuts(
+                                    seat,
+                                    val.clone(),
+                                    DrawOrigin::Instruction {
+                                        entry: synthetic_entry,
+                                        instruction: synthetic_index,
+                                    },
+                                    append,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                Instruction::MutateObject(spec) => {
+                    let targets: Vec<ObjectId> = match &spec.source {
+                        crate::toolbox::ObjectQuery::Source => rep.source.into_iter().collect(),
+                        crate::toolbox::ObjectQuery::EffectSubject(subject) => {
+                            self.inline_resolve_subject(*subject.as_ref(), rep)?
+                        }
+                        crate::toolbox::ObjectQuery::ZoneScan {
+                            zone: crate::toolbox::QueryZone::Battlefield,
+                            filter,
+                            ..
+                        } => {
+                            let evaluated = self.evaluated_characteristics()?;
+                            let excluded = BTreeSet::new();
+                            evaluated
+                                .objects
+                                .values()
+                                .filter(|p| {
+                                    p.zone == ObjectZone::Battlefield
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            p,
+                                            rep.controller,
+                                            rep.source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .map(|p| p.object)
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    match &spec.op {
+                        crate::toolbox::ObjectMutation::AddCounters { kind, amount } => {
+                            let val = self
+                                .resolve_inline_value_expr(rep, amount, event_amount)?
+                                .max(0.into());
+                            if val.is_positive() {
+                                self.inline_put_permanent_counters(
+                                    &targets,
+                                    *kind,
+                                    &val,
+                                    cause.clone(),
+                                    append,
+                                )?;
+                            }
+                        }
+                        crate::toolbox::ObjectMutation::SetTapped(tapped) => {
+                            let changing: Vec<ObjectId> = targets
+                                .into_iter()
+                                .filter(|id| {
+                                    self.window.cards().get(*id).and_then(GameObject::tapped)
+                                        == Some(!*tapped)
+                                })
+                                .collect();
+                            if !changing.is_empty() {
+                                let before = self.rules_snapshot(None)?;
+                                let occurrences = if *tapped {
+                                    let (window, changes) = self
+                                        .window
+                                        .record_inline_replacement_status(&changing, true)?;
+                                    self.window = window;
+                                    occurrence_flow::status_occurrences(
+                                        changes,
+                                        StatusReason::Effect,
+                                    )
+                                } else {
+                                    let mut untapping = Vec::with_capacity(changing.len());
+                                    let mut stun_occurrences = Vec::new();
+                                    for id in changing {
+                                        if self
+                                            .counters_of_kind(id, CounterKind::Stun)
+                                            .is_positive()
+                                        {
+                                            let prev = self.counters_of_kind(id, CounterKind::Stun);
+                                            let after = prev.minus(&1.into());
+                                            if let Some(map) = self
+                                                .characteristics
+                                                .named_permanent_counters_mut(CounterKind::Stun)
+                                            {
+                                                if after.is_positive() {
+                                                    map.insert(id, after.clone());
+                                                } else {
+                                                    map.remove(&id);
+                                                }
+                                            }
+                                            stun_occurrences.push(
+                                                RulesOccurrence::PermanentCounterChanged {
+                                                    object: id,
+                                                    kind: CounterKind::Stun,
+                                                    before: prev,
+                                                    after,
+                                                },
+                                            );
+                                        } else {
+                                            untapping.push(id);
+                                        }
+                                    }
+                                    let mut occs = if untapping.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        let (window, changes) = self
+                                            .window
+                                            .record_inline_replacement_status(&untapping, false)?;
+                                        self.window = window;
+                                        occurrence_flow::status_occurrences(
+                                            changes,
+                                            StatusReason::Effect,
+                                        )
+                                    };
+                                    occs.extend(stun_occurrences);
+                                    occs
+                                };
+                                self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
+                                    Ok(occurrences)
+                                })?;
+                            }
+                        }
+                        crate::toolbox::ObjectMutation::RemoveCounters {
+                            kind: Some(kind),
+                            amount,
+                        } => {
+                            let val = self
+                                .resolve_inline_value_expr(rep, amount, event_amount)?
+                                .max(0.into());
+                            if val.is_positive() {
+                                self.inline_remove_permanent_counters(
+                                    &targets,
+                                    *kind,
+                                    Some(&val),
+                                    cause.clone(),
+                                    append,
+                                )?;
+                            }
+                        }
+                        crate::toolbox::ObjectMutation::ClearCounters { kind: Some(kind) } => {
+                            self.inline_remove_permanent_counters(
+                                &targets,
+                                *kind,
+                                None,
+                                cause.clone(),
                                 append,
                             )?;
                         }
+                        _ => {}
+                    }
+                }
+                Instruction::ApplyContinuous(spec) => {
+                    if let crate::toolbox::ContinuousPayload::TemporaryRule(rule) = &spec.payload
+                        && let crate::program::TemporaryRuleKind::TemporaryStatic(ability) =
+                            rule.as_ref()
+                        && matches!(
+                            ability.as_ref(),
+                            StaticContinuousAbility::DrawRule {
+                                rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                                ..
+                            }
+                        )
+                    {
+                        self.characteristics
+                            .no_max_hand_size_players
+                            .insert(rep.controller);
                     }
                 }
                 Instruction::Mill { player, amount } => {
@@ -1313,96 +1512,6 @@ impl EffectWindow {
                     let seats: Vec<SeatId> = self.window.apnap_players()?.collect();
                     for seat in seats {
                         self.inline_mill_player(seat, &val, cause.clone(), append)?;
-                    }
-                }
-                Instruction::PutCountersOnSource { amount } => {
-                    if let Some(source) = rep.source
-                        && self
-                            .window
-                            .cards()
-                            .get(source)
-                            .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-                    {
-                        self.place_plus_one_counter_amount(
-                            vec![source],
-                            amount,
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::PutChargeCounterOnSource => {
-                    if let Some(source) = rep.source {
-                        self.inline_put_permanent_counters(
-                            &[source],
-                            CounterKind::Charge,
-                            &1.into(),
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::PutBlessingCounterOnSource => {
-                    if let Some(source) = rep.source {
-                        self.inline_put_permanent_counters(
-                            &[source],
-                            CounterKind::Blessing,
-                            &1.into(),
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::PutQuestCounterOnSource => {
-                    if let Some(source) = rep.source {
-                        self.inline_put_permanent_counters(
-                            &[source],
-                            CounterKind::Quest,
-                            &1.into(),
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::PutStorageCounterOnSource => {
-                    if let Some(source) = rep.source {
-                        self.inline_put_permanent_counters(
-                            &[source],
-                            CounterKind::Storage,
-                            &1.into(),
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::PutNamedCounterOnSource { kind, amount } => {
-                    if let Some(source) = rep.source {
-                        self.inline_put_permanent_counters(
-                            &[source],
-                            kind,
-                            &i64::from(amount).into(),
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::PutCountersOnSubject {
-                    subject,
-                    kind,
-                    amount,
-                } => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    if val.is_positive() {
-                        let objects = self.inline_resolve_subject(*subject, rep)?;
-                        self.inline_put_permanent_counters(
-                            &objects,
-                            kind,
-                            &val,
-                            cause.clone(),
-                            append,
-                        )?;
                     }
                 }
                 Instruction::RemoveCountersFromPermanent {
@@ -1424,32 +1533,6 @@ impl EffectWindow {
                             )?;
                         }
                     }
-                }
-                Instruction::RemoveCountersFromSubject {
-                    subject,
-                    kind: Some(kind),
-                    amount,
-                } => {
-                    let cap = match amount {
-                        Some(expr) => {
-                            let val = self
-                                .resolve_inline_value_expr(rep, &expr, event_amount)?
-                                .max(0.into());
-                            if !val.is_positive() {
-                                continue;
-                            }
-                            Some(val)
-                        }
-                        None => None,
-                    };
-                    let objects = self.inline_resolve_subject(*subject, rep)?;
-                    self.inline_remove_permanent_counters(
-                        &objects,
-                        kind,
-                        cap.as_ref(),
-                        cause.clone(),
-                        append,
-                    )?;
                 }
                 Instruction::AddExperienceCounter => {
                     self.inline_add_player_counter(
@@ -1543,90 +1626,6 @@ impl EffectWindow {
                 }
                 Instruction::DisallowDamagePreventionThisTurn => {
                     self.damage_state.prevention_disallowed_this_turn = true;
-                }
-                Instruction::GrantNoMaxHandSizeRestOfGame => {
-                    self.characteristics
-                        .no_max_hand_size_players
-                        .insert(rep.controller);
-                }
-                Instruction::SetGroupTapped { filter, tapped } => {
-                    let evaluated = self.evaluated_characteristics()?;
-                    let excluded = BTreeSet::new();
-                    let changing: Vec<ObjectId> = evaluated
-                        .objects
-                        .values()
-                        .filter(|p| {
-                            p.zone == ObjectZone::Battlefield
-                                && self.matches_object_filter(
-                                    *filter,
-                                    p,
-                                    rep.controller,
-                                    rep.source,
-                                    &excluded,
-                                    &evaluated,
-                                )
-                                && self
-                                    .window
-                                    .cards()
-                                    .get(p.object)
-                                    .and_then(GameObject::tapped)
-                                    == Some(!tapped)
-                        })
-                        .map(|p| p.object)
-                        .collect();
-                    if !changing.is_empty() {
-                        let before = self.rules_snapshot(None)?;
-                        let occurrences = if tapped {
-                            let (window, changes) = self
-                                .window
-                                .record_inline_replacement_status(&changing, true)?;
-                            self.window = window;
-                            occurrence_flow::status_occurrences(changes, StatusReason::Effect)
-                        } else {
-                            let mut untapping = Vec::with_capacity(changing.len());
-                            let mut stun_occurrences = Vec::new();
-                            for id in changing {
-                                if self.counters_of_kind(id, CounterKind::Stun).is_positive() {
-                                    let prev = self.counters_of_kind(id, CounterKind::Stun);
-                                    let after = prev.minus(&1.into());
-                                    if let Some(map) = self
-                                        .characteristics
-                                        .named_permanent_counters_mut(CounterKind::Stun)
-                                    {
-                                        if after.is_positive() {
-                                            map.insert(id, after.clone());
-                                        } else {
-                                            map.remove(&id);
-                                        }
-                                    }
-                                    stun_occurrences.push(
-                                        RulesOccurrence::PermanentCounterChanged {
-                                            object: id,
-                                            kind: CounterKind::Stun,
-                                            before: prev,
-                                            after,
-                                        },
-                                    );
-                                } else {
-                                    untapping.push(id);
-                                }
-                            }
-                            let mut occs = if untapping.is_empty() {
-                                Vec::new()
-                            } else {
-                                let (window, changes) = self
-                                    .window
-                                    .record_inline_replacement_status(&untapping, false)?;
-                                self.window = window;
-                                occurrence_flow::status_occurrences(changes, StatusReason::Effect)
-                            };
-                            occs.extend(stun_occurrences);
-                            occs
-                        };
-                        self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
-                            Ok(occurrences)
-                        })?;
-                    }
                 }
                 Instruction::ZoneOp(spec) => {
                     let evaluated = self.evaluated_characteristics()?;

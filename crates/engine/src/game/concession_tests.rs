@@ -574,7 +574,15 @@ fn simultaneous_departures_create_independent_surviving_triggers() {
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::PutCountersOnSource { amount: 13.into() }],
+            vec![Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Source,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: crate::effects::CounterKind::PlusOne,
+                        amount: crate::program::ValueExpr::literal(13),
+                    },
+                ),
+            ))],
         ),
     });
     let state = root(
@@ -626,11 +634,30 @@ fn departure_ends_temporary_control_before_exiling_remaining_objects() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                    ControlRecipient::ResolvingController,
-                )]),
-                duration: ResolvedDuration::UntilEndOfTurn,
+            vec![{
+                struct _Tmp {
+                    parts: crate::characteristics::ResolvedPartsSpec,
+                    duration: crate::characteristics::ResolvedDuration,
+                }
+                let _t = _Tmp {
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                        ControlRecipient::ResolvingController,
+                    )]),
+                    duration: ResolvedDuration::UntilEndOfTurn,
+                };
+                crate::program::Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: Some(crate::toolbox::ObjectQuery::Targets),
+                        payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                            _t.parts,
+                        )),
+                        duration: _t.duration,
+                        condition: None,
+                        one_shot: false,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))
             }],
         ),
     );
@@ -744,11 +771,30 @@ fn a_permanent_is_exiled_when_its_default_controller_left_before_the_effect_expi
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                    ControlRecipient::ResolvingController,
-                )]),
-                duration: ResolvedDuration::UntilEndOfTurn,
+            vec![{
+                struct _Tmp {
+                    parts: crate::characteristics::ResolvedPartsSpec,
+                    duration: crate::characteristics::ResolvedDuration,
+                }
+                let _t = _Tmp {
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                        ControlRecipient::ResolvingController,
+                    )]),
+                    duration: ResolvedDuration::UntilEndOfTurn,
+                };
+                crate::program::Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: Some(crate::toolbox::ObjectQuery::Targets),
+                        payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                            _t.parts,
+                        )),
+                        duration: _t.duration,
+                        condition: None,
+                        one_shot: false,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))
             }],
         ),
     );
@@ -808,7 +854,6 @@ fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
     use crate::characteristics::{
         ControlRecipient, PowerToughness, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
     };
-    use crate::program::PhasingSubject;
 
     let d = SeatId(19);
     let instant = |instruction| {
@@ -817,22 +862,61 @@ fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
             ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
         )
     };
-    let control = instant(Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-            ControlRecipient::ResolvingController,
-        )]),
-        duration: ResolvedDuration::UntilEndOfTurn,
+    let control = instant({
+        struct _Tmp {
+            parts: crate::characteristics::ResolvedPartsSpec,
+            duration: crate::characteristics::ResolvedDuration,
+        }
+        let _t = _Tmp {
+            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                ControlRecipient::ResolvingController,
+            )]),
+            duration: ResolvedDuration::UntilEndOfTurn,
+        };
+        crate::program::Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec {
+                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                duration: _t.duration,
+                condition: None,
+                one_shot: false,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        ))
     });
-    let phase = instant(Instruction::PhaseOut(PhasingSubject::Target));
-    let boost = instant(Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
-            power: 3.into(),
-            toughness: 3.into(),
-        })]),
-        duration: ResolvedDuration::ThroughNextTurn {
-            player: B,
-            created_in_turn: 1,
-        },
+    let phase = instant(crate::program::Instruction::MutateObject(Box::new(
+        crate::toolbox::MutateObjectSpec::all(
+            crate::toolbox::ObjectQuery::Targets,
+            crate::toolbox::ObjectMutation::PhaseOut,
+        ),
+    )));
+    let boost = instant({
+        struct _Tmp {
+            parts: crate::characteristics::ResolvedPartsSpec,
+            duration: crate::characteristics::ResolvedDuration,
+        }
+        let _t = _Tmp {
+            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+                power: 3.into(),
+                toughness: 3.into(),
+            })]),
+            duration: ResolvedDuration::ThroughNextTurn {
+                player: B,
+                created_in_turn: 1,
+            },
+        };
+        crate::program::Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec {
+                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                duration: _t.duration,
+                condition: None,
+                one_shot: false,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        ))
     });
     let creature = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
     let mut state = root(

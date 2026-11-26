@@ -210,7 +210,20 @@ fn cmm_deadly_rollick_and_flawless_maneuver_pay_the_printed_price_or_use_a_contr
                     4,
                     A,
                     ObjectDestination::LibraryBottom,
-                    free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                    free_instant(
+                        BodyTarget::SingleCreature,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ),
                 ),
             ],
         );
@@ -456,7 +469,19 @@ fn cmm_darksteel_monolith_survives_destruction_and_pays_zero_for_only_one_colorl
                 5,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(6, A, ObjectDestination::Graveyard, life()),
         ],
@@ -811,7 +836,19 @@ fn cmm_starfield_mystic_and_herald_of_the_pantheon_discount_enchantments_and_tri
                 4,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
             seed(
                 5,
@@ -1111,7 +1148,18 @@ fn cmm_not_of_this_world_counters_a_spell_or_ability_targeting_an_own_permanent_
  {
     let body = ExecutableBody::new(
         BodyTarget::SinglePermanent,
-        vec![Instruction::DestroyTarget],
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        ],
     );
     let ability = ActivatedAbility {
         id: ActivatedAbilityId(0),

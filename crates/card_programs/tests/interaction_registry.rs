@@ -271,7 +271,12 @@ fn assert_complete_programs(registry: &Registry, vocabulary: &CreatureTypeVocabu
                     let body = match card["name"].as_str().unwrap() {
                         "Unsummon" => ExecutableBody::new(
                             BodyTarget::SingleCreature,
-                            vec![Instruction::ReturnToOwnersHand],
+                            vec![spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Hand,
+                                ),
+                            ))],
                         ),
                         "Cancel" | "Counterspell" => ExecutableBody::new(
                             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),

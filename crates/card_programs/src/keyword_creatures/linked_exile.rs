@@ -140,7 +140,7 @@ pub(super) fn compile(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::FilteredPermanent(ObjectFilter::nonland().opposing()),
-            vec![Instruction::ExileTargetUntilSourceLeaves],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target_until_source_leaves()],
         ),
     });
     program.validate(vocabulary).ok()?;

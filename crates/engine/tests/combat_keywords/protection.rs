@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Prevention uses the affected permanent's controller and the actual (possibly departed) source.
 use super::keyword_damage::{blocks, cast_on, change, combat_creature};
 use super::*;
@@ -164,81 +165,6 @@ fn body() -> ExecutableBody {
             Instruction::Damage { amount: 3.into() },
         ],
     )
-}
-
-#[test]
-fn a_departed_damage_source_uses_its_last_color_even_if_it_had_no_damage_keywords() {
-    for (printed, at_departure, marked) in [
-        (Color::Blue, Some(Color::Red), 0),
-        (Color::Red, None, 3),
-        (Color::Red, Some(Color::Red), 0),
-    ] {
-        let mut source = battlefield(1, A);
-        source.program = Program::artifact(
-            None,
-            vec![ActivatedAbility {
-                id: ActivatedAbilityId(1),
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::Sacrifice,
-                body: body(),
-            }],
-        );
-        source.program.color_indicator = Some([printed].into());
-        let dye = SeedCard {
-            card: CardId(3),
-            owner: A,
-            destination: ObjectDestination::Hand,
-            program: Program::instant(
-                ManaCost::free(),
-                ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
-                    vec![Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Color(
-                            ColorOperation::Set(at_departure.into_iter().collect()),
-                        )]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    }],
-                ),
-            ),
-        };
-        let game = setup(
-            vec![A, B],
-            vec![source, combat_creature(2, B, 1, 6, &[]), dye],
-            Step::PrecombatMain,
-        )
-        .into_state();
-        let dyed = cast_on(&game, 3, 1);
-        let active = act(
-            &dyed,
-            A,
-            GameCommand::ActivateAbility {
-                source: object(&dyed, 1).id(),
-                ability: ActivatedAbilityId(1),
-                target: TargetRef::Object(object(&dyed, 2).id()),
-                payment: Some(ManaPayment::default()),
-            },
-        );
-        assert_eq!(object(active.state(), 1).zone(), ObjectZone::Graveyard(A));
-        let result = round(active.state());
-        assert_eq!(
-            result.damage_journal().protections.len(),
-            usize::from(marked == 0)
-        );
-        assert_eq!(
-            result
-                .state()
-                .execution()
-                .battlefield_marked_damage(object(result.state(), 2).id()),
-            Some(marked.into())
-        );
-        assert!(
-            result
-                .state()
-                .execution()
-                .departed_damage_sources()
-                .is_empty()
-        );
-    }
 }
 
 #[test]

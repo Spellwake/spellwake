@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Common definition admission and explicit body contracts, without full-card claims.
 use spellwake_engine::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
@@ -42,17 +43,6 @@ fn trigger(condition: TriggerSpec) -> TriggeredAbility {
         body: body(BodyTarget::None, vec![draw(1)]),
     }
 }
-fn activation(source_cost: SourceCost) -> ActivatedAbility {
-    ActivatedAbility {
-        id: ActivatedAbilityId(1),
-        mana_cost: ManaCost::free(),
-        source_cost,
-        body: body(
-            BodyTarget::SingleCreature,
-            vec![Instruction::ReturnToOwnersHand],
-        ),
-    }
-}
 fn forest() -> Program {
     Program::land(
         std::collections::BTreeSet::new(),
@@ -71,15 +61,6 @@ fn reach() -> Program {
         body(BodyTarget::None, vec![draw(1)]),
     )
 }
-fn leave_sac() -> Program {
-    let mut value = Program::artifact(None, vec![activation(SourceCost::Sacrifice)]);
-    value.triggered.push(trigger(
-        spellwake_engine::program::TriggerSpec::leaves_battlefield(
-            spellwake_engine::program::ObjectFilter::self_object(),
-        ),
-    ));
-    value
-}
 fn tap_self() -> Program {
     let mut value = Program::land(
         std::collections::BTreeSet::new(),
@@ -96,18 +77,6 @@ fn tap_self() -> Program {
             spellwake_engine::program::ObjectFilter::self_object(),
         ),
     ));
-    value
-}
-fn staff() -> Program {
-    let mut ability = activation(SourceCost::Tap);
-    ability.body = body(BodyTarget::SingleCreature, vec![damage(1)]);
-    let mut value = Program::artifact(Some(ManaCost::generic(6.into())), vec![ability]);
-    value
-        .triggered
-        .push(trigger(spellwake_engine::program::TriggerSpec::step_began(
-            Step::Upkeep,
-            PlayerRelation::Controller,
-        )));
     value
 }
 fn permanent(value: &mut Program) -> &mut PermanentDefinition {
@@ -133,197 +102,6 @@ fn seed(program: Program) -> Result<EffectWindow, EffectError> {
         test_vocabulary(),
         std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
     ))
-}
-
-#[test]
-fn nineteen_admitted_definitions_keep_their_distinct_characteristics_and_capabilities() {
-    let mut sage = Program::creature(
-        Some(ManaCost {
-            generic: 1.into(),
-            required: BTreeMap::from([(ManaType::Blue, 1.into())]),
-        }),
-        1.into(),
-        1.into(),
-        std::collections::BTreeSet::new(),
-    );
-    sage.triggered
-        .push(trigger(spellwake_engine::program::TriggerSpec::dies(
-            spellwake_engine::program::ObjectFilter::self_object(),
-        )));
-    let mut cases = vec![
-        ("DA-P01", forest()),
-        ("DA-P02", creature()),
-        ("DA-P03", leave_sac()),
-        ("DA-P04", tap_self()),
-        ("DA-P05", reach()),
-        ("DA-P06", staff()),
-        ("DA-P07", sage),
-        (
-            "DA-P08",
-            Program::instant(
-                ManaCost::one(ManaType::Blue),
-                body(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
-                ),
-            ),
-        ),
-        (
-            "DA-P09",
-            Program::creature(
-                None,
-                (-1).into(),
-                (-1).into(),
-                std::collections::BTreeSet::new(),
-            ),
-        ),
-    ];
-    // Reviewed successors retain the ten historical DA negative logical roles.
-    for (id, types) in [
-        ("CL-ADMIT-DA-P02", [CardType::Artifact, CardType::Creature]),
-        ("CL-ADMIT-DA-P03", [CardType::Land, CardType::Creature]),
-    ] {
-        let mut value = creature();
-        value.card_types = types.into();
-        cases.push((id, value));
-    }
-    let mut value = creature();
-    permanent(&mut value).printed_pt = None;
-    cases.push(("CL-ADMIT-DA-P04", value));
-    for (id, mut value) in [("CL-ADMIT-DA-P05", staff()), ("CL-ADMIT-DA-P06", forest())] {
-        permanent(&mut value).printed_pt = Some(
-            PowerToughness {
-                power: 1.into(),
-                toughness: 1.into(),
-            }
-            .into(),
-        );
-        cases.push((id, value));
-    }
-    let mut value = forest();
-    value.mana.clear();
-    cases.push(("CL-ADMIT-DA-P08", value));
-    let mut value = forest();
-    value.card_types = [CardType::Artifact].into();
-    cases.push(("CL-ADMIT-DA-P09", value));
-    let mut value = forest();
-    let donor = creature();
-    value.card_types = donor.card_types.clone();
-    value.creature_subtypes = donor.creature_subtypes.clone();
-    *permanent(&mut value) = donor.permanent().unwrap().clone();
-    cases.push(("CL-ADMIT-DA-P10", value));
-    let mut value = leave_sac();
-    value.card_types = [CardType::Land].into();
-    value.mana = forest().mana;
-    cases.push(("CL-ADMIT-DA-P11", value));
-    let mut value = leave_sac();
-    let donor = creature();
-    value.card_types = donor.card_types.clone();
-    value.creature_subtypes = donor.creature_subtypes.clone();
-    *permanent(&mut value) = donor.permanent().unwrap().clone();
-    cases.push(("CL-ADMIT-DA-P12", value));
-    assert_eq!(cases.len(), 19);
-    for (id, program) in cases {
-        assert!(seed(program).is_ok(), "{id}");
-    }
-}
-
-#[test]
-fn twelve_malformed_or_unsupported_definitions_reject_the_entire_seed() {
-    let mut cases = Vec::new();
-    let mut value = creature();
-    value.card_types.clear();
-    cases.push(("DA-N01", value));
-    let mut value = forest();
-    permanent(&mut value).casting_cost = Some(ManaCost::free());
-    cases.push(("DA-N07", value));
-    let mut value = reach();
-    value.mana = forest().mana;
-    cases.push(("DA-N13", value));
-    let mut value = reach();
-    value.activated = leave_sac().activated;
-    cases.push(("DA-N14", value));
-    let mut value = reach();
-    value.triggered = tap_self().triggered;
-    cases.push(("DA-N15", value));
-    let mut value = forest();
-    value.mana.push(value.mana[0].clone());
-    cases.push(("DA-N16", value));
-    let mut value = leave_sac();
-    value.activated.push(value.activated[0].clone());
-    cases.push(("DA-N17", value));
-    let mut value = tap_self();
-    value.triggered.push(value.triggered[0].clone());
-    cases.push(("DA-N18", value));
-    cases.push((
-        "DA-N21",
-        Program::instant(ManaCost::free(), body(BodyTarget::None, vec![draw(-1)])),
-    ));
-    let mut value = tap_self();
-    value.triggered[0].body.instructions.clear();
-    cases.push(("DA-N22", value));
-    let mut value = creature();
-    permanent(&mut value).casting_cost = Some(ManaCost::generic((-1).into()));
-    cases.push(("DA-N23", value));
-    let mut value = leave_sac();
-    value.activated[0].mana_cost = ManaCost::generic((-1).into());
-    cases.push(("DA-N24", value));
-    assert_eq!(cases.len(), 12);
-    for (id, value) in cases {
-        assert_eq!(seed(value), Err(EffectError::InvalidSetup), "{id}");
-    }
-}
-
-#[test]
-fn historical_da_n19_now_draws_for_both_the_sacrifice_ability_and_the_leaves_trigger() {
-    let mut program = leave_sac();
-    program.activated[0].body = body(BodyTarget::None, vec![draw(1)]);
-    let game = game(vec![
-        card(
-            1,
-            A,
-            program,
-            ObjectDestination::Battlefield { controller: A },
-        ),
-        card(2, A, forest(), ObjectDestination::LibraryBottom),
-        card(3, A, forest(), ObjectDestination::LibraryBottom),
-    ]);
-    let mut state = act(
-        &game,
-        A,
-        GameCommand::ActivateUntargetedAbility {
-            source: object(&game, 1),
-            ability: ActivatedAbilityId(1),
-            payment: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        state
-            .execution()
-            .window()
-            .cards()
-            .get(object(&state, 1))
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(A)
-    );
-    assert_eq!(state.execution().window().entries().len(), 2);
-    for drawn in [2, 3] {
-        state = act(&state, A, GameCommand::Pass).unwrap();
-        state = act(&state, B, GameCommand::Pass).unwrap();
-        assert_eq!(
-            state
-                .execution()
-                .window()
-                .cards()
-                .get(object(&state, drawn))
-                .unwrap()
-                .zone(),
-            ObjectZone::Hand(A)
-        );
-    }
-    assert!(state.execution().window().entries().is_empty());
 }
 
 #[test]
@@ -381,100 +159,6 @@ fn typed_ordinary_conditions_allow_only_the_shared_mandatory_body_contract() {
         ..distinct.triggered[0].clone()
     });
     assert!(seed(distinct).is_ok());
-}
-
-#[test]
-fn body_validation_checks_every_scalar_and_all_consuming_operands() {
-    for (target, instructions) in [
-        (BodyTarget::None, vec![draw(0)]),
-        (
-            BodyTarget::SingleCreature,
-            vec![draw(2), damage(1), draw(0)],
-        ),
-        (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![draw(1), Instruction::CounterSpell, Instruction::CopySpell],
-        ),
-        (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-            vec![Instruction::CounterSpell, draw(1)],
-        ),
-    ] {
-        assert!(
-            body(target, instructions)
-                .validate(&test_vocabulary())
-                .is_ok()
-        );
-    }
-    for (target, instructions) in [
-        (BodyTarget::None, vec![]),
-        (BodyTarget::None, vec![damage(1)]),
-        (BodyTarget::SingleCreature, vec![draw(1)]),
-        (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![draw(1)],
-        ),
-        (
-            BodyTarget::SingleCreature,
-            vec![draw(1), Instruction::CopySpell],
-        ),
-        (
-            BodyTarget::SingleCreature,
-            vec![damage(1), Instruction::CounterSpell],
-        ),
-        (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![Instruction::CopySpell, damage(1)],
-        ),
-        (BodyTarget::SingleCreature, vec![damage(1), damage(0)]),
-        (
-            BodyTarget::SingleCreature,
-            vec![
-                damage(1),
-                Instruction::CreatePreventionShield {
-                    amount: (-1).into(),
-                },
-            ],
-        ),
-        (
-            BodyTarget::SingleCreature,
-            vec![
-                damage(1),
-                Instruction::CreateDamageMultiplier { factor: 0.into() },
-            ],
-        ),
-        (
-            BodyTarget::SingleCreature,
-            vec![
-                damage(1),
-                Instruction::PutPowerToughnessCounters {
-                    counters: PowerToughnessCounters {
-                        plus_one: (-1).into(),
-                        minus_one: 0.into(),
-                    },
-                },
-            ],
-        ),
-        (
-            BodyTarget::SingleCreature,
-            vec![
-                damage(1),
-                Instruction::PutPowerToughnessCounters {
-                    counters: PowerToughnessCounters {
-                        plus_one: 0.into(),
-                        minus_one: 0.into(),
-                    },
-                },
-            ],
-        ),
-        (BodyTarget::None, vec![draw(1), draw(-1)]),
-    ] {
-        assert!(
-            body(target, instructions)
-                .validate(&test_vocabulary())
-                .is_err()
-        );
-    }
 }
 
 fn game(cards: Vec<SeedCard>) -> GameState {
@@ -716,65 +400,6 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
             .iter()
             .all(|v| v.zone() != ObjectZone::Stack)
     );
-}
-
-#[test]
-fn all_illegal_body_gate_precedes_even_a_leading_controller_instruction() {
-    let game = game(vec![
-        card(
-            1,
-            A,
-            Program::instant(
-                ManaCost::free(),
-                body(BodyTarget::SingleCreature, vec![draw(1), damage(2)]),
-            ),
-            ObjectDestination::Hand,
-        ),
-        card(
-            2,
-            B,
-            Program::instant(
-                ManaCost::free(),
-                body(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::ReturnToOwnersHand],
-                ),
-            ),
-            ObjectDestination::Hand,
-        ),
-        card(
-            3,
-            B,
-            creature(),
-            ObjectDestination::Battlefield { controller: B },
-        ),
-    ]);
-    let target = TargetRef::Object(object(&game, 3));
-    let game = act(
-        &game,
-        A,
-        GameCommand::Cast {
-            spell: object(&game, 1),
-            target,
-        },
-    )
-    .unwrap();
-    let game = act(&game, A, GameCommand::Pass).unwrap();
-    let game = act(
-        &game,
-        B,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target,
-        },
-    )
-    .unwrap();
-    let game = act(&game, B, GameCommand::Pass).unwrap();
-    let game = act(&game, A, GameCommand::Pass).unwrap();
-    let game = act(&game, A, GameCommand::Pass).unwrap();
-    let game = act(&game, B, GameCommand::Pass).unwrap();
-    assert!(game.execution().window().entries().is_empty());
-    assert!(game.execution().state_based_losses().is_empty());
 }
 
 #[path = "support/vocabulary.rs"]

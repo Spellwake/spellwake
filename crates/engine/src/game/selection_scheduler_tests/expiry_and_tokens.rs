@@ -75,14 +75,35 @@ fn real_until_end_of_turn_expiry_changes_the_cleanup_selection_domain_before_the
                 crate::mana::ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
-                            land_subtypes: SubtypeOperation::Keep,
-                            supertypes: TypeOperation::Keep,
-                            types: TypeOperation::Add(BTreeSet::from([CardType::Artifact])),
-                            subtypes: SubtypeOperation::Keep,
-                        })]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
+                    vec![{
+                        struct _Tmp {
+                            parts: crate::characteristics::ResolvedPartsSpec,
+                            duration: crate::characteristics::ResolvedDuration,
+                        }
+                        let _t = _Tmp {
+                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(
+                                TypeChangeSpec {
+                                    land_subtypes: SubtypeOperation::Keep,
+                                    supertypes: TypeOperation::Keep,
+                                    types: TypeOperation::Add(BTreeSet::from([CardType::Artifact])),
+                                    subtypes: SubtypeOperation::Keep,
+                                },
+                            )]),
+                            duration: ResolvedDuration::UntilEndOfTurn,
+                        };
+                        crate::program::Instruction::ApplyContinuous(Box::new(
+                            crate::toolbox::ApplyContinuousSpec {
+                                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                                payload: crate::toolbox::ContinuousPayload::ResolvedParts(
+                                    Box::new(_t.parts),
+                                ),
+                                duration: _t.duration,
+                                condition: None,
+                                one_shot: false,
+                                as_emblem: None,
+                                emblem_label: None,
+                            },
+                        ))
                     }],
                 ),
             ),

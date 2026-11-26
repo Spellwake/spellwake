@@ -86,7 +86,6 @@ impl EffectWindow {
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::Discover { .. }
-            | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::RevealCreatureForEachTargetController
             | Instruction::RevealUntilLandKind

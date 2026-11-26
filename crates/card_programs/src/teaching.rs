@@ -234,7 +234,12 @@ impl AuthoredEffect {
         Ok(match self {
             Self::BounceCreature => ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
             Self::CounterUnlessPaidThree => ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
