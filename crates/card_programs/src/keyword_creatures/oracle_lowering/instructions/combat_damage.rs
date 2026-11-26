@@ -149,13 +149,22 @@ pub(super) fn lower_combat_damage_instruction(
                                 if c.any_types == CardTypeMask::CREATURE
                         )
                 };
+                let eff_source = match source.as_ref() {
+                    SubjectRefAst::InZone {
+                        subject: inner,
+                        zone: ZoneFilter::Battlefield,
+                    } => inner.as_ref(),
+                    other => other,
+                };
                 if is_its_power {
-                    match source.as_ref() {
+                    match eff_source {
                         SubjectRefAst::TargetObject {
                             filter,
                             count: TargetCountAst::Exact(1),
-                        } if filter.zone.is_none() => {
-                            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
+                            let bt = lower_battlefield_body_target(&f_clean, vocabulary)?;
                             if bt_is_creature(bt) {
                                 if is_self_pronoun(target, builder, self_pronoun_valid) {
                                     builder.bind_target(bt)?;
@@ -353,20 +362,34 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                     }
                 }
-                let src_ref = match source.as_ref() {
+                let src_ref = match eff_source {
                     SubjectRefAst::SelfObject => Some(DamageSourceRef::AbilitySource),
                     SubjectRefAst::TargetObject {
                         filter,
                         count: TargetCountAst::Exact(1),
-                    } if filter.zone.is_none() => {
+                    } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                        let mut f_clean = filter.as_ref().clone();
+                        f_clean.zone = None;
                         let bt = lower_battlefield_body_target_in_context(
-                            filter, builder, in_trigger, vocabulary,
+                            &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
                         Some(DamageSourceRef::TargetObject)
                     }
-                    SubjectRefAst::Anaphora(_)
-                        if last_instruction_created_tokens(&builder.instructions) =>
+                    SubjectRefAst::TargetOneOf {
+                        options,
+                        count: TargetCountAst::Exact(1),
+                    } => {
+                        let bt = lower_target_one_of_permanent_body_target(
+                            options, builder, in_trigger, vocabulary,
+                        )?;
+                        builder.bind_target(bt)?;
+                        Some(DamageSourceRef::TargetObject)
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if last_instruction_created_tokens(&builder.instructions)
+                            || (has_prior_token_creation(&builder.instructions)
+                                && raw.to_ascii_lowercase().contains("token")) =>
                     {
                         Some(DamageSourceRef::CreatedTokens)
                     }
@@ -409,6 +432,12 @@ pub(super) fn lower_combat_damage_instruction(
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
                         Some(DamageSourceRef::AttachedHost)
                     }
+                    SubjectRefAst::Anaphora(_)
+                        if builder.target == BodyTarget::None
+                            && let Some(group_obj) = builder.last_group_filter =>
+                    {
+                        Some(DamageSourceRef::Matching(group_obj))
+                    }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
                         if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
                     {
@@ -433,10 +462,27 @@ pub(super) fn lower_combat_damage_instruction(
                     let rec_ref = match target.as_ref() {
                         SubjectRefAst::TargetObject {
                             filter,
-                            count: TargetCountAst::UpTo(1),
-                        } if filter.zone.is_none() => {
+                            count: TargetCountAst::Exact(1),
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                            && !filter.is_ability
+                            && !filter.any_spell =>
+                        {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
                             let bt = lower_battlefield_body_target_in_context(
-                                filter, builder, in_trigger, vocabulary,
+                                &f_clean, builder, in_trigger, vocabulary,
+                            )?;
+                            builder.bind_target(bt)?;
+                            Some(DamageRecipientsRef::Target)
+                        }
+                        SubjectRefAst::TargetObject {
+                            filter,
+                            count: TargetCountAst::UpTo(1),
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
+                            let bt = lower_battlefield_body_target_in_context(
+                                &f_clean, builder, in_trigger, vocabulary,
                             )?;
                             builder.bind_target(bt)?;
                             builder.up_to_one_target = true;
@@ -1383,7 +1429,14 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     Ok(())
                 }
-                s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+                s if is_self_pronoun(s, builder, self_pronoun_valid)
+                    || matches!(
+                        s,
+                        SubjectRefAst::Anaphora(a)
+                            if (self_pronoun_valid || in_trigger || builder.has_source)
+                                && a.trim().eq_ignore_ascii_case("itself")
+                    ) =>
+                {
                     let amt_expr = lower_amt(builder)?;
                     if let ValueExpr::Literal(n) = amt_expr {
                         builder.instructions.push(Instruction::DamageGroup {

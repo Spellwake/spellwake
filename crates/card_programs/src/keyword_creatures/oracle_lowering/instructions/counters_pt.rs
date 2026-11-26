@@ -41,6 +41,112 @@ fn strip_battlefield_zone_from_subject(subject: &SubjectRefAst) -> SubjectRefAst
     }
 }
 
+fn value_expr_references_ability_source(expr: &ValueExpr) -> bool {
+    match expr {
+        ValueExpr::SourceState(_) => true,
+        ValueExpr::CounterCount {
+            subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+            ..
+        } => true,
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            value_expr_references_ability_source(a) || value_expr_references_ability_source(b)
+        }
+        ValueExpr::Scale { expr: inner, .. } | ValueExpr::DivConst { expr: inner, .. } => {
+            value_expr_references_ability_source(inner)
+        }
+        _ => false,
+    }
+}
+
+fn prior_op_acted_on_ability_source(ops: &[Instruction]) -> bool {
+    for op in ops.iter().rev() {
+        match op {
+            Instruction::PutCountersOnSource { .. }
+            | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutChargeCounterOnSource
+            | Instruction::UntapAbilitySource
+            | Instruction::TapAbilitySource
+            | Instruction::ChangeAbilitySource { .. }
+            | Instruction::RemoveCountersFromPermanent {
+                target_self: true, ..
+            }
+            | Instruction::DoublePowerToughness {
+                target_self: true, ..
+            } => return true,
+            Instruction::PutCountersOnSubject { subject, .. }
+            | Instruction::RemoveCountersFromSubject { subject, .. }
+            | Instruction::SetSubjectTapped { subject, .. }
+            | Instruction::DoubleCountersOnSubject { subject, .. } => {
+                return matches!(subject.as_ref(), EffectSubject::AbilitySource);
+            }
+            Instruction::BranchIfFalse { condition, .. } => {
+                if value_expr_references_ability_source(&condition.left)
+                    || value_expr_references_ability_source(&condition.right)
+                {
+                    return true;
+                }
+            }
+            Instruction::OptionalEffect { .. }
+            | Instruction::OptionalSequence { .. }
+            | Instruction::Jump { .. } => {}
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn value_expr_counter_kind(expr: &ValueExpr) -> Option<CounterKind> {
+    match expr {
+        ValueExpr::CounterCount { kind: Some(ck), .. } if ck.is_permanent() => Some(*ck),
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            value_expr_counter_kind(a).or_else(|| value_expr_counter_kind(b))
+        }
+        ValueExpr::Scale { expr: inner, .. } | ValueExpr::DivConst { expr: inner, .. } => {
+            value_expr_counter_kind(inner)
+        }
+        _ => None,
+    }
+}
+
+fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKind> {
+    for op in ops.iter().rev() {
+        match op {
+            Instruction::PutNamedCounterOnSource { kind, .. }
+            | Instruction::PutNamedCounterOnTarget { kind, .. }
+            | Instruction::PutCountersOnSubject { kind, .. }
+                if kind.is_permanent() =>
+            {
+                return Some(*kind);
+            }
+            Instruction::PutCountersOnSource { .. } => return Some(CounterKind::PlusOne),
+            Instruction::PutChargeCounterOnSource => return Some(CounterKind::Charge),
+            Instruction::PutPowerToughnessCounters { counters } => {
+                if counters.plus_one.is_positive() && !counters.minus_one.is_positive() {
+                    return Some(CounterKind::PlusOne);
+                }
+                if counters.minus_one.is_positive() && !counters.plus_one.is_positive() {
+                    return Some(CounterKind::MinusOne);
+                }
+            }
+            Instruction::RemoveCountersFromPermanent { kind: Some(ck), .. }
+            | Instruction::RemoveCountersFromSubject { kind: Some(ck), .. }
+                if ck.is_permanent() =>
+            {
+                return Some(*ck);
+            }
+            Instruction::BranchIfFalse { condition, .. } => {
+                if let Some(ck) = value_expr_counter_kind(&condition.left)
+                    .or_else(|| value_expr_counter_kind(&condition.right))
+                {
+                    return Some(ck);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub(super) fn lower_counters_pt_instruction(
     ins: &InstructionAst,
     builder: &mut BodyBuilder,
@@ -51,11 +157,180 @@ pub(super) fn lower_counters_pt_instruction(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
     match ins {
-        InstructionAst::Transform { subject }
-            if is_self_pronoun(subject, builder, self_pronoun_valid) =>
-        {
-            builder.instructions.push(Instruction::TransformSource);
-            Ok(())
+        InstructionAst::Transform { subject } => {
+            let clean_subject = strip_battlefield_zone_from_subject(subject);
+            if let SubjectRefAst::Compound(items) = &clean_subject
+                && !items.is_empty()
+            {
+                let mut trial = builder.clone();
+                for item in items {
+                    lower_instruction(
+                        &InstructionAst::Transform {
+                            subject: Box::new(item.clone()),
+                        },
+                        &mut trial,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )?;
+                }
+                *builder = trial;
+                return Ok(());
+            }
+            let has_source = in_trigger || self_pronoun_valid || builder.has_source;
+            if is_self_pronoun(&clean_subject, builder, self_pronoun_valid) {
+                builder.instructions.push(Instruction::TransformSource);
+                return Ok(());
+            }
+            if has_source && let SubjectRefAst::Anaphora(raw) = &clean_subject {
+                let low = raw.trim().to_ascii_lowercase();
+                let explicit_self_noun = matches!(
+                    low.as_str(),
+                    "this creature"
+                        | "this permanent"
+                        | "this artifact"
+                        | "this enchantment"
+                        | "this land"
+                        | "this planeswalker"
+                        | "this battle"
+                        | "this saga"
+                        | "this room"
+                        | "this vehicle"
+                        | "this equipment"
+                        | "this aura"
+                        | "this artifact creature"
+                        | "this enchantment creature"
+                );
+                if explicit_self_noun
+                    || (builder.target == BodyTarget::None
+                        && matches!(low.as_str(), "it" | "him" | "her")
+                        && prior_op_acted_on_ability_source(&builder.instructions))
+                {
+                    builder.instructions.push(Instruction::TransformSource);
+                    return Ok(());
+                }
+            }
+            let mut trial = builder.clone();
+            let eff_subj = match &clean_subject {
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(1),
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, &trial, in_trigger, vocabulary,
+                    )?;
+                    trial.bind_target(bt)?;
+                    Some(EffectSubject::TargetObject)
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::Exact(1),
+                } => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, &trial, in_trigger, vocabulary,
+                    )?;
+                    trial.bind_target(bt)?;
+                    Some(EffectSubject::TargetObject)
+                }
+                SubjectRefAst::AttachedHost(_) if has_source => Some(EffectSubject::Matching(
+                    ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                )),
+                SubjectRefAst::TriggerSubject if in_trigger => Some(EffectSubject::TriggerSubject),
+                SubjectRefAst::Anaphora(raw)
+                    if last_instruction_created_tokens(&trial.instructions)
+                        || matches!(
+                            trial.instructions.last(),
+                            Some(Instruction::Incubate { .. })
+                        )
+                        || (has_prior_token_creation(&trial.instructions)
+                            && raw.to_ascii_lowercase().contains("token")) =>
+                {
+                    Some(EffectSubject::CreatedTokens)
+                }
+                SubjectRefAst::Anaphora(_) if is_permanent_body_target(trial.target) => {
+                    Some(EffectSubject::TargetObject)
+                }
+                SubjectRefAst::Anaphora(_)
+                    if last_instruction_moved_object(&trial.instructions)
+                        || matches!(
+                            trial.instructions.last(),
+                            Some(Instruction::ManifestTop { .. })
+                        ) =>
+                {
+                    Some(EffectSubject::LastMoved)
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if in_trigger
+                        && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                        && trial.target == BodyTarget::None =>
+                {
+                    Some(EffectSubject::TriggerSubject)
+                }
+                SubjectRefAst::Anaphora(_)
+                    if trial.target == BodyTarget::None
+                        && let Some(group_obj) = trial.last_group_filter =>
+                {
+                    Some(EffectSubject::Matching(group_obj))
+                }
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                {
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.zone = None;
+                    let obj =
+                        lower_object_filter_in_context(&f_clean, &trial, in_trigger, vocabulary)?;
+                    bind_filter_player_target(&mut trial, &obj)?;
+                    trial.last_group_filter = Some(obj);
+                    Some(EffectSubject::Matching(obj))
+                }
+                SubjectRefAst::Group(f)
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                        && !f.any_spell
+                        && !f.is_ability =>
+                {
+                    let mut inner = f.as_ref().clone();
+                    inner.zone = None;
+                    let source_zone = if inner.controller == Some(ControllerRelation::You) {
+                        inner.controller = None;
+                        SourceZoneFilter::Battlefield
+                    } else {
+                        SourceZoneFilter::AnyBattlefield
+                    };
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter_in_context(&inner, &trial, in_trigger, vocabulary)?
+                    };
+                    if obj.has_target_player() {
+                        None
+                    } else {
+                        trial.instructions.push(Instruction::ChooseObjects {
+                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                            source_zone,
+                            filter: Box::new(obj),
+                            min: ValueExpr::literal(1),
+                            max: ValueExpr::literal(1),
+                            distinct_powers: false,
+                            max_total_power: None,
+                            unchosen_action: None,
+                        });
+                        Some(EffectSubject::LastMoved)
+                    }
+                }
+                _ => None,
+            };
+            if let Some(subj) = eff_subj {
+                trial.instructions.push(Instruction::TransformSubject {
+                    subject: Box::new(subj),
+                });
+                *builder = trial;
+                return Ok(());
+            }
+            Err("oracle:unsupported-transform")
         }
         InstructionAst::BecomePrepared { subject }
             if is_self_pronoun(subject, builder, self_pronoun_valid) =>
@@ -105,6 +380,8 @@ pub(super) fn lower_counters_pt_instruction(
                 vocabulary,
             )?;
             let anaphora_created = last_instruction_created_tokens(&builder.instructions)
+                || (has_prior_token_creation(&builder.instructions)
+                    && matches!(subject, SubjectRefAst::Anaphora(raw) if raw.to_ascii_lowercase().contains("token")))
                 || (has_prior_token_creation(&builder.instructions)
                     && !is_permanent_body_target(builder.target)
                     && !has_prior_moved_object(&builder.instructions));
@@ -274,6 +551,8 @@ pub(super) fn lower_counters_pt_instruction(
             let dp = parse_signed_pt_delta(dx);
             let dt = parse_signed_pt_delta(dy);
             let anaphora_created = last_instruction_created_tokens(&builder.instructions)
+                || (has_prior_token_creation(&builder.instructions)
+                    && matches!(subject, SubjectRefAst::Anaphora(raw) if raw.to_ascii_lowercase().contains("token")))
                 || (has_prior_token_creation(&builder.instructions)
                     && !is_permanent_body_target(builder.target)
                     && !has_prior_moved_object(&builder.instructions));
@@ -1718,6 +1997,148 @@ pub(super) fn lower_counters_pt_instruction(
             count,
         } => {
             let kind_low_full = counter_kind.trim().to_ascii_lowercase();
+            let kind_trimmed = kind_low_full.trim_end_matches('.').trim();
+            if in_trigger
+                && matches!(count.as_ref(), ValueExprAst::Const(1))
+                && matches!(
+                    kind_trimmed,
+                    "those"
+                        | "all of those"
+                        | "all those"
+                        | "its"
+                        | "all of its"
+                        | "all its"
+                        | "~'s"
+                        | "all of ~'s"
+                        | "this creature's"
+                        | "this permanent's"
+                        | "this artifact's"
+                        | "that creature's"
+                        | "that permanent's"
+                        | "that artifact's"
+                        | "the dying creature's"
+                        | "all counters on it"
+                        | "all of the counters on it"
+                        | "all counters from it"
+                        | "all of the counters from it"
+                        | "the counters on it"
+                        | "the counters from it"
+                        | "those counters"
+                        | "all of those counters"
+                        | "its counters"
+                        | "all of its counters"
+                        | "its counters on it"
+                        | "~'s counters"
+                        | "all of ~'s counters"
+                        | "this creature's counters"
+                        | "that creature's counters"
+                        | "this permanent's counters"
+                        | "that permanent's counters"
+                        | "this artifact's counters"
+                        | "that artifact's counters"
+                        | "the counters that were on it"
+                        | "all counters that were on it"
+                )
+            {
+                let eff_subject = match subject.as_ref() {
+                    SubjectRefAst::InZone {
+                        subject: inner,
+                        zone: ZoneFilter::Battlefield,
+                    } => inner.as_ref(),
+                    other => other,
+                };
+                let has_source = in_trigger || self_pronoun_valid || builder.has_source;
+                let mut trial = builder.clone();
+                let target_subj = match eff_subject {
+                    s if has_source && is_self_pronoun(s, &trial, self_pronoun_valid) => {
+                        Some(EffectSubject::AbilitySource)
+                    }
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                    } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                        let mut f_clean = filter.as_ref().clone();
+                        f_clean.zone = None;
+                        let bt = lower_battlefield_body_target_in_context(
+                            &f_clean, &trial, in_trigger, vocabulary,
+                        )?;
+                        trial.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            trial.up_to_one_target = true;
+                        }
+                        Some(EffectSubject::TargetObject)
+                    }
+                    SubjectRefAst::TargetOneOf {
+                        options,
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                    } => {
+                        let bt = lower_target_one_of_permanent_body_target(
+                            options, &trial, in_trigger, vocabulary,
+                        )?;
+                        trial.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            trial.up_to_one_target = true;
+                        }
+                        Some(EffectSubject::TargetObject)
+                    }
+                    SubjectRefAst::AttachedHost(_) if has_source => Some(EffectSubject::Matching(
+                        ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                    )),
+                    SubjectRefAst::Anaphora(raw)
+                        if has_prior_token_creation(&trial.instructions)
+                            && raw.to_ascii_lowercase().contains("token") =>
+                    {
+                        Some(EffectSubject::CreatedTokens)
+                    }
+                    SubjectRefAst::Anaphora(_) if is_permanent_body_target(trial.target) => {
+                        Some(EffectSubject::TargetObject)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_created_tokens(&trial.instructions)
+                            || (has_prior_token_creation(&trial.instructions)
+                                && !is_permanent_body_target(trial.target)
+                                && !has_prior_moved_object(&trial.instructions)) =>
+                    {
+                        Some(EffectSubject::CreatedTokens)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_moved_object(&trial.instructions)
+                            || (!is_permanent_body_target(trial.target)
+                                && has_prior_moved_object(&trial.instructions)) =>
+                    {
+                        Some(EffectSubject::LastMoved)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if trial.target == BodyTarget::None
+                            && let Some(group_obj) = trial.last_group_filter =>
+                    {
+                        Some(EffectSubject::Matching(group_obj))
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
+                        if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                    {
+                        let mut f_clean = f.as_ref().clone();
+                        f_clean.zone = None;
+                        let obj = lower_object_filter_in_context(
+                            &f_clean, &trial, in_trigger, vocabulary,
+                        )?;
+                        bind_filter_player_target(&mut trial, &obj)?;
+                        trial.last_group_filter = Some(obj);
+                        Some(EffectSubject::Matching(obj))
+                    }
+                    _ => None,
+                };
+                if let Some(eff_subj) = target_subj {
+                    trial
+                        .instructions
+                        .push(Instruction::TransferAllCountersFromTriggeringLki {
+                            to: Box::new(eff_subj),
+                        });
+                    *builder = trial;
+                    return Ok(());
+                }
+                return Err("oracle:put-counter-kind");
+            }
             if matches!(count.as_ref(), ValueExprAst::Const(1))
                 && matches!(
                     kind_low_full.as_str(),
@@ -2621,8 +3042,10 @@ pub(super) fn lower_counters_pt_instruction(
                         });
                     Ok(())
                 }
-                SubjectRefAst::Anaphora(_)
+                SubjectRefAst::Anaphora(raw)
                     if last_instruction_created_tokens(&builder.instructions)
+                        || (has_prior_token_creation(&builder.instructions)
+                            && raw.to_ascii_lowercase().contains("token"))
                         || (has_prior_token_creation(&builder.instructions)
                             && !is_permanent_body_target(builder.target)
                             && !has_prior_moved_object(&builder.instructions)) =>
@@ -2637,7 +3060,11 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
-                    if last_instruction_moved_object(&builder.instructions) =>
+                    if last_instruction_moved_object(&builder.instructions)
+                        || matches!(
+                            builder.instructions.last(),
+                            Some(Instruction::ManifestTop { .. })
+                        ) =>
                 {
                     builder
                         .instructions
@@ -2658,7 +3085,37 @@ pub(super) fn lower_counters_pt_instruction(
                                 | BodyTarget::SingleOpponentOrPlaneswalker
                         ) =>
                 {
-                    if ck == CounterKind::Indestructible && const_n == Some(1) {
+                    let multi_bounds = if is_permanent_body_target(builder.target) {
+                        builder.instructions.iter().rev().find_map(|op| {
+                            if let Instruction::AffectPermanentTargets {
+                                minimum, maximum, ..
+                            } = op
+                            {
+                                Some((*minimum, *maximum))
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some((minimum, maximum)) = multi_bounds {
+                        let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
+                            PermanentTargetAction::PutPlusOneCounter
+                        } else {
+                            PermanentTargetAction::PutCounters {
+                                kind: ck,
+                                amount: amt,
+                            }
+                        };
+                        builder
+                            .instructions
+                            .push(Instruction::AffectPermanentTargets {
+                                minimum,
+                                maximum,
+                                action,
+                            });
+                    } else if ck == CounterKind::Indestructible && const_n == Some(1) {
                         builder
                             .instructions
                             .push(Instruction::PutIndestructibleCounter);
@@ -2880,6 +3337,13 @@ pub(super) fn lower_counters_pt_instruction(
                 "" | "any" | "a" | "counter" | "counters" | "all" | "any kind"
             ) {
                 None
+            } else if matches!(
+                ck_clean,
+                "those" | "them" | "all of them" | "of them" | "those counters"
+            ) {
+                let inferred = infer_prior_counter_kind(&builder.instructions)
+                    .ok_or("oracle:unsupported-counter-kind")?;
+                Some(inferred)
             } else {
                 let ck = parse_counter_kind(ck_clean).ok_or("oracle:unsupported-counter-kind")?;
                 if !ck.is_permanent() {
@@ -3641,7 +4105,11 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
-                    if last_instruction_moved_object(&builder.instructions) =>
+                    if last_instruction_moved_object(&builder.instructions)
+                        || matches!(
+                            builder.instructions.last(),
+                            Some(Instruction::ManifestTop { .. })
+                        ) =>
                 {
                     builder
                         .instructions
@@ -4161,10 +4629,24 @@ pub(super) fn lower_counters_pt_instruction(
                 .trim_end_matches(" counter")
                 .trim()
                 .to_ascii_lowercase();
+            let count_is_default_one = count
+                .as_deref()
+                .is_none_or(|c| matches!(c, ValueExprAst::Const(1)));
+            let effective_all = *all
+                || (!*any_number
+                    && count_is_default_one
+                    && matches!(kind_clean.as_str(), "all" | "all of the" | "all the"));
+            let effective_any_number = *any_number
+                || (!effective_all
+                    && count_is_default_one
+                    && matches!(kind_clean.as_str(), "any number of" | "any number"));
             let kind = if kind_clean.is_empty()
                 || matches!(
                     kind_clean.as_str(),
                     "any"
+                        | "all"
+                        | "all of the"
+                        | "all the"
                         | "a"
                         | "an"
                         | "one"
@@ -4172,6 +4654,7 @@ pub(super) fn lower_counters_pt_instruction(
                         | "any kind"
                         | "of any kind"
                         | "any number of"
+                        | "any number"
                 ) {
                 None
             } else {
@@ -4261,7 +4744,7 @@ pub(super) fn lower_counters_pt_instruction(
                 }
             };
             let mut trial = builder.clone();
-            let amount = if *all || *any_number {
+            let amount = if effective_all || effective_any_number {
                 None
             } else {
                 let default_one = ValueExprAst::Const(1);
@@ -4298,8 +4781,8 @@ pub(super) fn lower_counters_pt_instruction(
                     from: MoveSubjectRef::RememberedFirst,
                     to: MoveSubjectRef::RememberedSecond,
                     kind,
-                    all: *all,
-                    any_number: *any_number,
+                    all: effective_all,
+                    any_number: effective_any_number,
                     amount,
                 });
                 *builder = trial;
@@ -4372,8 +4855,8 @@ pub(super) fn lower_counters_pt_instruction(
                 from: from_ref,
                 to: to_ref,
                 kind,
-                all: *all,
-                any_number: *any_number,
+                all: effective_all,
+                any_number: effective_any_number,
                 amount,
             });
             *builder = trial;

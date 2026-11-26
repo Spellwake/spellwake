@@ -1267,6 +1267,10 @@ enum CardPlayDuration {
     ThroughTurn,
     ThroughNextOwnTurn(SeatId),
     ThroughNextOwnTurnSkipCurrent(SeatId),
+    UntilNextEndStep(SeatId),
+    UntilEndOfNextEndStep(SeatId),
+    UntilEndOfNextEndStepSkipCurrent(SeatId),
+    UntilNextUpkeep(SeatId),
     WhileInZone,
 }
 
@@ -4640,7 +4644,18 @@ impl EffectWindow {
         let mut updated_permissions = BTreeSet::new();
         for mut grant in std::mem::take(&mut next.card_play_permissions) {
             match grant.duration {
-                CardPlayDuration::WhileInZone => {
+                CardPlayDuration::WhileInZone
+                | CardPlayDuration::UntilNextEndStep(_)
+                | CardPlayDuration::UntilNextUpkeep(_) => {
+                    updated_permissions.insert(grant);
+                }
+                CardPlayDuration::UntilEndOfNextEndStepSkipCurrent(owner) => {
+                    if active_player == owner {
+                        grant.duration = CardPlayDuration::UntilEndOfNextEndStep(owner);
+                    }
+                    updated_permissions.insert(grant);
+                }
+                CardPlayDuration::UntilEndOfNextEndStep(owner) if active_player != owner => {
                     updated_permissions.insert(grant);
                 }
                 CardPlayDuration::ThroughNextOwnTurnSkipCurrent(owner) => {
@@ -4650,7 +4665,9 @@ impl EffectWindow {
                 CardPlayDuration::ThroughNextOwnTurn(owner) if active_player != owner => {
                     updated_permissions.insert(grant);
                 }
-                CardPlayDuration::ThroughTurn | CardPlayDuration::ThroughNextOwnTurn(_) => {}
+                CardPlayDuration::ThroughTurn
+                | CardPlayDuration::ThroughNextOwnTurn(_)
+                | CardPlayDuration::UntilEndOfNextEndStep(_) => {}
             }
         }
         next.card_play_permissions = updated_permissions;
@@ -4658,6 +4675,42 @@ impl EffectWindow {
         Ok(next)
     }
     /// Metadata-only bookkeeping; this operation emits no gameplay append.
+    fn map_impulse_play_duration(
+        &self,
+        duration: crate::program::ImpulsePlayDuration,
+        grantee: SeatId,
+    ) -> CardPlayDuration {
+        match duration {
+            crate::program::ImpulsePlayDuration::ThisTurn => CardPlayDuration::ThroughTurn,
+            crate::program::ImpulsePlayDuration::UntilEndOfNextTurn => {
+                if self.window.active_player() == grantee {
+                    CardPlayDuration::ThroughNextOwnTurnSkipCurrent(grantee)
+                } else {
+                    CardPlayDuration::ThroughNextOwnTurn(grantee)
+                }
+            }
+            crate::program::ImpulsePlayDuration::UntilNextEndStep => {
+                CardPlayDuration::UntilNextEndStep(grantee)
+            }
+            crate::program::ImpulsePlayDuration::UntilEndOfNextEndStep => {
+                if self.window.active_player() == grantee
+                    && self.current_step == Some(crate::turn::Step::End)
+                {
+                    CardPlayDuration::UntilEndOfNextEndStepSkipCurrent(grantee)
+                } else {
+                    CardPlayDuration::UntilEndOfNextEndStep(grantee)
+                }
+            }
+            crate::program::ImpulsePlayDuration::UntilNextUpkeep => {
+                CardPlayDuration::UntilNextUpkeep(grantee)
+            }
+            crate::program::ImpulsePlayDuration::WhileExiled
+            | crate::program::ImpulsePlayDuration::UntilNextFromSource => {
+                CardPlayDuration::WhileInZone
+            }
+        }
+    }
+
     pub fn pass(&self, expected: u64, player: SeatId) -> Result<Self, EffectError> {
         let revision = self.next_revision(expected)?;
         self.ensure_resolution_or_idle()?;
@@ -10661,6 +10714,7 @@ impl EffectWindow {
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
             | Instruction::AdjustPlayersLife { .. }
+            | Instruction::SetPlayersLife { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
@@ -10795,10 +10849,14 @@ impl EffectWindow {
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
             | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::TransformSubject { .. }
             | Instruction::EmpowerJace { .. }
             | Instruction::AddOneOfEachCounterKindOnSubject { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
-            | Instruction::MoveLastMovedFiltered { .. } => false,
+            | Instruction::MoveLastMovedFiltered { .. }
+            | Instruction::CounterMatchingStackObjects { .. }
+            | Instruction::ReturnLinkedExile { .. }
+            | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
         })
     }
 

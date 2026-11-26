@@ -104,8 +104,13 @@ pub(super) fn subject_has_upto_one_target(subject: &SubjectRefAst) -> bool {
             count: TargetCountAst::UpTo(1),
             ..
         } => true,
+        SubjectRefAst::TargetOneOf { options, .. } => {
+            options.iter().any(subject_has_upto_one_target)
+        }
         SubjectRefAst::Compound(items) => items.iter().any(subject_has_upto_one_target),
-        SubjectRefAst::InZone { subject, .. } => subject_has_upto_one_target(subject),
+        SubjectRefAst::InZone { subject, .. }
+        | SubjectRefAst::ControllerOf(subject)
+        | SubjectRefAst::OwnerOf(subject) => subject_has_upto_one_target(subject),
         _ => false,
     }
 }
@@ -119,6 +124,7 @@ pub(super) fn instruction_has_upto_one_target(ins: &InstructionAst) -> bool {
         | InstructionAst::ModifyPTChoice { subject, .. }
         | InstructionAst::GrantKeywords { subject, .. }
         | InstructionAst::GrantAbilityText { subject, .. }
+        | InstructionAst::GrantKeywordChoice { subject, .. }
         | InstructionAst::RemoveKeywords { subject, .. }
         | InstructionAst::RemoveAllAbilities { subject, .. }
         | InstructionAst::PutCounters { subject, .. }
@@ -127,7 +133,9 @@ pub(super) fn instruction_has_upto_one_target(ins: &InstructionAst) -> bool {
         | InstructionAst::Exile { subject, .. }
         | InstructionAst::ExileUntilLeaves { subject }
         | InstructionAst::ReturnZone { subject, .. }
+        | InstructionAst::ReturnHalf { subject, .. }
         | InstructionAst::MoveZone { subject, .. }
+        | InstructionAst::MoveCounted { subject, .. }
         | InstructionAst::TapPermanent { subject, .. }
         | InstructionAst::UntapPermanent { subject, .. }
         | InstructionAst::TapOrUntapPermanent { subject }
@@ -135,25 +143,56 @@ pub(super) fn instruction_has_upto_one_target(ins: &InstructionAst) -> bool {
         | InstructionAst::Regenerate { subject }
         | InstructionAst::Transform { subject }
         | InstructionAst::PhaseOut { subject }
+        | InstructionAst::PhaseIn { subject }
+        | InstructionAst::PhaseOutUntil { subject, .. }
+        | InstructionAst::TurnFaceDown { subject }
+        | InstructionAst::TurnFaceUp { subject, .. }
         | InstructionAst::GainControl { subject, .. }
         | InstructionAst::AnimateOrSetBasePT { subject, .. }
         | InstructionAst::SetDynamicPT { subject, .. }
         | InstructionAst::DoubleStatOrCounters { subject, .. }
         | InstructionAst::BecomeChosenCharacteristic { subject, .. }
+        | InstructionAst::SetBasicLandType { subject, .. }
+        | InstructionAst::RemoveSupertype { subject, .. }
         | InstructionAst::CombatRuleMod { subject, .. }
+        | InstructionAst::ChangeBlockerLimit { subject, .. }
         | InstructionAst::SwitchPowerToughness { subject, .. }
         | InstructionAst::Explore { subject }
         | InstructionAst::Detain { subject }
         | InstructionAst::Suspect { subject }
+        | InstructionAst::SetSuspected { subject, .. }
+        | InstructionAst::SetGoaded { subject, .. }
+        | InstructionAst::Exert { subject }
+        | InstructionAst::Harness { subject }
+        | InstructionAst::UnlockDoor { subject }
+        | InstructionAst::BecomePrepared { subject }
         | InstructionAst::Connive { subject, .. }
         | InstructionAst::ShuffleIntoLibrary { subject }
         | InstructionAst::RemoveFromCombat { subject }
         | InstructionAst::ExileWithCounters { subject, .. }
+        | InstructionAst::GrantCastPermission { subject, .. }
+        | InstructionAst::Sacrifice { subject, .. }
+        | InstructionAst::SacrificeUnlessPay { subject, .. }
         | InstructionAst::Copy { subject, .. } => subject_has_upto_one_target(subject),
+        InstructionAst::Airbend { subject } => {
+            subject.as_deref().is_some_and(subject_has_upto_one_target)
+        }
         InstructionAst::CreateToken {
             token: TokenSpecAst::Role { attached_to, .. },
             ..
+        }
+        | InstructionAst::CreateTokenWithAbilities {
+            token: TokenSpecAst::Role { attached_to, .. },
+            ..
         } => subject_has_upto_one_target(attached_to),
+        InstructionAst::CreateToken {
+            token: TokenSpecAst::Copy { source, .. },
+            ..
+        }
+        | InstructionAst::CreateTokenWithAbilities {
+            token: TokenSpecAst::Copy { source, .. },
+            ..
+        } => subject_has_upto_one_target(source),
         InstructionAst::BecomeCopy {
             subject, source, ..
         } => subject_has_upto_one_target(subject) || subject_has_upto_one_target(source),
@@ -163,21 +202,42 @@ pub(super) fn instruction_has_upto_one_target(ins: &InstructionAst) -> bool {
         InstructionAst::Counter { target, .. } | InstructionAst::PreventDamage { target, .. } => {
             subject_has_upto_one_target(target)
         }
+        InstructionAst::PreventAllDamage { target, .. } => {
+            target.as_deref().is_some_and(subject_has_upto_one_target)
+        }
+        InstructionAst::PreventAllDamageFrom {
+            source, recipient, ..
+        } => {
+            subject_has_upto_one_target(source)
+                || recipient
+                    .as_deref()
+                    .is_some_and(subject_has_upto_one_target)
+        }
         InstructionAst::Attach {
             subject, target, ..
         } => subject_has_upto_one_target(subject) || subject_has_upto_one_target(target),
-        InstructionAst::MoveCounters { from, to, .. } => {
+        InstructionAst::MoveCounters { from, to, .. }
+        | InstructionAst::MoveCounter { from, to, .. } => {
             subject_has_upto_one_target(from) || subject_has_upto_one_target(to)
         }
         InstructionAst::Fight { a, b } => {
             subject_has_upto_one_target(a) || subject_has_upto_one_target(b)
         }
+        InstructionAst::Exchange { left, right, .. } => {
+            subject_has_upto_one_target(left)
+                || right.as_deref().is_some_and(subject_has_upto_one_target)
+        }
         InstructionAst::Optional(inner)
+        | InstructionAst::Otherwise(inner)
+        | InstructionAst::IfPreviousSucceeded(inner)
+        | InstructionAst::IfPreviousFailed(inner)
+        | InstructionAst::Simultaneous(inner)
         | InstructionAst::IfCondition {
             then_body: inner, ..
         }
         | InstructionAst::OptionalPlayer { body: inner, .. }
         | InstructionAst::BindX { body: inner, .. }
+        | InstructionAst::BindXY { body: inner, .. }
         | InstructionAst::ScopedDuration { body: inner, .. } => {
             inner.iter().any(instruction_has_upto_one_target)
         }
@@ -195,6 +255,13 @@ pub(super) fn rewrite_subject_upto_one_to_exact_one(subject: &mut SubjectRefAst)
             *count = TargetCountAst::Exact(1);
             true
         }
+        SubjectRefAst::TargetOneOf { options, .. } => {
+            let mut changed = false;
+            for item in options {
+                changed |= rewrite_subject_upto_one_to_exact_one(item);
+            }
+            changed
+        }
         SubjectRefAst::Compound(items) => {
             let mut changed = false;
             for item in items {
@@ -202,7 +269,9 @@ pub(super) fn rewrite_subject_upto_one_to_exact_one(subject: &mut SubjectRefAst)
             }
             changed
         }
-        SubjectRefAst::InZone { subject, .. } => rewrite_subject_upto_one_to_exact_one(subject),
+        SubjectRefAst::InZone { subject, .. }
+        | SubjectRefAst::ControllerOf(subject)
+        | SubjectRefAst::OwnerOf(subject) => rewrite_subject_upto_one_to_exact_one(subject),
         _ => false,
     }
 }
@@ -218,6 +287,7 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
         | InstructionAst::ModifyPTChoice { subject, .. }
         | InstructionAst::GrantKeywords { subject, .. }
         | InstructionAst::GrantAbilityText { subject, .. }
+        | InstructionAst::GrantKeywordChoice { subject, .. }
         | InstructionAst::RemoveKeywords { subject, .. }
         | InstructionAst::RemoveAllAbilities { subject, .. }
         | InstructionAst::PutCounters { subject, .. }
@@ -226,7 +296,9 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
         | InstructionAst::Exile { subject, .. }
         | InstructionAst::ExileUntilLeaves { subject }
         | InstructionAst::ReturnZone { subject, .. }
+        | InstructionAst::ReturnHalf { subject, .. }
         | InstructionAst::MoveZone { subject, .. }
+        | InstructionAst::MoveCounted { subject, .. }
         | InstructionAst::TapPermanent { subject, .. }
         | InstructionAst::UntapPermanent { subject, .. }
         | InstructionAst::TapOrUntapPermanent { subject }
@@ -234,25 +306,56 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
         | InstructionAst::Regenerate { subject }
         | InstructionAst::Transform { subject }
         | InstructionAst::PhaseOut { subject }
+        | InstructionAst::PhaseIn { subject }
+        | InstructionAst::PhaseOutUntil { subject, .. }
+        | InstructionAst::TurnFaceDown { subject }
+        | InstructionAst::TurnFaceUp { subject, .. }
         | InstructionAst::GainControl { subject, .. }
         | InstructionAst::AnimateOrSetBasePT { subject, .. }
         | InstructionAst::SetDynamicPT { subject, .. }
         | InstructionAst::DoubleStatOrCounters { subject, .. }
         | InstructionAst::BecomeChosenCharacteristic { subject, .. }
+        | InstructionAst::SetBasicLandType { subject, .. }
+        | InstructionAst::RemoveSupertype { subject, .. }
         | InstructionAst::CombatRuleMod { subject, .. }
+        | InstructionAst::ChangeBlockerLimit { subject, .. }
         | InstructionAst::SwitchPowerToughness { subject, .. }
         | InstructionAst::Explore { subject }
         | InstructionAst::Detain { subject }
         | InstructionAst::Suspect { subject }
+        | InstructionAst::SetSuspected { subject, .. }
+        | InstructionAst::SetGoaded { subject, .. }
+        | InstructionAst::Exert { subject }
+        | InstructionAst::Harness { subject }
+        | InstructionAst::UnlockDoor { subject }
+        | InstructionAst::BecomePrepared { subject }
         | InstructionAst::Connive { subject, .. }
         | InstructionAst::ShuffleIntoLibrary { subject }
         | InstructionAst::RemoveFromCombat { subject }
         | InstructionAst::ExileWithCounters { subject, .. }
+        | InstructionAst::GrantCastPermission { subject, .. }
+        | InstructionAst::Sacrifice { subject, .. }
+        | InstructionAst::SacrificeUnlessPay { subject, .. }
         | InstructionAst::Copy { subject, .. } => rewrite_subject_upto_one_to_exact_one(subject),
+        InstructionAst::Airbend { subject } => subject
+            .as_deref_mut()
+            .is_some_and(rewrite_subject_upto_one_to_exact_one),
         InstructionAst::CreateToken {
             token: TokenSpecAst::Role { attached_to, .. },
             ..
+        }
+        | InstructionAst::CreateTokenWithAbilities {
+            token: TokenSpecAst::Role { attached_to, .. },
+            ..
         } => rewrite_subject_upto_one_to_exact_one(attached_to),
+        InstructionAst::CreateToken {
+            token: TokenSpecAst::Copy { source, .. },
+            ..
+        }
+        | InstructionAst::CreateTokenWithAbilities {
+            token: TokenSpecAst::Copy { source, .. },
+            ..
+        } => rewrite_subject_upto_one_to_exact_one(source),
         InstructionAst::BecomeCopy {
             subject, source, ..
         } => {
@@ -270,6 +373,18 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
         InstructionAst::Counter { target, .. } | InstructionAst::PreventDamage { target, .. } => {
             rewrite_subject_upto_one_to_exact_one(target)
         }
+        InstructionAst::PreventAllDamage { target, .. } => target
+            .as_deref_mut()
+            .is_some_and(rewrite_subject_upto_one_to_exact_one),
+        InstructionAst::PreventAllDamageFrom {
+            source, recipient, ..
+        } => {
+            let a = rewrite_subject_upto_one_to_exact_one(source);
+            let b = recipient
+                .as_deref_mut()
+                .is_some_and(rewrite_subject_upto_one_to_exact_one);
+            a || b
+        }
         InstructionAst::Attach {
             subject, target, ..
         } => {
@@ -277,7 +392,8 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
             let b = rewrite_subject_upto_one_to_exact_one(target);
             a || b
         }
-        InstructionAst::MoveCounters { from, to, .. } => {
+        InstructionAst::MoveCounters { from, to, .. }
+        | InstructionAst::MoveCounter { from, to, .. } => {
             let a = rewrite_subject_upto_one_to_exact_one(from);
             let b = rewrite_subject_upto_one_to_exact_one(to);
             a || b
@@ -287,12 +403,24 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
             let y = rewrite_subject_upto_one_to_exact_one(b);
             x || y
         }
+        InstructionAst::Exchange { left, right, .. } => {
+            let a = rewrite_subject_upto_one_to_exact_one(left);
+            let b = right
+                .as_deref_mut()
+                .is_some_and(rewrite_subject_upto_one_to_exact_one);
+            a || b
+        }
         InstructionAst::Optional(inner)
+        | InstructionAst::Otherwise(inner)
+        | InstructionAst::IfPreviousSucceeded(inner)
+        | InstructionAst::IfPreviousFailed(inner)
+        | InstructionAst::Simultaneous(inner)
         | InstructionAst::IfCondition {
             then_body: inner, ..
         }
         | InstructionAst::OptionalPlayer { body: inner, .. }
         | InstructionAst::BindX { body: inner, .. }
+        | InstructionAst::BindXY { body: inner, .. }
         | InstructionAst::ScopedDuration { body: inner, .. } => {
             let mut changed = false;
             for item in inner {
@@ -304,12 +432,92 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
     }
 }
 
-pub(super) fn try_lower_exact_plus_upto_spell_modes(
+fn body_has_dependent_targets(body: &ExecutableBody) -> bool {
+    matches!(body.target, BodyTarget::OpponentOrPlaneswalkerThenCreature)
+        || (body.target == BodyTarget::SinglePlayer
+            && matches!(
+                body.instructions.first(),
+                Some(Instruction::ShuffleTargetGraveyardCards { .. })
+            ))
+}
+
+fn body_safe_for_synthesized_mode(body: &ExecutableBody) -> bool {
+    !body.instructions.is_empty()
+        && body.triggered_modes().is_none()
+        && body.ordered_any_target_bounds().is_none()
+        && !body_has_dependent_targets(body)
+        && body.target_division_total().is_none()
+        && body.target_division_expr().is_none()
+        && !body.has_x_target_count()
+        && !body.has_up_to_x_target_count()
+        && !body.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::BindOrderedPermanents { .. }
+                    | Instruction::ShuffleOnePermanentPerPlayer
+                    | Instruction::ReturnOneNonlandPerOpponent
+                    | Instruction::ExileOnePerPlayerUntilSourceLeaves
+            )
+        })
+}
+
+fn primary_modifier_subject(ins: &InstructionAst) -> Option<(&SubjectRefAst, u8)> {
+    match ins {
+        InstructionAst::RemoveAllAbilities { subject, .. } => Some((subject.as_ref(), 1)),
+        InstructionAst::AnimateOrSetBasePT { subject, .. }
+        | InstructionAst::SetDynamicPT { subject, .. } => Some((subject.as_ref(), 2)),
+        InstructionAst::ModifyPT { subject, .. }
+        | InstructionAst::ModifyPTChoice { subject, .. } => Some((subject.as_ref(), 3)),
+        InstructionAst::GrantKeywords { subject, .. }
+        | InstructionAst::GrantAbilityText { subject, .. }
+        | InstructionAst::GrantKeywordChoice { subject, .. }
+        | InstructionAst::CombatRuleMod { subject, .. }
+        | InstructionAst::BecomeChosenCharacteristic { subject, .. } => Some((subject.as_ref(), 4)),
+        _ => None,
+    }
+}
+
+fn is_single_clause_repeated_modifier_pair(a: &[InstructionAst], b: &[InstructionAst]) -> bool {
+    let ([op_a], [op_b]) = (a, b) else {
+        return false;
+    };
+    let (Some((subj_a, kind_a)), Some((subj_b, kind_b))) = (
+        primary_modifier_subject(op_a),
+        primary_modifier_subject(op_b),
+    ) else {
+        return false;
+    };
+    subj_a == subj_b
+        && matches!(
+            (kind_a, kind_b),
+            (1, 2) | (2, 1) | (3, 4) | (4, 3) | (1, 4) | (4, 1) | (2, 4) | (4, 2)
+        )
+}
+
+enum OuterWrap<'a> {
+    None,
+    ScopedDuration(&'a DurationAst),
+    BindX(&'a ValueExprAst),
+}
+
+fn try_lower_exact_plus_upto_modes_core(
     ins: &[InstructionAst],
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
-) -> Option<(ExecutableBody, SpellModes)> {
-    let expanded = expand_top_level_compound_targets(ins);
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    trigger_hint: TriggerHint,
+) -> Option<(u8, Vec<ExecutableBody>)> {
+    let (wrap, inner_ins) = match ins {
+        [InstructionAst::ScopedDuration { duration, body }] if body.len() >= 2 => {
+            (OuterWrap::ScopedDuration(duration), body.as_slice())
+        }
+        [InstructionAst::BindX { x_expr, body }] if body.len() >= 2 => {
+            (OuterWrap::BindX(x_expr.as_ref()), body.as_slice())
+        }
+        _ => (OuterWrap::None, ins),
+    };
+    let expanded = expand_top_level_compound_targets(inner_ins);
     let mut groups: Vec<(usize, usize, bool)> = Vec::new();
     let mut i = 0usize;
     while i < expanded.len() {
@@ -329,56 +537,121 @@ pub(super) fn try_lower_exact_plus_upto_spell_modes(
         .enumerate()
         .filter_map(|(idx, &(_, _, has_upto))| has_upto.then_some(idx))
         .collect();
-    if upto_groups.len() != 1 || groups.len() < 2 {
+    if !(1..=3).contains(&upto_groups.len()) || groups.len() < 2 {
         return None;
     }
-    let (u_start, u_end, _) = groups[upto_groups[0]];
-    let mut mode0_ins = Vec::with_capacity(expanded.len().saturating_sub(u_end - u_start));
-    mode0_ins.extend_from_slice(&expanded[..u_start]);
-    mode0_ins.extend_from_slice(&expanded[u_end..]);
-    if mode0_ins.is_empty() {
+    // Fail closed if adjacent upto groups are a single-sentence repeated-target conjunction
+    // (such as "loses all abilities and becomes a 4/4" or "gets +1/+0 and gains flying").
+    for pair in upto_groups.windows(2) {
+        let (a_start, a_end, _) = groups[pair[0]];
+        let (b_start, b_end, _) = groups[pair[1]];
+        if is_single_clause_repeated_modifier_pair(
+            &expanded[a_start..a_end],
+            &expanded[b_start..b_end],
+        ) {
+            return None;
+        }
+    }
+    let k = upto_groups.len();
+    let subset_count = 1usize << k;
+    let mut options = Vec::with_capacity(subset_count);
+    let mut has_empty_subset = false;
+    for mask in 0..subset_count {
+        let mut subset_ins = Vec::with_capacity(expanded.len());
+        let mut upto_pos = 0usize;
+        for &(g_start, g_end, has_upto) in &groups {
+            if has_upto {
+                let include = (mask >> upto_pos) & 1 != 0;
+                upto_pos += 1;
+                if include {
+                    let start_len = subset_ins.len();
+                    subset_ins.extend_from_slice(&expanded[g_start..g_end]);
+                    let mut rewritten = false;
+                    for item in &mut subset_ins[start_len..] {
+                        rewritten |= rewrite_instruction_upto_one_to_exact_one(item);
+                    }
+                    if !rewritten {
+                        return None;
+                    }
+                }
+            } else {
+                subset_ins.extend_from_slice(&expanded[g_start..g_end]);
+            }
+        }
+        if subset_ins.is_empty() {
+            has_empty_subset = true;
+            continue;
+        }
+        // Skip empty-only BindX wrappers when all real action clauses were excluded.
+        let all_empty_bind_x = subset_ins
+            .iter()
+            .all(|op| matches!(op, InstructionAst::BindX { body, .. } if body.is_empty()));
+        if all_empty_bind_x {
+            has_empty_subset = true;
+            continue;
+        }
+        let wrapped_ins = match wrap {
+            OuterWrap::None => subset_ins,
+            OuterWrap::ScopedDuration(dur) => vec![InstructionAst::ScopedDuration {
+                duration: dur.clone(),
+                body: subset_ins,
+            }],
+            OuterWrap::BindX(x_expr) => vec![InstructionAst::BindX {
+                x_expr: Box::new(x_expr.clone()),
+                body: subset_ins,
+            }],
+        };
+        let mut lowered = lower_effect_body_with_hint(
+            &wrapped_ins,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            true,
+            trigger_hint,
+        )
+        .ok()?;
+        if !body_safe_for_synthesized_mode(&lowered) {
+            return None;
+        }
+        if !in_trigger {
+            let saw_sacrifice = lowered.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_)
+                )
+            });
+            if saw_sacrifice {
+                rewrite_body_anaphora_stats(&mut lowered, ValueObjectRef::LastSacrificedCreature);
+            }
+        }
+        options.push(lowered);
+    }
+    if options.len() < 2 {
         return None;
     }
-    let mut mode0 = lower_effect_body_impl(&mode0_ins, vocabulary, ids, false, false, true).ok()?;
-    let mode0_has_fixed = mode0
-        .instructions
-        .iter()
-        .any(|op| matches!(op, Instruction::FixedTargetClause(_)));
-    if mode0.target == BodyTarget::None && !mode0_has_fixed {
-        return None;
-    }
-    let mut mode1_ins = expanded.clone();
-    let mut rewritten = false;
-    for item in &mut mode1_ins[u_start..u_end] {
-        rewritten |= rewrite_instruction_upto_one_to_exact_one(item);
-    }
-    if !rewritten {
-        return None;
-    }
-    let mut mode1 = lower_multi_target_fixed_clauses(
-        &mode1_ins,
+    let minimum = if has_empty_subset { 0 } else { 1 };
+    Some((minimum, options))
+}
+
+pub(super) fn try_lower_exact_plus_upto_spell_modes(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<(ExecutableBody, SpellModes)> {
+    let (minimum, mut options) = try_lower_exact_plus_upto_modes_core(
+        ins,
         vocabulary,
         ids,
         false,
         false,
         TriggerHint::None,
-    )
-    .ok()?;
-    for body in [&mut mode0, &mut mode1] {
-        let saw_sacrifice = body.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_)
-            )
-        });
-        if saw_sacrifice {
-            rewrite_body_anaphora_stats(body, ValueObjectRef::LastSacrificedCreature);
-        }
-    }
+    )?;
+    let first = options.remove(0);
     Some((
-        mode0,
+        first,
         SpellModes {
-            minimum: 1,
+            minimum,
             maximum: 1,
             conditional_maximum: None,
             allow_repeat: false,
@@ -388,9 +661,275 @@ pub(super) fn try_lower_exact_plus_upto_spell_modes(
             escalate_mana: None,
             prefix: None,
             suffix: None,
-            additional: vec![mode1],
+            additional: options,
         },
     ))
+}
+
+pub(in super::super) fn try_lower_exact_plus_upto_activated_modes(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<(ExecutableBody, SpellModes)> {
+    let (minimum, mut options) =
+        try_lower_exact_plus_upto_modes_core(ins, vocabulary, ids, false, true, TriggerHint::None)?;
+    let first = options.remove(0);
+    Some((
+        first,
+        SpellModes {
+            minimum,
+            maximum: 1,
+            conditional_maximum: None,
+            allow_repeat: false,
+            distinct_targets: false,
+            uniqueness: ModalUniqueness::None,
+            mode_costs: Vec::new(),
+            escalate_mana: None,
+            prefix: None,
+            suffix: None,
+            additional: options,
+        },
+    ))
+}
+
+pub(in super::super) fn try_lower_exact_plus_upto_triggered_modes(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    spec: &TriggerSpec,
+    self_pronoun_valid: bool,
+    guard: Option<InterveningCondition>,
+) -> Option<ExecutableBody> {
+    let hint = TriggerHint::from_event(&spec.event);
+    let (minimum, mut options) =
+        try_lower_exact_plus_upto_modes_core(ins, vocabulary, ids, true, self_pronoun_valid, hint)?;
+    if let Some(cond) = guard {
+        for opt in &mut options {
+            prepend_instruction_at(
+                &mut opt.instructions,
+                0,
+                Instruction::RequireCondition(cond),
+            );
+        }
+    }
+    Some(ExecutableBody::with_triggered_modes(TriggeredModes {
+        minimum,
+        maximum: 1,
+        distinct_targets: false,
+        allow_repeat: false,
+        uniqueness: ModalUniqueness::None,
+        prefix: None,
+        suffix: None,
+        options,
+    }))
+}
+
+fn try_lower_independent_multi_clause_modes_core(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    trigger_hint: TriggerHint,
+) -> Option<Vec<ExecutableBody>> {
+    let expanded = expand_top_level_compound_targets(ins);
+    if expanded
+        .iter()
+        .any(|op| matches!(op, InstructionAst::BindX { body, .. } if body.is_empty()))
+    {
+        return None;
+    }
+    let mut groups: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < expanded.len() {
+        let step = logical_unit_len(&expanded, i);
+        let unit = &expanded[i..i + step];
+        let is_followup = unit.iter().any(instruction_references_target_anaphora)
+            || matches!(
+                unit.first(),
+                Some(
+                    InstructionAst::IfPreviousSucceeded(_)
+                        | InstructionAst::IfPreviousFailed(_)
+                        | InstructionAst::Otherwise(_)
+                        | InstructionAst::ReflexiveTrigger(_)
+                )
+            );
+        if is_followup && let Some(last) = groups.last_mut() {
+            last.1 = i + step;
+        } else {
+            groups.push((i, i + step));
+        }
+        i += step;
+    }
+    if !(2..=6).contains(&groups.len()) {
+        return None;
+    }
+    let mut lowered_groups = Vec::with_capacity(groups.len());
+    let mut targeted_count = 0usize;
+    for (idx, &(g_start, g_end)) in groups.iter().enumerate() {
+        let slice = &expanded[g_start..g_end];
+        if idx > 0
+            && slice
+                .iter()
+                .any(instruction_has_that_player_controller_target)
+        {
+            return None;
+        }
+        let mut body = lower_effect_body_with_hint(
+            slice,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            false,
+            trigger_hint,
+        )
+        .ok()?;
+        if !body_safe_for_synthesized_mode(&body)
+            || body
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+        {
+            return None;
+        }
+        if !in_trigger {
+            let saw_sacrifice = body.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_)
+                )
+            });
+            if saw_sacrifice {
+                rewrite_body_anaphora_stats(&mut body, ValueObjectRef::LastSacrificedCreature);
+            }
+        }
+        if body.target != BodyTarget::None {
+            targeted_count += 1;
+        }
+        lowered_groups.push(body);
+    }
+    if targeted_count < 2 {
+        return None;
+    }
+    // Fail closed if any two clauses share the same BodyTarget while either carries
+    // multi-target bounds: this prevents splitting a single-sentence conjunction such as
+    // "Up to two target creatures each get +1/+0 and can't be blocked" into two target pools.
+    for (a_idx, a) in lowered_groups.iter().enumerate() {
+        if a.target == BodyTarget::None {
+            continue;
+        }
+        for b in &lowered_groups[a_idx + 1..] {
+            if a.target == b.target
+                && (a.permanent_target_bounds().is_some() || b.permanent_target_bounds().is_some())
+            {
+                return None;
+            }
+        }
+    }
+    Some(lowered_groups)
+}
+
+pub(super) fn try_lower_independent_multi_clause_spell_modes(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<(ExecutableBody, SpellModes)> {
+    let mut options = try_lower_independent_multi_clause_modes_core(
+        ins,
+        vocabulary,
+        ids,
+        false,
+        false,
+        TriggerHint::None,
+    )?;
+    let count = u8::try_from(options.len()).ok()?;
+    let first = options.remove(0);
+    Some((
+        first,
+        SpellModes {
+            minimum: count,
+            maximum: count,
+            conditional_maximum: None,
+            allow_repeat: false,
+            distinct_targets: false,
+            uniqueness: ModalUniqueness::None,
+            mode_costs: Vec::new(),
+            escalate_mana: None,
+            prefix: None,
+            suffix: None,
+            additional: options,
+        },
+    ))
+}
+
+pub(in super::super) fn try_lower_independent_multi_clause_activated_modes(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<(ExecutableBody, SpellModes)> {
+    let mut options = try_lower_independent_multi_clause_modes_core(
+        ins,
+        vocabulary,
+        ids,
+        false,
+        true,
+        TriggerHint::None,
+    )?;
+    let count = u8::try_from(options.len()).ok()?;
+    let first = options.remove(0);
+    Some((
+        first,
+        SpellModes {
+            minimum: count,
+            maximum: count,
+            conditional_maximum: None,
+            allow_repeat: false,
+            distinct_targets: false,
+            uniqueness: ModalUniqueness::None,
+            mode_costs: Vec::new(),
+            escalate_mana: None,
+            prefix: None,
+            suffix: None,
+            additional: options,
+        },
+    ))
+}
+
+pub(in super::super) fn try_lower_independent_multi_clause_triggered_modes(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    spec: &TriggerSpec,
+    self_pronoun_valid: bool,
+    guard: Option<InterveningCondition>,
+) -> Option<ExecutableBody> {
+    let hint = TriggerHint::from_event(&spec.event);
+    let options = try_lower_independent_multi_clause_modes_core(
+        ins,
+        vocabulary,
+        ids,
+        true,
+        self_pronoun_valid,
+        hint,
+    )?;
+    let count = u8::try_from(options.len()).ok()?;
+    let prefix = guard.map(|cond| {
+        Box::new(ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::RequireCondition(cond)],
+        ))
+    });
+    Some(ExecutableBody::with_triggered_modes(TriggeredModes {
+        minimum: count,
+        maximum: count,
+        distinct_targets: false,
+        allow_repeat: false,
+        uniqueness: ModalUniqueness::None,
+        prefix,
+        suffix: None,
+        options,
+    }))
 }
 
 pub(super) fn parse_conditional_modal_max_phrase(raw: &str, modes_len: u8) -> Option<u8> {
@@ -2189,6 +2728,12 @@ pub(in super::super) fn apply_trigger_body_rewrites(
     };
     apply_one(exec_body);
     if let Some(modes) = exec_body.triggered_modes_mut() {
+        if let Some(prefix) = modes.prefix.as_deref_mut() {
+            apply_one(prefix);
+        }
+        if let Some(suffix) = modes.suffix.as_deref_mut() {
+            apply_one(suffix);
+        }
         for opt in &mut modes.options {
             apply_one(opt);
         }

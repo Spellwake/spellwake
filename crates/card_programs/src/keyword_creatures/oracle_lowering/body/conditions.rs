@@ -503,6 +503,58 @@ pub(in super::super) fn lower_resolution_condition(
         ConditionAst::Compare { lhs, op, rhs } | ConditionAst::ExprCompare { lhs, op, rhs } => {
             let lhs_res = resolve_x(lhs, bound_x);
             let rhs_res = resolve_x(rhs, bound_x);
+            // Handle controller life compared directly against AnyOpponent / EachOpponent life
+            // (e.g. Glorious Enforcer: "if you have more life than an opponent").
+            if let (
+                ValueExprAst::PlayerStat {
+                    player: p_lhs,
+                    stat: PlayerStatKind::LifeTotal,
+                },
+                ValueExprAst::PlayerStat {
+                    player: p_rhs,
+                    stat: PlayerStatKind::LifeTotal,
+                },
+            ) = (lhs_res, rhs_res)
+            {
+                let opp_life = |opp: PlayerRefAst, cmp: CompareOp| -> Option<ValueExpr> {
+                    match (opp, cmp) {
+                        (PlayerRefAst::AnyOpponent, CompareOp::Gt | CompareOp::Ge)
+                        | (PlayerRefAst::EachOpponent, CompareOp::Lt | CompareOp::Le) => {
+                            Some(ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife))
+                        }
+                        (PlayerRefAst::AnyOpponent, CompareOp::Lt | CompareOp::Le)
+                        | (PlayerRefAst::EachOpponent, CompareOp::Gt | CompareOp::Ge) => {
+                            Some(ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife))
+                        }
+                        _ => None,
+                    }
+                };
+                if *p_lhs == PlayerRefAst::You
+                    && let Some(right_expr) = opp_life(*p_rhs, *op)
+                {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                        comparison: lower_comparison(*op),
+                        right: right_expr,
+                    });
+                }
+                if *p_rhs == PlayerRefAst::You {
+                    let flipped = match *op {
+                        CompareOp::Gt => CompareOp::Lt,
+                        CompareOp::Ge => CompareOp::Le,
+                        CompareOp::Lt => CompareOp::Gt,
+                        CompareOp::Le => CompareOp::Ge,
+                        other => other,
+                    };
+                    if let Some(left_expr) = opp_life(*p_lhs, flipped) {
+                        return Ok(ResolutionCondition {
+                            left: left_expr,
+                            comparison: lower_comparison(*op),
+                            right: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                        });
+                    }
+                }
+            }
             bind_value_expr_targets(lhs_res, builder)?;
             bind_value_expr_targets(rhs_res, builder)?;
             let mut left = lower_value_expr_in_context(lhs_res, builder, in_trigger, vocabulary)?;
@@ -885,6 +937,28 @@ pub(in super::super) fn lower_resolution_condition(
             })
         }
         ConditionAst::LifeCompare { player, op, value } => {
+            let max_all_life = || {
+                let ctrl = ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife);
+                let opp_max = ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife);
+                ValueExpr::Conditional {
+                    left: Box::new(ctrl.clone()),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: Box::new(opp_max.clone()),
+                    then_value: Box::new(ctrl),
+                    else_value: Box::new(opp_max),
+                }
+            };
+            let min_all_life = || {
+                let ctrl = ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife);
+                let opp_min = ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife);
+                ValueExpr::Conditional {
+                    left: Box::new(ctrl.clone()),
+                    comparison: Comparison::LessOrEqual,
+                    right: Box::new(opp_min.clone()),
+                    then_value: Box::new(ctrl),
+                    else_value: Box::new(opp_min),
+                }
+            };
             let left = match player {
                 PlayerRefAst::AnyOpponent if matches!(op, CompareOp::Ge | CompareOp::Gt) => {
                     ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife)
@@ -897,6 +971,18 @@ pub(in super::super) fn lower_resolution_condition(
                 }
                 PlayerRefAst::EachOpponent if matches!(op, CompareOp::Ge | CompareOp::Gt) => {
                     ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife)
+                }
+                PlayerRefAst::EachPlayer if matches!(op, CompareOp::Le | CompareOp::Lt) => {
+                    max_all_life()
+                }
+                PlayerRefAst::EachPlayer if matches!(op, CompareOp::Ge | CompareOp::Gt) => {
+                    min_all_life()
+                }
+                PlayerRefAst::AnyPlayer if matches!(op, CompareOp::Ge | CompareOp::Gt) => {
+                    max_all_life()
+                }
+                PlayerRefAst::AnyPlayer if matches!(op, CompareOp::Le | CompareOp::Lt) => {
+                    min_all_life()
                 }
                 _ => {
                     let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
@@ -928,8 +1014,22 @@ pub(in super::super) fn lower_resolution_condition(
             value,
         } => {
             let subject = unwrap_battlefield_subject(subject);
-            let kind = if counter_kind.eq_ignore_ascii_case("any") {
+            let mut eff_op = *op;
+            let mut eff_val = i64::from(*value);
+            let ck_trim = counter_kind.trim();
+            let ck_low = ck_trim.to_ascii_lowercase();
+            let kind = if ck_low == "any" {
                 None
+            } else if *op == CompareOp::Ge
+                && *value == 1
+                && let Some(rest) = ck_low.strip_prefix("exactly ")
+                && let Some((cnt_tok, kind_rest)) = rest.trim().split_once(' ')
+                && let Some(n) = parse_small_positive_count(cnt_tok)
+                && let Some(parsed_ck) = parse_counter_kind(kind_rest.trim())
+            {
+                eff_op = CompareOp::Eq;
+                eff_val = n;
+                Some(parsed_ck)
             } else {
                 Some(parse_counter_kind(counter_kind).ok_or("oracle:unsupported-if-condition")?)
             };
@@ -956,25 +1056,27 @@ pub(in super::super) fn lower_resolution_condition(
                         };
                         Ok(ResolutionCondition {
                             left: ValueExpr::counters(subj, Some(ck)),
-                            comparison: lower_comparison(*op),
-                            right: ValueExpr::literal(i64::from(*value)),
+                            comparison: lower_comparison(eff_op),
+                            right: ValueExpr::literal(eff_val),
                         })
                     }
-                    PlayerRefAst::AnyOpponent if matches!(op, CompareOp::Ge | CompareOp::Gt) => {
-                        Ok(ResolutionCondition {
-                            left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxCounter(ck)),
-                            comparison: lower_comparison(*op),
-                            right: ValueExpr::literal(i64::from(*value)),
-                        })
-                    }
-                    PlayerRefAst::EachOpponent
-                        if matches!(op, CompareOp::Le | CompareOp::Lt)
-                            || (*op == CompareOp::Eq && *value == 0) =>
+                    PlayerRefAst::AnyOpponent
+                        if matches!(eff_op, CompareOp::Ge | CompareOp::Gt) =>
                     {
                         Ok(ResolutionCondition {
                             left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxCounter(ck)),
-                            comparison: lower_comparison(*op),
-                            right: ValueExpr::literal(i64::from(*value)),
+                            comparison: lower_comparison(eff_op),
+                            right: ValueExpr::literal(eff_val),
+                        })
+                    }
+                    PlayerRefAst::EachOpponent
+                        if matches!(eff_op, CompareOp::Le | CompareOp::Lt)
+                            || (eff_op == CompareOp::Eq && eff_val == 0) =>
+                    {
+                        Ok(ResolutionCondition {
+                            left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxCounter(ck)),
+                            comparison: lower_comparison(eff_op),
+                            right: ValueExpr::literal(eff_val),
                         })
                     }
                     other => {
@@ -984,8 +1086,8 @@ pub(in super::super) fn lower_resolution_condition(
                                 spellwake_engine::program::CounterSubjectRef::PlayerCounter(rp, ck),
                                 Some(ck),
                             ),
-                            comparison: lower_comparison(*op),
-                            right: ValueExpr::literal(i64::from(*value)),
+                            comparison: lower_comparison(eff_op),
+                            right: ValueExpr::literal(eff_val),
                         })
                     }
                 };
@@ -1036,12 +1138,20 @@ pub(in super::super) fn lower_resolution_condition(
                 SubjectRefAst::Anaphora(_) if in_trigger => {
                     spellwake_engine::program::CounterSubjectRef::TriggerSubject
                 }
+                SubjectRefAst::Anaphora(a)
+                    if a.trim().eq_ignore_ascii_case("it")
+                        && builder.has_source
+                        && resolve_prev_anaphora_ref(&builder.instructions, false, false)
+                            .is_none() =>
+                {
+                    spellwake_engine::program::CounterSubjectRef::AbilitySource
+                }
                 _ => return Err("oracle:unsupported-if-condition"),
             };
             Ok(ResolutionCondition {
                 left: ValueExpr::counters(subj, kind),
-                comparison: lower_comparison(*op),
-                right: ValueExpr::literal(i64::from(*value)),
+                comparison: lower_comparison(eff_op),
+                right: ValueExpr::literal(eff_val),
             })
         }
         ConditionAst::TotalStatCompare {
@@ -1128,6 +1238,15 @@ pub(in super::super) fn lower_resolution_condition(
                 }
                 SubjectRefAst::Anaphora(_) if is_object_target => ValueObjectRef::TargetObject,
                 SubjectRefAst::Anaphora(_) if in_trigger => ValueObjectRef::TriggerSubject,
+                SubjectRefAst::Anaphora(a)
+                    if a.trim().eq_ignore_ascii_case("it")
+                        && builder.has_source
+                        && builder.target == BodyTarget::None
+                        && resolve_prev_anaphora_ref(&builder.instructions, false, false)
+                            .is_none() =>
+                {
+                    ValueObjectRef::AbilitySource
+                }
                 _ => return Err("oracle:unsupported-if-condition"),
             };
             Ok(ResolutionCondition {
@@ -1380,6 +1499,90 @@ pub(in super::super) fn lower_resolution_condition(
                     }
                 }
             }
+            if let SubjectRefAst::Group(f) = subject
+                && matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                && f.extra_zones.is_empty()
+            {
+                let mut clean = f.as_ref().clone();
+                clean.zone = None;
+                let base_obj = lower_object_filter(&clean, vocabulary)?;
+                let apply_status = |c: &mut ObjectClause| -> bool {
+                    match status_low.as_str() {
+                        "tapped" if c.tapped.is_none() => {
+                            c.tapped = Some(true);
+                            true
+                        }
+                        "untapped" if c.tapped.is_none() => {
+                            c.tapped = Some(false);
+                            true
+                        }
+                        "attacking" if c.combat == CombatFilter::Any => {
+                            c.combat = CombatFilter::Attacking;
+                            true
+                        }
+                        "blocking" if c.combat == CombatFilter::Any => {
+                            c.combat = CombatFilter::Blocking;
+                            true
+                        }
+                        "blocked" if c.combat == CombatFilter::Any => {
+                            c.combat = CombatFilter::Blocked;
+                            true
+                        }
+                        "unblocked" if c.combat == CombatFilter::Any => {
+                            c.combat = CombatFilter::Unblocked;
+                            true
+                        }
+                        "attacking or blocking" if c.combat == CombatFilter::Any => {
+                            c.combat = CombatFilter::AttackingOrBlocking;
+                            true
+                        }
+                        "enchanted" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::ENCHANTED);
+                            true
+                        }
+                        "equipped" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::EQUIPPED);
+                            true
+                        }
+                        "modified" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::MODIFIED);
+                            true
+                        }
+                        "suspected" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::SUSPECTED);
+                            true
+                        }
+                        "renowned" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::RENOWNED);
+                            true
+                        }
+                        "monstrous" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::MONSTROUS);
+                            true
+                        }
+                        "saddled" => {
+                            c.flags = c.flags.union(ObjectFilterFlags::SADDLED);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                let applied = match base_obj {
+                    ObjectFilter::Clause(mut c) => {
+                        apply_status(&mut c).then_some(ObjectFilter::Clause(c))
+                    }
+                    ObjectFilter::Either(mut a, mut b) => (apply_status(&mut a)
+                        && apply_status(&mut b))
+                    .then_some(ObjectFilter::Either(a, b)),
+                };
+                if let Some(obj) = applied {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::count_battlefield(obj),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    });
+                }
+            }
             let mref = if let SubjectRefAst::TargetObject {
                 filter,
                 count: TargetCountAst::Exact(1),
@@ -1556,6 +1759,49 @@ pub(in super::super) fn lower_resolution_condition(
         }
         ConditionAst::HasKeyword { subject, keyword } => {
             let subject = unwrap_battlefield_subject(subject);
+            let kw_toxic = keyword.trim().eq_ignore_ascii_case("toxic");
+            let parsed_kw = if kw_toxic {
+                None
+            } else {
+                Some(lower_keyword_ability_name(keyword).ok_or("oracle:unsupported-if-condition")?)
+            };
+            if let SubjectRefAst::Group(f) = subject
+                && matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                && f.extra_zones.is_empty()
+            {
+                let mut clean = f.as_ref().clone();
+                clean.zone = None;
+                let base_obj = lower_object_filter(&clean, vocabulary)?;
+                let apply_kw = |c: &mut ObjectClause| -> bool {
+                    if kw_toxic {
+                        c.flags = c.flags.union(ObjectFilterFlags::HAS_TOXIC);
+                        true
+                    } else if let Some(kw) = parsed_kw {
+                        if c.keyword.is_some() && c.keyword != Some(kw) {
+                            return false;
+                        }
+                        *c = (*c).with_keyword(kw);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                let applied = match base_obj {
+                    ObjectFilter::Clause(mut c) => {
+                        apply_kw(&mut c).then_some(ObjectFilter::Clause(c))
+                    }
+                    ObjectFilter::Either(mut a, mut b) => {
+                        (apply_kw(&mut a) && apply_kw(&mut b)).then_some(ObjectFilter::Either(a, b))
+                    }
+                };
+                if let Some(obj) = applied {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::count_battlefield(obj),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    });
+                }
+            }
             let mref = if let SubjectRefAst::TargetObject {
                 filter,
                 count: TargetCountAst::Exact(1),
@@ -1567,12 +1813,12 @@ pub(in super::super) fn lower_resolution_condition(
                 resolve_match_object_ref(subject, builder, in_trigger, false)
                     .ok_or("oracle:unsupported-if-condition")?
             };
-            let filter = if keyword.trim().eq_ignore_ascii_case("toxic") {
+            let filter = if kw_toxic {
                 ObjectFilter::any().with_flags(ObjectFilterFlags::HAS_TOXIC)
-            } else {
-                let kw =
-                    lower_keyword_ability_name(keyword).ok_or("oracle:unsupported-if-condition")?;
+            } else if let Some(kw) = parsed_kw {
                 ObjectFilter::any().with_keyword(kw)
+            } else {
+                return Err("oracle:unsupported-if-condition");
             };
             Ok(ResolutionCondition {
                 left: ValueExpr::object_matches(mref, filter),
@@ -1849,7 +2095,31 @@ pub(in super::super) fn lower_resolution_condition(
                     right: ValueExpr::literal(1),
                 });
             }
-            if low.contains("produced by a creature") || low == "creature mana" {
+            if let Some(rest) = low
+                .strip_prefix("at least ")
+                .and_then(|s| {
+                    s.strip_suffix(" mana from creatures")
+                        .or_else(|| s.strip_suffix(" mana produced by creatures"))
+                        .or_else(|| s.strip_suffix(" mana produced by a creature"))
+                })
+                .or_else(|| {
+                    low.strip_suffix(" or more mana from creatures")
+                        .or_else(|| low.strip_suffix(" or more mana produced by creatures"))
+                        .or_else(|| low.strip_suffix(" or more mana produced by a creature"))
+                })
+                && let Some(n) = parse_small_positive_count(rest)
+            {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::event(EventValueKind::CreatureManaSpentToCast),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(n),
+                });
+            }
+            if low.contains("produced by a creature")
+                || low == "creature mana"
+                || low == "mana from a creature"
+                || low == "mana from creatures"
+            {
                 return Ok(ResolutionCondition {
                     left: ValueExpr::event(EventValueKind::CreatureManaSpentToCast),
                     comparison: Comparison::GreaterOrEqual,

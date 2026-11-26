@@ -9515,8 +9515,10 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                     mana,
                     once_each_turn,
                     own_turn_only,
+                    pay_life_mv,
+                    each_player,
                 } => {
-                    json!({"tag":"AlternativeForMatching","id":id.0,"filter":format!("{filter:?}"),"mana":cost(mana),"once_each_turn":once_each_turn,"own_turn_only":own_turn_only})
+                    json!({"tag":"AlternativeForMatching","id":id.0,"filter":format!("{filter:?}"),"mana":cost(mana),"once_each_turn":once_each_turn,"own_turn_only":own_turn_only,"pay_life_mv":pay_life_mv,"each_player":each_player})
                 }
                 SpellCostModifier::KeywordCastCost {
                     keyword,
@@ -11834,6 +11836,9 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::EmpowerJace { count } => json!({"op":"EmpowerJace","count":instruction_amount(count)}),
             Instruction::AddOneOfEachCounterKindOnSubject { subject } => json!({"op":"AddOneOfEachCounterKindOnSubject","subject":effect_group_wire(**subject)}),
             Instruction::GrantLastMovedPlayPermission { player, filter, duration, free, cast_only, any_color } => json!({"op":"GrantLastMovedPlayPermission","player":format!("{player:?}"),"filter":filter.as_ref().map(|f| format!("{f:?}")),"duration":format!("{duration:?}"),"free":free,"cast_only":cast_only,"any_color":any_color}),
+            Instruction::CounterMatchingStackObjects { filter, include_spells, include_abilities, opponents_only } => json!({"op":"CounterMatchingStackObjects","filter":filter.as_ref().map(|f| format!("{f:?}")),"include_spells":include_spells,"include_abilities":include_abilities,"opponents_only":opponents_only}),
+            Instruction::ReturnLinkedExile { destination, only_first } => json!({"op":"ReturnLinkedExile","destination":format!("{destination:?}"),"only_first":only_first}),
+            Instruction::TransferAllCountersFromTriggeringLki { to } => json!({"op":"TransferAllCountersFromTriggeringLki","to":effect_group_wire(**to)}),
             Instruction::MoveLastMovedFiltered { filter, destination } => json!({"op":"MoveLastMovedFiltered","filter":filter.as_ref().map(|f| format!("{f:?}")),"destination":format!("{destination:?}")}),
             Instruction::DiscardUpToExt { players, max_count, filter, any_number } => json!({"op":"DiscardUpToExt","players":format!("{players:?}"),"max_count":instruction_amount(max_count),"filter":filter.as_deref().map(|f| permanent_group_wire(*f)),"any_number":any_number}),
             Instruction::Earthbend { amount } => json!({"op":"Earthbend","amount":instruction_amount(amount)}),
@@ -11849,6 +11854,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::AttachChoosingPermanent { chooser, attachment, host, optional, all } => json!({"op":"AttachChoosingPermanent","chooser":format!("{chooser:?}"),"attachment":format!("{attachment:?}"),"host":format!("{host:?}"),"optional":optional,"all":all}),
             Instruction::UnattachSubject { subject } => json!({"op":"UnattachSubject","subject":format!("{subject:?}")}),
             Instruction::ChooseOneLastMoved { chooser } => json!({"op":"ChooseOneLastMoved","chooser":format!("{chooser:?}")}),
+            Instruction::TransformSubject { subject } => json!({"op":"TransformSubject","subject":format!("{subject:?}")}),
+            Instruction::SetPlayersLife { players, amount } => json!({"op":"SetPlayersLife","players":format!("{players:?}"),"amount":format!("{amount:?}")}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});

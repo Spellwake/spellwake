@@ -167,10 +167,16 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             | Instruction::ExileSubjectUntilSourceLeaves { subject }
             | Instruction::TurnFaceUpSubject { subject }
             | Instruction::TurnFaceDownSubject { subject }
+            | Instruction::TransformSubject { subject }
             | Instruction::AddOneOfEachCounterKindOnSubject { subject } => {
                 subject_uses_damage_pairs(subject)
             }
-            Instruction::EmpowerJace { .. } => false,
+            Instruction::EmpowerJace { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. }
+            | Instruction::CounterMatchingStackObjects { .. }
+            | Instruction::ReturnLinkedExile { .. }
+            | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
             Instruction::DamageGroupAmount { group, amount } => {
                 value_expr_uses_damage_pairs(amount)
                     || matches!(
@@ -591,6 +597,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         | Instruction::PutCountersOnSubject { amount, .. }
         | Instruction::PutNamedCounterOnTarget { amount, .. }
         | Instruction::AdjustPlayersLife { amount, .. }
+        | Instruction::SetPlayersLife { amount, .. }
         | Instruction::DrainOpponents(amount)
         | Instruction::DamageOpponentsAmount(amount)
         | Instruction::DamageRelatedPlayerAmount(amount)

@@ -642,6 +642,55 @@ impl ProliferateChoice {
     }
 }
 impl CharacteristicState {
+    /// Exact map of every permanent counter kind with a positive count currently on `object`.
+    pub(crate) fn all_permanent_counters(
+        &self,
+        object: ObjectId,
+    ) -> std::collections::BTreeMap<CounterKind, RulesInteger> {
+        let mut out = std::collections::BTreeMap::new();
+        let pt = self.counters(object);
+        if pt.plus_one.is_positive() {
+            out.insert(CounterKind::PlusOne, pt.plus_one.clone());
+        }
+        if pt.minus_one.is_positive() {
+            out.insert(CounterKind::MinusOne, pt.minus_one.clone());
+        }
+        for (kind, map) in [
+            (CounterKind::Vow, &self.vow_counters),
+            (CounterKind::Corpse, &self.corpse_counters),
+            (CounterKind::Blessing, &self.blessing_counters),
+            (CounterKind::Despair, &self.despair_counters),
+            (CounterKind::Hatchling, &self.hatchling_counters),
+            (CounterKind::Indestructible, &self.indestructible_counters),
+            (CounterKind::Page, &self.page_counters),
+            (CounterKind::Quest, &self.quest_counters),
+            (CounterKind::Verse, &self.verse_counters),
+            (CounterKind::Suspect, &self.suspect_counters),
+            (CounterKind::Charge, &self.charge),
+            (CounterKind::Defense, &self.defense),
+            (CounterKind::Loyalty, &self.loyalty),
+            (CounterKind::Storage, &self.storage),
+            (CounterKind::Lore, &self.lore),
+            (CounterKind::Time, &self.time_counters),
+            (CounterKind::Fade, &self.fade),
+            (CounterKind::Age, &self.age),
+        ] {
+            if let Some(count) = map.get(&object)
+                && count.is_positive()
+            {
+                out.insert(kind, count.clone());
+            }
+        }
+        for (&kind, map) in &self.named_counters {
+            if let Some(count) = map.get(&object)
+                && count.is_positive()
+            {
+                out.insert(kind, count.clone());
+            }
+        }
+        out
+    }
+
     /// Every permanent counter kind with a positive count currently on `object`.
     pub(crate) fn present_permanent_counter_kinds(
         &self,

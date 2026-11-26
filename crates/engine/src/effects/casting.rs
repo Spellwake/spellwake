@@ -1041,9 +1041,11 @@ impl EffectWindow {
                                 mana,
                                 once_each_turn,
                                 own_turn_only,
+                                pay_life_mv,
+                                each_player,
                             },
                         ..
-                    } if controller_matches
+                    } if (*each_player || controller_matches)
                         && (!*own_turn_only || actor == self.window.active_player())
                         && self.spell_filter_matches_cast(
                             *filter,
@@ -1054,7 +1056,7 @@ impl EffectWindow {
                             permanent.entry_creature_type,
                         ) =>
                     {
-                        Some((*once_each_turn, false, mana.clone()))
+                        Some((*once_each_turn, *pay_life_mv, mana.clone()))
                     }
                     _ => None,
                 };
@@ -1144,16 +1146,16 @@ impl EffectWindow {
             )
             || self.flash_through_cleanup.contains(&actor)
             || temporary_flash
-            || current.objects.values().any(|source| {
-                source.zone == ObjectZone::Battlefield
-                && source
+            || current.objects.values().any(|perm| {
+                perm.zone == ObjectZone::Battlefield
+                && perm
                     .printed_text
                     .continuous
                     .iter()
-                    .chain(&source.printed_text.additional_battlefield_abilities)
+                    .chain(&perm.printed_text.additional_battlefield_abilities)
                     .any(|ab| {
-                        let active = source.abilities.continuous == Some(ab.id())
-                            || source
+                        let active = perm.abilities.continuous == Some(ab.id())
+                            || perm
                                 .abilities
                                 .additional_battlefield_abilities
                                 .contains(&ab.id());
@@ -1166,11 +1168,14 @@ impl EffectWindow {
                                         matching,
                                     },
                                     ..
-                                } if (*any_player || source.controller == Some(actor))
-                                    && matching.matches_characteristics(
+                                } if (*any_player || perm.controller == Some(actor))
+                                    && self.spell_filter_matches_cast(
+                                        *matching,
                                         current_spell,
+                                        source,
+                                        actor,
                                         aura_or_equipment,
-                                        source.entry_creature_type,
+                                        perm.entry_creature_type,
                                     )
                             )
                     })
@@ -1188,8 +1193,11 @@ impl EffectWindow {
                         },
                         ..
                     } if (*any_player || active.controller == actor)
-                        && matching.matches_characteristics(
+                        && self.spell_filter_matches_cast(
+                            *matching,
                             current_spell,
+                            source,
+                            actor,
                             aura_or_equipment,
                             None,
                         )

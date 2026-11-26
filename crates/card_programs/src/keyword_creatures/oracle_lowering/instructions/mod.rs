@@ -1,4 +1,5 @@
 use super::*;
+pub(super) use control_misc::lower_loop_player_sub_body;
 use spellwake_engine::characteristics::ActivationSuppression;
 use spellwake_engine::day_night::DayNight;
 use spellwake_engine::program::{

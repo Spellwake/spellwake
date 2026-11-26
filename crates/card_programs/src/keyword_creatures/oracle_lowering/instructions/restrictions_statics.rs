@@ -2119,6 +2119,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 })
                                 .flatten()
                         })
+                        .or_else(|| {
+                            (filter.is_none()
+                                && matches!(
+                                    rule_norm_owned.as_str(),
+                                    "can_block_any_number" | "can block any number of creatures"
+                                ))
+                            .then_some(BlockingRestriction::CanBlockAnyNumber)
+                        })
                         .filter(|br| {
                             !matches!(
                                 br,
@@ -2170,6 +2178,66 @@ pub(super) fn lower_restrictions_statics_instruction(
                             if emit_resolved_parts_for_subject(
                                 subj,
                                 parts,
+                                eff_br_dur,
+                                &mut trial,
+                                vocabulary,
+                                in_trigger,
+                                self_pronoun_valid,
+                            )
+                            .is_ok()
+                            {
+                                *builder = trial;
+                                return Ok(());
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if filter.is_none()
+                    && let Some(after_by) = rule_norm_owned.strip_prefix("can't be blocked by ")
+                    && after_by.contains(" and/or ")
+                    && let Some(conj_parts) = {
+                        let mut parts_vec = Vec::new();
+                        let mut all_valid = true;
+                        for seg in after_by.split(" and/or ") {
+                            let seg_clean = seg.trim().trim_end_matches('.');
+                            if seg_clean.is_empty() {
+                                all_valid = false;
+                                break;
+                            }
+                            let probe = format!("can't be blocked by {seg_clean}");
+                            if let Some(br) = lower_combat_mod_blocking_restriction(
+                                &probe, vocabulary,
+                            )
+                            .filter(|br| {
+                                !matches!(
+                                    br,
+                                    BlockingRestriction::CannotBlockSource
+                                        | BlockingRestriction::MustBlockSource
+                                        | BlockingRestriction::CannotBeBlockedBySource
+                                ) || self_pronoun_valid
+                            }) {
+                                parts_vec.push(ResolvedPartSpec::BlockingRestriction(br));
+                            } else {
+                                all_valid = false;
+                                break;
+                            }
+                        }
+                        (all_valid && parts_vec.len() >= 2).then_some(ResolvedPartsSpec(parts_vec))
+                    }
+                {
+                    match subject.as_deref() {
+                        None if self_pronoun_valid => {
+                            builder.instructions.push(Instruction::ChangeAbilitySource {
+                                parts: conj_parts,
+                                duration: eff_br_dur,
+                            });
+                            return Ok(());
+                        }
+                        Some(subj) => {
+                            let mut trial = builder.clone();
+                            if emit_resolved_parts_for_subject(
+                                subj,
+                                conj_parts,
                                 eff_br_dur,
                                 &mut trial,
                                 vocabulary,
@@ -2993,6 +3061,56 @@ pub(super) fn lower_restrictions_statics_instruction(
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "counter all abilities"
+                    | "counter all activated and triggered abilities"
+                    | "counter all activated or triggered abilities"
+                    | "counter all abilities your opponents control"
+                    | "counter all abilities opponents control"
+                    | "counter all activated and triggered abilities your opponents control"
+                    | "counter all activated or triggered abilities your opponents control"
+                    | "counter all spells"
+                    | "counter all other spells"
+                    | "counter all spells your opponents control"
+                    | "counter all spells opponents control"
+                    | "counter all other spells your opponents control"
+                    | "counter all spells and abilities"
+                    | "counter all other spells and abilities"
+                    | "counter all spells and all abilities"
+                    | "counter all other spells and all abilities"
+                    | "counter all spells and abilities your opponents control"
+                    | "counter all spells your opponents control and all abilities your opponents control"
+                    | "counter all other spells and abilities your opponents control"
+                    | "counter all spells and abilities opponents control"
+            )
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let include_spells = r_low.contains("spell");
+            let include_abilities = r_low.contains("abilit");
+            let opponents_only = r_low.contains("opponent");
+            builder
+                .instructions
+                .push(Instruction::CounterMatchingStackObjects {
+                    filter: None,
+                    include_spells,
+                    include_abilities,
+                    opponents_only,
+                });
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
         } if restriction
             .trim()
             .trim_end_matches('.')
@@ -3011,6 +3129,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                     destination: SubjectDestination::Battlefield { tapped, .. },
                     ..
                 })
+                | Some(Instruction::ReturnLinkedExile {
+                    destination: SubjectDestination::Battlefield { tapped, .. },
+                    ..
+                })
                 | Some(Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped })
                 | Some(Instruction::ReturnSourceGraveyardToBattlefield { tapped }) => {
                     *tapped = true;
@@ -3018,6 +3140,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                 }
                 Some(Instruction::CreateTokens { creations }) if creations.len() == 1 => {
                     creations[0].enters_tapped = true;
+                    Ok(())
+                }
+                Some(Instruction::CreateTokenCopy { tapped, .. }) => {
+                    *tapped = true;
+                    Ok(())
+                }
+                Some(Instruction::CreateTokenCopyExt { enters_tapped, .. }) => {
+                    *enters_tapped = true;
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-instruction"),
@@ -3220,6 +3350,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                     | "the token enters tapped and attacking that player"
                     | "those tokens enter tapped and attacking that player"
                     | "it enters tapped and attacking that player"
+                    | "the token enters tapped and attacking defending player"
+                    | "those tokens enter tapped and attacking defending player"
+                    | "it enters tapped and attacking defending player"
             )
         } =>
         {
@@ -3234,6 +3367,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                     in_trigger,
                 )?;
                 spellwake_engine::token::AttackingDefenderScope::Player(rp)
+            } else if r_low.ends_with(" defending player") {
+                spellwake_engine::token::AttackingDefenderScope::Player(
+                    ResolvingPlayer::DefendingPlayer,
+                )
             } else {
                 spellwake_engine::token::AttackingDefenderScope::AnyLegal
             };
@@ -3257,13 +3394,96 @@ pub(super) fn lower_restrictions_statics_instruction(
                     });
                 return Ok(());
             }
+            if let Some(last) = builder.instructions.last_mut() {
+                match last {
+                    Instruction::CreateTokenCopyExt {
+                        recipients,
+                        enters_tapped,
+                        enters_attacking,
+                        defender_scope: ds,
+                        ..
+                    } if *recipients == TokenRecipients::Controller => {
+                        *enters_tapped = true;
+                        *enters_attacking = true;
+                        *ds = defender_scope;
+                        return Ok(());
+                    }
+                    Instruction::CreateTokenCopy {
+                        recipients,
+                        tapped,
+                        attacking,
+                        ..
+                    } if *recipients == TokenRecipients::Controller
+                        && defender_scope
+                            == spellwake_engine::token::AttackingDefenderScope::AnyLegal =>
+                    {
+                        *tapped = true;
+                        *attacking = true;
+                        return Ok(());
+                    }
+                    Instruction::CreateTokenCopy {
+                        source,
+                        count,
+                        sacrifice_at_end_step,
+                        exile_at_end_step,
+                        grant_keywords,
+                        nonlegendary,
+                        override_pt,
+                        override_colors: None,
+                        add_subtypes,
+                        add_card_types,
+                        strip_mana_cost: false,
+                        recipients,
+                        ..
+                    } if *recipients == TokenRecipients::Controller => {
+                        let mut extra_keywords = std::mem::take(grant_keywords);
+                        let haste = extra_keywords.remove(&KeywordAbility::Haste);
+                        let ext_pt =
+                            override_pt.map(|(p, t)| (i64::from(p).into(), i64::from(t).into()));
+                        *last = Instruction::CreateTokenCopyExt {
+                            source: *source,
+                            count: count.clone(),
+                            recipients: *recipients,
+                            enters_tapped: true,
+                            enters_attacking: true,
+                            haste,
+                            sacrifice_at_end_step: *sacrifice_at_end_step,
+                            exile_at_end_step: *exile_at_end_step,
+                            nonlegendary: *nonlegendary,
+                            extra_types: std::mem::take(add_card_types),
+                            extra_subtypes: std::mem::take(add_subtypes),
+                            extra_keywords,
+                            override_pt: ext_pt,
+                            extra_colors: BTreeSet::new(),
+                            defender_scope,
+                        };
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
             Err("oracle:unsupported-instruction")
         }
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
-        } if restriction.eq_ignore_ascii_case("it's still a land")
-            || restriction.eq_ignore_ascii_case("they're still lands") =>
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "it's still a land"
+                    | "they're still lands"
+                    | "it's still a creature"
+                    | "they're still creatures"
+                    | "it's still an artifact"
+                    | "they're still artifacts"
+                    | "it's still an enchantment"
+                    | "they're still enchantments"
+            )
+        } =>
         {
             if let Some(op) = builder.instructions.last_mut() {
                 let parts = match op {
@@ -4183,6 +4403,51 @@ pub(super) fn lower_restrictions_statics_instruction(
                     }
                 }
             }
+            if is_exile
+                && !rep_low.contains(" and ")
+                && !rep_low.contains(" with ")
+                && matches!(
+                    subj_low.as_str(),
+                    "a card" | "card" | "a card or token" | "a card or a token"
+                )
+                && (ev_low.contains("put into your graveyard from anywhere")
+                    || ev_low.contains("put into an opponent's graveyard from anywhere")
+                    || ev_low.contains("put into a graveyard from anywhere"))
+            {
+                let objects = if subj_low.contains("token") {
+                    ZoneObjectKind::Either
+                } else {
+                    ZoneObjectKind::Card
+                };
+                let zr_subject = if ev_low.contains("your graveyard") {
+                    ZoneReplacementSubject::Matching {
+                        filter: Box::new(ObjectFilter::any()),
+                        owner_relation: Some(PlayerRelation::Controller),
+                    }
+                } else if ev_low.contains("opponent's graveyard") {
+                    ZoneReplacementSubject::Matching {
+                        filter: Box::new(ObjectFilter::any()),
+                        owner_relation: Some(PlayerRelation::Opponent),
+                    }
+                } else {
+                    ZoneReplacementSubject::AnyObject
+                };
+                builder.instructions.push(Instruction::CreateTemporaryRule {
+                    rule: Box::new(TemporaryRuleKind::TemporaryZoneReplacement(Box::new(
+                        ZoneReplacementAbility {
+                            id: ZoneReplacementAbilityId(ids.static_id().0),
+                            actions: ZoneActionPredicate::Any,
+                            objects,
+                            subject: zr_subject,
+                            destination: PublicZoneDestination::Graveyard,
+                            replace_with: PublicZoneDestination::Exile,
+                            choice: ZoneReplacementChoice::Mandatory,
+                        },
+                    ))),
+                    duration: ResolvedDuration::UntilEndOfTurn,
+                });
+                return Ok(());
+            }
             if (ev_low.contains("die") || ev_low.contains("graveyard")) && is_exile {
                 let eff_subj = if matches!(
                     subj_low.as_str(),
@@ -5081,11 +5346,59 @@ pub(super) fn lower_restrictions_statics_instruction(
                 .trim()
                 .trim_end_matches(',')
                 .to_ascii_lowercase();
+            let step_cast_slug = match norm.as_str() {
+                "until your next end step" | "until the beginning of your next end step" => {
+                    Some("until_your_next_end_step")
+                }
+                "until that player's next end step" | "until their next end step" => {
+                    Some("until_their_next_end_step")
+                }
+                "until the end of your next end step" => {
+                    Some("until the end of your next end step")
+                }
+                "until the end of that player's next end step"
+                | "until the end of their next end step" => {
+                    Some("until the end of their next end step")
+                }
+                "until your next upkeep" | "until the beginning of your next upkeep" => {
+                    Some("until_your_next_upkeep")
+                }
+                "until that player's next upkeep" | "until their next upkeep" => {
+                    Some("until_their_next_upkeep")
+                }
+                _ => None,
+            };
+            if let Some(slug) = step_cast_slug {
+                let mut rewritten = Vec::with_capacity(body.len());
+                let mut all_ok = true;
+                for ins in body {
+                    if let Some(r) = rewrite_grant_cast_duration_slug(ins, slug) {
+                        rewritten.push(r);
+                    } else {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                if all_ok {
+                    return lower_instruction_seq(
+                        &rewritten,
+                        builder,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    );
+                }
+            }
             let duration = match norm.as_str() {
                 "until end of turn" | "this turn" => DurationAst::UntilEndOfTurn,
                 "until your next turn" => DurationAst::UntilYourNextTurn,
                 "until end of combat" => DurationAst::UntilEndOfCombat,
                 "until the end of your next turn" => DurationAst::UntilEndOfNextTurn,
+                "until the end of that player's next turn" | "until the end of their next turn" => {
+                    DurationAst::UntilEndOfPlayersNextTurn(PlayerRefAst::ThatPlayer)
+                }
                 "for as long as ~ remains on the battlefield"
                 | "while ~ remains on the battlefield"
                     if has_source =>
@@ -6596,11 +6909,82 @@ pub(super) fn static_source_condition_is_source_independent(
     }
 }
 
+fn rewrite_grant_cast_duration_slug(ins: &InstructionAst, slug: &str) -> Option<InstructionAst> {
+    match ins {
+        InstructionAst::GrantCastPermission {
+            player,
+            cast_only,
+            subject,
+            free,
+            count_limit,
+            alt_cost,
+            ..
+        } => Some(InstructionAst::GrantCastPermission {
+            player: *player,
+            cast_only: *cast_only,
+            subject: subject.clone(),
+            free: *free,
+            duration: slug.to_string(),
+            count_limit: count_limit.clone(),
+            alt_cost: alt_cost.clone(),
+        }),
+        InstructionAst::GrantModifiedCastPermission(perm) => {
+            let mut cloned = perm.as_ref().clone();
+            cloned.duration = slug.to_string();
+            Some(InstructionAst::GrantModifiedCastPermission(Box::new(
+                cloned,
+            )))
+        }
+        InstructionAst::Optional(inner) if !inner.is_empty() => {
+            let mut out = Vec::with_capacity(inner.len());
+            for sub in inner {
+                out.push(rewrite_grant_cast_duration_slug(sub, slug)?);
+            }
+            Some(InstructionAst::Optional(out))
+        }
+        InstructionAst::OptionalPlayer { player, body } if !body.is_empty() => {
+            let mut out = Vec::with_capacity(body.len());
+            for sub in body {
+                out.push(rewrite_grant_cast_duration_slug(sub, slug)?);
+            }
+            Some(InstructionAst::OptionalPlayer {
+                player: *player,
+                body: out,
+            })
+        }
+        InstructionAst::ManaSpendRestriction(_) => Some(ins.clone()),
+        _ => None,
+    }
+}
+
 pub(super) fn duration_ast_to_grant_cast_str(dur: &DurationAst) -> Option<String> {
     match dur {
         DurationAst::UntilEndOfTurn => Some("this_turn".to_string()),
+        DurationAst::UntilYourNextTurn => Some("until_your_next_turn".to_string()),
         DurationAst::UntilEndOfNextTurn => Some("until_end_of_next_turn".to_string()),
+        DurationAst::UntilEndOfPlayersNextTurn(_) => {
+            Some("until_end_of_players_next_turn".to_string())
+        }
         DurationAst::Permanent | DurationAst::Instant => Some(String::new()),
+        DurationAst::ForAsLongAs(cond) => match cond.as_ref() {
+            ConditionAst::Marker(GameMarker::UntilStep {
+                player: PlayerRefAst::You,
+                step: TurnStepAst::EndStep,
+            }) => Some("until_your_next_end_step".to_string()),
+            ConditionAst::Marker(GameMarker::UntilStep {
+                player: PlayerRefAst::You,
+                step: TurnStepAst::Upkeep,
+            }) => Some("until_your_next_upkeep".to_string()),
+            ConditionAst::Marker(GameMarker::UntilStep {
+                player: PlayerRefAst::ThatPlayer,
+                step: TurnStepAst::EndStep,
+            }) => Some("until_their_next_end_step".to_string()),
+            ConditionAst::Marker(GameMarker::UntilStep {
+                player: PlayerRefAst::ThatPlayer,
+                step: TurnStepAst::Upkeep,
+            }) => Some("until_their_next_upkeep".to_string()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -6624,10 +7008,43 @@ pub(super) fn rewrite_instruction_duration(
     dur: &DurationAst,
 ) -> Option<InstructionAst> {
     match ins {
-        // Delayed event lowering already uses an end-of-turn expiry. Other lifetimes
-        // must remain unsupported until they are carried explicitly into that lowering.
-        InstructionAst::DelayedEventTrigger { .. }
-            if matches!(dur, DurationAst::UntilEndOfTurn) =>
+        InstructionAst::DelayedEventTrigger { trigger, body } => {
+            if matches!(dur, DurationAst::UntilEndOfTurn) {
+                Some(ins.clone())
+            } else {
+                Some(InstructionAst::TemporaryTrigger {
+                    trigger: trigger.clone(),
+                    body: body.clone(),
+                    duration: dur.clone(),
+                })
+            }
+        }
+        InstructionAst::SetBasicLandType {
+            subject, land_type, ..
+        } => Some(InstructionAst::SetBasicLandType {
+            subject: subject.clone(),
+            land_type: land_type.clone(),
+            duration: dur.clone(),
+        }),
+        InstructionAst::PreventAllDamageFrom {
+            combat_only,
+            source,
+            recipient,
+            ..
+        } => Some(InstructionAst::PreventAllDamageFrom {
+            combat_only: *combat_only,
+            source: source.clone(),
+            recipient: recipient.clone(),
+            duration: dur.clone(),
+        }),
+        InstructionAst::ManaSpendRestriction(_)
+            if matches!(
+                dur,
+                DurationAst::UntilEndOfTurn
+                    | DurationAst::UntilYourNextTurn
+                    | DurationAst::UntilEndOfNextTurn
+                    | DurationAst::UntilEndOfPlayersNextTurn(_)
+            ) =>
         {
             Some(ins.clone())
         }

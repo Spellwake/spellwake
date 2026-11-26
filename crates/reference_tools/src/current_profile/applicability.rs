@@ -871,6 +871,9 @@ native!(ExecutableBody, self, {
         | Instruction::AddOneOfEachCounterKindOnSubject { .. }
         | Instruction::GrantLastMovedPlayPermission { .. }
         | Instruction::MoveLastMovedFiltered { .. }
+        | Instruction::CounterMatchingStackObjects { .. }
+        | Instruction::ReturnLinkedExile { .. }
+        | Instruction::TransferAllCountersFromTriggeringLki { .. }
         | Instruction::DiscardUpToExt { .. }
         | Instruction::Earthbend { .. }
         | Instruction::ReturnEarthbentCard
@@ -883,7 +886,9 @@ native!(ExecutableBody, self, {
         | Instruction::AttachPermanentToPlayer { .. }
         | Instruction::AttachChoosingPermanent { .. }
         | Instruction::UnattachSubject { .. }
-        | Instruction::ChooseOneLastMoved { .. } => Ok(()),
+        | Instruction::ChooseOneLastMoved { .. }
+        | Instruction::TransformSubject { .. }
+        | Instruction::SetPlayersLife { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

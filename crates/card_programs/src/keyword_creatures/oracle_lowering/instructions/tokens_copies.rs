@@ -464,15 +464,165 @@ pub(super) fn lower_tokens_copies_instruction(
                 },
                 _ => return Err("oracle:unsupported-token-controller"),
             };
-            let (mut creation, attacking) = lower_token_spec_with_abilities(
-                token,
-                recipients,
-                vocabulary,
-                ids,
-                bound_x,
-                Some((builder, in_trigger)),
-                compiled_abilities,
-            )?;
+            let (mut creation, attacking) =
+                if let TokenSpecAst::Predefined {
+                    name,
+                    count,
+                    tapped,
+                } = token
+                    && let Some(def) = try_lower_extra_predefined_token_def(name, vocabulary, ids)?
+                {
+                    let amt = lower_value_expr_in_context(
+                        resolve_x(count, bound_x),
+                        builder,
+                        in_trigger,
+                        vocabulary,
+                    )?;
+                    (
+                        TokenCreation {
+                            enters_tapped: *tapped,
+                            definition: def,
+                            amount: amt,
+                            base_size: None,
+                            recipients,
+                        },
+                        false,
+                    )
+                } else if let TokenSpecAst::Creature {
+                    count,
+                    power,
+                    toughness,
+                    colors,
+                    supertypes,
+                    card_types,
+                    subtypes,
+                    keywords,
+                    tapped,
+                    attacking,
+                    named,
+                } = token
+                    && let Some(face) = compiled_abilities
+                    && (power.trim() == "*" || power.trim().is_empty())
+                    && (toughness.trim() == "*" || toughness.trim().is_empty())
+                    && face
+                        .statics
+                        .iter()
+                        .any(|s| matches!(s, StaticAbilityAst::CdaPowerToughness { .. }))
+                {
+                    let normalized = TokenSpecAst::Creature {
+                        count: count.clone(),
+                        power: "0".to_owned(),
+                        toughness: "0".to_owned(),
+                        colors: *colors,
+                        supertypes: *supertypes,
+                        card_types: *card_types,
+                        subtypes: subtypes.clone(),
+                        keywords: keywords.clone(),
+                        tapped: *tapped,
+                        attacking: *attacking,
+                        named: named.clone(),
+                    };
+                    let (creation, is_attacking) = lower_token_spec_with_abilities(
+                        &normalized,
+                        recipients,
+                        vocabulary,
+                        ids,
+                        bound_x,
+                        Some((builder, in_trigger)),
+                        compiled_abilities,
+                    )?;
+                    if !creation.definition.program().continuous.iter().any(|ab| {
+                        matches!(ab, StaticContinuousAbility::CharacteristicDefining { .. })
+                    }) {
+                        return Err("oracle:token-pt");
+                    }
+                    (creation, is_attacking)
+                } else if let TokenSpecAst::Creature {
+                    count,
+                    power,
+                    toughness,
+                    colors,
+                    supertypes,
+                    card_types,
+                    subtypes,
+                    keywords,
+                    tapped,
+                    attacking,
+                    named,
+                } = token
+                    && ((power.trim().eq_ignore_ascii_case("x")
+                        && toughness.trim().parse::<i64>().is_ok())
+                        || (toughness.trim().eq_ignore_ascii_case("x")
+                            && power.trim().parse::<i64>().is_ok()))
+                {
+                    let x_expr = if let Some(bx) = bound_x {
+                        lower_value_expr_in_context(bx, builder, in_trigger, vocabulary)?
+                    } else {
+                        ValueExpr::chosen_x()
+                    };
+                    let p_expr = if power.trim().eq_ignore_ascii_case("x") {
+                        x_expr.clone()
+                    } else {
+                        ValueExpr::literal(
+                            power.trim().parse::<i64>().map_err(|_| "oracle:token-pt")?,
+                        )
+                    };
+                    let t_expr = if toughness.trim().eq_ignore_ascii_case("x") {
+                        x_expr
+                    } else {
+                        ValueExpr::literal(
+                            toughness
+                                .trim()
+                                .parse::<i64>()
+                                .map_err(|_| "oracle:token-pt")?,
+                        )
+                    };
+                    let normalized = TokenSpecAst::Creature {
+                        count: count.clone(),
+                        power: if power.trim().eq_ignore_ascii_case("x") {
+                            "0".to_owned()
+                        } else {
+                            power.clone()
+                        },
+                        toughness: if toughness.trim().eq_ignore_ascii_case("x") {
+                            "0".to_owned()
+                        } else {
+                            toughness.clone()
+                        },
+                        colors: *colors,
+                        supertypes: *supertypes,
+                        card_types: *card_types,
+                        subtypes: subtypes.clone(),
+                        keywords: keywords.clone(),
+                        tapped: *tapped,
+                        attacking: *attacking,
+                        named: named.clone(),
+                    };
+                    let (mut creation, is_attacking) = lower_token_spec_with_abilities(
+                        &normalized,
+                        recipients,
+                        vocabulary,
+                        ids,
+                        bound_x,
+                        Some((builder, in_trigger)),
+                        compiled_abilities,
+                    )?;
+                    creation.base_size = Some(TokenSize::AtCreationPair {
+                        power: Box::new(p_expr),
+                        toughness: Box::new(t_expr),
+                    });
+                    (creation, is_attacking)
+                } else {
+                    lower_token_spec_with_abilities(
+                        token,
+                        recipients,
+                        vocabulary,
+                        ids,
+                        bound_x,
+                        Some((builder, in_trigger)),
+                        compiled_abilities,
+                    )?
+                };
             if builder.target == BodyTarget::None
                 && let ValueExpr::CounterCount { subject, kind } = &mut creation.amount
                 && *subject == spellwake_engine::program::CounterSubjectRef::TargetObject
@@ -880,17 +1030,41 @@ pub(super) fn lower_tokens_copies_instruction(
                     });
                 return Ok(());
             }
-            let receiver = match subject.as_ref() {
+            let eff_receiver =
+                unwrap_in_zone_subject(subject).unwrap_or_else(|| (**subject).clone());
+            let eff_donor = unwrap_in_zone_subject(source).unwrap_or_else(|| (**source).clone());
+            let receiver = match &eff_receiver {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
                     EffectSubject::AbilitySource
                 }
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::Exact(1),
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     EffectSubject::TargetObject
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::Exact(1),
+                } => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    EffectSubject::TargetObject
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if last_instruction_created_tokens(&builder.instructions)
+                        || (has_prior_token_creation(&builder.instructions)
+                            && raw.to_ascii_lowercase().contains("token")) =>
+                {
+                    EffectSubject::CreatedTokens
                 }
                 SubjectRefAst::Anaphora(_)
                     if matches!(
@@ -902,6 +1076,11 @@ pub(super) fn lower_tokens_copies_instruction(
                     ) =>
                 {
                     EffectSubject::TargetObject
+                }
+                SubjectRefAst::Anaphora(_)
+                    if last_instruction_moved_object(&builder.instructions) =>
+                {
+                    EffectSubject::LastMoved
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => EffectSubject::TriggerSubject,
                 SubjectRefAst::Anaphora(raw)
@@ -911,9 +1090,11 @@ pub(super) fn lower_tokens_copies_instruction(
                 {
                     EffectSubject::TriggerSubject
                 }
-                SubjectRefAst::AttachedHost(_) if self_pronoun_valid => EffectSubject::Matching(
-                    ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
-                ),
+                SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
+                    EffectSubject::Matching(ObjectFilter::Clause(
+                        ObjectClause::any().attached_to_self(),
+                    ))
+                }
                 SubjectRefAst::Anaphora(_)
                     if builder.target == BodyTarget::None
                         && let Some(group_obj) = builder.last_group_filter =>
@@ -921,34 +1102,65 @@ pub(super) fn lower_tokens_copies_instruction(
                     EffectSubject::Matching(group_obj)
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
-                    if f.zone.is_none() =>
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
                 {
-                    let obj = lower_object_filter(f, vocabulary)?;
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.zone = None;
+                    let obj =
+                        lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
+                    bind_filter_player_target(builder, &obj)?;
                     builder.last_group_filter = Some(obj);
                     EffectSubject::Matching(obj)
                 }
                 _ => return Err("oracle:unsupported-become-copy"),
             };
-            let donor = match source.as_ref() {
+            let donor = match &eff_donor {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
                     MoveSubjectRef::AbilitySource
                 }
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::Exact(1),
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(
+                    filter.zone,
+                    None | Some(
+                        ZoneFilter::Battlefield
+                            | ZoneFilter::YourGraveyard
+                            | ZoneFilter::OpponentGraveyard
+                            | ZoneFilter::AnyGraveyard
+                    )
+                ) =>
+                {
+                    let bt = if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) {
+                        let mut f_clean = filter.as_ref().clone();
+                        f_clean.zone = None;
+                        lower_battlefield_body_target_in_context(
+                            &f_clean, builder, in_trigger, vocabulary,
+                        )?
+                    } else {
+                        lower_target_subject(&eff_donor, vocabulary)?
+                    };
+                    builder.bind_target(bt)?;
+                    MoveSubjectRef::TargetObject
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::Exact(1),
+                } => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     MoveSubjectRef::TargetObject
                 }
                 SubjectRefAst::Anaphora(_)
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
-                    ) =>
+                    if last_instruction_created_tokens(&builder.instructions) =>
+                {
+                    MoveSubjectRef::CreatedTokens
+                }
+                SubjectRefAst::Anaphora(_)
+                    if is_permanent_body_target(builder.target)
+                        || is_graveyard_body_target(builder.target) =>
                 {
                     MoveSubjectRef::TargetObject
                 }
@@ -965,8 +1177,36 @@ pub(super) fn lower_tokens_copies_instruction(
                 {
                     MoveSubjectRef::TriggeringObject
                 }
-                SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
+                SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
                     MoveSubjectRef::AttachedHost
+                }
+                SubjectRefAst::Group(f)
+                    if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                        && (in_trigger || self_pronoun_valid) =>
+                {
+                    let mut inner = f.as_ref().clone();
+                    inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+                    inner.zone = None;
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter_in_context(&inner, builder, in_trigger, vocabulary)?
+                    };
+                    if obj.has_target_player() {
+                        return Err("oracle:unsupported-become-copy");
+                    }
+                    builder.instructions.push(Instruction::ChooseObjects {
+                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                        source_zone: SourceZoneFilter::LinkedExile,
+                        filter: Box::new(obj),
+                        min: ValueExpr::literal(1),
+                        max: ValueExpr::literal(1),
+                        distinct_powers: false,
+                        max_total_power: None,
+                        unchosen_action: None,
+                    });
+                    MoveSubjectRef::LastMoved
                 }
                 _ => return Err("oracle:unsupported-become-copy"),
             };
@@ -1292,6 +1532,197 @@ pub(super) fn lower_tokens_copies_instruction(
     }
 }
 
+fn try_lower_extra_predefined_token_def(
+    name: &str,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<Option<TokenDefinition>, &'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "vibranium" => {
+            let mut p = Program::artifact(None, vec![]);
+            p.printed_keywords.insert(KeywordAbility::Indestructible);
+            p.effect_defined_colors = Some(BTreeSet::new());
+            p.mana.push(ManaAbility {
+                id: ids.mana(),
+                output: ManaOutput::Fixed(BTreeMap::from([(ManaType::Colourless, 1.into())]))
+                    .restricted(ManaRestriction::NotNonartifactSpell),
+            });
+            TokenDefinition::new(
+                p,
+                TokenName::Specified(
+                    EnglishCardName::new("Vibranium".to_string())
+                        .map_err(|_| "oracle:predef-token-invalid")?,
+                ),
+                vocabulary,
+            )
+            .map(Some)
+            .map_err(|_| "oracle:predef-token-invalid")
+        }
+        "heartwood" => {
+            let mut p = Program::artifact(None, vec![]);
+            p.effect_defined_colors = Some(BTreeSet::from([Color::Red, Color::Green]));
+            p.mana.push(ManaAbility {
+                id: ids.mana(),
+                output: ManaOutput::ChooseColor {
+                    amount: 1.into(),
+                    colors: BTreeSet::from([ManaType::Red, ManaType::Green]),
+                },
+            });
+            TokenDefinition::new(
+                p,
+                TokenName::Specified(
+                    EnglishCardName::new("Heartwood".to_string())
+                        .map_err(|_| "oracle:predef-token-invalid")?,
+                ),
+                vocabulary,
+            )
+            .map(Some)
+            .map_err(|_| "oracle:predef-token-invalid")
+        }
+        "spellgorger weird" => {
+            let weird = vocabulary
+                .resolve_label("Weird")
+                .ok_or("oracle:predef-token-invalid")?;
+            let cost = ManaCost {
+                generic: 2.into(),
+                required: BTreeMap::from([(ManaType::Red, 1.into())]),
+            };
+            let mut p = Program::creature(Some(cost), 2.into(), 2.into(), BTreeSet::from([weird]));
+            p.effect_defined_colors = Some(BTreeSet::from([Color::Red]));
+            p.triggered.push(TriggeredAbility {
+                id: ids.triggered(),
+                condition: TriggerSpec::new(TriggerEvent::SpellCast {
+                    caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                    filter: SpellFilter::from_object(ObjectFilter::Clause(ObjectClause {
+                        forbidden_types: CardTypeMask::CREATURE,
+                        ..ObjectClause::any()
+                    })),
+                    self_cast: false,
+                    include_copy: false,
+                    min_mana_value: None,
+                }),
+                grouping: TriggerGrouping::EachOccurrence,
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+                ),
+            });
+            TokenDefinition::new(
+                p,
+                TokenName::Specified(
+                    EnglishCardName::new("Spellgorger Weird".to_string())
+                        .map_err(|_| "oracle:predef-token-invalid")?,
+                ),
+                vocabulary,
+            )
+            .map(Some)
+            .map_err(|_| "oracle:predef-token-invalid")
+        }
+        "gingerbrute" => {
+            let golem = vocabulary
+                .resolve_label("Golem")
+                .ok_or("oracle:predef-token-invalid")?;
+            let mut p = Program::creature(
+                Some(ManaCost::generic(1.into())),
+                1.into(),
+                1.into(),
+                BTreeSet::from([golem]),
+            );
+            p.card_types.insert(CardType::Artifact);
+            p.artifact_subtypes.insert(ArtifactSubtype::Food);
+            p.printed_keywords.insert(KeywordAbility::Haste);
+            p.effect_defined_colors = Some(BTreeSet::new());
+            p.activated.push(ActivatedAbility {
+                id: ids.activated(),
+                mana_cost: ManaCost::generic(1.into()),
+                source_cost: SourceCost::None,
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::ChangeAbilitySource {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                            BlockingRestriction::OnlyBlockedByMatching(ObjectFilter::Clause(
+                                ObjectClause {
+                                    keyword: Some(KeywordAbility::Haste),
+                                    ..ObjectClause::creature()
+                                },
+                            )),
+                        )]),
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    }],
+                ),
+            });
+            p.activated.push(ActivatedAbility {
+                id: ids.activated(),
+                mana_cost: ManaCost::generic(2.into()),
+                source_cost: SourceCost::TapSacrifice,
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::AdjustControllerLife {
+                        adjustment: LifeAdjustment::Gain(3.into()),
+                    }],
+                ),
+            });
+            TokenDefinition::new(
+                p,
+                TokenName::Specified(
+                    EnglishCardName::new("Gingerbrute".to_string())
+                        .map_err(|_| "oracle:predef-token-invalid")?,
+                ),
+                vocabulary,
+            )
+            .map(Some)
+            .map_err(|_| "oracle:predef-token-invalid")
+        }
+        "mutavault" => {
+            let mut p = Program::land(
+                BTreeSet::new(),
+                vec![ManaAbility {
+                    id: ids.mana(),
+                    output: ManaOutput::Fixed(BTreeMap::from([(ManaType::Colourless, 1.into())])),
+                }],
+            );
+            p.effect_defined_colors = Some(BTreeSet::new());
+            p.activated.push(ActivatedAbility {
+                id: ids.activated(),
+                mana_cost: ManaCost::generic(1.into()),
+                source_cost: SourceCost::None,
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::ChangeAbilitySource {
+                        parts: ResolvedPartsSpec(vec![
+                            ResolvedPartSpec::Type(TypeChangeSpec {
+                                supertypes: TypeOperation::Keep,
+                                types: TypeOperation::Add(BTreeSet::from([CardType::Creature])),
+                                subtypes: SubtypeOperation::Keep,
+                                land_subtypes: SubtypeOperation::Keep,
+                            }),
+                            ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(
+                                BTreeSet::from([KeywordAbility::Changeling]),
+                            )),
+                            ResolvedPartSpec::SetPT(PowerToughness {
+                                power: 2.into(),
+                                toughness: 2.into(),
+                            }),
+                        ]),
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    }],
+                ),
+            });
+            TokenDefinition::new(
+                p,
+                TokenName::Specified(
+                    EnglishCardName::new("Mutavault".to_string())
+                        .map_err(|_| "oracle:predef-token-invalid")?,
+                ),
+                vocabulary,
+            )
+            .map(Some)
+            .map_err(|_| "oracle:predef-token-invalid")
+        }
+        _ => Ok(None),
+    }
+}
+
 pub(super) fn parse_copy_exceptions(
     exception: Option<&str>,
     vocabulary: &CreatureTypeVocabulary,
@@ -1478,8 +1909,16 @@ pub(super) fn parse_copy_exceptions(
         "in addition to their other abilities",
         "except it has this ability",
         "except it gains this ability",
+        "except he has this ability",
+        "except he gains this ability",
+        "except she has this ability",
+        "except she gains this ability",
         "it has this ability",
         "it gains this ability",
+        "he has this ability",
+        "he gains this ability",
+        "she has this ability",
+        "she gains this ability",
         "has this ability",
         "gains this ability",
         "except it keeps its other abilities",
@@ -1513,17 +1952,25 @@ pub(super) fn parse_copy_exceptions(
         "except she's",
         "except it has",
         "except they have",
+        "except he has",
+        "except she has",
         "except it's an",
         "except it's a",
         "except it's",
         "except they're",
         "except it gains",
         "except they gain",
+        "except he gains",
+        "except she gains",
         "except",
         "it has",
         "they have",
+        "he has",
+        "she has",
         "it gains",
         "they gain",
+        "he gains",
+        "she gains",
         "it's an",
         "it's a",
         "it's",
@@ -1666,6 +2113,10 @@ pub(super) fn parse_copy_exceptions(
                 continue;
             }
             _ => {}
+        }
+        if let Some(kw) = lower_keyword_ability_name(tok) {
+            out.extra_keywords.insert(kw);
+            continue;
         }
         if let Some(ct) = resolve_protection_subtype(tok, vocabulary) {
             out.extra_creature_subtypes.insert(ct);
@@ -1825,6 +2276,8 @@ pub(super) fn parse_token_copy_exceptions(
     for pat in [
         "that's tapped and attacking",
         "that are tapped and attacking",
+        "it enters tapped and attacking",
+        "they enter tapped and attacking",
         "enters tapped and attacking",
         "enter tapped and attacking",
         "tapped and attacking",
@@ -1836,13 +2289,25 @@ pub(super) fn parse_token_copy_exceptions(
         }
     }
     for pat in [
+        "it enters the battlefield tapped",
+        "they enter the battlefield tapped",
         "enters the battlefield tapped",
         "enter the battlefield tapped",
+        "it enters tapped",
+        "they enter tapped",
         "enters tapped",
         "enter tapped",
+        "that's tapped",
+        "that are tapped",
     ] {
         if remainder.contains(pat) {
             extra_tapped = true;
+            remainder = remainder.replace(pat, " ");
+        }
+    }
+    for pat in ["that's attacking", "that are attacking"] {
+        if remainder.contains(pat) {
+            extra_attacking = true;
             remainder = remainder.replace(pat, " ");
         }
     }
