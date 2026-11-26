@@ -558,6 +558,9 @@ pub(super) fn body_turn_record_filter_supported(
             && c.mana_value == ManaValueFilter::Any
             && c.flags == empty_flags
             && c.source_relation == SourceRelation::Any
+            && c.exact_name.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
     };
     let (a, b) = filter.clauses();
     clause_ok(a) && b.is_none_or(clause_ok)

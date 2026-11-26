@@ -4292,6 +4292,9 @@ mod wave12_die_roll_tests;
 mod wave12_condition_scope_tests;
 
 #[cfg(test)]
+mod wave14_selector_filter_tests;
+
+#[cfg(test)]
 use super::vocabulary as creature_vocabulary;
 #[cfg(test)]
 #[path = "../../../../engine/test_support/characteristic_trajectories.rs"]

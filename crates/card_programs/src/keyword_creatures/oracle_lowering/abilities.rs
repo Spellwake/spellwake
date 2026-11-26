@@ -5226,6 +5226,21 @@ pub(super) fn lower_trigger_event(
                     },
                     grouping,
                 )),
+                (_, _)
+                    if {
+                        let (a, b) = filter.clauses();
+                        let non_pt = |c: ObjectClause| {
+                            c.required_counter_kind.is_some_and(|k| {
+                                !matches!(k, CounterKind::PlusOne | CounterKind::MinusOne)
+                            }) || c.forbidden_counter_kind.is_some_and(|k| {
+                                !matches!(k, CounterKind::PlusOne | CounterKind::MinusOne)
+                            })
+                        };
+                        non_pt(a) || b.is_some_and(non_pt)
+                    } =>
+                {
+                    Err("oracle:unsupported-object-filter")
+                }
                 (Some("battlefield"), None) => Ok((
                     TriggerEvent::LeavesBattlefield { subject: filter },
                     grouping,
@@ -8500,6 +8515,9 @@ fn clause_supported_by_zone_move_record(clause: ObjectClause) -> bool {
         && clause.forbidden_keyword.is_none()
         && clause.tapped.is_none()
         && clause.token.is_none()
+        && clause.exact_name.is_none()
+        && clause.required_counter_kind.is_none()
+        && clause.forbidden_counter_kind.is_none()
 }
 
 fn filter_supported_by_zone_move_record(filter: &ObjectFilter) -> bool {

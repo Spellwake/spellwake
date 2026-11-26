@@ -3796,6 +3796,12 @@ impl EffectWindow {
             }
         }
         let match_clause = |c: crate::program::ObjectClause| -> bool {
+            if c.exact_name.is_some()
+                || c.required_counter_kind.is_some()
+                || c.forbidden_counter_kind.is_some()
+            {
+                return false;
+            }
             if !c.any_types.matches_any(&record_types)
                 || !c.required_types.matches_all(&record_types)
                 || !c.forbidden_types.matches_none(&record_types)
@@ -3826,6 +3832,29 @@ impl EffectWindow {
                     if kinds.iter().any(|k| rec.subtypes.contains(k)) =>
                 {
                     return false;
+                }
+                crate::program::SubtypeFilter::AnyOfList(list) => {
+                    if !list.iter().any(|item| match item {
+                        crate::program::SingleSubtype::Creature(k) => rec.subtypes.contains(k),
+                        _ => false,
+                    }) {
+                        return false;
+                    }
+                }
+                crate::program::SubtypeFilter::AllOfList(list) => {
+                    if !list.iter().all(|item| match item {
+                        crate::program::SingleSubtype::Creature(k) => rec.subtypes.contains(k),
+                        _ => false,
+                    }) {
+                        return false;
+                    }
+                }
+                crate::program::SubtypeFilter::NoneOfList(list) => {
+                    if !list.iter().all(|item| {
+                        matches!(item, crate::program::SingleSubtype::Creature(k) if !rec.subtypes.contains(k))
+                    }) {
+                        return false;
+                    }
                 }
                 _ => {}
             }

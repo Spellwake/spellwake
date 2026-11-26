@@ -2735,11 +2735,23 @@ impl EffectWindow {
                         .filter(|p| {
                             let same = p.object == source;
                             let (c1, c2) = filter.clauses();
+                            let shares_name = || {
+                                evaluated.objects.get(&source).is_some_and(|src| {
+                                    self.name_rules
+                                        .shares_name(&p.current_names, &src.current_names)
+                                })
+                            };
                             let src_ok = |c: crate::program::ObjectClause| match c.source_relation {
                                 crate::program::SourceRelation::Any => true,
                                 crate::program::SourceRelation::SelfObject => same,
                                 crate::program::SourceRelation::OtherThanAbilitySource
                                 | crate::program::SourceRelation::OtherThanTriggerSource => !same,
+                                crate::program::SourceRelation::SharingNameWithAbilitySource => {
+                                    shares_name()
+                                }
+                                crate::program::SourceRelation::OtherThanAbilitySourceSharingName => {
+                                    !same && shares_name()
+                                }
                                 _ => false,
                             };
                             (src_ok(c1) || c2.is_some_and(src_ok))

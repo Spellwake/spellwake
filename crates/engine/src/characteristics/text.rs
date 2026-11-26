@@ -84,6 +84,15 @@ fn selector(change: CreatureTypeTextChange, value: &mut PermanentSelector) {
         word(change, subtype);
     }
     words(change, &mut value.any_creature_subtypes);
+    for set in [
+        &mut value.required_subtypes,
+        &mut value.any_subtypes,
+        &mut value.forbidden_subtypes,
+    ] {
+        if set.remove(&SelectorSubtype::Creature(change.from)) {
+            set.insert(SelectorSubtype::Creature(change.to));
+        }
+    }
     if let Some(cond) = &mut value.source_condition {
         static_source_condition(change, cond);
     }

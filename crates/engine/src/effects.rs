@@ -8890,6 +8890,17 @@ impl EffectWindow {
                 .and_then(|src| self.ability_source_names(src, evaluated))
                 .or(source.names)
                 .is_some_and(|src_names| self.name_rules.shares_name(&p.current_names, src_names)),
+            SourceRelation::OtherThanAbilitySourceSharingName => {
+                ability_source.is_some_and(|src| {
+                    id != src
+                        && self
+                            .ability_source_names(src, evaluated)
+                            .or(source.names)
+                            .is_some_and(|src_names| {
+                                self.name_rules.shares_name(&p.current_names, src_names)
+                            })
+                })
+            }
             SourceRelation::SelfObject => ability_source == Some(id),
             SourceRelation::AttachedToSelf => ability_source.is_some_and(|src| {
                 self.characteristics.attachments.get(&src)
@@ -8972,6 +8983,27 @@ impl EffectWindow {
                 .cards()
                 .get(id)
                 .is_some_and(|o| o.is_token() == required_token)
+        {
+            return false;
+        }
+        if let Some(exact) = clause.exact_name
+            && !exact.matches_with_rules(&p.current_names, &self.name_rules)
+        {
+            return false;
+        }
+        if let Some(kind) = clause.required_counter_kind
+            && !self
+                .characteristics
+                .permanent_counter_count(id, kind)
+                .is_positive()
+        {
+            return false;
+        }
+        if let Some(kind) = clause.forbidden_counter_kind
+            && self
+                .characteristics
+                .permanent_counter_count(id, kind)
+                .is_positive()
         {
             return false;
         }
@@ -9405,7 +9437,10 @@ impl EffectWindow {
         {
             return false;
         }
-        clause.matches_static_characteristics(p, excluded_subtypes, || {
+        // Exact-name matching already ran above with NameRules (interchangeable names).
+        let mut static_clause = clause;
+        static_clause.exact_name = None;
+        static_clause.matches_static_characteristics(p, excluded_subtypes, || {
             if p.zone == ObjectZone::Battlefield {
                 self.permanent_mana_value(id)
             } else {

@@ -3915,8 +3915,54 @@ pub(super) fn temp_static_selector_to_clause(
         devotion_below,
         station_at,
         exclude_source,
+        required_subtypes,
+        any_subtypes,
+        forbidden_subtypes,
+        owner,
+        commander,
+        requires_modified,
+        face_down,
+        entered_this_turn,
+        matches_source_entry_color,
+        without_counters,
+        attached_to_source_permanent,
+        attached_to_source_host,
+        any_required_keywords,
+        historic,
+        attacked_this_turn,
+        dealt_damage_this_turn,
+        kicked,
+        renowned,
+        saddled,
+        monstrous,
+        suspected,
+        solved,
+        exerted,
     } = selector;
-    if *sole_controlled_creature
+    if !required_subtypes.is_empty()
+        || !any_subtypes.is_empty()
+        || !forbidden_subtypes.is_empty()
+        || owner.is_some()
+        || commander.is_some()
+        || *requires_modified
+        || face_down.is_some()
+        || *entered_this_turn
+        || *matches_source_entry_color
+        || *without_counters
+        || *attached_to_source_permanent
+        || *attached_to_source_host
+        || !any_required_keywords.is_empty()
+        || historic.is_some()
+        || attacked_this_turn.is_some()
+        || *dealt_damage_this_turn
+        || *kicked
+        || *renowned
+        || *saddled
+        || *monstrous
+        || *suspected
+        || *solved
+        || *exerted
+        || *sole_controlled_creature
         || *while_controlling_own_commander
         || *source_has_imprinted_creature
         || controlled_creatures_and_typed_tokens.is_some()
@@ -4259,8 +4305,54 @@ pub(super) fn try_lower_temp_battlefield_static(
             devotion_below,
             station_at,
             exclude_source,
+            required_subtypes,
+            any_subtypes,
+            forbidden_subtypes,
+            owner,
+            commander,
+            requires_modified,
+            face_down,
+            entered_this_turn,
+            matches_source_entry_color,
+            without_counters,
+            attached_to_source_permanent,
+            attached_to_source_host,
+            any_required_keywords,
+            historic,
+            attacked_this_turn,
+            dealt_damage_this_turn,
+            kicked,
+            renowned,
+            saddled,
+            monstrous,
+            suspected,
+            solved,
+            exerted,
         } = selector;
         if !self_pronoun_valid
+            || !required_subtypes.is_empty()
+            || !any_subtypes.is_empty()
+            || !forbidden_subtypes.is_empty()
+            || owner.is_some()
+            || commander.is_some()
+            || *requires_modified
+            || face_down.is_some()
+            || *entered_this_turn
+            || *matches_source_entry_color
+            || *without_counters
+            || *attached_to_source_permanent
+            || *attached_to_source_host
+            || !any_required_keywords.is_empty()
+            || historic.is_some()
+            || attacked_this_turn.is_some()
+            || *dealt_damage_this_turn
+            || *kicked
+            || *renowned
+            || *saddled
+            || *monstrous
+            || *suspected
+            || *solved
+            || *exerted
             || *sole_controlled_creature
             || *while_controlling_own_commander
             || *source_has_imprinted_creature
@@ -4484,6 +4576,8 @@ pub(super) fn value_expr_uses_ability_source(expr: &ValueExpr) -> bool {
                     SourceRelation::SelfObject
                         | SourceRelation::OtherThanAbilitySource
                         | SourceRelation::AttachedToSelf
+                        | SourceRelation::SharingNameWithAbilitySource
+                        | SourceRelation::OtherThanAbilitySourceSharingName
                 )
             };
             match filter.as_ref() {

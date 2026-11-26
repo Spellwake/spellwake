@@ -6009,6 +6009,14 @@ fn lower_static_filter_to_permanent_selector(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<PermanentSelector, &'static str> {
+    lower_static_filter_to_permanent_selector_with_host(f, false, vocabulary)
+}
+
+fn lower_static_filter_to_permanent_selector_with_host(
+    f: &ObjectFilterAst,
+    subject_is_attached_host: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<PermanentSelector, &'static str> {
     let mut requires_flying = false;
     let mut required_keyword: Option<KeywordAbility> = None;
     let mut extra_required_keyword: Option<KeywordAbility> = None;
@@ -6058,7 +6066,11 @@ fn lower_static_filter_to_permanent_selector(
     }
 
     if !needs_clone {
-        return super::lower_filter_to_permanent_selector(f, vocabulary);
+        return super::lower_filter_to_permanent_selector_with_host_context(
+            f,
+            subject_is_attached_host,
+            vocabulary,
+        );
     }
 
     let mut cloned = f.clone();
@@ -6067,7 +6079,11 @@ fn lower_static_filter_to_permanent_selector(
         cloned.counter_kind = None;
         cloned.flags = AstFilterFlags(cloned.flags.0 & !AstFilterFlags::WITH_ANY_COUNTER.0);
     }
-    let mut sel = super::lower_filter_to_permanent_selector(&cloned, vocabulary)?;
+    let mut sel = super::lower_filter_to_permanent_selector_with_host_context(
+        &cloned,
+        subject_is_attached_host,
+        vocabulary,
+    )?;
     sel.requires_flying |= requires_flying;
     if let Some(kw) = required_keyword {
         sel.required_keyword = Some(kw);
@@ -8189,30 +8205,126 @@ fn lower_single_granted_ability(
 }
 
 fn permanent_selector_to_object_filter(selector: &PermanentSelector) -> Option<ObjectFilter> {
-    use spellwake_engine::characteristics::{CombatSelector, NameFilter};
+    use spellwake_engine::characteristics::{
+        CombatSelector, NameFilter, OwnerSelector, SelectorSubtype,
+    };
+    use spellwake_engine::program::{ExactNameKey, SingleSubtype, SubtypeList};
 
     if selector.sole_controlled_creature
         || selector.while_controlling_own_commander
         || selector.source_has_imprinted_creature
         || selector.controlled_creatures_and_typed_tokens.is_some()
-        || selector.matches_source_entry_type
         || selector.controller_type_threshold.is_some()
         || selector.source_condition.is_some()
         || selector.extra_required_keyword.is_some()
         || selector.requires_toxic
-        || selector.required_counter_kind.is_some()
         || !selector.forbidden_keywords.is_empty()
         || selector.equipped_by_at_least > 1
         || selector.devotion_below.is_some()
         || selector.station_at.is_some()
-        || selector.minus_one_counter
         || selector.minimum_plus_one_counters > 1
-        || selector.name != NameFilter::Any
+        || selector.attached_to_source_permanent
+        || selector.attached_to_source_host
+        || !selector.any_required_keywords.is_empty()
+        || selector.face_down == Some(false)
     {
         return None;
     }
 
     let mut clause = ObjectClause::any();
+    match &selector.name {
+        NameFilter::Any => {}
+        NameFilter::Named(name) => {
+            clause.exact_name = Some(ExactNameKey::from_name(name.as_str())?);
+        }
+        NameFilter::SharesWithSource => {
+            clause.source_relation = SourceRelation::SharingNameWithAbilitySource;
+        }
+        NameFilter::DifferentFromSource => return None,
+    }
+    if selector.matches_source_entry_type {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE);
+    }
+    if selector.matches_source_entry_color {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR);
+    }
+    if let Some(is_cmd) = selector.commander {
+        clause.flags = clause.flags.union(if is_cmd {
+            ObjectFilterFlags::COMMANDER_ONLY
+        } else {
+            ObjectFilterFlags::NOT_COMMANDER
+        });
+    }
+    if selector.requires_modified {
+        clause.flags = clause.flags.union(ObjectFilterFlags::MODIFIED);
+    }
+    if selector.face_down == Some(true) {
+        clause.flags = clause.flags.union(ObjectFilterFlags::FACE_DOWN);
+    }
+    if selector.entered_this_turn {
+        clause.flags = clause.flags.union(ObjectFilterFlags::ENTERED_THIS_TURN);
+    }
+    if selector.without_counters {
+        clause.flags = clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+    }
+    if selector.minus_one_counter {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER);
+    }
+    if let Some(kind) = selector.required_counter_kind {
+        clause.required_counter_kind = Some(kind);
+    }
+    if let Some(is_hist) = selector.historic {
+        clause.flags = clause.flags.union(if is_hist {
+            ObjectFilterFlags::HISTORIC
+        } else {
+            ObjectFilterFlags::NON_HISTORIC
+        });
+    }
+    if let Some(attacked) = selector.attacked_this_turn {
+        clause.flags = clause.flags.union(if attacked {
+            ObjectFilterFlags::ATTACKED_THIS_TURN
+        } else {
+            ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN
+        });
+    }
+    if selector.dealt_damage_this_turn {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN);
+    }
+    if selector.kicked {
+        clause.flags = clause.flags.union(ObjectFilterFlags::KICKED);
+    }
+    if selector.renowned {
+        clause.flags = clause.flags.union(ObjectFilterFlags::RENOWNED);
+    }
+    if selector.saddled {
+        clause.flags = clause.flags.union(ObjectFilterFlags::SADDLED);
+    }
+    if selector.monstrous {
+        clause.flags = clause.flags.union(ObjectFilterFlags::MONSTROUS);
+    }
+    if selector.suspected {
+        clause.flags = clause.flags.union(ObjectFilterFlags::SUSPECTED);
+    }
+    if selector.solved {
+        clause.flags = clause.flags.union(ObjectFilterFlags::SOLVED);
+    }
+    if selector.exerted {
+        clause.flags = clause.flags.union(ObjectFilterFlags::EXERTED);
+    }
+    if let Some(owner) = selector.owner {
+        clause.owner = match owner {
+            OwnerSelector::SourceController => ControllerFilter::You,
+            OwnerSelector::Opponents => ControllerFilter::Opponent,
+        };
+    }
 
     for ty in &selector.required_types {
         clause.required_types = clause.required_types.with(*ty);
@@ -8239,15 +8351,64 @@ fn permanent_selector_to_object_filter(selector: &PermanentSelector) -> Option<O
         clause.subtypes = SubtypeFilter::Has(ct);
         subtype_count += 1;
     }
+    let to_single = |s: SelectorSubtype| -> SingleSubtype {
+        match s {
+            SelectorSubtype::Creature(ct) => SingleSubtype::Creature(ct),
+            SelectorSubtype::Land(lt) => SingleSubtype::Land(lt),
+            SelectorSubtype::Artifact(at) => SingleSubtype::Artifact(at),
+            SelectorSubtype::Enchantment(et) => SingleSubtype::Enchantment(et),
+            SelectorSubtype::Planeswalker(pw) => SingleSubtype::Planeswalker(pw),
+            SelectorSubtype::Aura => SingleSubtype::Aura,
+        }
+    };
     if !selector.any_creature_subtypes.is_empty() {
         subtype_count += 1;
-        let items: Vec<CreatureTypeId> = selector.any_creature_subtypes.iter().copied().collect();
-        clause.subtypes = match items.as_slice() {
-            [a] => SubtypeFilter::Has(*a),
-            [a, b] => SubtypeFilter::AnyOf([*a, *b, *b]),
-            [a, b, c] => SubtypeFilter::AnyOf([*a, *b, *c]),
-            _ => return None,
-        };
+        let items: Vec<SingleSubtype> = selector
+            .any_creature_subtypes
+            .iter()
+            .copied()
+            .map(SingleSubtype::Creature)
+            .collect();
+        clause.subtypes = SubtypeFilter::AnyOfList(SubtypeList::from_slice(&items)?);
+    }
+    if !selector.any_land_subtypes.is_empty() {
+        subtype_count += 1;
+        let mask = selector
+            .any_land_subtypes
+            .iter()
+            .copied()
+            .fold(0u32, |acc, lt| acc | lt.bit());
+        clause.subtypes = SubtypeFilter::AnyLandMask(mask);
+    }
+    if !selector.required_subtypes.is_empty() {
+        subtype_count += 1;
+        let items: Vec<SingleSubtype> = selector
+            .required_subtypes
+            .iter()
+            .copied()
+            .map(to_single)
+            .collect();
+        clause.subtypes = SubtypeFilter::AllOfList(SubtypeList::from_slice(&items)?);
+    }
+    if !selector.any_subtypes.is_empty() {
+        subtype_count += 1;
+        let items: Vec<SingleSubtype> = selector
+            .any_subtypes
+            .iter()
+            .copied()
+            .map(to_single)
+            .collect();
+        clause.subtypes = SubtypeFilter::AnyOfList(SubtypeList::from_slice(&items)?);
+    }
+    if !selector.forbidden_subtypes.is_empty() {
+        subtype_count += 1;
+        let items: Vec<SingleSubtype> = selector
+            .forbidden_subtypes
+            .iter()
+            .copied()
+            .map(to_single)
+            .collect();
+        clause.subtypes = SubtypeFilter::NoneOfList(SubtypeList::from_slice(&items)?);
     }
     if let Some(ct) = selector.forbidden_creature_subtype {
         clause.subtypes = SubtypeFilter::Lacks(ct);
@@ -8273,8 +8434,13 @@ fn permanent_selector_to_object_filter(selector: &PermanentSelector) -> Option<O
         ControllerSelector::Any => ControllerFilter::Any,
         ControllerSelector::SourceController => ControllerFilter::You,
         ControllerSelector::Opponents => ControllerFilter::Opponent,
+        ControllerSelector::OwnerIsSourceController => ControllerFilter::OwnerYou,
+        ControllerSelector::OwnerIsOpponent => ControllerFilter::OwnerOpponent,
         ControllerSelector::SourceItself => {
-            if selector.attached_to_source || selector.exclude_source {
+            if selector.attached_to_source
+                || selector.exclude_source
+                || clause.source_relation != SourceRelation::Any
+            {
                 return None;
             }
             clause.source_relation = SourceRelation::SelfObject;
@@ -8289,9 +8455,18 @@ fn permanent_selector_to_object_filter(selector: &PermanentSelector) -> Option<O
         return None;
     }
     if selector.attached_to_source {
+        if clause.source_relation != SourceRelation::Any {
+            return None;
+        }
         clause.source_relation = SourceRelation::AttachedToSelf;
     } else if selector.exclude_source {
-        clause.source_relation = SourceRelation::OtherThanAbilitySource;
+        clause.source_relation = match clause.source_relation {
+            SourceRelation::Any => SourceRelation::OtherThanAbilitySource,
+            SourceRelation::SharingNameWithAbilitySource => {
+                SourceRelation::OtherThanAbilitySourceSharingName
+            }
+            _ => return None,
+        };
     }
 
     clause.combat = match selector.combat_role {
@@ -11987,7 +12162,11 @@ fn lower_numeric_expr_with_context(
                 });
             }
             if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
-                && let Ok(selector) = lower_static_filter_to_permanent_selector(f, vocabulary)
+                && let Ok(selector) = lower_static_filter_to_permanent_selector_with_host(
+                    f,
+                    subject_is_attached_host,
+                    vocabulary,
+                )
             {
                 return Ok(NumericExpression::count(selector));
             }
@@ -11997,7 +12176,11 @@ fn lower_numeric_expr_with_context(
                 return Ok(NumericExpression::Eval(Box::new(ve)));
             }
             if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) {
-                let selector = lower_static_filter_to_permanent_selector(f, vocabulary)?;
+                let selector = lower_static_filter_to_permanent_selector_with_host(
+                    f,
+                    subject_is_attached_host,
+                    vocabulary,
+                )?;
                 return Ok(NumericExpression::count(selector));
             }
             Err("oracle:unsupported-numeric-expr")
@@ -12357,6 +12540,8 @@ fn spell_filter_supported_by_matches_characteristics(sf: &SpellFilter) -> bool {
             && c.forbidden_keyword.is_none()
             && c.tapped.is_none()
             && c.token.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
             && ALLOWED_FLAGS.union(c.flags) == ALLOWED_FLAGS
     };
     match sf.object {
@@ -12417,6 +12602,8 @@ fn spell_filter_supported_by_prohibit_casting(sf: &SpellFilter) -> bool {
             && c.forbidden_keyword.is_none()
             && c.tapped.is_none()
             && c.token.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
             && ALLOWED_FLAGS.union(c.flags) == ALLOWED_FLAGS
     };
     match sf.object {

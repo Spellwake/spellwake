@@ -871,6 +871,29 @@ pub enum ControllerSelector {
     SourceController,
     Opponents,
     EnchantedPlayer,
+    /// Permanents owned by the source's controller (for example, Backgrounds).
+    OwnerIsSourceController,
+    /// Permanents owned by an opponent of the source's controller.
+    OwnerIsOpponent,
+}
+
+/// Independent owner predicate on a [`PermanentSelector`] when both controller
+/// and owner are specified (for example, "permanents you own that your opponents control").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerSelector {
+    SourceController,
+    Opponents,
+}
+
+/// Typed subtype atom for conjunctive, disjunctive, and negated subtype sets on [`PermanentSelector`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SelectorSubtype {
+    Creature(CreatureTypeId),
+    Land(LandType),
+    Artifact(crate::program::ArtifactSubtype),
+    Enchantment(crate::program::EnchantmentSubtype),
+    Planeswalker(crate::program::PlaneswalkerSubtype),
+    Aura,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatSelector {
@@ -910,9 +933,17 @@ pub struct PermanentSelector {
     pub land_subtype: Option<LandType>,
     /// Disjunctive land-subtype predicate: when nonempty, recipient must have at least one of these land subtypes.
     pub any_land_subtypes: BTreeSet<LandType>,
+    /// Conjunctive subtype set: recipient must currently have every subtype listed here.
+    pub required_subtypes: BTreeSet<SelectorSubtype>,
+    /// Disjunctive cross-category subtype set: when nonempty, recipient must have at least one.
+    pub any_subtypes: BTreeSet<SelectorSubtype>,
+    /// Negated subtype set: recipient must lack every subtype listed here.
+    pub forbidden_subtypes: BTreeSet<SelectorSubtype>,
     pub color: ColorFilter,
     pub name: NameFilter,
     pub controller: ControllerSelector,
+    /// Optional independent owner predicate on the recipient.
+    pub owner: Option<OwnerSelector>,
     /// Restrict this selector to the current permanent attached to the source.
     pub attached_to_source: bool,
     /// A station symbol affects its source only once it has the indicated charge counters.
@@ -973,6 +1004,44 @@ pub struct PermanentSelector {
     pub devotion_below: Option<(Color, u8)>,
     pub station_at: Option<std::num::NonZeroU16>,
     pub exclude_source: bool,
+    /// Optional commander designation predicate (`Some(true)` requires commander, `Some(false)` forbids).
+    pub commander: Option<bool>,
+    /// Require the recipient to be modified under CR 700.9 (Equipment, Aura controlled by its controller, or counter).
+    pub requires_modified: bool,
+    /// Optional face-down status predicate (`Some(true)` face-down, `Some(false)` face-up).
+    pub face_down: Option<bool>,
+    /// Require the recipient to have entered the battlefield this turn.
+    pub entered_this_turn: bool,
+    /// Require the recipient to share the color chosen as the ability source entered.
+    pub matches_source_entry_color: bool,
+    /// Require the recipient to have zero counters of any kind.
+    pub without_counters: bool,
+    /// Require the recipient to be attached to the ability source permanent.
+    pub attached_to_source_permanent: bool,
+    /// Require the recipient to be attached to the same host permanent as the ability source.
+    pub attached_to_source_host: bool,
+    /// Disjunctive required keywords: when nonempty, recipient must have at least one keyword in this set.
+    pub any_required_keywords: BTreeSet<KeywordAbility>,
+    /// Optional historic predicate (artifact, legendary, or Saga; CR 700.6).
+    pub historic: Option<bool>,
+    /// Optional turn-history attack predicate (`Some(true)` attacked this turn, `Some(false)` did not).
+    pub attacked_this_turn: Option<bool>,
+    /// Require the recipient to have been dealt damage this turn.
+    pub dealt_damage_this_turn: bool,
+    /// Require the recipient to have been kicked (CR 702.33).
+    pub kicked: bool,
+    /// Require the recipient to be renowned (CR 702.112).
+    pub renowned: bool,
+    /// Require the recipient to be saddled this turn (CR 702.171).
+    pub saddled: bool,
+    /// Require the recipient to be monstrous (CR 701.31).
+    pub monstrous: bool,
+    /// Require the recipient to be suspected (CR 701.58).
+    pub suspected: bool,
+    /// Require the recipient to be solved (CR 719.3).
+    pub solved: bool,
+    /// Require the recipient to have been exerted this turn (CR 701.39).
+    pub exerted: bool,
 }
 impl Default for PermanentSelector {
     fn default() -> Self {
@@ -992,9 +1061,13 @@ impl Default for PermanentSelector {
             forbidden_creature_subtype: None,
             land_subtype: None,
             any_land_subtypes: BTreeSet::new(),
+            required_subtypes: BTreeSet::new(),
+            any_subtypes: BTreeSet::new(),
+            forbidden_subtypes: BTreeSet::new(),
             color: ColorFilter::Any,
             name: NameFilter::Any,
             controller: ControllerSelector::Any,
+            owner: None,
             attached_to_source: false,
             requires_flying: false,
             required_keyword: None,
@@ -1027,6 +1100,25 @@ impl Default for PermanentSelector {
             while_controlling_own_commander: false,
             station_at: None,
             exclude_source: false,
+            commander: None,
+            requires_modified: false,
+            face_down: None,
+            entered_this_turn: false,
+            matches_source_entry_color: false,
+            without_counters: false,
+            attached_to_source_permanent: false,
+            attached_to_source_host: false,
+            any_required_keywords: BTreeSet::new(),
+            historic: None,
+            attacked_this_turn: None,
+            dealt_damage_this_turn: false,
+            kicked: false,
+            renowned: false,
+            saddled: false,
+            monstrous: false,
+            suspected: false,
+            solved: false,
+            exerted: false,
         }
     }
 }
@@ -1410,6 +1502,39 @@ impl PermanentSelector {
         {
             return Err(CharacteristicDefinitionError::ContradictorySelector);
         }
+        if !self.required_subtypes.is_disjoint(&self.forbidden_subtypes)
+            || self.creature_subtype.is_some_and(|ct| {
+                self.forbidden_subtypes
+                    .contains(&SelectorSubtype::Creature(ct))
+            })
+            || self.forbidden_creature_subtype.is_some_and(|ct| {
+                self.required_subtypes
+                    .contains(&SelectorSubtype::Creature(ct))
+            })
+            || self
+                .land_subtype
+                .is_some_and(|lt| self.forbidden_subtypes.contains(&SelectorSubtype::Land(lt)))
+            || self.artifact_subtype.is_some_and(|at| {
+                self.forbidden_subtypes
+                    .contains(&SelectorSubtype::Artifact(at))
+            })
+            || self.planeswalker_subtype.is_some_and(|pw| {
+                self.forbidden_subtypes
+                    .contains(&SelectorSubtype::Planeswalker(pw))
+            })
+            || (self.exclude_auras && self.required_subtypes.contains(&SelectorSubtype::Aura))
+        {
+            return Err(CharacteristicDefinitionError::ContradictorySelector);
+        }
+        if self.without_counters
+            && (self.any_counter
+                || self.plus_one_counter
+                || self.minus_one_counter
+                || self.minimum_plus_one_counters > 0
+                || self.required_counter_kind.is_some())
+        {
+            return Err(CharacteristicDefinitionError::ContradictorySelector);
+        }
         if [
             self.creature_subtype,
             self.forbidden_creature_subtype,
@@ -1418,6 +1543,20 @@ impl PermanentSelector {
         .into_iter()
         .flatten()
         .chain(self.any_creature_subtypes.iter().copied())
+        .chain(
+            self.required_subtypes
+                .iter()
+                .chain(self.any_subtypes.iter())
+                .chain(self.forbidden_subtypes.iter())
+                .filter_map(|sub| match sub {
+                    SelectorSubtype::Creature(ct) => Some(*ct),
+                    SelectorSubtype::Land(_)
+                    | SelectorSubtype::Artifact(_)
+                    | SelectorSubtype::Enchantment(_)
+                    | SelectorSubtype::Planeswalker(_)
+                    | SelectorSubtype::Aura => None,
+                }),
+        )
         .any(|kind| vocabulary.label(kind).is_none())
         {
             return Err(CharacteristicDefinitionError::ForeignCreatureType);
@@ -2308,10 +2447,34 @@ pub struct ObjectCharacteristics {
     /// Exact +1/+1 counter count on this incarnation.
     pub plus_one_counters: RulesInteger,
     pub has_any_counter: bool,
+    /// Permanent counter kinds currently present with positive count on this incarnation.
+    pub present_counter_kinds: BTreeSet<crate::effects::CounterKind>,
     pub attacking: bool,
     pub blocking: bool,
     /// This exact permanent has resolved a saddle ability this turn.
     pub saddled: bool,
+    /// True while this physical permanent is face down.
+    pub is_face_down: bool,
+    /// True if this permanent entered the battlefield during the current turn.
+    pub entered_this_turn: bool,
+    /// Color chosen as this permanent entered the battlefield, if any.
+    pub entry_color: Option<Color>,
+    /// True if this permanent attacked during the current turn.
+    pub attacked_this_turn: bool,
+    /// True if this permanent was dealt damage during the current turn.
+    pub dealt_damage_this_turn: bool,
+    /// True if this permanent was kicked (CR 702.33).
+    pub kicked: bool,
+    /// True if this permanent is renowned (CR 702.112).
+    pub renowned: bool,
+    /// True if this permanent is monstrous (CR 701.31).
+    pub monstrous: bool,
+    /// True if this permanent is suspected (CR 701.58).
+    pub suspected: bool,
+    /// True if this Case permanent is solved (CR 719.3).
+    pub solved: bool,
+    /// True if this permanent was exerted this turn (CR 701.39).
+    pub exerted: bool,
     pub object: ObjectId,
     /// Speed of the controller after applying control-changing effects.
     pub controller_speed: u8,

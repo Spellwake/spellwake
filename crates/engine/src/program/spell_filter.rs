@@ -1,7 +1,7 @@
 //! Composable spell filter unifying spell-cast trigger filters and spell-target filters.
 use super::{
     CardType, CardTypeMask, DefinitionError, ObjectClause, ObjectColorFilter, ObjectFilter,
-    ObjectFilterFlags, PowerFilter, SubtypeFilter, Supertype,
+    ObjectFilterFlags, PowerFilter, Supertype,
 };
 use crate::{
     characteristics::{Color, ObjectCharacteristics},
@@ -318,57 +318,32 @@ impl SpellFilter {
             {
                 return false;
             }
-            match c.subtypes {
-                SubtypeFilter::Any => {}
-                SubtypeFilter::Has(kind) => {
-                    if !spell.current_creature_subtypes.contains(&kind) {
-                        return false;
-                    }
-                }
-                SubtypeFilter::Lacks(kind) => {
-                    if spell.current_creature_subtypes.contains(&kind) {
-                        return false;
-                    }
-                }
-                SubtypeFilter::Enchantment(kind) => {
-                    if !spell.current_enchantment_subtypes.contains(&kind) {
-                        return false;
-                    }
-                }
-                SubtypeFilter::Spell(kind) => {
-                    if !spell.current_spell_subtypes.contains(&kind) {
-                        return false;
-                    }
-                }
-                SubtypeFilter::Artifact(kind) => {
-                    if !spell.current_artifact_subtypes.contains(&kind) {
-                        return false;
-                    }
-                }
-                SubtypeFilter::Planeswalker(kind) => {
-                    if !spell.current_planeswalker_subtypes.contains(&kind) {
-                        return false;
-                    }
-                }
-                SubtypeFilter::AnyLandMask(mask) => {
-                    if !spell
-                        .current_land_subtypes
-                        .iter()
-                        .any(|lt| (mask & lt.bit()) != 0)
-                    {
-                        return false;
-                    }
-                }
-                SubtypeFilter::NotLandMask(mask) => {
-                    if spell
-                        .current_land_subtypes
-                        .iter()
-                        .any(|lt| (mask & lt.bit()) != 0)
-                    {
-                        return false;
-                    }
-                }
-                _ => return false,
+            if let Some(exact) = c.exact_name
+                && !exact.matches_exact_names(&spell.current_names)
+            {
+                return false;
+            }
+            if c.required_counter_kind.is_some() || c.forbidden_counter_kind.is_some() {
+                return false;
+            }
+            let is_aura = matches!(
+                spell.attachment_kind,
+                Some(crate::attachment::AttachmentKind::Aura(_))
+            );
+            if !c
+                .subtypes
+                .matches_sets(
+                    &spell.current_creature_subtypes,
+                    &spell.current_land_subtypes,
+                    &spell.current_artifact_subtypes,
+                    &spell.current_enchantment_subtypes,
+                    &spell.current_planeswalker_subtypes,
+                    &spell.current_spell_subtypes,
+                    is_aura,
+                )
+                .unwrap_or(false)
+            {
+                return false;
             }
             if !c.color.matches(&spell.current_colors) {
                 return false;

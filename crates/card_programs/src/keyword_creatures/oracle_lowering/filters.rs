@@ -88,7 +88,12 @@ fn apply_selector_counter_kind(
     sel: &mut PermanentSelector,
     ck_raw: &str,
 ) -> Result<(), &'static str> {
-    match ck_raw.trim().to_ascii_lowercase().as_str() {
+    let ck = ck_raw.trim().to_ascii_lowercase();
+    let ck_clean = ck
+        .trim_end_matches(" counters")
+        .trim_end_matches(" counter")
+        .trim();
+    match ck_clean {
         "+1/+1" => sel.plus_one_counter = true,
         "-1/-1" => sel.minus_one_counter = true,
         "" | "any" | "a" | "one or more" => sel.any_counter = true,
@@ -125,13 +130,50 @@ fn extract_state_qual_counter_kind(norm: &str) -> Option<&str> {
     Some(kind)
 }
 
+fn resolve_selector_subtype(
+    st: &str,
+    any_types: AstCardTypeMask,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<spellwake_engine::characteristics::SelectorSubtype> {
+    use spellwake_engine::characteristics::SelectorSubtype;
+    if any_types == AstCardTypeMask::PLANESWALKER
+        && let Some(pw) = parse_planeswalker_subtype(st)
+    {
+        return Some(SelectorSubtype::Planeswalker(pw));
+    }
+    if st.eq_ignore_ascii_case("aura") {
+        return Some(SelectorSubtype::Aura);
+    }
+    if let Some(ct) = vocabulary.resolve_label(st) {
+        return Some(SelectorSubtype::Creature(ct));
+    }
+    if let Some(lt) = parse_land_subtype(st) {
+        return Some(SelectorSubtype::Land(lt));
+    }
+    if let Some(at) = ArtifactSubtype::from_wire_label(st) {
+        return Some(SelectorSubtype::Artifact(at));
+    }
+    if let Some(et) = EnchantmentSubtype::from_wire_label(st) {
+        return Some(SelectorSubtype::Enchantment(et));
+    }
+    parse_planeswalker_subtype(st).map(SelectorSubtype::Planeswalker)
+}
+
 pub(super) fn lower_filter_to_permanent_selector(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<PermanentSelector, &'static str> {
+    lower_filter_to_permanent_selector_with_host_context(f, false, vocabulary)
+}
+
+pub(super) fn lower_filter_to_permanent_selector_with_host_context(
+    f: &ObjectFilterAst,
+    subject_is_attached_host: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<PermanentSelector, &'static str> {
+    use spellwake_engine::characteristics::{OwnerSelector, SelectorSubtype};
     if !matches!(f.zone, None | Some(ZoneFilter::Battlefield))
         || !f.extra_zones.is_empty()
-        || f.owner.is_some()
         || f.any_spell
         || f.is_ability
     {
@@ -211,11 +253,67 @@ pub(super) fn lower_filter_to_permanent_selector(
     if f.flags.0 & AstFilterFlags::WITH_ANY_COUNTER.0 != 0 {
         sel.any_counter = true;
     }
+    if f.flags.0 & AstFilterFlags::WITHOUT_COUNTERS.0 != 0 {
+        if sel.any_counter
+            || sel.plus_one_counter
+            || sel.minus_one_counter
+            || sel.required_counter_kind.is_some()
+        {
+            return Err("oracle:unsupported-selector-flag");
+        }
+        sel.without_counters = true;
+    }
     if f.flags.0 & AstFilterFlags::EQUIPPED.0 != 0 {
         sel.equipped_by_at_least = 1;
     }
     if f.flags.0 & AstFilterFlags::ENCHANTED.0 != 0 {
         sel.requires_enchanted = true;
+    }
+    if f.flags.0 & AstFilterFlags::MODIFIED.0 != 0 {
+        sel.requires_modified = true;
+    }
+    let has_is_commander = (f.flags.0 & AstFilterFlags::IS_COMMANDER.0) != 0;
+    let has_not_commander = (f.flags.0 & AstFilterFlags::NOT_COMMANDER.0) != 0;
+    if has_is_commander && has_not_commander {
+        return Err("oracle:unsupported-selector-flag");
+    }
+    if has_is_commander {
+        sel.commander = Some(true);
+    } else if has_not_commander {
+        sel.commander = Some(false);
+    }
+    let has_face_down = (f.flags.0 & AstFilterFlags::FACE_DOWN.0) != 0;
+    let has_face_up = (f.flags.0 & AstFilterFlags::FACE_UP.0) != 0;
+    if has_face_down && has_face_up {
+        return Err("oracle:unsupported-selector-flag");
+    }
+    if has_face_down {
+        sel.face_down = Some(true);
+    } else if has_face_up {
+        sel.face_down = Some(false);
+    }
+    if f.flags.0 & AstFilterFlags::ENTERED_THIS_TURN.0 != 0 {
+        sel.entered_this_turn = true;
+    }
+    let has_attacked = (f.flags.0 & AstFilterFlags::ATTACKED_THIS_TURN.0) != 0;
+    let has_did_not_attack = (f.flags.0 & AstFilterFlags::DID_NOT_ATTACK_THIS_TURN.0) != 0;
+    if has_attacked && has_did_not_attack {
+        return Err("oracle:unsupported-selector-flag");
+    }
+    if has_attacked {
+        sel.attacked_this_turn = Some(true);
+    } else if has_did_not_attack {
+        sel.attacked_this_turn = Some(false);
+    }
+    if f.flags.0 & AstFilterFlags::DEALT_DAMAGE_THIS_TURN.0 != 0 {
+        sel.dealt_damage_this_turn = true;
+    }
+    if f.flags.0 & AstFilterFlags::ATTACHED_TO_SELF.0 != 0 {
+        if subject_is_attached_host {
+            sel.attached_to_source_host = true;
+        } else {
+            sel.attached_to_source_permanent = true;
+        }
     }
     if f.flags.0
         & (AstFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR.0 | AstFilterFlags::MATCHES_CHOSEN_TYPE.0)
@@ -223,20 +321,45 @@ pub(super) fn lower_filter_to_permanent_selector(
     {
         sel.matches_source_entry_type = true;
     }
+    if f.flags.0 & AstFilterFlags::MATCHES_CHOSEN_COLOR.0 != 0 {
+        sel.matches_source_entry_color = true;
+    }
+    let keywords_match_any = (f.flags.0 & AstFilterFlags::KEYWORDS_MATCH_ANY.0) != 0;
     let unsupported_flags = f.flags.0
         & !(AstFilterFlags::EXCLUDE_SELF.0
             | AstFilterFlags::WITH_ANY_COUNTER.0
+            | AstFilterFlags::WITHOUT_COUNTERS.0
             | AstFilterFlags::EQUIPPED.0
             | AstFilterFlags::ENCHANTED.0
+            | AstFilterFlags::MODIFIED.0
+            | AstFilterFlags::IS_COMMANDER.0
+            | AstFilterFlags::NOT_COMMANDER.0
+            | AstFilterFlags::FACE_DOWN.0
+            | AstFilterFlags::FACE_UP.0
+            | AstFilterFlags::ENTERED_THIS_TURN.0
+            | AstFilterFlags::ATTACKED_THIS_TURN.0
+            | AstFilterFlags::DID_NOT_ATTACK_THIS_TURN.0
+            | AstFilterFlags::DEALT_DAMAGE_THIS_TURN.0
+            | AstFilterFlags::ATTACHED_TO_SELF.0
             | AstFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR.0
             | AstFilterFlags::MATCHES_CHOSEN_TYPE.0
+            | AstFilterFlags::MATCHES_CHOSEN_COLOR.0
+            | AstFilterFlags::KEYWORDS_MATCH_ANY.0
             | AstFilterFlags::LKI_PAST_TENSE.0);
     if unsupported_flags != 0 {
         return Err("oracle:unsupported-selector-flag");
     }
 
-    for kw_raw in &f.required_keywords {
-        apply_selector_required_keyword(&mut sel, kw_raw, vocabulary)?;
+    if keywords_match_any && f.required_keywords.len() > 1 {
+        for kw_raw in &f.required_keywords {
+            let kw = lower_keyword_ability_name(kw_raw)
+                .ok_or("oracle:unsupported-selector-predicate")?;
+            sel.any_required_keywords.insert(kw);
+        }
+    } else {
+        for kw_raw in &f.required_keywords {
+            apply_selector_required_keyword(&mut sel, kw_raw, vocabulary)?;
+        }
     }
     if f.forbidden_keywords.len() == 1 {
         let kw = lower_keyword_ability_name(&f.forbidden_keywords[0])
@@ -298,70 +421,114 @@ pub(super) fn lower_filter_to_permanent_selector(
         sel.any_types = any_types_set;
     }
     sel.forbidden_types = card_type_mask_to_set(f.forbidden_types)?;
-    sel.required_supertypes = supertype_mask_to_set(f.required_supertypes)?;
-    sel.forbidden_supertypes = supertype_mask_to_set(f.forbidden_supertypes)?;
+    let req_historic = (f.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0;
+    let forb_historic = (f.forbidden_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0;
+    if req_historic && forb_historic {
+        return Err("oracle:unsupported-selector-predicate");
+    }
+    if req_historic {
+        sel.historic = Some(true);
+    } else if forb_historic {
+        sel.historic = Some(false);
+    }
+    sel.required_supertypes = supertype_mask_to_set(AstSupertypeMask(
+        f.required_supertypes.0 & !AstSupertypeMask::HISTORIC.0,
+    ))?;
+    sel.forbidden_supertypes = supertype_mask_to_set(AstSupertypeMask(
+        f.forbidden_supertypes.0 & !AstSupertypeMask::HISTORIC.0,
+    ))?;
 
     // Subtypes
-    if f.forbidden_subtypes.len() > 1 {
-        return Err("oracle:selector-multi-subtypes");
-    }
     if f.subtypes.len() > 1 {
-        if !f
+        let match_any = f
             .predicates
             .iter()
-            .any(|p| matches!(p, FilterPredicateAst::SubtypesMatchAny))
-        {
+            .any(|p| matches!(p, FilterPredicateAst::SubtypesMatchAny));
+        if match_any {
+            if let Some(lands) = f
+                .subtypes
+                .iter()
+                .map(|st| parse_land_subtype(st))
+                .collect::<Option<BTreeSet<LandType>>>()
+            {
+                sel.any_land_subtypes = lands;
+            } else if let Some(creatures) = f
+                .subtypes
+                .iter()
+                .map(|st| vocabulary.resolve_label(st))
+                .collect::<Option<BTreeSet<CreatureTypeId>>>()
+            {
+                sel.any_creature_subtypes = creatures;
+            } else {
+                for st in &f.subtypes {
+                    let sub = resolve_selector_subtype(st, f.any_types, vocabulary)
+                        .ok_or("oracle:selector-multi-subtypes")?;
+                    sel.any_subtypes.insert(sub);
+                }
+            }
+        } else {
+            // Stage 1 currently drops `"and"` between plural subtype lists (`Mounts and Vehicles`,
+            // `Skeletons and Zombies`) without emitting `SubtypesMatchAny`, making them
+            // indistinguishable in the AST from conjunctive compound subtypes (`Eldrazi Spawn`).
+            // Fail closed until Stage 1 explicitly distinguishes disjunction from conjunction.
             return Err("oracle:selector-multi-subtypes");
         }
-        let parsed_lands: Option<BTreeSet<LandType>> =
-            f.subtypes.iter().map(|st| parse_land_subtype(st)).collect();
-        if let Some(lands) = parsed_lands {
-            sel.any_land_subtypes = lands;
-        } else {
-            for st in &f.subtypes {
-                let ct = vocabulary
-                    .resolve_label(st)
-                    .ok_or("oracle:selector-multi-subtypes")?;
-                sel.any_creature_subtypes.insert(ct);
+    } else if let Some(st) = f.subtypes.first() {
+        let sub = resolve_selector_subtype(st, f.any_types, vocabulary)
+            .ok_or("oracle:selector-unknown-subtype")?;
+        match sub {
+            SelectorSubtype::Creature(ct) => sel.creature_subtype = Some(ct),
+            SelectorSubtype::Land(lt) => sel.land_subtype = Some(lt),
+            SelectorSubtype::Artifact(at) => sel.artifact_subtype = Some(at),
+            SelectorSubtype::Planeswalker(pw) => sel.planeswalker_subtype = Some(pw),
+            SelectorSubtype::Enchantment(_) | SelectorSubtype::Aura => {
+                sel.required_subtypes.insert(sub);
             }
         }
-    } else if let Some(st) = f.subtypes.first() {
-        if f.any_types == AstCardTypeMask::PLANESWALKER
-            && let Some(pw) = parse_planeswalker_subtype(st)
-        {
-            sel.planeswalker_subtype = Some(pw);
-        } else if let Some(ct) = vocabulary.resolve_label(st) {
-            sel.creature_subtype = Some(ct);
-        } else if let Some(lt) = parse_land_subtype(st) {
-            sel.land_subtype = Some(lt);
-        } else if let Some(at) = ArtifactSubtype::from_wire_label(st) {
-            sel.artifact_subtype = Some(at);
-        } else if let Some(pw) = parse_planeswalker_subtype(st) {
-            sel.planeswalker_subtype = Some(pw);
-        } else {
-            return Err("oracle:selector-unknown-subtype");
-        }
     }
-    if let Some(fst) = f.forbidden_subtypes.first() {
+    if f.forbidden_subtypes.len() == 1 {
+        let fst = &f.forbidden_subtypes[0];
         if fst.eq_ignore_ascii_case("aura") {
             sel.exclude_auras = true;
         } else if let Some(ct) = vocabulary.resolve_label(fst) {
             sel.forbidden_creature_subtype = Some(ct);
+        } else if let Some(sub) = resolve_selector_subtype(fst, f.any_types, vocabulary) {
+            sel.forbidden_subtypes.insert(sub);
         } else {
             return Err("oracle:selector-unknown-forbidden-subtype");
+        }
+    } else if f.forbidden_subtypes.len() > 1 {
+        for fst in &f.forbidden_subtypes {
+            let sub = resolve_selector_subtype(fst, f.any_types, vocabulary)
+                .ok_or("oracle:selector-unknown-forbidden-subtype")?;
+            sel.forbidden_subtypes.insert(sub);
         }
     }
 
     // Color
     sel.color = lower_color_filter(f.any_colors, f.forbidden_colors, f.color_arity)?;
 
-    // Controller
+    // Controller & owner
     sel.controller = match f.controller {
         None => ControllerSelector::Any,
         Some(ControllerRelation::You) => ControllerSelector::SourceController,
         Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
             ControllerSelector::Opponents
         }
+        Some(ControllerRelation::OwnerYou) => ControllerSelector::OwnerIsSourceController,
+        Some(ControllerRelation::OwnerOpponent) => ControllerSelector::OwnerIsOpponent,
+        _ => return Err("oracle:selector-unsupported-controller"),
+    };
+    sel.owner = match f.owner {
+        None => None,
+        Some(ControllerRelation::You | ControllerRelation::OwnerYou) => {
+            Some(OwnerSelector::SourceController)
+        }
+        Some(
+            ControllerRelation::Opponent
+            | ControllerRelation::Opponents
+            | ControllerRelation::OwnerOpponent,
+        ) => Some(OwnerSelector::Opponents),
         _ => return Err("oracle:selector-unsupported-controller"),
     };
     for pred in &f.predicates {
@@ -429,6 +596,15 @@ pub(super) fn lower_filter_to_permanent_selector(
             }
             _ => return Err("oracle:unsupported-selector-predicate"),
         }
+    }
+    if sel.without_counters
+        && (sel.any_counter
+            || sel.plus_one_counter
+            || sel.minus_one_counter
+            || sel.minimum_plus_one_counters > 0
+            || sel.required_counter_kind.is_some())
+    {
+        return Err("oracle:unsupported-selector-predicate");
     }
     Ok(sel)
 }
@@ -2837,11 +3013,27 @@ fn set_clause_source_relation(
     slot: &mut SourceRelation,
     rel: SourceRelation,
 ) -> Result<(), &'static str> {
-    if *slot != SourceRelation::Any && *slot != rel {
-        return Err("oracle:unsupported-object-filter");
+    match (*slot, rel) {
+        (SourceRelation::Any, r) => {
+            *slot = r;
+            Ok(())
+        }
+        (a, b) if a == b => Ok(()),
+        (SourceRelation::OtherThanAbilitySource, SourceRelation::SharingNameWithAbilitySource)
+        | (SourceRelation::SharingNameWithAbilitySource, SourceRelation::OtherThanAbilitySource)
+        | (
+            SourceRelation::OtherThanAbilitySourceSharingName,
+            SourceRelation::OtherThanAbilitySource | SourceRelation::SharingNameWithAbilitySource,
+        )
+        | (
+            SourceRelation::OtherThanAbilitySource | SourceRelation::SharingNameWithAbilitySource,
+            SourceRelation::OtherThanAbilitySourceSharingName,
+        ) => {
+            *slot = SourceRelation::OtherThanAbilitySourceSharingName;
+            Ok(())
+        }
+        _ => Err("oracle:unsupported-object-filter"),
     }
-    *slot = rel;
-    Ok(())
 }
 
 fn set_clause_combat_filter(
@@ -2961,15 +3153,11 @@ fn intersect_object_clauses(
     } else {
         return Err("oracle:unsupported-filter-predicate");
     };
-    let source_relation = if base.source_relation == SourceRelation::Any {
-        extra.source_relation
-    } else if extra.source_relation == SourceRelation::Any
-        || base.source_relation == extra.source_relation
-    {
-        base.source_relation
-    } else {
-        return Err("oracle:unsupported-filter-predicate");
-    };
+    let mut source_relation = base.source_relation;
+    if extra.source_relation != SourceRelation::Any {
+        set_clause_source_relation(&mut source_relation, extra.source_relation)
+            .map_err(|_| "oracle:unsupported-filter-predicate")?;
+    }
     let color = if base.color == ObjectColorFilter::Any {
         extra.color
     } else if extra.color == ObjectColorFilter::Any || base.color == extra.color {
@@ -3041,6 +3229,37 @@ fn intersect_object_clauses(
     {
         return Err("oracle:unsupported-filter-predicate");
     }
+    let required_counter_kind = match (base.required_counter_kind, extra.required_counter_kind) {
+        (None, k) | (k, None) => k,
+        (Some(a), Some(b)) if a == b => Some(a),
+        _ => return Err("oracle:unsupported-filter-predicate"),
+    };
+    let forbidden_counter_kind = match (base.forbidden_counter_kind, extra.forbidden_counter_kind) {
+        (None, k) | (k, None) => k,
+        (Some(a), Some(b)) if a == b => Some(a),
+        _ => return Err("oracle:unsupported-filter-predicate"),
+    };
+    if required_counter_kind.is_some()
+        && (required_counter_kind == forbidden_counter_kind
+            || flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS))
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    if forbidden_counter_kind == Some(CounterKind::PlusOne)
+        && flags.contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    if forbidden_counter_kind == Some(CounterKind::MinusOne)
+        && flags.contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    let exact_name = match (base.exact_name, extra.exact_name) {
+        (None, n) | (n, None) => n,
+        (Some(a), Some(b)) if a == b => Some(a),
+        _ => return Err("oracle:unsupported-filter-predicate"),
+    };
     Ok(ObjectClause {
         any_types,
         required_types,
@@ -3061,6 +3280,9 @@ fn intersect_object_clauses(
         tapped,
         token,
         flags,
+        required_counter_kind,
+        forbidden_counter_kind,
+        exact_name,
     })
 }
 
@@ -3073,6 +3295,7 @@ pub(super) fn lower_object_filter(
     }
     let mut clause = ObjectClause::any();
     if let Some(named) = &f.named {
+        use spellwake_engine::program::ExactNameKey;
         use spellwake_oracle_compiler::ast::NameFilterAst;
         match named {
             NameFilterAst::SelfName => {
@@ -3081,9 +3304,12 @@ pub(super) fn lower_object_filter(
                     SourceRelation::SharingNameWithAbilitySource,
                 )?;
             }
-            NameFilterAst::Exact(_)
-            | NameFilterAst::SameAsReferenced
-            | NameFilterAst::SameAs(_) => {
+            NameFilterAst::Exact(name) => {
+                let key =
+                    ExactNameKey::from_name(name).ok_or("oracle:unsupported-object-filter")?;
+                clause.exact_name = Some(key);
+            }
+            NameFilterAst::SameAsReferenced | NameFilterAst::SameAs(_) => {
                 return Err("oracle:unsupported-object-filter");
             }
         }
@@ -3518,28 +3744,42 @@ pub(super) fn lower_object_filter(
             return Err("oracle:unsupported-object-filter");
         }
         let ck = ck_raw.trim().to_ascii_lowercase();
+        let ck_clean = ck
+            .trim_end_matches(" counters")
+            .trim_end_matches(" counter")
+            .trim();
         if has_without_flag {
-            match ck.as_str() {
-                "any" | "a" | "one or more" | "none" | "no" => {
+            match ck_clean {
+                "" | "any" | "a" | "one or more" | "none" | "no" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITHOUT_COUNTERS);
                 }
-                _ => return Err("oracle:unsupported-object-filter"),
+                other => {
+                    let kind = parse_counter_kind(other)
+                        .filter(|k| k.is_permanent())
+                        .ok_or("oracle:unsupported-object-filter")?;
+                    clause.forbidden_counter_kind = Some(kind);
+                }
             }
         } else {
-            match ck.as_str() {
+            match ck_clean {
                 "+1/+1" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
                 }
                 "-1/-1" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER);
                 }
-                "any" | "a" | "one or more" => {
+                "" | "any" | "a" | "one or more" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITH_ANY_COUNTER);
                 }
                 "none" | "no" => {
                     clause = clause.with_flags(ObjectFilterFlags::WITHOUT_COUNTERS);
                 }
-                _ => return Err("oracle:unsupported-object-filter"),
+                other => {
+                    let kind = parse_counter_kind(other)
+                        .filter(|k| k.is_permanent())
+                        .ok_or("oracle:unsupported-object-filter")?;
+                    clause.required_counter_kind = Some(kind);
+                }
             }
         }
     } else {
@@ -4039,7 +4279,108 @@ pub(super) fn lower_object_filter(
                         clause.flags = clause.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
                     }
                     other => {
-                        if let Some(rest) = other.strip_prefix("with ")
+                        if let Some(ck_raw) = extract_state_qual_counter_kind(other) {
+                            let ck = ck_raw.trim().to_ascii_lowercase();
+                            match ck.as_str() {
+                                "+1/+1" => {
+                                    if clause.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS)
+                                        || clause.forbidden_counter_kind
+                                            == Some(CounterKind::PlusOne)
+                                    {
+                                        return Err("oracle:unsupported-filter-predicate");
+                                    }
+                                    clause.flags = clause
+                                        .flags
+                                        .union(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
+                                }
+                                "-1/-1" => {
+                                    if clause.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS)
+                                        || clause.forbidden_counter_kind
+                                            == Some(CounterKind::MinusOne)
+                                    {
+                                        return Err("oracle:unsupported-filter-predicate");
+                                    }
+                                    clause.flags = clause
+                                        .flags
+                                        .union(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER);
+                                }
+                                "" | "any" | "a" | "one or more" => {
+                                    if clause.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS) {
+                                        return Err("oracle:unsupported-filter-predicate");
+                                    }
+                                    clause.flags =
+                                        clause.flags.union(ObjectFilterFlags::WITH_ANY_COUNTER);
+                                }
+                                kind_str => {
+                                    let kind = parse_counter_kind(kind_str)
+                                        .filter(|k| k.is_permanent())
+                                        .ok_or("oracle:unsupported-filter-predicate")?;
+                                    if clause.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS)
+                                        || clause.forbidden_counter_kind == Some(kind)
+                                        || clause
+                                            .required_counter_kind
+                                            .is_some_and(|prev| prev != kind)
+                                    {
+                                        return Err("oracle:unsupported-filter-predicate");
+                                    }
+                                    clause.required_counter_kind = Some(kind);
+                                }
+                            }
+                        } else if let Some(body) = other
+                            .strip_prefix("without ")
+                            .or_else(|| other.strip_prefix("that doesn't have "))
+                            .or_else(|| other.strip_prefix("that don't have "))
+                            .and_then(|s| {
+                                s.strip_suffix(" on it")
+                                    .or_else(|| s.strip_suffix(" on them"))
+                            })
+                            .and_then(|s| {
+                                s.strip_suffix(" counters")
+                                    .or_else(|| s.strip_suffix(" counter"))
+                            })
+                        {
+                            let ck = body
+                                .strip_prefix("any ")
+                                .or_else(|| body.strip_prefix("a "))
+                                .or_else(|| body.strip_prefix("an "))
+                                .unwrap_or(body)
+                                .trim();
+                            if matches!(ck, "" | "any" | "a" | "one or more") {
+                                if clause.flags.contains(ObjectFilterFlags::WITH_ANY_COUNTER)
+                                    || clause
+                                        .flags
+                                        .contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)
+                                    || clause
+                                        .flags
+                                        .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+                                    || clause.required_counter_kind.is_some()
+                                {
+                                    return Err("oracle:unsupported-filter-predicate");
+                                }
+                                clause.flags =
+                                    clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+                            } else {
+                                let kind = parse_counter_kind(ck)
+                                    .filter(|k| k.is_permanent())
+                                    .ok_or("oracle:unsupported-filter-predicate")?;
+                                if clause.required_counter_kind == Some(kind)
+                                    || (kind == CounterKind::PlusOne
+                                        && clause
+                                            .flags
+                                            .contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER))
+                                    || (kind == CounterKind::MinusOne
+                                        && clause
+                                            .flags
+                                            .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER))
+                                    || clause
+                                        .forbidden_counter_kind
+                                        .is_some_and(|prev| prev != kind)
+                                {
+                                    return Err("oracle:unsupported-filter-predicate");
+                                }
+                                clause.forbidden_counter_kind = Some(kind);
+                            }
+                        } else if let Some(rest) = other.strip_prefix("with ")
                             && let Some(kw) = lower_keyword_ability_name(rest)
                             && clause.keyword.is_none_or(|prev| prev == kw)
                             && clause.forbidden_keyword != Some(kw)
@@ -4061,9 +4402,39 @@ pub(super) fn lower_object_filter(
         }
     }
 
+    let resolve_single_subtype_atom =
+        |st: &str| -> Option<spellwake_engine::program::SingleSubtype> {
+            use spellwake_engine::program::SingleSubtype;
+            if f.any_types == AstCardTypeMask::PLANESWALKER
+                && let Some(pw) = parse_planeswalker_subtype(st)
+            {
+                Some(SingleSubtype::Planeswalker(pw))
+            } else if st.eq_ignore_ascii_case("aura") {
+                Some(SingleSubtype::Aura)
+            } else if let Some(ct) = vocabulary.resolve_label(st) {
+                Some(SingleSubtype::Creature(ct))
+            } else if let Some(lt) = parse_land_subtype(st) {
+                Some(SingleSubtype::Land(lt))
+            } else if let Some(at) = ArtifactSubtype::from_wire_label(st) {
+                Some(SingleSubtype::Artifact(at))
+            } else if let Some(et) = EnchantmentSubtype::from_wire_label(st) {
+                Some(SingleSubtype::Enchantment(et))
+            } else {
+                match st.trim().to_ascii_lowercase().as_str() {
+                    "arcane" => Some(SingleSubtype::Spell(SpellSubtype::Arcane)),
+                    "lesson" => Some(SingleSubtype::Spell(SpellSubtype::Lesson)),
+                    "adventure" => Some(SingleSubtype::Spell(SpellSubtype::Adventure)),
+                    "trap" => Some(SingleSubtype::Spell(SpellSubtype::Trap)),
+                    "omen" => Some(SingleSubtype::Spell(SpellSubtype::Omen)),
+                    _ => parse_planeswalker_subtype(st).map(SingleSubtype::Planeswalker),
+                }
+            }
+        };
+
     // Forbidden subtypes
     let mut forb_creature_types = Vec::new();
     let mut forb_land_types = Vec::new();
+    let mut forb_other_atoms = Vec::new();
     for fst in &f.forbidden_subtypes {
         if fst.eq_ignore_ascii_case("aura") {
             clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
@@ -4073,12 +4444,38 @@ pub(super) fn lower_object_filter(
             forb_creature_types.push(ct);
         } else if let Some(lt) = parse_land_subtype(fst) {
             forb_land_types.push(lt);
+        } else if let Some(atom) = resolve_single_subtype_atom(fst) {
+            forb_other_atoms.push(atom);
         } else {
             return Err("oracle:unsupported-forbidden-subtype");
         }
     }
-    if !forb_land_types.is_empty() {
-        if clause.subtypes != SubtypeFilter::Any || !forb_creature_types.is_empty() {
+    let has_mixed_forbidden = (!forb_other_atoms.is_empty())
+        || (!forb_land_types.is_empty() && !forb_creature_types.is_empty())
+        || forb_creature_types.len() > 3;
+    if has_mixed_forbidden {
+        if clause.subtypes != SubtypeFilter::Any {
+            return Err("oracle:multi-subtype-filter");
+        }
+        let mut all_forb = Vec::with_capacity(
+            forb_creature_types.len() + forb_land_types.len() + forb_other_atoms.len(),
+        );
+        all_forb.extend(
+            forb_creature_types
+                .into_iter()
+                .map(spellwake_engine::program::SingleSubtype::Creature),
+        );
+        all_forb.extend(
+            forb_land_types
+                .into_iter()
+                .map(spellwake_engine::program::SingleSubtype::Land),
+        );
+        all_forb.extend(forb_other_atoms);
+        let list = spellwake_engine::program::SubtypeList::from_slice(&all_forb)
+            .ok_or("oracle:too-many-subtypes")?;
+        clause.subtypes = SubtypeFilter::NoneOfList(list);
+    } else if !forb_land_types.is_empty() {
+        if clause.subtypes != SubtypeFilter::Any {
             return Err("oracle:multi-subtype-filter");
         }
         clause.subtypes = match forb_land_types.as_slice() {
@@ -4088,8 +4485,7 @@ pub(super) fn lower_object_filter(
                 SubtypeFilter::NotLandMask(mask)
             }
         };
-    }
-    if !forb_creature_types.is_empty() {
+    } else if !forb_creature_types.is_empty() {
         if clause.subtypes != SubtypeFilter::Any {
             return Err("oracle:multi-subtype-filter");
         }
@@ -4097,36 +4493,22 @@ pub(super) fn lower_object_filter(
             [a] => SubtypeFilter::Lacks(*a),
             [a, b] => SubtypeFilter::NoneOf([*a, *b, *b]),
             [a, b, c] => SubtypeFilter::NoneOf([*a, *b, *c]),
-            _ => return Err("oracle:multi-subtype-filter"),
+            _ => unreachable!(),
         };
     }
 
     // Positive subtypes
     let resolve_single_subtype = |st: &str| -> Option<SubtypeFilter> {
-        if f.any_types == AstCardTypeMask::PLANESWALKER
-            && let Some(pw) = parse_planeswalker_subtype(st)
-        {
-            Some(SubtypeFilter::Planeswalker(pw))
-        } else if st.eq_ignore_ascii_case("aura") {
-            Some(SubtypeFilter::Aura)
-        } else if let Some(ct) = vocabulary.resolve_label(st) {
-            Some(SubtypeFilter::Has(ct))
-        } else if let Some(lt) = parse_land_subtype(st) {
-            Some(SubtypeFilter::Land(lt))
-        } else if let Some(at) = ArtifactSubtype::from_wire_label(st) {
-            Some(SubtypeFilter::Artifact(at))
-        } else if let Some(et) = EnchantmentSubtype::from_wire_label(st) {
-            Some(SubtypeFilter::Enchantment(et))
-        } else {
-            match st.trim().to_ascii_lowercase().as_str() {
-                "arcane" => Some(SubtypeFilter::Spell(SpellSubtype::Arcane)),
-                "lesson" => Some(SubtypeFilter::Spell(SpellSubtype::Lesson)),
-                "adventure" => Some(SubtypeFilter::Spell(SpellSubtype::Adventure)),
-                "trap" => Some(SubtypeFilter::Spell(SpellSubtype::Trap)),
-                "omen" => Some(SubtypeFilter::Spell(SpellSubtype::Omen)),
-                _ => parse_planeswalker_subtype(st).map(SubtypeFilter::Planeswalker),
-            }
-        }
+        use spellwake_engine::program::SingleSubtype;
+        resolve_single_subtype_atom(st).map(|atom| match atom {
+            SingleSubtype::Creature(ct) => SubtypeFilter::Has(ct),
+            SingleSubtype::Land(lt) => SubtypeFilter::Land(lt),
+            SingleSubtype::Artifact(at) => SubtypeFilter::Artifact(at),
+            SingleSubtype::Enchantment(et) => SubtypeFilter::Enchantment(et),
+            SingleSubtype::Planeswalker(pw) => SubtypeFilter::Planeswalker(pw),
+            SingleSubtype::Spell(sp) => SubtypeFilter::Spell(sp),
+            SingleSubtype::Aura => SubtypeFilter::Aura,
+        })
     };
     if f.subtypes.len() == 1 {
         if clause.subtypes != SubtypeFilter::Any {
@@ -4139,39 +4521,34 @@ pub(super) fn lower_object_filter(
             return Err("oracle:mixed-subtype-filter");
         }
         if !subtypes_match_any {
+            // Stage 1 currently drops `"and"` between plural subtype lists (`Mounts and Vehicles`,
+            // `Auras and Equipment`) without emitting `SubtypesMatchAny`, making them
+            // indistinguishable in the AST from conjunctive compound subtypes (`Eldrazi Spawn`,
+            // `Spider Hero`) or two-object costs (`a Swamp and a Forest`). Fail closed until
+            // Stage 1 explicitly distinguishes disjunction from conjunction.
             return Err("oracle:unsupported-multi-subtype");
-        }
-        if let Some(land_mask) = f.subtypes.iter().try_fold(0u32, |acc, st| {
+        } else if let Some(land_mask) = f.subtypes.iter().try_fold(0u32, |acc, st| {
             parse_land_subtype(st).map(|lt| acc | lt.bit())
         }) {
             clause.subtypes = SubtypeFilter::AnyLandMask(land_mask);
-        } else if f.subtypes.len() == 2 {
-            if mana_value_pair.is_some() || any_of_pair.is_some() || keyword_pair.is_some() {
-                return Err("oracle:unsupported-filter-predicate");
-            }
-            if let (Some(sa), Some(sb)) = (
-                resolve_single_subtype(&f.subtypes[0]),
-                resolve_single_subtype(&f.subtypes[1]),
-            ) {
-                let mut c1 = clause;
-                let mut c2 = clause;
-                c1.subtypes = sa;
-                c2.subtypes = sb;
-                return Ok(ObjectFilter::either(c1, c2));
-            }
-            return Err("oracle:unsupported-multi-subtype");
-        } else if f.subtypes.len() == 3 {
-            if let (Some(a), Some(b), Some(c)) = (
+        } else if f.subtypes.len() == 3
+            && let (Some(a), Some(b), Some(c)) = (
                 vocabulary.resolve_label(&f.subtypes[0]),
                 vocabulary.resolve_label(&f.subtypes[1]),
                 vocabulary.resolve_label(&f.subtypes[2]),
-            ) {
-                clause.subtypes = SubtypeFilter::AnyOf([a, b, c]);
-            } else {
-                return Err("oracle:unsupported-multi-subtype");
-            }
+            )
+        {
+            clause.subtypes = SubtypeFilter::AnyOf([a, b, c]);
         } else {
-            return Err("oracle:too-many-subtypes");
+            let atoms: Vec<_> = f
+                .subtypes
+                .iter()
+                .map(|st| resolve_single_subtype_atom(st))
+                .collect::<Option<Vec<_>>>()
+                .ok_or("oracle:unsupported-multi-subtype")?;
+            let list = spellwake_engine::program::SubtypeList::from_slice(&atoms)
+                .ok_or("oracle:too-many-subtypes")?;
+            clause.subtypes = SubtypeFilter::AnyOfList(list);
         }
     }
 
@@ -5098,6 +5475,9 @@ fn turn_record_filter_supported(filter: ObjectFilter, allow_artifact_subtypes: b
             && c.mana_value == ManaValueFilter::Any
             && c.flags == empty_flags
             && c.source_relation == SourceRelation::Any
+            && c.exact_name.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
     };
     let (a, b) = filter.clauses();
     clause_ok(a) && b.is_none_or(clause_ok)

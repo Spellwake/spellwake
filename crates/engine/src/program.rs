@@ -340,8 +340,9 @@ use control::FlowFacts;
 pub use control::{Comparison, ResolutionCondition};
 pub use object_filter::{
     CardTypeMask, ColorMask, CombatFilter, ControllerFilter, DynamicStatAnchor, EffectSubject,
-    ManaValueFilter, ObjectClause, ObjectColorFilter, ObjectFilter, ObjectFilterFlags, PowerFilter,
-    SourceRelation, SubtypeFilter, SupertypeMask, ToughnessFilter,
+    ExactNameKey, ManaValueFilter, ObjectClause, ObjectColorFilter, ObjectFilter,
+    ObjectFilterFlags, PowerFilter, SingleSubtype, SourceRelation, SubtypeFilter, SubtypeList,
+    SupertypeMask, ToughnessFilter,
 };
 pub use spell_filter::{SpellCastZoneFilter, SpellFilter, SpellSpecialFilter, SpellTargetShape};
 pub use trigger_spec::{

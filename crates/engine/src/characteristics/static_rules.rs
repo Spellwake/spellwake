@@ -2,9 +2,10 @@
 //! damage/draw/untap rules, restrictions, battlefield modifiers, and Conspiracy command-zone agendas.
 use super::{
     BlockingRestriction, CharacteristicDefinitionError, CreatureTypeTextChange,
-    DefiningCreatureTypes, DefiningPart, DefiningParts, PermanentSelector, StaticAbilityId,
-    StaticPart, StaticParts, StaticSubtypeOperand, StaticTypeChange, SubtypeOperation,
-    TypeOperation, validate_battlefield_types, validate_buckets, validate_subtypes,
+    DefiningCreatureTypes, DefiningPart, DefiningParts, PermanentSelector, SelectorSubtype,
+    StaticAbilityId, StaticPart, StaticParts, StaticSubtypeOperand, StaticTypeChange,
+    SubtypeOperation, TypeOperation, validate_battlefield_types, validate_buckets,
+    validate_subtypes,
 };
 use crate::{
     land::NonlandCardNames,
@@ -1182,6 +1183,15 @@ impl StaticContinuousAbility {
                     if sel.any_creature_subtypes.remove(&change.from) {
                         sel.any_creature_subtypes.insert(change.to);
                     }
+                    for set in [
+                        &mut sel.required_subtypes,
+                        &mut sel.any_subtypes,
+                        &mut sel.forbidden_subtypes,
+                    ] {
+                        if set.remove(&SelectorSubtype::Creature(change.from)) {
+                            set.insert(SelectorSubtype::Creature(change.to));
+                        }
+                    }
                 }
                 _ => {}
             },
@@ -1209,6 +1219,15 @@ impl StaticContinuousAbility {
                         }
                         if sel.any_creature_subtypes.remove(&change.from) {
                             sel.any_creature_subtypes.insert(change.to);
+                        }
+                        for set in [
+                            &mut sel.required_subtypes,
+                            &mut sel.any_subtypes,
+                            &mut sel.forbidden_subtypes,
+                        ] {
+                            if set.remove(&SelectorSubtype::Creature(change.from)) {
+                                set.insert(SelectorSubtype::Creature(change.to));
+                            }
                         }
                     }
                 }

@@ -3383,6 +3383,8 @@ enum Controller {
     SourcePair,
     Any,
     Source,
+    OwnerIsSourceController,
+    OwnerIsOpponent,
 }
 impl TryFrom<String> for Controller {
     type Error = String;
@@ -3394,6 +3396,8 @@ impl TryFrom<String> for Controller {
             "SelfAtMaxSpeed" => Ok(Self::SelfAtMaxSpeed),
             "SourcePair" => Ok(Self::SourcePair),
             "SourceController" => Ok(Self::Source),
+            "OwnerIsSourceController" => Ok(Self::OwnerIsSourceController),
+            "OwnerIsOpponent" => Ok(Self::OwnerIsOpponent),
             _ => Err(format!("unknown selector controller {value}")),
         }
     }
@@ -3484,6 +3488,8 @@ impl Selector {
                 Controller::SelfAtMaxSpeed => ControllerSelector::SelfAtMaxSpeed,
                 Controller::SourcePair => ControllerSelector::SourcePair,
                 Controller::Source => ControllerSelector::SourceController,
+                Controller::OwnerIsSourceController => ControllerSelector::OwnerIsSourceController,
+                Controller::OwnerIsOpponent => ControllerSelector::OwnerIsOpponent,
             },
             combat_role: match self.combat_role.as_deref() {
                 None => None,
@@ -9073,6 +9079,8 @@ fn selector(value: &PermanentSelector) -> Value {
             ControllerSelector::SourceController => "SourceController",
             ControllerSelector::Opponents => "Opponents",
             ControllerSelector::EnchantedPlayer => "EnchantedPlayer",
+            ControllerSelector::OwnerIsSourceController => "OwnerIsSourceController",
+            ControllerSelector::OwnerIsOpponent => "OwnerIsOpponent",
         },
         "exclude_source":value.exclude_source,
     });

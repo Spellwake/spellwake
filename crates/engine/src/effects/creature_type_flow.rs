@@ -84,7 +84,13 @@ fn matches_compact_clause(
     subtypes: &BTreeSet<CreatureTypeId>,
     artifact_subtypes: Option<&BTreeSet<crate::program::ArtifactSubtype>>,
 ) -> bool {
-    use crate::program::{ObjectFilterFlags, SubtypeFilter, Supertype};
+    use crate::program::{ObjectFilterFlags, SingleSubtype, SubtypeFilter, Supertype};
+    if clause.exact_name.is_some()
+        || clause.required_counter_kind.is_some()
+        || clause.forbidden_counter_kind.is_some()
+    {
+        return false;
+    }
     if !clause.any_types.is_empty() && (types.bits() & clause.any_types.bits()) == 0 {
         return false;
     }
@@ -111,6 +117,21 @@ fn matches_compact_clause(
         SubtypeFilter::AnyOf(cts) => cts.iter().any(|ct| subtypes.contains(ct)),
         SubtypeFilter::NoneOf(cts) => cts.iter().all(|ct| !subtypes.contains(ct)),
         SubtypeFilter::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(&art)),
+        SubtypeFilter::AnyOfList(list) => list.iter().any(|item| match item {
+            SingleSubtype::Creature(ct) => subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(art)),
+            _ => false,
+        }),
+        SubtypeFilter::AllOfList(list) => list.iter().all(|item| match item {
+            SingleSubtype::Creature(ct) => subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(art)),
+            _ => false,
+        }),
+        SubtypeFilter::NoneOfList(list) => list.iter().all(|item| match item {
+            SingleSubtype::Creature(ct) => !subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| !set.contains(art)),
+            _ => false,
+        }),
         _ => false,
     };
     if !subtype_ok {
