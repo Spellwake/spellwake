@@ -663,7 +663,7 @@ impl EffectWindow {
             None
         };
         let permanent_targets = if ability != ExileCastAbility::Impulse
-            && matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures] || spell.body.has_x_target_count())
+            && matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures] || spell.body.has_x_target_count() || spell.body.has_up_to_x_target_count())
         {
             // Without paying its mana cost X must be zero, so the spell has no targets.
             Some(ExilePermanentTargets {

@@ -1845,13 +1845,17 @@ pub(super) fn lower_modify_pt_part(
         }
         SubjectRefAst::TargetObject {
             filter,
-            count: TargetCountAst::ChosenX,
+            count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
         } if filter.zone.is_none() && !in_trigger => {
             let bt = lower_battlefield_body_target_in_context_local(
                 filter, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder.x_target_count = true;
+            if *tc == TargetCountAst::UpToX {
+                builder.up_to_x_target_count = true;
+            } else {
+                builder.x_target_count = true;
+            }
             builder
                 .instructions
                 .push(Instruction::AffectPermanentTargets {
@@ -1937,13 +1941,17 @@ pub(super) fn lower_modify_pt_part(
         }
         SubjectRefAst::TargetOneOf {
             options,
-            count: TargetCountAst::ChosenX,
+            count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
         } if !in_trigger => {
             let bt = lower_target_one_of_permanent_body_target_local(
                 options, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder.x_target_count = true;
+            if *tc == TargetCountAst::UpToX {
+                builder.up_to_x_target_count = true;
+            } else {
+                builder.x_target_count = true;
+            }
             builder
                 .instructions
                 .push(Instruction::AffectPermanentTargets {
@@ -3013,7 +3021,11 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
                 return false;
             }
             match zone {
-                ValueZone::Battlefield | ValueZone::AllGraveyards | ValueZone::Exile(None) => true,
+                ValueZone::Battlefield
+                | ValueZone::AllGraveyards
+                | ValueZone::AllHands
+                | ValueZone::OpponentsHands
+                | ValueZone::Exile(None) => true,
                 ValueZone::Hand(r)
                 | ValueZone::Graveyard(r)
                 | ValueZone::Library(r)

@@ -1343,6 +1343,11 @@ fn select_affected(
                         .as_ref()
                         .is_some_and(|pt| pt.derived.toughness <= max.into())
                 }))
+                && (!selector.toughness_greater_than_power
+                    || object
+                        .power_toughness
+                        .as_ref()
+                        .is_some_and(|pt| pt.derived.toughness > pt.derived.power))
                 && selector
                     .min_mana_value
                     .is_none_or(|min| object.defined.mana_value >= i64::from(min).into())

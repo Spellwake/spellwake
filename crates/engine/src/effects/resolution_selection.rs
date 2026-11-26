@@ -3088,6 +3088,7 @@ impl EffectWindow {
             | Instruction::LookTopChoose { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
@@ -3126,6 +3127,8 @@ impl EffectWindow {
             | Instruction::Demonstrate
             | Instruction::Enlist
             | Instruction::AttachPermanent { .. }
+            | Instruction::UnattachSubject { .. }
+            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
@@ -3515,6 +3518,11 @@ impl EffectWindow {
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::EmpowerJace { .. }
+            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::RegenerateSubject { .. }
@@ -6498,6 +6506,8 @@ impl EffectWindow {
             ) {
                 cursor.results.revealed_top_types = cursor.results.moved_library_types.clone();
                 cursor.results.revealed_top_card = ordered.first().map(|(m, _)| m.after.id());
+                cursor.results.last_moved_objects =
+                    ordered.iter().map(|(m, _)| m.after.id()).collect();
             }
         }
         if let ResolutionSelectionOperation::MillEachPlayer { amount, segments } = operation {

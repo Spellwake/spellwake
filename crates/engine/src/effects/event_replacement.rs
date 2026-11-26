@@ -158,6 +158,7 @@ impl EffectWindow {
                 && matches!(
                     &active.rule,
                     crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        | crate::program::TemporaryRuleKind::OneShotEventReplacement(ab)
                         | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
                             ability: ab,
                             ..
@@ -832,9 +833,186 @@ impl EffectWindow {
         if !self.active_event_replacements.insert(key) {
             return Ok(());
         }
+        for active in &mut self.temporary_rules {
+            if !active.consumed
+                && active.source_object == rep.source
+                && matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::OneShotEventReplacement(ab)
+                        if ab.id() == rep.ability
+                )
+            {
+                active.consumed = true;
+                break;
+            }
+        }
         let result = self.run_inline_replacement_body(rep, event_amount.as_ref(), cause, append);
         self.active_event_replacements.remove(&key);
         result
+    }
+
+    /// Check active `ReplaceableEvent::LoseGame` replacements (static, temporary, or one-shot)
+    /// for `player`. Returns `Ok(true)` if the loss was replaced (and any inline replacement body
+    /// executed), or `Ok(false)` if the player still loses.
+    pub(super) fn try_replace_player_loss(
+        &mut self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<bool, EffectError> {
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), player)?;
+        let relation_applies = |rel: AffectedPlayers, ctrl: SeatId| match rel {
+            AffectedPlayers::One(ResolvingPlayer::Controller) => player == ctrl,
+            AffectedPlayers::EachOpponent | AffectedPlayers::EachOtherPlayer => {
+                opponents.contains(&ctrl)
+            }
+            AffectedPlayers::EachPlayer | AffectedPlayers::One(_) => true,
+        };
+        struct LoseGameReplacementMatch {
+            source: Option<ObjectId>,
+            ability: StaticAbilityId,
+            controller: SeatId,
+            action: StaticReplacementAction,
+            one_shot_idx: Option<usize>,
+        }
+        let mut found: Option<LoseGameReplacementMatch> = None;
+        for perm in evaluated
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(ctrl) = perm.controller else {
+                continue;
+            };
+            for ab in perm
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&perm.printed_text.additional_battlefield_abilities)
+            {
+                let active = perm.abilities.continuous == Some(ab.id())
+                    || perm
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ab.id());
+                if !active {
+                    continue;
+                }
+                if let StaticContinuousAbility::EventReplacement {
+                    id,
+                    event: ReplaceableEvent::LoseGame { player: rel },
+                    condition,
+                    action,
+                } = ab
+                {
+                    let key = (Some(perm.object), *id);
+                    if self.active_event_replacements.contains(&key)
+                        || !relation_applies(*rel, ctrl)
+                    {
+                        continue;
+                    }
+                    let cond_ok = condition.as_deref().is_none_or(|cond| {
+                        self.eval_static_source_condition_at(
+                            evaluated,
+                            cond,
+                            Some(perm.object),
+                            ctrl,
+                            Some(player),
+                        )
+                    });
+                    if cond_ok {
+                        found = Some(LoseGameReplacementMatch {
+                            source: Some(perm.object),
+                            ability: *id,
+                            controller: ctrl,
+                            action: action.clone(),
+                            one_shot_idx: None,
+                        });
+                        break;
+                    }
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        if found.is_none() {
+            for (idx, active) in self.temporary_rules.iter().enumerate() {
+                let Some(ab) = self.active_temporary_static(active, evaluated) else {
+                    continue;
+                };
+                if let StaticContinuousAbility::EventReplacement {
+                    id,
+                    event: ReplaceableEvent::LoseGame { player: rel },
+                    condition,
+                    action,
+                } = ab
+                {
+                    let key = (active.source_object, *id);
+                    if self.active_event_replacements.contains(&key)
+                        || !relation_applies(*rel, active.controller)
+                    {
+                        continue;
+                    }
+                    let cond_ok = condition.as_deref().is_none_or(|cond| {
+                        self.eval_static_source_condition_at(
+                            evaluated,
+                            cond,
+                            active.source_object,
+                            active.controller,
+                            Some(player),
+                        )
+                    });
+                    if cond_ok {
+                        let one_shot_idx = matches!(
+                            &active.rule,
+                            crate::program::TemporaryRuleKind::OneShotEventReplacement(_)
+                        )
+                        .then_some(idx);
+                        found = Some(LoseGameReplacementMatch {
+                            source: active.source_object,
+                            ability: *id,
+                            controller: active.controller,
+                            action: action.clone(),
+                            one_shot_idx,
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        let Some(LoseGameReplacementMatch {
+            source,
+            ability,
+            controller,
+            action,
+            one_shot_idx,
+        }) = found
+        else {
+            return Ok(false);
+        };
+        if let Some(idx) = one_shot_idx {
+            self.temporary_rules[idx].consumed = true;
+        }
+        match action {
+            StaticReplacementAction::Skip => Ok(true),
+            StaticReplacementAction::ReplaceWithBody { body, .. } => {
+                let rep = EventBodyReplacement {
+                    source,
+                    ability,
+                    controller,
+                    affected_player: player,
+                    optional: false,
+                    body: (*body).clone(),
+                };
+                self.execute_inline_replacement_body(&rep, cause, append)?;
+                Ok(true)
+            }
+            StaticReplacementAction::ModifyAmount { .. } => Ok(false),
+        }
     }
 
     fn resolve_inline_value_expr(

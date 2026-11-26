@@ -192,6 +192,7 @@ fn entry_tap_wire_supported(tap: EntryTap) -> bool {
         | EntryTap::SiegeProtector
         | EntryTap::ChosenOpponentControls
         | EntryTap::UnlessRevealHandLandType(_, _)
+        | EntryTap::UnlessRevealHandSubtype { .. }
         | EntryTap::UnlessPayLife(_) => true,
     }
 }

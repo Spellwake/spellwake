@@ -20,6 +20,10 @@ pub enum ValueZone {
     Hand(ResolvingPlayer),
     /// All players' graveyards combined.
     AllGraveyards,
+    /// All players' hands combined.
+    AllHands,
+    /// All opponents' hands combined.
+    OpponentsHands,
     /// Exile (either all cards in exile, or cards owned by a specific resolving player).
     Exile(Option<ResolvingPlayer>),
     /// Cards in a resolving player's library.
@@ -150,6 +154,8 @@ pub enum SourceStateExpr {
     Solved,
     /// `1` if the ability source is prepared, else `0`.
     Prepared,
+    /// `1` if entry option index `u8` was chosen as the ability source entered, else `0`.
+    EntryOptionChosen(u8),
     /// `1` if the ability source is goaded, else `0`.
     Goaded,
     /// `1` if the ability source was exerted this turn, else `0`.
@@ -847,9 +853,11 @@ impl ValueExpr {
                 controller_scope,
             } => {
                 let zone_ok = match *zone {
-                    ValueZone::Battlefield | ValueZone::AllGraveyards | ValueZone::Exile(None) => {
-                        true
-                    }
+                    ValueZone::Battlefield
+                    | ValueZone::AllGraveyards
+                    | ValueZone::AllHands
+                    | ValueZone::OpponentsHands
+                    | ValueZone::Exile(None) => true,
                     ValueZone::Graveyard(p)
                     | ValueZone::Hand(p)
                     | ValueZone::Library(p)
@@ -929,6 +937,8 @@ impl ValueExpr {
                     let zone_ok = match *zone {
                         ValueZone::Battlefield
                         | ValueZone::AllGraveyards
+                        | ValueZone::AllHands
+                        | ValueZone::OpponentsHands
                         | ValueZone::Exile(None) => true,
                         ValueZone::Graveyard(p)
                         | ValueZone::Hand(p)
@@ -1029,9 +1039,11 @@ impl ValueExpr {
                 controller_scope,
             } => {
                 let zone_ok = match *zone {
-                    ValueZone::Battlefield | ValueZone::AllGraveyards | ValueZone::Exile(None) => {
-                        true
-                    }
+                    ValueZone::Battlefield
+                    | ValueZone::AllGraveyards
+                    | ValueZone::AllHands
+                    | ValueZone::OpponentsHands
+                    | ValueZone::Exile(None) => true,
                     ValueZone::Graveyard(p)
                     | ValueZone::Hand(p)
                     | ValueZone::Library(p)
@@ -1116,6 +1128,8 @@ impl ValueExpr {
                     let zone_ok = match *zone {
                         ValueZone::Battlefield
                         | ValueZone::AllGraveyards
+                        | ValueZone::AllHands
+                        | ValueZone::OpponentsHands
                         | ValueZone::Exile(None) => true,
                         ValueZone::Graveyard(p)
                         | ValueZone::Hand(p)
@@ -1200,7 +1214,7 @@ impl ValueExpr {
     }
 
     /// Validate that this expression is world-evaluable and references only valid creature types.
-    pub(crate) fn validate_world_expr(
+    pub fn validate_world_expr(
         &self,
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
@@ -2726,7 +2740,11 @@ impl ValueExpr {
                 let vocab_ok = filter.validate_vocabulary(vocabulary).is_ok();
                 match subject {
                     MatchObjectRef::SacrificedCreature => {
-                        if matches!(context, BodyContext::SacrificedCreature) && vocab_ok {
+                        if matches!(
+                            context,
+                            BodyContext::SacrificedCreature | BodyContext::SacrificedPermanent
+                        ) && vocab_ok
+                        {
                             Ok(())
                         } else {
                             Err(DefinitionError::InvalidInstruction)

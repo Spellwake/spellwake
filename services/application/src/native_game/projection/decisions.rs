@@ -370,7 +370,8 @@ impl Projection<'_, '_> {
                     },
                 )
             }
-            spellwake_engine::land::EntryTap::UnlessRevealHandLandType(_, _) => (
+            spellwake_engine::land::EntryTap::UnlessRevealHandLandType(_, _)
+            | spellwake_engine::land::EntryTap::UnlessRevealHandSubtype { .. } => (
                 DecisionKind::EntryReveal,
                 self.objects_range(candidates, 0, candidates.len().min(1))?,
             ),

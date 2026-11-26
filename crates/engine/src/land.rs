@@ -107,6 +107,11 @@ pub enum EntryTap {
     UnlessLandType(BasicLandType, BasicLandType),
     /// The entering controller may reveal a matching land card from their hand.
     UnlessRevealHandLandType(BasicLandType, BasicLandType),
+    /// The entering controller may reveal a card of `subtype` from their hand (or already control one when `or_control` is true).
+    UnlessRevealHandSubtype {
+        subtype: spellwake_contracts::creature_types::CreatureTypeId,
+        or_control: bool,
+    },
     UnlessTwoOpponents,
     UnlessOpponentLandsEight,
     UnlessPlayerLifeThirteenOrLess,

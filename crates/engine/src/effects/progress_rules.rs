@@ -1327,7 +1327,12 @@ impl EffectWindow {
                 .and_then(|cursor| cursor.manifest_remaining.clone())
             {
                 Some(count) => count,
-                None => self.resolve_value_expr(entry.controller(), amount)?,
+                None => {
+                    if let Some(cur) = self.resolution_cursor_mut() {
+                        cur.results.last_moved_objects.clear();
+                    }
+                    self.resolve_value_expr(entry.controller(), amount)?
+                }
             };
             let next_card = self.window.cards().library(player).first().copied();
             if let Some(card) = next_card
@@ -1867,6 +1872,484 @@ impl EffectWindow {
                             |_, _, _| Ok(changes),
                         )?;
                     }
+                }
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::GrantLastMovedPlayPermission {
+            player,
+            ref filter,
+            duration,
+            free,
+            cast_only,
+            any_color,
+        } = instruction
+        {
+            let chooser = self.resolving_player(player)?;
+            let evaluated = self.evaluated_characteristics()?;
+            let moved: Vec<ObjectId> = self
+                .resolution_cursor()
+                .map(|c| c.results.last_moved_objects.clone())
+                .unwrap_or_default();
+            let play_duration = match duration {
+                crate::characteristics::ResolvedDuration::UntilEndOfTurn
+                | crate::characteristics::ResolvedDuration::UntilEndOfCombat => {
+                    CardPlayDuration::ThroughTurn
+                }
+                crate::characteristics::ResolvedDuration::ThroughControllerNextTurn
+                | crate::characteristics::ResolvedDuration::UntilControllerNextTurn
+                | crate::characteristics::ResolvedDuration::ThroughNextTurn { .. }
+                | crate::characteristics::ResolvedDuration::UntilPlayerNextTurn { .. } => {
+                    if self.window.active_player() == chooser {
+                        CardPlayDuration::ThroughNextOwnTurnSkipCurrent(chooser)
+                    } else {
+                        CardPlayDuration::ThroughNextOwnTurn(chooser)
+                    }
+                }
+                _ => CardPlayDuration::WhileInZone,
+            };
+            let ability_source = match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                StackKind::CardSpell(id) => Some(*id),
+                _ => None,
+            };
+            let mut granted = 0usize;
+            for id in moved {
+                let Some(obj) = self.window.cards().get(id) else {
+                    continue;
+                };
+                if obj.card_id().is_none() {
+                    continue;
+                }
+                let zone = match obj.zone() {
+                    ObjectZone::Exile => CardPlayZone::Exile,
+                    ObjectZone::Graveyard(_) => CardPlayZone::Graveyard,
+                    ObjectZone::Hand(_) => CardPlayZone::Hand,
+                    _ => continue,
+                };
+                if let Some(f) = filter.as_deref() {
+                    let Some(view) = evaluated.get(id) else {
+                        continue;
+                    };
+                    if !self.matches_object_filter(
+                        *f,
+                        view,
+                        entry.controller(),
+                        ability_source,
+                        &BTreeSet::new(),
+                        &evaluated,
+                    ) {
+                        continue;
+                    }
+                }
+                self.card_play_permissions.insert(CardPlayPermission {
+                    zone,
+                    object: id,
+                    player: chooser,
+                    duration: play_duration,
+                    any_color,
+                    free,
+                    cast_only,
+                });
+                granted += 1;
+            }
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = granted > 0;
+                cursor.results.last_action_count = Some(RulesInteger::from_usize(granted));
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::MoveLastMovedFiltered {
+            ref filter,
+            destination,
+        } = instruction
+        {
+            let evaluated = self.evaluated_characteristics()?;
+            let moved: Vec<ObjectId> = self
+                .resolution_cursor()
+                .map(|c| c.results.last_moved_objects.clone())
+                .unwrap_or_default();
+            let ability_source = match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                StackKind::CardSpell(id) => Some(*id),
+                _ => None,
+            };
+            let matched: Vec<ObjectId> = moved
+                .into_iter()
+                .filter(|&id| {
+                    if self.window.cards().get(id).is_none() {
+                        return false;
+                    }
+                    let Some(f) = filter.as_deref() else {
+                        return true;
+                    };
+                    evaluated.get(id).is_some_and(|view| {
+                        self.matches_object_filter(
+                            *f,
+                            view,
+                            entry.controller(),
+                            ability_source,
+                            &BTreeSet::new(),
+                            &evaluated,
+                        )
+                    })
+                })
+                .collect();
+            if !matched.is_empty() {
+                let before_controllers: Vec<SeatId> = matched
+                    .iter()
+                    .filter_map(|&oid| {
+                        self.window
+                            .cards()
+                            .get(oid)
+                            .and_then(|o| o.controller().or(Some(o.owner())))
+                    })
+                    .collect();
+                let moved_ids = self.move_objects_to_subject_destination_ids(
+                    entry,
+                    index,
+                    entry.controller(),
+                    &matched,
+                    destination,
+                    ctx.append,
+                )?;
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
+                    cursor.results.last_action_count =
+                        Some(RulesInteger::from_usize(moved_ids.len()));
+                    cursor.results.last_moved_objects = moved_ids;
+                    cursor.results.last_moved_controllers = before_controllers;
+                }
+            } else if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = false;
+                cursor.results.last_action_count = Some(0.into());
+                cursor.results.last_moved_objects.clear();
+                cursor.results.last_moved_controllers.clear();
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::AddOneOfEachCounterKindOnSubject { subject } = instruction {
+            let targets: Vec<ObjectId> = self
+                .effect_group(entry, *subject)?
+                .into_iter()
+                .filter(|&id| {
+                    self.window
+                        .cards()
+                        .get(id)
+                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                })
+                .collect();
+            let before = self.rules_snapshot(None)?;
+            let mut occurrences = Vec::new();
+            let mut placed_any = false;
+            for object in targets {
+                let kinds: Vec<CounterKind> = self
+                    .characteristics
+                    .present_permanent_counter_kinds(object)
+                    .into_iter()
+                    .collect();
+                for kind in kinds {
+                    let mult = super::permanent_counters::effect_counter_multiplier(
+                        &before.view().evaluated,
+                        object,
+                    );
+                    let added = self.apply_static_counter_modifiers(
+                        &before.view().evaluated,
+                        object,
+                        kind,
+                        mult,
+                    );
+                    if !added.is_positive() {
+                        continue;
+                    }
+                    placed_any = true;
+                    if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
+                        let pt = if kind == CounterKind::PlusOne {
+                            PowerToughnessCounters {
+                                plus_one: added,
+                                minus_one: 0.into(),
+                            }
+                        } else {
+                            PowerToughnessCounters {
+                                plus_one: 0.into(),
+                                minus_one: added,
+                            }
+                        };
+                        let previous = self.characteristics.counters(object);
+                        self.characteristics.place_counters(object, &pt)?;
+                        let after_pt = self.characteristics.counters(object);
+                        occurrences.push(
+                            crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                                object,
+                                kind,
+                                before: if kind == CounterKind::PlusOne {
+                                    previous.plus_one
+                                } else {
+                                    previous.minus_one
+                                },
+                                after: if kind == CounterKind::PlusOne {
+                                    after_pt.plus_one
+                                } else {
+                                    after_pt.minus_one
+                                },
+                            },
+                        );
+                    } else {
+                        let old = self.counters_of_kind(object, kind);
+                        let after = old.plus(&added);
+                        self.characteristics
+                            .named_permanent_counters_mut(kind)
+                            .ok_or(EffectError::InconsistentProgram)?
+                            .insert(object, after.clone());
+                        if kind.keyword_counter_ability().is_some() {
+                            self.characteristics.refresh_keyword_counter_grant(
+                                entry.id(),
+                                object,
+                                kind,
+                            )?;
+                        }
+                        occurrences.push(if kind == CounterKind::Loyalty {
+                            crate::occurrence::RulesOccurrence::LoyaltyCountersChanged {
+                                object,
+                                before: old,
+                                after,
+                            }
+                        } else {
+                            crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                                object,
+                                kind,
+                                before: old,
+                                after,
+                            }
+                        });
+                    }
+                }
+            }
+            if !occurrences.is_empty() {
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| Ok(occurrences),
+                )?;
+            }
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = placed_any;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::TurnFaceDownSubject { subject } = instruction {
+            let targets: Vec<ObjectId> = self
+                .effect_group(entry, *subject)?
+                .into_iter()
+                .filter(|&id| {
+                    self.window.cards().get(id).is_some_and(|card| {
+                        card.zone() == ObjectZone::Battlefield
+                            && card.face_down().is_none()
+                            && !card.is_token()
+                            && card
+                                .card_id()
+                                .and_then(|cid| self.programs.get(&cid))
+                                .is_none_or(|p| p.back_face().is_none())
+                    })
+                })
+                .collect();
+            let mut turned = 0usize;
+            for id in targets {
+                let Some(card) = self.window.cards().get(id).cloned() else {
+                    continue;
+                };
+                if card.zone() != ObjectZone::Battlefield || card.face_down().is_some() {
+                    continue;
+                }
+                self.window
+                    .set_orientation(id, Some(crate::face_down::FaceDownKind::Morph))?;
+                turned += 1;
+            }
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = turned > 0;
+                cursor.results.last_action_count = Some(RulesInteger::from_usize(turned));
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::EmpowerJace { count } = instruction {
+            let controller = entry.controller();
+            let amount = self.resolve_value_expr(controller, &count)?.max(0.into());
+            let evaluated = self.evaluated_characteristics()?;
+            let mut jace_id = evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Battlefield
+                        && o.controller == Some(controller)
+                        && o.current_planeswalker_subtypes
+                            .contains(&crate::program::PlaneswalkerSubtype::Jace)
+                        && self
+                            .window
+                            .cards()
+                            .get(o.object)
+                            .is_some_and(|c| c.is_token())
+                })
+                .map(|o| o.object)
+                .min();
+            if jace_id.is_none() {
+                let before_tok = self.rules_snapshot(None)?;
+                let mut prog = crate::program::Program::new(
+                    std::collections::BTreeSet::from([crate::program::CardType::Planeswalker]),
+                    std::collections::BTreeSet::new(),
+                    std::collections::BTreeSet::new(),
+                    crate::program::ProgramKind::Permanent(crate::program::PermanentDefinition {
+                        entry_tap: None,
+                        attachment: None,
+                        printed_pt: None,
+                        casting_cost: None,
+                    }),
+                );
+                prog.printed_loyalty = Some(0.into());
+                prog.planeswalker_subtypes
+                    .insert(crate::program::PlaneswalkerSubtype::Jace);
+                prog.effect_defined_colors = Some(std::collections::BTreeSet::from([
+                    crate::characteristics::Color::Blue,
+                ]));
+                if let Ok(name) =
+                    spellwake_contracts::names::EnglishCardName::new("Jace".to_string())
+                {
+                    prog.names = spellwake_contracts::names::ObjectNames::single(name);
+                }
+                let id_surveil = crate::activated::ActivatedAbilityId(0);
+                prog.loyalty_costs.insert(id_surveil, -1);
+                prog.activated.push(crate::activated::ActivatedAbility {
+                    id: id_surveil,
+                    mana_cost: crate::mana::ManaCost::free(),
+                    source_cost: crate::activated::SourceCost::None,
+                    body: crate::program::ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![Instruction::Surveil {
+                            player: crate::program::ResolvingPlayer::Controller,
+                            amount: ValueExpr::literal(1),
+                        }],
+                    ),
+                });
+                let id_draw = crate::activated::ActivatedAbilityId(1);
+                prog.loyalty_costs.insert(id_draw, -3);
+                prog.activated.push(crate::activated::ActivatedAbility {
+                    id: id_draw,
+                    mana_cost: crate::mana::ManaCost::free(),
+                    source_cost: crate::activated::SourceCost::None,
+                    body: crate::program::ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![Instruction::DrawController {
+                            amount: ValueExpr::literal(1),
+                        }],
+                    ),
+                });
+                let adjusted = self.adjusted_token_count(
+                    &before_tok.view().evaluated,
+                    controller,
+                    1,
+                    Some(&prog),
+                )?;
+                if adjusted > 0 {
+                    let inputs: Vec<_> =
+                        (0..adjusted).map(|_| (controller, prog.clone())).collect();
+                    let (window, objects) = self.window.record_token_creations(
+                        self.window.revision(),
+                        inputs,
+                        &self.creature_vocabulary,
+                    )?;
+                    self.window = window;
+                    let ids: Vec<ObjectId> = objects.iter().map(GameObject::id).collect();
+                    self.characteristics.register_battlefield_entries(&ids)?;
+                    for &id in &ids {
+                        self.apply_entry_counters(
+                            &before_tok,
+                            id,
+                            PowerToughnessCounters::default(),
+                            0,
+                        )?;
+                    }
+                    self.emit_from(
+                        crate::occurrence::EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before_tok,
+                        None,
+                        ctx.append,
+                        |_, current, _| {
+                            objects
+                                .iter()
+                                .map(|object| {
+                                    Ok(crate::occurrence::RulesOccurrence::TokenCreated {
+                                        creator: object.owner(),
+                                        after: Box::new(
+                                            current
+                                                .appearance(object.id())
+                                                .ok_or(EffectError::InconsistentProgram)?,
+                                        ),
+                                    })
+                                })
+                                .collect()
+                        },
+                    )?;
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.last_created_tokens = ids.clone();
+                    }
+                    jace_id = ids.into_iter().min();
+                }
+            }
+            if let Some(target_jace) = jace_id
+                && amount.is_positive()
+            {
+                let before_cnt = self.rules_snapshot(None)?;
+                let old = self.counters_of_kind(target_jace, CounterKind::Loyalty);
+                let multiplied = super::permanent_counters::effect_counter_multiplier(
+                    &before_cnt.view().evaluated,
+                    target_jace,
+                )
+                .times(&amount);
+                let added = self.apply_static_counter_modifiers(
+                    &before_cnt.view().evaluated,
+                    target_jace,
+                    CounterKind::Loyalty,
+                    multiplied,
+                );
+                if added.is_positive() {
+                    let after = old.plus(&added);
+                    self.characteristics
+                        .loyalty
+                        .insert(target_jace, after.clone());
+                    self.emit_from(
+                        crate::occurrence::EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before_cnt,
+                        None,
+                        ctx.append,
+                        |_, _, _| {
+                            Ok(vec![
+                                crate::occurrence::RulesOccurrence::LoyaltyCountersChanged {
+                                    object: target_jace,
+                                    before: old.clone(),
+                                    after: after.clone(),
+                                },
+                            ])
+                        },
+                    )?;
                 }
             }
             self.advance_instruction()?;
@@ -3202,7 +3685,9 @@ impl EffectWindow {
                 ),
                 DamageRecipientsRef::OtherCreaturesAndEachPlayer
                 | DamageRecipientsRef::EachOtherPlayer
-                | DamageRecipientsRef::EachOtherOpponent => None,
+                | DamageRecipientsRef::EachOtherOpponent
+                | DamageRecipientsRef::EachSourceToItself
+                | DamageRecipientsRef::EachSourceController => None,
             };
             if source_ids.is_empty() || fixed_targets.as_ref().is_some_and(Vec::is_empty) {
                 if let Some(cursor) = self.resolution_cursor_mut() {
@@ -3303,6 +3788,14 @@ impl EffectWindow {
                             .into_iter()
                             .map(DamageRecipient::Player)
                             .collect(),
+                        DamageRecipientsRef::EachSourceToItself => current
+                            .get(src_id)
+                            .and_then(|v| v.damage_recipient())
+                            .into_iter()
+                            .collect(),
+                        DamageRecipientsRef::EachSourceController => {
+                            vec![DamageRecipient::Player(src_controller)]
+                        }
                         _ => Vec::new(),
                     };
                     for recipient in per_source {
@@ -3569,6 +4062,7 @@ impl EffectWindow {
                         let resolved_players: BTreeSet<SeatId> = match &other {
                             TemporaryRuleKind::PlayerCantGainLife { players }
                             | TemporaryRuleKind::CantCastSpells { players, .. }
+                            | TemporaryRuleKind::CantCastFromZone { players, .. }
                             | TemporaryRuleKind::CantActivateAbilities { players, .. }
                             | TemporaryRuleKind::CantPlayLands { players }
                             | TemporaryRuleKind::PlayerGrantKeyword { players, .. }
@@ -6890,7 +7384,13 @@ impl EffectWindow {
                 if self.window.participants().contains(&seat)
                     && !self.player_cannot_lose(&evaluated, seat, false)?
                 {
-                    losing.insert(seat);
+                    let loss_cause = crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    };
+                    if !self.try_replace_player_loss(&evaluated, seat, loss_cause, ctx.append)? {
+                        losing.insert(seat);
+                    }
                 }
             }
             if !losing.is_empty() {
@@ -7482,7 +7982,16 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::DivideDamageAmongTargets { total } = instruction {
+        if let Some(total) = match &instruction {
+            Instruction::DivideDamageAmongTargets { total } => Some(*total),
+            Instruction::DivideDamageExprAmongTargets { total, .. } => {
+                let resolved = self
+                    .resolve_value_expr(entry.controller(), total)?
+                    .max(0.into());
+                Some(u16::try_from(resolved.to_usize().unwrap_or(0)).unwrap_or(u16::MAX))
+            }
+            _ => None,
+        } {
             let assessment = self
                 .window
                 .target_assessment()
@@ -9406,7 +9915,17 @@ impl EffectWindow {
                         == Some(!tap)
                 })
                 .collect::<Vec<_>>();
+            let eval_lki = if changing.is_empty() {
+                Vec::new()
+            } else {
+                let eval = self.evaluated_characteristics()?;
+                changing
+                    .iter()
+                    .filter_map(|id| eval.get(*id).cloned())
+                    .collect()
+            };
             if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_lki = eval_lki;
                 cursor.results.last_action_succeeded = !changing.is_empty();
                 cursor.results.last_action_count = Some(RulesInteger::from_usize(changing.len()));
             }
@@ -10243,6 +10762,38 @@ impl EffectWindow {
                 return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
                     frame,
                 )));
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::UnattachSubject { subject } = instruction {
+            let objects = self.resolve_move_subject_objects(entry, subject)?;
+            if !objects.is_empty() {
+                let cut = self.rules_snapshot(None)?;
+                let mut changes = Vec::new();
+                for obj_id in objects {
+                    if self.window.cards().phased_out_under(obj_id).is_none()
+                        && let Some(host) = self.characteristics.detach(obj_id)
+                    {
+                        changes.push(crate::occurrence::RulesOccurrence::AttachmentChanged {
+                            source: obj_id,
+                            before: Some(host),
+                            after: None,
+                        });
+                    }
+                }
+                if !changes.is_empty() {
+                    self.emit_from(
+                        crate::occurrence::EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &cut,
+                        None,
+                        ctx.append,
+                        |_, _, _| Ok(changes),
+                    )?;
+                }
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);

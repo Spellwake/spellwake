@@ -203,7 +203,7 @@ pub(super) fn lower_search_library_group(
             filter,
             reveal,
             to_zone,
-            shuffle: true,
+            shuffle,
             up_to,
             any_number,
             extra_zones,
@@ -214,29 +214,103 @@ pub(super) fn lower_search_library_group(
             modifier,
             follow_up,
             exact: false,
-        } => lower_search_library_instruction(
-            library,
-            count,
-            filter,
-            *reveal,
-            to_zone,
-            *up_to,
-            *any_number,
-            extra_zones,
-            secondary_filter.as_deref(),
-            *secondary_is_or,
-            where_x.as_deref(),
-            rest_to_zone.as_deref(),
-            modifier.as_ref(),
-            follow_up,
-            false,
-            builder,
-            vocabulary,
-            ids,
-            in_trigger,
-            self_pronoun_valid,
-            bound_x,
-        ),
+        } if *shuffle || to_zone.to_ascii_lowercase().contains("after_shuffle") => {
+            let eff_dest = if to_zone.to_ascii_lowercase().contains("after_shuffle")
+                && to_zone.to_ascii_lowercase().contains("top")
+            {
+                "top of your library"
+            } else {
+                to_zone.as_str()
+            };
+            match lower_search_library_instruction(
+                library,
+                count,
+                filter,
+                *reveal,
+                eff_dest,
+                *up_to,
+                *any_number,
+                extra_zones,
+                secondary_filter.as_deref(),
+                *secondary_is_or,
+                where_x.as_deref(),
+                rest_to_zone.as_deref(),
+                modifier.as_ref(),
+                follow_up,
+                false,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            ) {
+                Ok(()) => Ok(()),
+                Err("oracle:dynamic-search-count")
+                    if (*up_to || !is_unrestricted_filter(filter))
+                        && !*any_number
+                        && secondary_filter.is_none()
+                        && rest_to_zone.is_none()
+                        && follow_up.is_empty() =>
+                {
+                    let dyn_ast = match where_x.as_deref() {
+                        Some(we) if matches!(count.as_ref(), ValueExprAst::ChosenX) => {
+                            resolve_x(we, bound_x)
+                        }
+                        None => resolve_x(count, bound_x),
+                        Some(_) => return Err("oracle:dynamic-search-count"),
+                    };
+                    let dyn_expr =
+                        lower_value_expr_in_context(dyn_ast, builder, in_trigger, vocabulary)?;
+                    let mut search = lower_library_search_ext(
+                        library,
+                        &ValueExprAst::Const(1),
+                        filter,
+                        *reveal,
+                        eff_dest,
+                        vocabulary,
+                        false,
+                        true,
+                        false,
+                        &SearchLibraryExtra {
+                            extra_zones: extra_zones.as_slice(),
+                            secondary_filter: None,
+                            secondary_is_or: false,
+                            where_x: None,
+                            rest_to_zone: None,
+                            modifier: modifier.as_ref(),
+                        },
+                    )?;
+                    if !matches!(
+                        search.destination,
+                        SearchDestination::Hand
+                            | SearchDestination::Graveyard
+                            | SearchDestination::Exile { .. }
+                            | SearchDestination::Battlefield {
+                                post_entry:
+                                    spellwake_engine::program::SearchBattlefieldPostEntry::None,
+                                ..
+                            }
+                    ) {
+                        return Err("oracle:dynamic-search-count");
+                    }
+                    search.count = SearchCount::UpToExpr(Box::new(dyn_expr));
+                    bind_search_target(builder, &search)?;
+                    if search.searcher == ResolvingPlayer::UniqueRelatedPlayer {
+                        search.searcher = lower_resolving_player_in_context(
+                            PlayerRefAst::ThatPlayer,
+                            builder,
+                            in_trigger,
+                        )?;
+                    }
+                    builder.instructions.push(Instruction::SearchLibrary {
+                        filter: Box::new(search),
+                    });
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        }
         InstructionAst::TapPermanent {
             subject,
             any_number: true,
@@ -996,6 +1070,25 @@ pub(super) fn lower_search_library_group(
                                 .push(Instruction::CounterTriggeringStackObject);
                             return Ok(());
                         }
+                        CostAtomAst::PayGenericManaExpr(_) | CostAtomAst::PayScaledMana { .. } => {
+                            let (fixed, extra_generic) = lower_counter_unless_dynamic_mana(
+                                cost_atom, builder, in_trigger, vocabulary, bound_x,
+                            )?;
+                            let idx = builder.instructions.len();
+                            builder
+                                .instructions
+                                .push(Instruction::OfferDynamicManaPayment {
+                                    payer: ResolvingPlayer::TriggerSubjectController,
+                                    fixed,
+                                    extra_generic,
+                                    paid_destination: idx + 2,
+                                    declined_destination: idx + 1,
+                                });
+                            builder
+                                .instructions
+                                .push(Instruction::CounterTriggeringStackObject);
+                            return Ok(());
+                        }
                         _ => return Err("oracle:counter-unless-non-mana"),
                     }
                 }
@@ -1013,7 +1106,13 @@ pub(super) fn lower_search_library_group(
                 target.as_ref(),
                 SubjectRefAst::Anaphora(raw) if matches!(
                     raw.trim().to_ascii_lowercase().as_str(),
-                    "that spell" | "that spell or ability" | "that ability" | "it"
+                    "that spell"
+                        | "that spell or ability"
+                        | "that ability"
+                        | "the chosen spell"
+                        | "the chosen spell or ability"
+                        | "the chosen ability"
+                        | "it"
                 )
             );
             if !reuse_bound_spell {
@@ -1053,6 +1152,23 @@ pub(super) fn lower_search_library_group(
                         } else {
                             return Err("oracle:counter-unless-x");
                         }
+                        builder.instructions.push(Instruction::CounterSpell);
+                        Ok(())
+                    }
+                    CostAtomAst::PayGenericManaExpr(_) | CostAtomAst::PayScaledMana { .. } => {
+                        let (fixed, extra_generic) = lower_counter_unless_dynamic_mana(
+                            cost_atom, builder, in_trigger, vocabulary, bound_x,
+                        )?;
+                        let idx = builder.instructions.len();
+                        builder
+                            .instructions
+                            .push(Instruction::OfferDynamicManaPayment {
+                                payer: ResolvingPlayer::TargetSpellController,
+                                fixed,
+                                extra_generic,
+                                paid_destination: idx + 2,
+                                declined_destination: idx + 1,
+                            });
                         builder.instructions.push(Instruction::CounterSpell);
                         Ok(())
                     }
@@ -1921,13 +2037,71 @@ pub(super) fn lower_search_library_group(
             any_number,
             all,
         } => {
+            let has_source = in_trigger || self_pronoun_valid || builder.has_source;
             if matches!(
                 target.as_ref(),
                 SubjectRefAst::Anaphora(raw) if raw.eq_ignore_ascii_case("unattach")
             ) {
+                if *any_number || *all {
+                    return Err("oracle:unsupported-attach");
+                }
+                let mut trial = builder.clone();
+                let unattach_subj = match subject.as_ref() {
+                    s if has_source && is_self_pronoun(s, &trial, self_pronoun_valid) => {
+                        Some(MoveSubjectRef::AbilitySource)
+                    }
+                    SubjectRefAst::AttachedHost(_) if has_source => {
+                        Some(MoveSubjectRef::AttachedHost)
+                    }
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                    } if filter.zone.is_none() => {
+                        let bt = lower_battlefield_body_target_in_context(
+                            filter, &trial, in_trigger, vocabulary,
+                        )?;
+                        let was_none = trial.target == BodyTarget::None;
+                        trial.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            if !was_none {
+                                return Err("oracle:unsupported-attach");
+                            }
+                            trial.up_to_one_target = true;
+                        }
+                        Some(MoveSubjectRef::TargetObject)
+                    }
+                    SubjectRefAst::Anaphora(_) if is_permanent_body_target(trial.target) => {
+                        Some(MoveSubjectRef::TargetObject)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_moved_object(&trial.instructions) =>
+                    {
+                        Some(MoveSubjectRef::LastMoved)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_created_tokens(&trial.instructions) =>
+                    {
+                        Some(MoveSubjectRef::CreatedTokens)
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
+                    {
+                        Some(MoveSubjectRef::TriggeringObject)
+                    }
+                    SubjectRefAst::TriggerSubject if in_trigger => {
+                        Some(MoveSubjectRef::TriggeringObject)
+                    }
+                    _ => None,
+                };
+                if let Some(subj) = unattach_subj {
+                    trial
+                        .instructions
+                        .push(Instruction::UnattachSubject { subject: subj });
+                    *builder = trial;
+                    return Ok(());
+                }
                 return Err("oracle:unsupported-attach");
             }
-            let has_source = in_trigger || self_pronoun_valid || builder.has_source;
             if !*any_number && !*all {
                 if is_self_pronoun(subject, builder, self_pronoun_valid) {
                     if in_trigger
@@ -2022,6 +2196,7 @@ pub(super) fn lower_search_library_group(
                     }
                 }
             }
+            let prior_target = trial.target;
             let resolve_fixed_att = |subj: &SubjectRefAst,
                                      b: &mut BodyBuilder|
              -> Result<Option<MoveSubjectRef>, &'static str> {
@@ -2031,17 +2206,24 @@ pub(super) fn lower_search_library_group(
                     }
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::Exact(1),
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } if filter.zone.is_none() => {
                         let bt = lower_battlefield_body_target_in_context(
                             filter, b, in_trigger, vocabulary,
                         )?;
+                        let was_none = b.target == BodyTarget::None;
                         b.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            if !was_none {
+                                return Err("oracle:unsupported-attach");
+                            }
+                            b.up_to_one_target = true;
+                        }
                         Ok(Some(MoveSubjectRef::TargetObject))
                     }
                     SubjectRefAst::Anaphora(_)
-                        if is_permanent_body_target(b.target)
-                            || is_graveyard_body_target(b.target) =>
+                        if is_permanent_body_target(prior_target)
+                            || is_graveyard_body_target(prior_target) =>
                     {
                         Ok(Some(MoveSubjectRef::TargetObject))
                     }
@@ -2072,22 +2254,48 @@ pub(super) fn lower_search_library_group(
             let resolve_fixed_host = |subj: &SubjectRefAst,
                                       b: &mut BodyBuilder|
              -> Result<Option<MoveSubjectRef>, &'static str> {
-                match subj {
-                    s if has_source && is_self_pronoun(s, b, self_pronoun_valid) => {
-                        Ok(Some(MoveSubjectRef::AbilitySource))
+                let self_anaphora = match subj {
+                    SubjectRefAst::SelfObject => true,
+                    SubjectRefAst::Anaphora(p)
+                        if self_pronoun_valid && prior_target == BodyTarget::None =>
+                    {
+                        matches!(
+                            p.to_ascii_lowercase().as_str(),
+                            "it" | "him"
+                                | "her"
+                                | "he"
+                                | "she"
+                                | "this creature"
+                                | "this permanent"
+                                | "this artifact"
+                                | "this enchantment"
+                                | "this land"
+                        )
                     }
+                    _ => false,
+                };
+                match subj {
+                    _ if has_source && self_anaphora => Ok(Some(MoveSubjectRef::AbilitySource)),
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::Exact(1),
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } if filter.zone.is_none() => {
                         let bt = lower_battlefield_body_target_in_context(
                             filter, b, in_trigger, vocabulary,
                         )?;
+                        let was_none = b.target == BodyTarget::None;
                         b.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            if !was_none {
+                                return Err("oracle:unsupported-attach");
+                            }
+                            b.up_to_one_target = true;
+                        }
                         Ok(Some(MoveSubjectRef::TargetObject))
                     }
                     SubjectRefAst::Anaphora(_)
-                        if b.target != BodyTarget::None && !is_stack_body_target(b.target) =>
+                        if prior_target != BodyTarget::None
+                            && !is_stack_body_target(prior_target) =>
                     {
                         Ok(Some(MoveSubjectRef::TargetObject))
                     }
@@ -2970,6 +3178,97 @@ pub(super) fn lower_search_library_group(
             Ok(())
         }
         _ => Err("oracle:unsupported-instruction"),
+    }
+}
+
+fn lower_counter_unless_dynamic_mana(
+    cost_atom: &CostAtomAst,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<(ManaCost, ValueExpr), &'static str> {
+    match cost_atom {
+        CostAtomAst::PayGenericManaExpr(expr) => {
+            let extra_generic = lower_value_expr_in_context(
+                resolve_x(expr, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            Ok((ManaCost::free(), extra_generic))
+        }
+        CostAtomAst::PayScaledMana { base, per } => {
+            let base_trim = base.trim();
+            let per_clean = per.trim().trim_end_matches('.').trim().to_ascii_lowercase();
+            if per_clean == "twice" && base_trim.eq_ignore_ascii_case("{x}") {
+                let x_val = match bound_x {
+                    Some(expr) => {
+                        lower_value_expr_in_context(expr, builder, in_trigger, vocabulary)?
+                    }
+                    None => ValueExpr::chosen_x(),
+                };
+                return Ok((ManaCost::free(), scale_value_expr(x_val, 2)));
+            }
+            let base_low = base_trim.to_ascii_lowercase();
+            let (fixed, unit_n) = if let Some(pos) = base_low.find(" plus an additional ") {
+                let fixed_raw = base_trim[..pos].trim();
+                let unit_raw = base_trim[pos + " plus an additional ".len()..].trim();
+                let fixed_cost =
+                    parse_fixed_mana_cost(fixed_raw).ok_or("oracle:counter-unless-non-mana")?;
+                let unit = parse_generic_mana_amount(unit_raw)
+                    .filter(|&n| n > 0)
+                    .ok_or("oracle:counter-unless-non-mana")?;
+                (fixed_cost, unit)
+            } else {
+                let unit = parse_generic_mana_amount(base_trim)
+                    .filter(|&n| n > 0)
+                    .ok_or("oracle:counter-unless-non-mana")?;
+                (ManaCost::free(), unit)
+            };
+            let per_expr = match per_clean.as_str() {
+                "basic land type among lands you control" => ValueExpr::DomainCount,
+                "creature in your party" => lower_value_expr_in_context(
+                    &ValueExprAst::PartySize,
+                    builder,
+                    in_trigger,
+                    vocabulary,
+                )?,
+                "card discarded this way" | "cards discarded this way" => {
+                    ValueExpr::event(EventValueKind::LastActionCount)
+                }
+                _ => {
+                    let compiler_vocab = cached_compiler_vocab(vocabulary);
+                    if let Ok(parsed_flt) = spellwake_oracle_compiler::filter::parse_object_filter(
+                        &per_clean,
+                        &compiler_vocab,
+                    ) && let Ok(expr) = lower_value_expr_in_context(
+                        &ValueExprAst::Count(Box::new(parsed_flt)),
+                        builder,
+                        in_trigger,
+                        vocabulary,
+                    ) {
+                        expr
+                    } else if let Ok(parsed_expr) =
+                        spellwake_oracle_compiler::filter::parse_value_expr(
+                            &format!("the number of {per_clean}"),
+                            &compiler_vocab,
+                        )
+                    {
+                        lower_value_expr_in_context(&parsed_expr, builder, in_trigger, vocabulary)?
+                    } else {
+                        return Err("oracle:counter-unless-non-mana");
+                    }
+                }
+            };
+            let extra_generic = if unit_n == 1 {
+                per_expr
+            } else {
+                scale_value_expr(per_expr, i64::from(unit_n))
+            };
+            Ok((fixed, extra_generic))
+        }
+        _ => Err("oracle:counter-unless-non-mana"),
     }
 }
 

@@ -309,6 +309,7 @@ native!(ExecutableBody, self, {
         | Instruction::ChooseOption { .. }
         | Instruction::DealDamageFrom { .. }
         | Instruction::DivideDamageAmongTargets { .. }
+        | Instruction::DivideDamageExprAmongTargets { .. }
         | Instruction::GainControlOfPermanent { .. }
         | Instruction::GiveFixedTargetControl { .. }
         | Instruction::BecomeCopy { .. }
@@ -865,6 +866,11 @@ native!(ExecutableBody, self, {
         | Instruction::ReturnCardsExiledWithLinkExt { .. }
         | Instruction::DrawGame
         | Instruction::TurnFaceUpSubject { .. }
+        | Instruction::TurnFaceDownSubject { .. }
+        | Instruction::EmpowerJace { .. }
+        | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+        | Instruction::GrantLastMovedPlayPermission { .. }
+        | Instruction::MoveLastMovedFiltered { .. }
         | Instruction::DiscardUpToExt { .. }
         | Instruction::Earthbend { .. }
         | Instruction::ReturnEarthbentCard
@@ -875,7 +881,9 @@ native!(ExecutableBody, self, {
         | Instruction::SelectExtremeLifePlayer { .. }
         | Instruction::AttachFixedTargets
         | Instruction::AttachPermanentToPlayer { .. }
-        | Instruction::AttachChoosingPermanent { .. } => Ok(()),
+        | Instruction::AttachChoosingPermanent { .. }
+        | Instruction::UnattachSubject { .. }
+        | Instruction::ChooseOneLastMoved { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

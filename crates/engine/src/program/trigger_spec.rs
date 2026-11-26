@@ -181,8 +181,13 @@ pub enum DamageTriggerRecipient {
     OpponentOrPlaneswalker,
     ControllerOrPlaneswalker,
     Creature,
+    Planeswalker,
     Battle,
     SelfObject,
+    PlayerOrBattle,
+    PlaneswalkerOrBattle,
+    OpponentOrBattle,
+    PlayerPlaneswalkerOrBattle,
 }
 
 /// Counter-change trigger kind.
@@ -245,6 +250,10 @@ pub enum PlayerTriggerAction {
     /// Player targeted an opponent, anything an opponent controls, or a card in an opponent's graveyard (CR 700.13).
     CommittedCrime,
     LandPlayed,
+    /// Player played a land matching `ObjectFilter`.
+    LandPlayedFiltered(ObjectFilter),
+    /// Player drew a card other than the first card they draw in each of their draw steps.
+    DrewCardExceptFirstInDrawStep,
     Proliferated,
     Explored,
     ShuffledLibrary,
@@ -761,7 +770,8 @@ impl TriggerEvent {
                     PlayerTriggerAction::Sacrificed(filter)
                     | PlayerTriggerAction::PermanentTappedForMana(filter)
                     | PlayerTriggerAction::DiscardedMatching(filter)
-                    | PlayerTriggerAction::DiscardedByOpponent(Some(filter)),
+                    | PlayerTriggerAction::DiscardedByOpponent(Some(filter))
+                    | PlayerTriggerAction::LandPlayedFiltered(filter),
                 ..
             } => filter.rewrite_creature_type(from, to),
             Self::AnyOf(events) => {
@@ -856,7 +866,8 @@ impl TriggerEvent {
                     PlayerTriggerAction::Sacrificed(filter)
                     | PlayerTriggerAction::PermanentTappedForMana(filter)
                     | PlayerTriggerAction::DiscardedMatching(filter)
-                    | PlayerTriggerAction::DiscardedByOpponent(Some(filter)),
+                    | PlayerTriggerAction::DiscardedByOpponent(Some(filter))
+                    | PlayerTriggerAction::LandPlayedFiltered(filter),
                 ..
             } => filter.validate_vocabulary(vocabulary),
             Self::AnyOf(events) => {

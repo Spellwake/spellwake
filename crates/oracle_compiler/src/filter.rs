@@ -11567,6 +11567,38 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
                     value: u16::try_from(n.max(0)).unwrap_or(1),
                 });
             }
+            if let Some(after_fewer) = before_cnt.strip_prefix("fewer than ")
+                && let Some((num_tok, kind_tok)) = after_fewer.split_once(' ')
+                && let Some(n) = parse_number_word(num_tok)
+            {
+                let kclean = if kind_tok.trim().is_empty() {
+                    "any"
+                } else {
+                    kind_tok.trim()
+                };
+                return Ok(ConditionAst::CounterCompare {
+                    subject: Box::new(subj),
+                    counter_kind: kclean.to_string(),
+                    op: CompareOp::Lt,
+                    value: u16::try_from(n.max(0)).unwrap_or(0),
+                });
+            }
+            if let Some(after_more) = before_cnt.strip_prefix("more than ")
+                && let Some((num_tok, kind_tok)) = after_more.split_once(' ')
+                && let Some(n) = parse_number_word(num_tok)
+            {
+                let kclean = if kind_tok.trim().is_empty() {
+                    "any"
+                } else {
+                    kind_tok.trim()
+                };
+                return Ok(ConditionAst::CounterCompare {
+                    subject: Box::new(subj),
+                    counter_kind: kclean.to_string(),
+                    op: CompareOp::Gt,
+                    value: u16::try_from(n.max(0)).unwrap_or(0),
+                });
+            }
             let kind = before_cnt
                 .strip_prefix("one or more ")
                 .or_else(|| before_cnt.strip_prefix("a "))

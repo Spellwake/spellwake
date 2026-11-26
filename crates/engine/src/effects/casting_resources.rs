@@ -1135,6 +1135,7 @@ impl EffectWindow {
                     payload.sacrificed_creature_subtypes = creature
                         .map(|value| value.current_creature_subtypes.clone())
                         .unwrap_or_default();
+                    payload.sacrificed_lki = evaluated.get(object).cloned().map(Box::new);
                     payload.sacrificed_permanent_mana_value = mana_value;
                 }
             }

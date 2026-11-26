@@ -16,12 +16,13 @@ use spellwake_contracts::creature_types::{CreatureTypeId, CreatureTypeVocabulary
 use std::{collections::BTreeSet, num::NonZeroU8, sync::Arc};
 
 /// Magnitude of a generic spell cost reduction granted by a permanent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpellDiscount {
     SourcePlusOneCounters,
     PerExperienceCounter(NonZeroU8),
     Fixed(NonZeroU8),
     ControlledCreaturesWithPlusOneCounters,
+    Dynamic(Box<crate::program::ValueExpr>),
 }
 
 /// Which kinds of cards a permission lets its controller play from their library.
@@ -422,6 +423,10 @@ pub enum ReplaceableEvent {
     ExtraTurn {
         player: crate::program::AffectedPlayers,
     },
+    /// Player would lose the game (CR 104.3 / 614.1, e.g. Exquisite Archangel, Stunning Reversal).
+    LoseGame {
+        player: crate::program::AffectedPlayers,
+    },
 }
 
 /// Replacement transformation applied by [`StaticContinuousAbility::EventReplacement`].
@@ -507,6 +512,7 @@ pub enum StaticRestriction {
     ControllerHasShroud,
     /// Controller cannot lose the game and opponents cannot win the game (Platinum Angel).
     ControllerCantLoseOpponentsCantWin,
+    ControllerCantLoseGame,
     /// Controller does not lose the game for having 0 or less life (Phyrexian Unlife, Lich's Mastery).
     ControllerCantLoseForZeroLife,
     /// Controller cannot win the game and opponents cannot lose the game (Abyssal Persecutor).
@@ -1015,6 +1021,7 @@ impl StaticContinuousAbility {
                         | StaticRestriction::ControllerHasHexproof
                         | StaticRestriction::ControllerHasShroud
                         | StaticRestriction::ControllerCantLoseOpponentsCantWin
+                        | StaticRestriction::ControllerCantLoseGame
                         | StaticRestriction::ControllerCantLoseForZeroLife
                         | StaticRestriction::ControllerCantWinOpponentsCantLose
                         | StaticRestriction::CantPlayLands(_)
@@ -1071,8 +1078,13 @@ impl StaticContinuousAbility {
         };
         match self {
             Self::CostModifier { modifier, .. } => match modifier {
-                SpellCostModifier::Discount { matching, .. } => {
+                SpellCostModifier::Discount {
+                    matching, amount, ..
+                } => {
                     matching.rewrite_creature_type(change.from, change.to);
+                    if let SpellDiscount::Dynamic(expr) = amount {
+                        expr.rewrite_creature_type(change.from, change.to);
+                    }
                 }
                 SpellCostModifier::FirstSpellRule { filter, .. }
                 | SpellCostModifier::AlternativeForMatching { filter, .. } => {
@@ -1250,8 +1262,18 @@ impl StaticContinuousAbility {
     ) -> Result<(), CharacteristicDefinitionError> {
         let (selector, parts) = match self {
             Self::CostModifier { modifier, .. } => match modifier {
-                SpellCostModifier::Discount { matching, .. }
-                | SpellCostModifier::Increase { matching, .. } => {
+                SpellCostModifier::Discount {
+                    matching, amount, ..
+                } => {
+                    if let SpellDiscount::Dynamic(expr) = amount {
+                        expr.validate_world_expr(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                    }
+                    return matching
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
+                SpellCostModifier::Increase { matching, .. } => {
                     return matching
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
@@ -1448,7 +1470,7 @@ impl StaticContinuousAbility {
                 }
                 match action {
                     StaticReplacementAction::ModifyAmount { add, multiply } => {
-                        if *multiply == 0 {
+                        if *multiply == 0 || matches!(event, ReplaceableEvent::LoseGame { .. }) {
                             return Err(CharacteristicDefinitionError::EmptyParts);
                         }
                         add.validate_world_condition(vocabulary)

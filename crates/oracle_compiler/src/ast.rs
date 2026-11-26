@@ -4066,6 +4066,8 @@ pub enum ReplacementEffectAst {
     },
     EntersTappedUnlessReveal {
         filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        or_control: bool,
     },
     EntersPrepared,
     EntersAsCopy {

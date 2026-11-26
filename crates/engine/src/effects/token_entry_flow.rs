@@ -1327,6 +1327,34 @@ impl EffectWindow {
                         .map(GameObject::id)
                         .collect()
                 }
+                crate::land::EntryTap::UnlessRevealHandSubtype {
+                    subtype,
+                    or_control,
+                } => {
+                    let evaluated = self.evaluated_characteristics()?;
+                    if or_control
+                        && evaluated.objects.values().any(|p| {
+                            p.zone == ObjectZone::Battlefield
+                                && p.controller == Some(chooser)
+                                && p.current_creature_subtypes.contains(&subtype)
+                        })
+                    {
+                        continue;
+                    }
+                    self.window
+                        .cards()
+                        .iter()
+                        .filter(|card| {
+                            card.card_id().is_some() && card.zone() == ObjectZone::Hand(chooser)
+                        })
+                        .filter(|card| {
+                            evaluated
+                                .get(card.id())
+                                .is_some_and(|c| c.current_creature_subtypes.contains(&subtype))
+                        })
+                        .map(GameObject::id)
+                        .collect()
+                }
                 _ => continue,
             };
             let chooser = if matches!(rule, crate::land::EntryTap::Tribute(_)) {
@@ -1408,11 +1436,13 @@ impl EffectWindow {
                 crate::land::EntryChoice::Players(players),
             ) if self.valid_distinct_players(players) => {}
             (
-                crate::land::EntryTap::UnlessRevealHandLandType(_, _),
+                crate::land::EntryTap::UnlessRevealHandLandType(_, _)
+                | crate::land::EntryTap::UnlessRevealHandSubtype { .. },
                 crate::land::EntryChoice::Reveal(None),
             ) => {}
             (
-                crate::land::EntryTap::UnlessRevealHandLandType(_, _),
+                crate::land::EntryTap::UnlessRevealHandLandType(_, _)
+                | crate::land::EntryTap::UnlessRevealHandSubtype { .. },
                 crate::land::EntryChoice::Reveal(Some(id)),
             ) if frame.eligible_reveals.contains(&id) => {}
             (crate::land::EntryTap::UnlessPayLife(_), crate::land::EntryChoice::PayLife(false)) => {

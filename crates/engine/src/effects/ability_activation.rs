@@ -1000,6 +1000,12 @@ impl EffectWindow {
                     {
                         return Err(EffectError::InvalidCastResource);
                     }
+                    if selected.body.has_up_to_x_target_count()
+                        && RulesInteger::from_usize(targets.len())
+                            > chosen_x.clone().unwrap_or_else(|| 0.into())
+                    {
+                        return Err(EffectError::InvalidCastResource);
+                    }
                     let (min, max) = selected
                         .body
                         .permanent_target_bounds()
@@ -1509,14 +1515,15 @@ impl EffectWindow {
                 choices.clone(),
             )?
         } else if let crate::activated::ActivationOrigin::PermanentTargets(targets) = &origin {
-            let (minimum, maximum) = if selected.body.has_x_target_count() {
-                (targets.len(), targets.len())
-            } else {
-                selected
-                    .body
-                    .permanent_target_bounds()
-                    .ok_or(EffectError::InconsistentProgram)?
-            };
+            let (minimum, maximum) =
+                if selected.body.has_x_target_count() || selected.body.has_up_to_x_target_count() {
+                    (targets.len(), targets.len())
+                } else {
+                    selected
+                        .body
+                        .permanent_target_bounds()
+                        .ok_or(EffectError::InconsistentProgram)?
+                };
             let choices = targets
                 .iter()
                 .enumerate()

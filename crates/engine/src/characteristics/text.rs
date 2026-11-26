@@ -461,8 +461,13 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DestroySubject { subject, .. }
             | Instruction::ExileSubjectUntilSourceLeaves { subject }
             | Instruction::TurnFaceUpSubject { subject }
+            | Instruction::TurnFaceDownSubject { subject }
+            | Instruction::AddOneOfEachCounterKindOnSubject { subject }
             | Instruction::RegenerateSubject { subject } => {
                 subject.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::EmpowerJace { count } => {
+                count.rewrite_creature_type(change.from, change.to);
             }
             Instruction::CreateTemporaryRule { rule, .. } => match rule.as_mut() {
                 crate::program::TemporaryRuleKind::CantBeCountered {
@@ -473,6 +478,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     ..
                 }
                 | crate::program::TemporaryRuleKind::CantCastSpells {
+                    filter: Some(f), ..
+                }
+                | crate::program::TemporaryRuleKind::CantCastFromZone {
                     filter: Some(f), ..
                 }
                 | crate::program::TemporaryRuleKind::ExileSpellOnResolve {
@@ -500,7 +508,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
                     subject.rewrite_creature_type(change.from, change.to);
                 }
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
+                crate::program::TemporaryRuleKind::TemporaryStatic(ability)
+                | crate::program::TemporaryRuleKind::OneShotEventReplacement(ability) => {
                     rewrite_static_ability(change, ability);
                 }
                 crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
@@ -580,6 +589,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::ScheduleDelayedEventTrigger { body: inner, .. } => {
                 body(change, inner);
             }
+            Instruction::DivideDamageExprAmongTargets { total, .. } => {
+                total.rewrite_creature_type(change.from, change.to);
+            }
             Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::GiveFixedTargetControl { .. }
@@ -587,6 +599,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::LoseGame(_)
             | Instruction::DrawGame
             | Instruction::AttachPermanent { .. }
+            | Instruction::UnattachSubject { .. }
+            | Instruction::ChooseOneLastMoved { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::MoveSubject { .. }
             | Instruction::ExileTopPlay { .. }

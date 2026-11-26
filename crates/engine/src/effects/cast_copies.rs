@@ -26,6 +26,7 @@ pub(crate) struct CastCopySource {
     sacrificed_creature_toughness: Option<RulesInteger>,
     exiled_cost_creature: Option<(ObjectId, RulesInteger)>,
     sacrificed_creature_subtypes: BTreeSet<CreatureTypeId>,
+    sacrificed_lki: Option<Box<crate::characteristics::ObjectCharacteristics>>,
     paid_creature_taps: usize,
     target_division: BTreeMap<TargetId, u16>,
     sacrificed_permanent_mana_value: Option<RulesInteger>,
@@ -314,6 +315,7 @@ impl EffectWindow {
             sacrificed_creature_subtypes: payload
                 .map(|p| p.sacrificed_creature_subtypes.clone())
                 .unwrap_or_default(),
+            sacrificed_lki: payload.and_then(|p| p.sacrificed_lki.clone()),
             paid_creature_taps: payload.map_or(0, |payload| payload.paid_creature_taps),
             target_division: payload
                 .map(|payload| payload.target_division.clone())
@@ -702,6 +704,7 @@ impl EffectWindow {
                 .clone_from(&source.exiled_cost_creature);
             p.sacrificed_creature_subtypes
                 .clone_from(&source.sacrificed_creature_subtypes);
+            p.sacrificed_lki.clone_from(&source.sacrificed_lki);
             p.paid_creature_taps = source.paid_creature_taps;
             p.target_division.clone_from(&source.target_division);
             p.revealed_cost_card.clone_from(&source.revealed_cost_card);

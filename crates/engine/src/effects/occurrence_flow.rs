@@ -161,10 +161,15 @@ impl EffectWindow {
                 if completion == crate::occurrence::EntryCompletion::Resolved
                     && destination == Some(ObjectDestination::Graveyard)
                     && entry.cast_from_controllers_hand()
-                    && before
-                        .evaluated
-                        .get(*object)
-                        .is_some_and(|current| current.has_keyword(KeywordAbility::Rebound)) =>
+                    && before.evaluated.get(*object).is_some_and(|current| {
+                        current.has_keyword(KeywordAbility::Rebound)
+                            || self.spell_has_granted_keyword(
+                                &before.evaluated,
+                                current,
+                                entry.controller(),
+                                KeywordAbility::Rebound,
+                            )
+                    }) =>
             {
                 before.view().appearance(*object)
             }
@@ -1285,17 +1290,32 @@ impl EffectWindow {
                         let mut values = vec![value];
                         if current.evaluated.objects.values().any(|source| {
                             source.zone == ObjectZone::Battlefield
-                                && source.controller == Some(player)
-                                && source.printed_text.triggered.iter().any(|ability| {
-                                    matches!(
-                                        ability.condition.event,
-                                        crate::program::TriggerEvent::PlayerAction {
-                                            player: crate::program::PlayerRelation::Controller,
-                                            action: crate::program::PlayerTriggerAction::DrewCard {
-                                                nth_each_turn: Some(number),
-                                            },
-                                        } if ordinal == i64::from(number.get()).into()
-                                    ) && source.abilities.triggered.contains(&ability.id)
+                                && source.controller.is_some_and(|ctrl| {
+                                    source.printed_text.triggered.iter().any(|ability| {
+                                        source.abilities.triggered.contains(&ability.id)
+                                            && match ability.condition.event {
+                                                crate::program::TriggerEvent::PlayerAction {
+                                                    player: rel,
+                                                    action:
+                                                        crate::program::PlayerTriggerAction::DrewCard {
+                                                            nth_each_turn: Some(number),
+                                                        },
+                                                } if ordinal == i64::from(number.get()).into() => {
+                                                    match rel {
+                                                        crate::program::PlayerRelation::Controller => {
+                                                            ctrl == player
+                                                        }
+                                                        crate::program::PlayerRelation::Opponent => {
+                                                            ctrl != player
+                                                        }
+                                                        crate::program::PlayerRelation::AnyParticipant => {
+                                                            true
+                                                        }
+                                                    }
+                                                }
+                                                _ => false,
+                                            }
+                                    })
                                 })
                         }) {
                             values.push(RulesOccurrence::CardDrawOrdinal {
@@ -4346,6 +4366,19 @@ impl EffectWindow {
             .map(|m| m.after.id())
             .collect::<Vec<_>>();
         self.characteristics.register_battlefield_entries(&ids)?;
+        if matches!(origin, LinkedReturnOrigin::Manifest { .. })
+            && !ids.is_empty()
+            && let Some(cursor) = self.resolution_cursor_mut()
+        {
+            cursor
+                .results
+                .last_moved_objects
+                .extend(ids.iter().copied());
+            cursor.results.last_action_succeeded = true;
+            cursor.results.last_action_count = Some(RulesInteger::from_usize(
+                cursor.results.last_moved_objects.len(),
+            ));
+        }
         if let Some(entry) = wake_entry {
             let controller = self
                 .window

@@ -656,6 +656,41 @@ impl EffectWindow {
                                     )
                             })
                             .count(),
+                        ValueZone::AllHands => evaluated
+                            .objects
+                            .values()
+                            .filter(|o| {
+                                matches!(o.zone, ObjectZone::Hand(_))
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        o,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count(),
+                        ValueZone::OpponentsHands => {
+                            let opponents = self
+                                .combat_rules
+                                .opponents(self.window.participants(), controller)?;
+                            evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    matches!(o.zone, ObjectZone::Hand(s) if opponents.contains(&s))
+                                        && self.matches_object_filter(
+                                            bound_filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count()
+                        }
                     };
                     best = Some(match best {
                         Some(prev) => {
@@ -822,6 +857,10 @@ impl EffectWindow {
                     SourceStateExpr::Prepared => {
                         i64::from(self.characteristics.prepared.contains(&source_id)).into()
                     }
+                    SourceStateExpr::EntryOptionChosen(expected) => i64::from(
+                        self.characteristics.entry_option_choices.get(&source_id) == Some(expected),
+                    )
+                    .into(),
                     SourceStateExpr::Goaded => i64::from(
                         self.goaded
                             .get(&source_id)
@@ -1166,6 +1205,47 @@ impl EffectWindow {
                             .values()
                             .filter(|card| {
                                 matches!(card.zone, ObjectZone::Graveyard(_))
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        card,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count();
+                        Ok(RulesInteger::from_usize(count))
+                    }
+                    ValueZone::AllHands => {
+                        let evaluated = self.evaluated_characteristics()?;
+                        let count = evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                matches!(card.zone, ObjectZone::Hand(_))
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        card,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count();
+                        Ok(RulesInteger::from_usize(count))
+                    }
+                    ValueZone::OpponentsHands => {
+                        let evaluated = self.evaluated_characteristics()?;
+                        let opponents = self
+                            .combat_rules
+                            .opponents(self.window.participants(), controller)?;
+                        let count = evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                matches!(card.zone, ObjectZone::Hand(s) if opponents.contains(&s))
                                     && self.matches_object_filter(
                                         bound_filter,
                                         card,
@@ -3165,6 +3245,36 @@ impl EffectWindow {
                                         )
                                 })
                                 .count(),
+                            ValueZone::AllHands => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    matches!(o.zone, ObjectZone::Hand(_))
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
+                            ValueZone::OpponentsHands => evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    matches!(o.zone, ObjectZone::Hand(s) if s != seat)
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count(),
                         }
                     };
                     let own = count_for(seat);
@@ -3322,9 +3432,6 @@ impl EffectWindow {
                         before.is_creature() && before.creature_subtypes.contains(&kind)
                     }
                     MatchObjectRef::SacrificedCreature => {
-                        let SubtypeFilter::Has(kind) = clause_a.subtypes else {
-                            return Err(EffectError::InconsistentProgram);
-                        };
                         let entry = self
                             .window
                             .resolving()
@@ -3334,7 +3441,22 @@ impl EffectWindow {
                         else {
                             return Err(EffectError::InconsistentProgram);
                         };
-                        payload.sacrificed_creature_subtypes.contains(&kind)
+                        if let Some(lki) = payload.sacrificed_lki.as_deref() {
+                            let evaluated = self.evaluated_characteristics()?;
+                            let excluded = BTreeSet::new();
+                            self.matches_object_filter(
+                                **filter,
+                                lki,
+                                controller,
+                                resolve_ability_source(),
+                                &excluded,
+                                &evaluated,
+                            )
+                        } else if let SubtypeFilter::Has(kind) = clause_a.subtypes {
+                            payload.sacrificed_creature_subtypes.contains(&kind)
+                        } else {
+                            false
+                        }
                     }
                     MatchObjectRef::AbilitySource => {
                         let source_id =

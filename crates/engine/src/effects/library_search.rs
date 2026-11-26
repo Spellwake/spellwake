@@ -390,27 +390,47 @@ impl EffectWindow {
                     }
                     _ => {}
                 }
-                if let Some(crate::land::EntryTap::UnlessRevealHandLandType(a, b)) = self
+                match self
                     .copiable_program(id)
                     .and_then(Program::permanent)
                     .and_then(|value| value.entry_tap)
                 {
-                    let candidates = self
-                        .window
-                        .cards()
-                        .iter()
-                        .filter(|card| {
-                            card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
-                        })
-                        .filter(|card| {
-                            evaluated.get(card.id()).is_some_and(|value| {
-                                value.current_land_subtypes.contains(&a.land_type())
-                                    || value.current_land_subtypes.contains(&b.land_type())
+                    Some(crate::land::EntryTap::UnlessRevealHandLandType(a, b)) => {
+                        let candidates = self
+                            .window
+                            .cards()
+                            .iter()
+                            .filter(|card| {
+                                card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
                             })
-                        })
-                        .map(GameObject::id)
-                        .collect();
-                    entry_reveals.insert(id, candidates);
+                            .filter(|card| {
+                                evaluated.get(card.id()).is_some_and(|value| {
+                                    value.current_land_subtypes.contains(&a.land_type())
+                                        || value.current_land_subtypes.contains(&b.land_type())
+                                })
+                            })
+                            .map(GameObject::id)
+                            .collect();
+                        entry_reveals.insert(id, candidates);
+                    }
+                    Some(crate::land::EntryTap::UnlessRevealHandSubtype { subtype, .. }) => {
+                        let candidates = self
+                            .window
+                            .cards()
+                            .iter()
+                            .filter(|card| {
+                                card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
+                            })
+                            .filter(|card| {
+                                evaluated.get(card.id()).is_some_and(|value| {
+                                    value.current_creature_subtypes.contains(&subtype)
+                                })
+                            })
+                            .map(GameObject::id)
+                            .collect();
+                        entry_reveals.insert(id, candidates);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1197,7 +1217,8 @@ impl EffectWindow {
                 crate::land::EntryTap::ChooseCreatureType => {
                     work.creature_types.iter().any(|(id, _)| *id == object)
                 }
-                crate::land::EntryTap::UnlessRevealHandLandType(_, _) => {
+                crate::land::EntryTap::UnlessRevealHandLandType(_, _)
+                | crate::land::EntryTap::UnlessRevealHandSubtype { .. } => {
                     work.reveals.iter().any(|(id, _)| *id == object)
                 }
                 _ => self.resolution_entry_choices.contains_key(&object),

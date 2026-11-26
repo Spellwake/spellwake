@@ -249,6 +249,91 @@ fn try_lower_triggered_mana_ability(
     )))
 }
 
+fn trigger_event_subject_is_self(ev: &TriggerEventAst) -> bool {
+    let mut cur = ev;
+    while let TriggerEventAst::QualifiedTrigger { inner, .. } = cur {
+        cur = inner.as_ref();
+    }
+    match cur {
+        TriggerEventAst::ZoneChange { subject, .. }
+        | TriggerEventAst::PermanentSacrificed { subject, .. }
+        | TriggerEventAst::TapStateChanged { subject, .. }
+        | TriggerEventAst::CountersChanged { subject, .. }
+        | TriggerEventAst::PhaseChanged { subject, .. }
+        | TriggerEventAst::Exiled { subject, .. } => {
+            matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+        }
+        TriggerEventAst::Attacks {
+            subject: Some(s), ..
+        }
+        | TriggerEventAst::DamageDealt {
+            source: Some(s), ..
+        } => matches!(s.as_ref(), SubjectRefAst::SelfObject),
+        _ => false,
+    }
+}
+
+fn is_it_anaphora(subj: &SubjectRefAst) -> bool {
+    matches!(subj, SubjectRefAst::Anaphora(raw) if raw.trim().eq_ignore_ascii_case("it"))
+}
+
+fn replace_compound_it_with_self(ev: &TriggerEventAst) -> TriggerEventAst {
+    match ev {
+        TriggerEventAst::QualifiedTrigger {
+            inner,
+            first_time_each_turn,
+            timing,
+        } => TriggerEventAst::QualifiedTrigger {
+            inner: Box::new(replace_compound_it_with_self(inner)),
+            first_time_each_turn: *first_time_each_turn,
+            timing: timing.clone(),
+        },
+        TriggerEventAst::PermanentSacrificed { player, subject } if is_it_anaphora(subject) => {
+            TriggerEventAst::PermanentSacrificed {
+                player: *player,
+                subject: Box::new(SubjectRefAst::SelfObject),
+            }
+        }
+        TriggerEventAst::Attacks {
+            subject: Some(subj),
+            actor,
+            qualifier,
+            grouped,
+        } if is_it_anaphora(subj) => TriggerEventAst::Attacks {
+            subject: Some(Box::new(SubjectRefAst::SelfObject)),
+            actor: *actor,
+            qualifier: qualifier.clone(),
+            grouped: *grouped,
+        },
+        TriggerEventAst::ZoneChange {
+            from,
+            to,
+            subject,
+            grouped,
+            entering_controller,
+        } if is_it_anaphora(subject) => TriggerEventAst::ZoneChange {
+            from: from.clone(),
+            to: to.clone(),
+            subject: Box::new(SubjectRefAst::SelfObject),
+            grouped: *grouped,
+            entering_controller: *entering_controller,
+        },
+        TriggerEventAst::TapStateChanged {
+            subject,
+            tapped,
+            for_mana,
+        } if is_it_anaphora(subject) => TriggerEventAst::TapStateChanged {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            tapped: *tapped,
+            for_mana: *for_mana,
+        },
+        TriggerEventAst::Exiled { subject } if is_it_anaphora(subject) => TriggerEventAst::Exiled {
+            subject: Box::new(SubjectRefAst::SelfObject),
+        },
+        other => other.clone(),
+    }
+}
+
 fn body_contains_graveyard_self_return_instruction(body: &ExecutableBody) -> bool {
     body.instructions.iter().any(|op| {
         matches!(
@@ -525,6 +610,21 @@ pub(super) fn lower_ability(
                 });
                 return Ok(());
             }
+            let resolved_compound_trigger =
+                if trigger.events.len() >= 2 && trigger_event_subject_is_self(&trigger.events[0]) {
+                    let mut events = Vec::with_capacity(trigger.events.len());
+                    events.push(trigger.events[0].clone());
+                    for ev in &trigger.events[1..] {
+                        events.push(replace_compound_it_with_self(ev));
+                    }
+                    Some(TriggerSpecAst {
+                        events,
+                        intervening_if: trigger.intervening_if.clone(),
+                    })
+                } else {
+                    None
+                };
+            let trigger = resolved_compound_trigger.as_ref().unwrap_or(trigger);
             if trigger.events.len() >= 2 {
                 let mut branch_specs = Vec::with_capacity(trigger.events.len());
                 let mut all_branches_ok = true;
@@ -1058,12 +1158,107 @@ fn build_single_triggered_ability(
         b
     };
     apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, self_pronoun);
+    if grouping == TriggerGrouping::OneOrMoreTogether
+        && is_player_attacks_one_or_more_opponents_trigger(&unwrapped_for_self)
+    {
+        // CR 508.1: in a declare-attackers trigger "Whenever a player attacks one or more
+        // of your opponents, that attacking player ...", the attacking player is always the
+        // active player while grouping remains OneOrMoreTogether (once per combat declaration).
+        rewrite_body_unique_related_player(&mut exec_body, ResolvingPlayer::ActivePlayer);
+    }
     Ok(TriggeredAbility {
         id: ids.triggered(),
         condition: spec,
         grouping,
         body: exec_body,
     })
+}
+
+fn is_player_attacks_one_or_more_opponents_trigger(trigger: &TriggerSpecAst) -> bool {
+    matches!(
+        trigger.events.as_slice(),
+        [TriggerEventAst::Attacks {
+            subject: Some(subj),
+            actor: None,
+            qualifier: Some(q),
+            ..
+        }] if matches!(
+            subj.as_ref(),
+            SubjectRefAst::Player(
+                PlayerRefAst::AnyPlayer
+                    | PlayerRefAst::EachPlayer
+                    | PlayerRefAst::AnyOpponent
+                    | PlayerRefAst::EachOpponent
+            )
+        ) && q.trim().eq_ignore_ascii_case("one or more of your opponents")
+    )
+}
+
+fn rewrite_resolving_player_if_unique(player: &mut ResolvingPlayer, replacement: ResolvingPlayer) {
+    if *player == ResolvingPlayer::UniqueRelatedPlayer {
+        *player = replacement;
+    }
+}
+
+fn rewrite_affected_players_if_unique(players: &mut AffectedPlayers, replacement: ResolvingPlayer) {
+    if let AffectedPlayers::One(p) = players {
+        rewrite_resolving_player_if_unique(p, replacement);
+    }
+}
+
+fn rewrite_instructions_unique_related_player(
+    instructions: &mut [Instruction],
+    replacement: ResolvingPlayer,
+) {
+    for op in instructions {
+        match op {
+            Instruction::CreateTokens { creations }
+            | Instruction::CreateAttackingTokens { creations, .. } => {
+                for creation in creations {
+                    if let TokenRecipients::Player(p) = &mut creation.recipients {
+                        rewrite_resolving_player_if_unique(p, replacement);
+                    }
+                }
+            }
+            Instruction::DrawPlayer { players, .. }
+            | Instruction::AdjustPlayersLife { players, .. }
+            | Instruction::Discard { players, .. }
+            | Instruction::DiscardFiltered { players, .. }
+            | Instruction::Sacrifice { players, .. }
+            | Instruction::SacrificeUpTo { players, .. }
+            | Instruction::AddPlayerCounter { players, .. } => {
+                rewrite_affected_players_if_unique(players, replacement);
+            }
+            Instruction::Mill { player, .. }
+            | Instruction::Scry { player, .. }
+            | Instruction::Surveil { player, .. }
+            | Instruction::AddManaForPlayer { player, .. } => {
+                rewrite_resolving_player_if_unique(player, replacement);
+            }
+            Instruction::OptionalSequence { chooser, .. } => {
+                rewrite_resolving_player_if_unique(chooser, replacement);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rewrite_body_unique_related_player(
+    exec_body: &mut ExecutableBody,
+    replacement: ResolvingPlayer,
+) {
+    rewrite_instructions_unique_related_player(&mut exec_body.instructions, replacement);
+    if let Some(modes) = exec_body.triggered_modes_mut() {
+        if let Some(prefix) = modes.prefix.as_deref_mut() {
+            rewrite_instructions_unique_related_player(&mut prefix.instructions, replacement);
+        }
+        if let Some(suffix) = modes.suffix.as_deref_mut() {
+            rewrite_instructions_unique_related_player(&mut suffix.instructions, replacement);
+        }
+        for opt in &mut modes.options {
+            rewrite_instructions_unique_related_player(&mut opt.instructions, replacement);
+        }
+    }
 }
 
 pub(super) fn parse_mana_cost_with_snow(
@@ -4436,7 +4631,79 @@ fn unwrap_qualified_trigger(
         }
         match timing_part {
             "during_your_turn" => push_cond(TriggerCondition::ControllersTurn),
-            "during_opponents_turn" => push_cond(TriggerCondition::OpponentsTurn),
+            "during_opponents_turn" | "during_an_opponents_turn" | "during_each_opponents_turn" => {
+                push_cond(TriggerCondition::OpponentsTurn)
+            }
+            "during_their_turn" => {
+                if matches!(
+                    ev,
+                    TriggerEventAst::SpellCast { .. }
+                        | TriggerEventAst::CardDrawn { .. }
+                        | TriggerEventAst::LifeChanged { .. }
+                        | TriggerEventAst::LandPlayed { .. }
+                        | TriggerEventAst::CardPlayed { .. }
+                        | TriggerEventAst::CardDiscarded { .. }
+                        | TriggerEventAst::CardMilled { .. }
+                        | TriggerEventAst::PermanentSacrificed { .. }
+                        | TriggerEventAst::AbilityActivated { .. }
+                        | TriggerEventAst::QualifiedAbilityActivated { .. }
+                        | TriggerEventAst::CrimeCommitted { .. }
+                        | TriggerEventAst::Attacks { .. }
+                        | TriggerEventAst::DamageDealt { .. }
+                        | TriggerEventAst::TapStateChanged { .. }
+                        | TriggerEventAst::ZoneChange { .. }
+                        | TriggerEventAst::KeywordActionPerformed { .. }
+                ) {
+                    push_cond(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(
+                            ResolvingPlayer::UniqueRelatedPlayer,
+                        )),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    })));
+                } else {
+                    return Err("oracle:unsupported-trigger-qualifier");
+                }
+            }
+            "during_your_main_phase" => {
+                push_cond(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(TriggerCondition::Or(
+                        Box::new(TriggerCondition::DuringStep(Step::PrecombatMain)),
+                        Box::new(TriggerCondition::DuringStep(Step::PostcombatMain)),
+                    )),
+                ));
+            }
+            "during_main_phase" => {
+                push_cond(TriggerCondition::Or(
+                    Box::new(TriggerCondition::DuringStep(Step::PrecombatMain)),
+                    Box::new(TriggerCondition::DuringStep(Step::PostcombatMain)),
+                ));
+            }
+            "during_your_upkeep" => {
+                push_cond(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(TriggerCondition::DuringStep(Step::Upkeep)),
+                ));
+            }
+            "during_your_end_step" => {
+                push_cond(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(TriggerCondition::DuringStep(Step::End)),
+                ));
+            }
+            "during_your_draw_step" => {
+                push_cond(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(TriggerCondition::DuringStep(Step::Draw)),
+                ));
+            }
+            "during_your_combat" | "during_combat_on_your_turn" => {
+                push_cond(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(combat_steps_condition()),
+                ));
+            }
             "during_combat" => push_cond(combat_steps_condition()),
             "during_declare_attackers_step" => {
                 push_cond(TriggerCondition::DuringStep(Step::DeclareAttackers));
@@ -4451,18 +4718,40 @@ fn unwrap_qualified_trigger(
                 }
             }
             "other_than_first_each_turn" => {
-                if matches!(
-                    ev,
-                    TriggerEventAst::SpellCast {
-                        caster: PlayerRefAst::You,
-                        spell,
-                        self_spell: false,
-                        targets: None,
-                        nth_each_turn: None,
-                        include_copy: false,
-                    } if spell.as_deref().is_none_or(is_unrestricted_filter)
-                ) {
-                    push_cond(TriggerCondition::ControllerCastSpellsThisTurn(2));
+                if let TriggerEventAst::SpellCast {
+                    caster,
+                    spell,
+                    self_spell: false,
+                    targets: None,
+                    nth_each_turn: None,
+                    include_copy: false,
+                } = ev
+                    && spell.as_deref().is_none_or(is_unrestricted_filter)
+                {
+                    match caster {
+                        PlayerRefAst::You => {
+                            push_cond(TriggerCondition::ControllerCastSpellsThisTurn(2));
+                        }
+                        PlayerRefAst::AnyOpponent
+                        | PlayerRefAst::EachOpponent
+                        | PlayerRefAst::AnyPlayer
+                        | PlayerRefAst::EachPlayer => {
+                            push_cond(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                left: ValueExpr::PlayerStat(
+                                    PlayerStatExpr::SpellsCastMatchingThisTurn {
+                                        players: AffectedPlayers::One(
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                        ),
+                                        filter: Box::new(ObjectFilter::any()),
+                                        from_zone: None,
+                                    },
+                                ),
+                                comparison: Comparison::GreaterOrEqual,
+                                right: ValueExpr::literal(2),
+                            })));
+                        }
+                        _ => return Err("oracle:unsupported-trigger-qualifier"),
+                    }
                 } else {
                     return Err("oracle:unsupported-trigger-qualifier");
                 }
@@ -4641,6 +4930,127 @@ pub(super) fn lower_trigger_spec(
                             extra_cond = Some(TriggerCondition::ControllersTurn);
                             handled_single = true;
                         }
+                        "an opponent loses life for the first time during each of their turns" => {
+                            events.push(TriggerEvent::LifeChanged {
+                                kind: LifeChangeKind::Loss,
+                                player: PlayerRelation::Opponent,
+                            });
+                            grouping = TriggerGrouping::OneOrMoreOnceEachTurn;
+                            extra_cond =
+                                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::PlayerStat(
+                                        PlayerStatExpr::PlayerIsActivePlayer(
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                        ),
+                                    ),
+                                    comparison: Comparison::Equal,
+                                    right: ValueExpr::literal(1),
+                                })));
+                            handled_single = true;
+                        }
+                        "you cast an instant or sorcery spell during your main phase" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::from_object(ObjectFilter::Clause(
+                                    ObjectClause::any().any_types(
+                                        CardTypeMask::INSTANT.union(CardTypeMask::SORCERY),
+                                    ),
+                                )),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(own_main_phase());
+                            handled_single = true;
+                        }
+                        "you cast a creature spell during your main phase" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::from_object(ObjectFilter::creature()),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(own_main_phase());
+                            handled_single = true;
+                        }
+                        "you cast a noncreature spell during your main phase" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::from_object(ObjectFilter::Clause(
+                                    ObjectClause::any().noncreature(),
+                                )),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(own_main_phase());
+                            handled_single = true;
+                        }
+                        "you cast a spell during an opponent's turn" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(TriggerCondition::OpponentsTurn);
+                            handled_single = true;
+                        }
+                        "an opponent casts a spell during your turn" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(TriggerCondition::ControllersTurn);
+                            handled_single = true;
+                        }
+                        "an opponent casts a spell during their turn" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond =
+                                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::PlayerStat(
+                                        PlayerStatExpr::PlayerIsActivePlayer(
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                        ),
+                                    ),
+                                    comparison: Comparison::Equal,
+                                    right: ValueExpr::literal(1),
+                                })));
+                            handled_single = true;
+                        }
+                        "a player casts a spell during their turn" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(
+                                    PlayerRelation::AnyParticipant,
+                                ),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond =
+                                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::PlayerStat(
+                                        PlayerStatExpr::PlayerIsActivePlayer(
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                        ),
+                                    ),
+                                    comparison: Comparison::Equal,
+                                    right: ValueExpr::literal(1),
+                                })));
+                            handled_single = true;
+                        }
                         "whenever ~ saddles a mount or crews a vehicle during your main phase"
                         | "~ saddles a mount or crews a vehicle during your main phase" => {
                             events.push(TriggerEvent::AnyOf(vec![
@@ -4656,7 +5066,117 @@ pub(super) fn lower_trigger_spec(
                             extra_cond = Some(own_main_phase());
                             handled_single = true;
                         }
-                        _ => {}
+                        _ => {
+                            // Filtered or player-parameterized Nth spell triggers:
+                            // "you cast your second <filter> spell each turn"
+                            // "an opponent casts their second [<filter>] spell each turn"
+                            // "a player casts their second [<filter>] spell each turn"
+                            let nth_parts = low
+                                .strip_prefix("you cast your ")
+                                .map(|r| {
+                                    (PlayerRelation::Controller, ResolvingPlayer::Controller, r)
+                                })
+                                .or_else(|| {
+                                    low.strip_prefix("an opponent casts their ").map(|r| {
+                                        (
+                                            PlayerRelation::Opponent,
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                            r,
+                                        )
+                                    })
+                                })
+                                .or_else(|| {
+                                    low.strip_prefix("a player casts their ").map(|r| {
+                                        (
+                                            PlayerRelation::AnyParticipant,
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                            r,
+                                        )
+                                    })
+                                });
+                            if let Some((caster_rel, count_rp, after_who)) = nth_parts
+                                && let Some(mid) = after_who
+                                    .strip_suffix(" spell each turn")
+                                    .or_else(|| after_who.strip_suffix(" spell in a turn"))
+                            {
+                                let (ord_word, flt_opt) = match mid.trim().split_once(' ') {
+                                    Some((o, f)) => (o.trim(), Some(f.trim())),
+                                    None => (mid.trim(), None),
+                                };
+                                let ord_n: Option<u32> = match ord_word {
+                                    "first" | "1st" => Some(1),
+                                    "second" | "2nd" => Some(2),
+                                    "third" | "3rd" => Some(3),
+                                    "fourth" | "4th" => Some(4),
+                                    "fifth" | "5th" => Some(5),
+                                    _ => None,
+                                };
+                                if let Some(n) = ord_n
+                                    && let Some(nz) = NonZeroU32::new(n)
+                                {
+                                    match flt_opt {
+                                        None => {
+                                            events.push(TriggerEvent::SpellCast {
+                                                caster: TriggerPlayerScope::Relation(caster_rel),
+                                                filter: SpellFilter::any().ordinal_this_turn(nz),
+                                                self_cast: false,
+                                                include_copy: false,
+                                                min_mana_value: None,
+                                            });
+                                            handled_single = true;
+                                        }
+                                        Some(flt_raw) => {
+                                            let compiler_vocab = cached_compiler_vocab(vocabulary);
+                                            let spell_phrase = format!("{flt_raw} spell");
+                                            if let Ok(parsed) =
+                                                spellwake_oracle_compiler::filter::parse_object_filter(
+                                                    &spell_phrase,
+                                                    &compiler_vocab,
+                                                )
+                                                && parsed.zone.is_none()
+                                                && parsed.extra_zones.is_empty()
+                                                && parsed.controller.is_none()
+                                                && parsed.owner.is_none()
+                                                && parsed.named.is_none()
+                                                && parsed.predicates.is_empty()
+                                                && parsed.flags.is_empty()
+                                                && let Ok(obj) =
+                                                    lower_object_filter(&parsed, vocabulary)
+                                                && filter_supported_by_cast_spell_record(&obj)
+                                                && let Ok(sf) =
+                                                    lower_spell_filter(&parsed, vocabulary)
+                                            {
+                                                events.push(TriggerEvent::SpellCast {
+                                                    caster: TriggerPlayerScope::Relation(
+                                                        caster_rel,
+                                                    ),
+                                                    filter: sf,
+                                                    self_cast: false,
+                                                    include_copy: false,
+                                                    min_mana_value: None,
+                                                });
+                                                extra_cond = Some(TriggerCondition::Eval(
+                                                    Box::new(ResolutionCondition {
+                                                        left: ValueExpr::PlayerStat(
+                                                            PlayerStatExpr::SpellsCastMatchingThisTurn {
+                                                                players: AffectedPlayers::One(
+                                                                    count_rp,
+                                                                ),
+                                                                filter: Box::new(obj),
+                                                                from_zone: None,
+                                                            },
+                                                        ),
+                                                        comparison: Comparison::Equal,
+                                                        right: ValueExpr::literal(i64::from(n)),
+                                                    }),
+                                                ));
+                                                handled_single = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -4705,6 +5225,82 @@ pub(super) fn lower_trigger_spec(
                         comparison: lower_comparison(sb.op),
                         right: rhs,
                     })));
+                    handled_single = true;
+                }
+            }
+            TriggerEventAst::Attacks {
+                subject,
+                actor,
+                qualifier: Some(q),
+                grouped,
+            } if !has_intervening_if
+                && q.trim()
+                    .to_ascii_lowercase()
+                    .ends_with(" for the first time each turn") =>
+            {
+                let q_low = q.trim().to_ascii_lowercase();
+                if let Some(stripped) = q_low.strip_suffix(" for the first time each turn") {
+                    let inner_ev = TriggerEventAst::Attacks {
+                        subject: subject.clone(),
+                        actor: *actor,
+                        qualifier: Some(stripped.trim().to_owned()),
+                        grouped: *grouped,
+                    };
+                    let (e, g) = lower_trigger_event(&inner_ev, vocabulary)?;
+                    if g != TriggerGrouping::EachOccurrence {
+                        grouping = g;
+                    }
+                    events.push(e);
+                    qualified_first_time = true;
+                    handled_single = true;
+                }
+            }
+            TriggerEventAst::CardDrawn { player, qualifier } => {
+                let q_low = qualifier.trim().to_ascii_lowercase();
+                let own_turn_related = || {
+                    TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(
+                            ResolvingPlayer::UniqueRelatedPlayer,
+                        )),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    }))
+                };
+                let timing_split = q_low
+                    .strip_suffix(" during an opponent's turn")
+                    .map(|p| (p.trim(), TriggerCondition::OpponentsTurn))
+                    .or_else(|| {
+                        q_low
+                            .strip_suffix(" during your turn")
+                            .or_else(|| q_low.strip_suffix(" during each of your turns"))
+                            .map(|p| (p.trim(), TriggerCondition::ControllersTurn))
+                    })
+                    .or_else(|| {
+                        let p = q_low
+                            .strip_suffix(" during their turn")
+                            .or_else(|| q_low.strip_suffix(" during that player's turn"))
+                            .or_else(|| q_low.strip_suffix(" during each of their turns"))?;
+                        let cond = match player {
+                            PlayerRefAst::You => TriggerCondition::ControllersTurn,
+                            PlayerRefAst::AnyPlayer
+                            | PlayerRefAst::EachPlayer
+                            | PlayerRefAst::AnyOpponent
+                            | PlayerRefAst::EachOpponent => own_turn_related(),
+                            _ => return None,
+                        };
+                        Some((p.trim(), cond))
+                    });
+                if let Some((prefix, turn_cond)) = timing_split {
+                    let inner_ev = TriggerEventAst::CardDrawn {
+                        player: *player,
+                        qualifier: prefix.to_owned(),
+                    };
+                    let (e, g) = lower_trigger_event(&inner_ev, vocabulary)?;
+                    if g != TriggerGrouping::EachOccurrence {
+                        grouping = g;
+                    }
+                    events.push(e);
+                    extra_cond = Some(turn_cond);
                     handled_single = true;
                 }
             }
@@ -5596,6 +6192,66 @@ pub(super) fn lower_trigger_event(
                         TriggerGrouping::EachOccurrence,
                     ));
                 }
+                "each opponent's precombat main phase"
+                | "each of each opponent's precombat main phases"
+                | "each opponent's first main phase"
+                | "an opponent's precombat main phase" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PrecombatMain,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each opponent's postcombat main phase"
+                | "each of each opponent's postcombat main phases"
+                | "each opponent's second main phase"
+                | "an opponent's postcombat main phase" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PostcombatMain,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each opponent's main phase"
+                | "each of each opponent's main phases"
+                | "an opponent's main phase" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::StepBegan {
+                                step: Step::PrecombatMain,
+                                player: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                            },
+                            TriggerEvent::StepBegan {
+                                step: Step::PostcombatMain,
+                                player: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each player's main phase" | "each main phase" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::StepBegan {
+                                step: Step::PrecombatMain,
+                                player: TriggerPlayerScope::Relation(
+                                    PlayerRelation::AnyParticipant,
+                                ),
+                            },
+                            TriggerEvent::StepBegan {
+                                step: Step::PostcombatMain,
+                                player: TriggerPlayerScope::Relation(
+                                    PlayerRelation::AnyParticipant,
+                                ),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
                 "combat on your turn" => {
                     return Ok((
                         TriggerEvent::StepBegan {
@@ -5614,7 +6270,9 @@ pub(super) fn lower_trigger_event(
                         TriggerGrouping::EachOccurrence,
                     ));
                 }
-                "combat on each opponent's turn" | "combat on an opponent's turn" => {
+                "combat on each opponent's turn"
+                | "combat on an opponent's turn"
+                | "combat on each other player's turn" => {
                     return Ok((
                         TriggerEvent::StepBegan {
                             step: Step::BeginningCombat,
@@ -5915,7 +6573,28 @@ pub(super) fn lower_trigger_event(
             qualifier,
             grouped,
         } => {
-            let mut subjects = match (subject, actor) {
+            let mut player_level_attack = false;
+            let mut subjects = match (subject.as_deref(), actor) {
+                (Some(SubjectRefAst::Player(PlayerRefAst::You)), None) => {
+                    player_level_attack = true;
+                    vec![ObjectFilter::creature().controlled()]
+                }
+                (
+                    Some(SubjectRefAst::Player(
+                        PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
+                    )),
+                    None,
+                ) => {
+                    player_level_attack = true;
+                    vec![ObjectFilter::creature().opposing()]
+                }
+                (
+                    Some(SubjectRefAst::Player(PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer)),
+                    None,
+                ) => {
+                    player_level_attack = true;
+                    vec![ObjectFilter::creature()]
+                }
                 (Some(s), _) => lower_trigger_subject_filters(s, vocabulary)?,
                 (None, None | Some(PlayerRefAst::You)) => {
                     vec![ObjectFilter::creature().controlled()]
@@ -5928,7 +6607,7 @@ pub(super) fn lower_trigger_event(
                 }
                 _ => return Err("oracle:unsupported-trigger-event"),
             };
-            let mut grouping = if *grouped {
+            let mut grouping = if *grouped || (player_level_attack && qualifier.is_none()) {
                 TriggerGrouping::OneOrMoreTogether
             } else {
                 TriggerGrouping::EachOccurrence
@@ -5957,6 +6636,10 @@ pub(super) fn lower_trigger_event(
                 Some("opponent" | "an opponent" | "one of your opponents") => {
                     AttackTriggerMode::AtOpponent
                 }
+                Some("one or more of your opponents") => {
+                    grouping = TriggerGrouping::OneOrMoreTogether;
+                    AttackTriggerMode::AtOpponent
+                }
                 Some("player" | "a player" | "one or more players") => AttackTriggerMode::AtPlayer,
                 Some("planeswalker" | "a planeswalker") => AttackTriggerMode::AtPlaneswalker,
                 Some("enchanted_player" | "enchanted player") => {
@@ -5969,18 +6652,7 @@ pub(super) fn lower_trigger_event(
                 Some("first_time_each_turn") => AttackTriggerMode::FirstThisTurn {
                     highest_life: false,
                 },
-                Some("two_or_more" | "two or more creatures" | "2 or more creatures") => {
-                    AttackTriggerMode::GroupAtLeast(2)
-                }
-                Some("three or more creatures" | "3 or more creatures") => {
-                    AttackTriggerMode::GroupAtLeast(3)
-                }
-                Some("four or more creatures" | "4 or more creatures") => {
-                    AttackTriggerMode::GroupAtLeast(4)
-                }
-                Some("five or more creatures" | "5 or more creatures") => {
-                    AttackTriggerMode::GroupAtLeast(5)
-                }
+                Some("two_or_more") => AttackTriggerMode::GroupAtLeast(2),
                 Some("one or more equipped creatures") => AttackTriggerMode::EquippedAtPlayer,
                 Some(
                     "the most life"
@@ -5988,7 +6660,74 @@ pub(super) fn lower_trigger_event(
                     | "the most life or tied for the most life",
                 ) => AttackTriggerMode::HighestLifeDefender,
                 Some(other) => {
-                    if let Some(n_str) = other
+                    let core = if subject.is_none() && actor.is_some() {
+                        other.strip_prefix("with ").map_or(other, str::trim)
+                    } else {
+                        other
+                    };
+                    if subject.is_none() && actor.is_some() && core == "one or more creatures" {
+                        grouping = TriggerGrouping::OneOrMoreTogether;
+                        AttackTriggerMode::Individual {
+                            capture_defender: false,
+                        }
+                    } else if subject.is_none()
+                        && matches!(actor, None | Some(PlayerRefAst::You))
+                        && core == "your commander"
+                    {
+                        subjects = vec![ObjectFilter::Clause(ObjectClause {
+                            owner: ControllerFilter::You,
+                            flags: ObjectFilterFlags::COMMANDER_ONLY,
+                            ..ObjectClause::any()
+                        })];
+                        grouping = TriggerGrouping::OneOrMoreTogether;
+                        AttackTriggerMode::Individual {
+                            capture_defender: false,
+                        }
+                    } else if subject.is_none()
+                        && matches!(actor, None | Some(PlayerRefAst::You))
+                        && matches!(
+                            core,
+                            "a commander you control" | "your commander you control"
+                        )
+                    {
+                        subjects = vec![ObjectFilter::Clause(ObjectClause {
+                            controller: ControllerFilter::You,
+                            flags: ObjectFilterFlags::COMMANDER_ONLY,
+                            ..ObjectClause::any()
+                        })];
+                        grouping = TriggerGrouping::OneOrMoreTogether;
+                        AttackTriggerMode::Individual {
+                            capture_defender: false,
+                        }
+                    } else if subject.is_none()
+                        && matches!(actor, None | Some(PlayerRefAst::You))
+                        && matches!(
+                            core,
+                            "~ and/or your commander" | "this creature and/or your commander"
+                        )
+                    {
+                        subjects = vec![
+                            ObjectFilter::self_object(),
+                            ObjectFilter::Clause(ObjectClause {
+                                owner: ControllerFilter::You,
+                                flags: ObjectFilterFlags::COMMANDER_ONLY,
+                                ..ObjectClause::any()
+                            }),
+                        ];
+                        grouping = TriggerGrouping::OneOrMoreTogether;
+                        AttackTriggerMode::Individual {
+                            capture_defender: false,
+                        }
+                    } else if let Some(after_you) = other.strip_prefix("you with ")
+                        && matches!(
+                            actor,
+                            Some(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent)
+                        )
+                        && let Some((n, "creatures")) = parse_attack_count_prefix(after_you.trim())
+                    {
+                        grouping = TriggerGrouping::OneOrMoreTogether;
+                        AttackTriggerMode::OpponentsAtController { minimum: n }
+                    } else if let Some(n_str) = core
                         .strip_prefix("creatures with total power ")
                         .and_then(|r| r.strip_suffix(" or greater"))
                         && let Ok(n) = n_str.trim().parse::<u16>()
@@ -6046,22 +6785,13 @@ pub(super) fn lower_trigger_event(
                             TriggerGrouping::OneOrMoreTogether
                         };
                         def_mode
-                    } else if let Some((count_prefix, flt_raw)) = [
-                        ("two or more ", 2u8),
-                        ("2 or more ", 2u8),
-                        ("three or more ", 3u8),
-                        ("3 or more ", 3u8),
-                        ("four or more ", 4u8),
-                        ("4 or more ", 4u8),
-                        ("five or more ", 5u8),
-                        ("5 or more ", 5u8),
-                    ]
-                    .into_iter()
-                    .find_map(|(pfx, n)| other.strip_prefix(pfx).map(|r| (n, r.trim())))
+                    } else if let Some(flt_raw) = core.strip_prefix("one or more ")
+                        && subject.is_none()
+                        && actor.is_some()
                     {
                         let compiler_vocab = cached_compiler_vocab(vocabulary);
                         let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
-                            flt_raw,
+                            flt_raw.trim(),
                             &compiler_vocab,
                         )
                         .map_err(|_| "oracle:unsupported-attack-qualifier")?;
@@ -6076,6 +6806,28 @@ pub(super) fn lower_trigger_event(
                             f = f.opposing();
                         }
                         subjects = vec![f];
+                        grouping = TriggerGrouping::OneOrMoreTogether;
+                        AttackTriggerMode::GroupAtLeast(1)
+                    } else if let Some((count_prefix, flt_raw)) = parse_attack_count_prefix(core) {
+                        if flt_raw != "creatures" {
+                            let compiler_vocab = cached_compiler_vocab(vocabulary);
+                            let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+                                flt_raw,
+                                &compiler_vocab,
+                            )
+                            .map_err(|_| "oracle:unsupported-attack-qualifier")?;
+                            let mut f = lower_object_filter(&parsed, vocabulary)
+                                .map_err(|_| "oracle:unsupported-attack-qualifier")?;
+                            if matches!(actor, None | Some(PlayerRefAst::You)) {
+                                f = f.controlled();
+                            } else if matches!(
+                                actor,
+                                Some(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent)
+                            ) {
+                                f = f.opposing();
+                            }
+                            subjects = vec![f];
+                        }
                         grouping = TriggerGrouping::OneOrMoreTogether;
                         AttackTriggerMode::GroupAtLeast(count_prefix)
                     } else {
@@ -6330,7 +7082,6 @@ pub(super) fn lower_trigger_event(
             if source.is_none()
                 && !*combat_only
                 && !*noncombat_only
-                && !*grouped
                 && let Some(rec_subj) = recipient.as_deref()
                 && !matches!(
                     rec_subj,
@@ -6345,10 +7096,12 @@ pub(super) fn lower_trigger_event(
                         linked_player: false,
                     })
                     .collect();
-                return Ok((
-                    wrap_trigger_events_any_of(sub_events)?,
-                    TriggerGrouping::EachOccurrence,
-                ));
+                let grouping = if *grouped {
+                    TriggerGrouping::OneOrMoreTogether
+                } else {
+                    TriggerGrouping::EachOccurrence
+                };
+                return Ok((wrap_trigger_events_any_of(sub_events)?, grouping));
             }
             let sources = match source {
                 Some(s) => lower_trigger_subject_filters(s, vocabulary)?,
@@ -6380,34 +7133,111 @@ pub(super) fn lower_trigger_event(
                 Some(SubjectRefAst::TargetPlayerOrPlaneswalker {
                     opponent_only: false,
                 }) => DamageTriggerRecipient::PlayerOrPlaneswalker,
-                Some(SubjectRefAst::Compound(items))
-                    if items.len() == 2
-                        && items.iter().any(|s| {
-                            matches!(
-                                s,
-                                SubjectRefAst::Group(f)
-                                    | SubjectRefAst::Each(f)
-                                    | SubjectRefAst::All(f)
-                                    if f.any_types == AstCardTypeMask::PLANESWALKER
-                            )
-                        }) =>
-                {
-                    if items
-                        .iter()
-                        .any(|s| matches!(s, SubjectRefAst::Player(PlayerRefAst::You)))
-                    {
-                        DamageTriggerRecipient::ControllerOrPlaneswalker
-                    } else if items.iter().any(|s| {
-                        matches!(
-                            s,
+                Some(SubjectRefAst::Compound(items)) if (2..=3).contains(&items.len()) => {
+                    let mut has_controller = false;
+                    let mut has_opponent = false;
+                    let mut has_any_player = false;
+                    let mut has_pw = false;
+                    let mut has_battle = false;
+                    let mut all_recognized = true;
+                    let plain_types = FilterAllow {
+                        types: true,
+                        ..FilterAllow::NONE
+                    };
+                    let types_or_ctrl = FilterAllow {
+                        types: true,
+                        controller: true,
+                        ..FilterAllow::NONE
+                    };
+                    for item in items {
+                        match item {
+                            SubjectRefAst::Player(PlayerRefAst::You) => has_controller = true,
                             SubjectRefAst::Player(
-                                PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent
-                            )
-                        )
-                    }) {
-                        DamageTriggerRecipient::OpponentOrPlaneswalker
-                    } else {
-                        DamageTriggerRecipient::PlayerOrPlaneswalker
+                                PlayerRefAst::AnyOpponent
+                                | PlayerRefAst::EachOpponent
+                                | PlayerRefAst::DefendingPlayer,
+                            ) => has_opponent = true,
+                            SubjectRefAst::Player(
+                                PlayerRefAst::AnyPlayer
+                                | PlayerRefAst::EachPlayer
+                                | PlayerRefAst::TargetPlayer
+                                | PlayerRefAst::ThatPlayer,
+                            ) => has_any_player = true,
+                            SubjectRefAst::TargetPlayerOrPlaneswalker {
+                                opponent_only: false,
+                            } => {
+                                has_any_player = true;
+                                has_pw = true;
+                            }
+                            SubjectRefAst::TargetPlayerOrPlaneswalker {
+                                opponent_only: true,
+                            } => {
+                                has_opponent = true;
+                                has_pw = true;
+                            }
+                            SubjectRefAst::Group(f)
+                            | SubjectRefAst::Each(f)
+                            | SubjectRefAst::All(f)
+                                if f.any_types == AstCardTypeMask::PLANESWALKER
+                                    && filter_only_has(f, types_or_ctrl) =>
+                            {
+                                has_pw = true;
+                            }
+                            SubjectRefAst::Group(f)
+                            | SubjectRefAst::Each(f)
+                            | SubjectRefAst::All(f)
+                                if f.any_types == AstCardTypeMask::BATTLE
+                                    && filter_only_has(f, plain_types) =>
+                            {
+                                has_battle = true;
+                            }
+                            SubjectRefAst::Group(f)
+                            | SubjectRefAst::Each(f)
+                            | SubjectRefAst::All(f)
+                                if f.any_types
+                                    == AstCardTypeMask::PLANESWALKER
+                                        .union(AstCardTypeMask::BATTLE)
+                                    && filter_only_has(f, plain_types) =>
+                            {
+                                has_pw = true;
+                                has_battle = true;
+                            }
+                            _ => {
+                                all_recognized = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !all_recognized {
+                        return Err("oracle:unsupported-damage-recipient");
+                    }
+                    match (
+                        has_controller,
+                        has_opponent,
+                        has_any_player,
+                        has_pw,
+                        has_battle,
+                    ) {
+                        (true, false, false, true, false) => {
+                            DamageTriggerRecipient::ControllerOrPlaneswalker
+                        }
+                        (false, true, false, true, false) => {
+                            DamageTriggerRecipient::OpponentOrPlaneswalker
+                        }
+                        (false, false, true, true, false) => {
+                            DamageTriggerRecipient::PlayerOrPlaneswalker
+                        }
+                        (false, false, true, false, true) => DamageTriggerRecipient::PlayerOrBattle,
+                        (false, true, false, false, true) => {
+                            DamageTriggerRecipient::OpponentOrBattle
+                        }
+                        (false, false, false, true, true) => {
+                            DamageTriggerRecipient::PlaneswalkerOrBattle
+                        }
+                        (false, false, true, true, true) => {
+                            DamageTriggerRecipient::PlayerPlaneswalkerOrBattle
+                        }
+                        _ => return Err("oracle:unsupported-damage-recipient"),
                     }
                 }
                 Some(SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f))
@@ -6421,6 +7251,31 @@ pub(super) fn lower_trigger_event(
                         ) =>
                 {
                     DamageTriggerRecipient::Creature
+                }
+                Some(SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f))
+                    if f.any_types
+                        == AstCardTypeMask::PLANESWALKER.union(AstCardTypeMask::BATTLE)
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                types: true,
+                                ..FilterAllow::NONE
+                            },
+                        ) =>
+                {
+                    DamageTriggerRecipient::PlaneswalkerOrBattle
+                }
+                Some(SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f))
+                    if f.any_types == AstCardTypeMask::PLANESWALKER
+                        && filter_only_has(
+                            f,
+                            FilterAllow {
+                                types: true,
+                                ..FilterAllow::NONE
+                            },
+                        ) =>
+                {
+                    DamageTriggerRecipient::Planeswalker
                 }
                 Some(SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f))
                     if f.any_types == AstCardTypeMask::BATTLE =>
@@ -6474,27 +7329,151 @@ pub(super) fn lower_trigger_event(
         }
         TriggerEventAst::CardDrawn { player, qualifier } => {
             let rel = lower_player_relation(*player)?;
-            let nth = match qualifier.trim().to_ascii_lowercase().as_str() {
+            let q_low = qualifier.trim().to_ascii_lowercase();
+            let is_except_first_in_draw_step = match rel {
+                PlayerRelation::Controller => matches!(
+                    q_low.as_str(),
+                    "a card except the first one you draw in each of your draw steps"
+                        | "a card except the first one you draw in your draw step"
+                        | "a card other than the first one you draw in each of your draw steps"
+                        | "a card other than the first one you draw in your draw step"
+                ),
+                PlayerRelation::Opponent | PlayerRelation::AnyParticipant => matches!(
+                    q_low.as_str(),
+                    "a card except the first one they draw in each of their draw steps"
+                        | "a card except the first one that player draws in each of their draw steps"
+                        | "a card except the first one they draw in their draw step"
+                        | "a card except the first one that player draws in their draw step"
+                        | "a card other than the first one they draw in each of their draw steps"
+                        | "a card other than the first one that player draws in each of their draw steps"
+                        | "a card other than the first one they draw in their draw step"
+                        | "a card other than the first one that player draws in their draw step"
+                ),
+            };
+            if is_except_first_in_draw_step {
+                return Ok((
+                    TriggerEvent::PlayerAction {
+                        player: rel,
+                        action: PlayerTriggerAction::DrewCardExceptFirstInDrawStep,
+                    },
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            let is_first_or_second = q_low == "first or second"
+                || (rel == PlayerRelation::Controller
+                    && matches!(
+                        q_low.as_str(),
+                        "your first or second card each turn"
+                            | "your first or second card in a turn"
+                            | "your first or second card"
+                    ))
+                || (matches!(
+                    rel,
+                    PlayerRelation::Opponent | PlayerRelation::AnyParticipant
+                ) && matches!(
+                    q_low.as_str(),
+                    "their first or second card each turn"
+                        | "their first or second card in a turn"
+                        | "their first or second card"
+                ));
+            if is_first_or_second {
+                return Ok((
+                    TriggerEvent::AnyOf(vec![
+                        TriggerEvent::PlayerAction {
+                            player: rel,
+                            action: PlayerTriggerAction::DrewCard {
+                                nth_each_turn: NonZeroU16::new(1),
+                            },
+                        },
+                        TriggerEvent::PlayerAction {
+                            player: rel,
+                            action: PlayerTriggerAction::DrewCard {
+                                nth_each_turn: NonZeroU16::new(2),
+                            },
+                        },
+                    ]),
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            let nth = match q_low.as_str() {
                 "" | "any" | "a card" | "cards" | "one or more cards" => None,
                 "first"
                 | "1"
+                | "your first card"
                 | "your first card each turn"
+                | "your first card in a turn"
+                | "their first card"
                 | "their first card each turn"
+                | "their first card in a turn"
+                | "a first card"
+                | "the first card they draw"
                 | "the first card they draw each turn" => NonZeroU16::new(1),
                 "second"
                 | "2"
+                | "your second card"
                 | "your second card each turn"
+                | "your second card in a turn"
+                | "their second card"
                 | "their second card each turn"
+                | "their second card in a turn"
+                | "a second card"
                 | "a second card each turn"
-                | "their second card" => NonZeroU16::new(2),
+                | "a second card in a turn" => NonZeroU16::new(2),
                 "third"
                 | "3"
+                | "your third card"
                 | "your third card each turn"
+                | "your third card in a turn"
+                | "their third card"
                 | "their third card each turn"
-                | "a third card each turn" => NonZeroU16::new(3),
-                "fourth" | "4" | "your fourth card each turn" | "their fourth card each turn" => {
-                    NonZeroU16::new(4)
-                }
+                | "their third card in a turn"
+                | "a third card"
+                | "a third card each turn"
+                | "a third card in a turn" => NonZeroU16::new(3),
+                "fourth"
+                | "4"
+                | "your fourth card"
+                | "your fourth card each turn"
+                | "your fourth card in a turn"
+                | "their fourth card"
+                | "their fourth card each turn"
+                | "their fourth card in a turn"
+                | "a fourth card"
+                | "a fourth card each turn"
+                | "a fourth card in a turn" => NonZeroU16::new(4),
+                "fifth"
+                | "5"
+                | "your fifth card"
+                | "your fifth card each turn"
+                | "your fifth card in a turn"
+                | "their fifth card"
+                | "their fifth card each turn"
+                | "their fifth card in a turn"
+                | "a fifth card"
+                | "a fifth card each turn"
+                | "a fifth card in a turn" => NonZeroU16::new(5),
+                "sixth"
+                | "6"
+                | "your sixth card"
+                | "your sixth card each turn"
+                | "your sixth card in a turn"
+                | "their sixth card"
+                | "their sixth card each turn"
+                | "their sixth card in a turn"
+                | "a sixth card"
+                | "a sixth card each turn"
+                | "a sixth card in a turn" => NonZeroU16::new(6),
+                "seventh"
+                | "7"
+                | "your seventh card"
+                | "your seventh card each turn"
+                | "your seventh card in a turn"
+                | "their seventh card"
+                | "their seventh card each turn"
+                | "their seventh card in a turn"
+                | "a seventh card"
+                | "a seventh card each turn"
+                | "a seventh card in a turn" => NonZeroU16::new(7),
                 _ => return Err("oracle:unsupported-draw-qualifier"),
             };
             Ok((
@@ -7277,12 +8256,47 @@ pub(super) fn lower_trigger_event(
                         TriggerGrouping::OneOrMoreTogether,
                     ));
                 }
-                "you activate an ability" => {
+                "you activate an ability" | "you activate an ability that isn't a mana ability" => {
                     return Ok((
                         TriggerEvent::AbilityActivated {
                             player: PlayerRelation::Controller,
                             source_filter: ObjectFilter::any(),
                         },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "an opponent activates an ability"
+                | "an opponent activates an ability that isn't a mana ability" => {
+                    return Ok((
+                        TriggerEvent::AbilityActivated {
+                            player: PlayerRelation::Opponent,
+                            source_filter: ObjectFilter::any(),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "a player activates an ability"
+                | "a player activates an ability that isn't a mana ability" => {
+                    return Ok((
+                        TriggerEvent::AbilityActivated {
+                            player: PlayerRelation::AnyParticipant,
+                            source_filter: ObjectFilter::any(),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "an artifact becomes tapped or a player activates an artifact's ability" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::StatusChanged {
+                                subject: ObjectFilter::artifact(),
+                                kind: StatusTriggerKind::BecomesTapped,
+                            },
+                            TriggerEvent::AbilityActivated {
+                                player: PlayerRelation::AnyParticipant,
+                                source_filter: ObjectFilter::artifact(),
+                            },
+                        ]),
                         TriggerGrouping::EachOccurrence,
                     ));
                 }
@@ -7372,7 +8386,220 @@ pub(super) fn lower_trigger_event(
                         TriggerGrouping::EachOccurrence,
                     ));
                 }
+                "you and/or at least one permanent you control becomes the target of a spell or ability an opponent controls" =>
+                {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::PlayerTargeted {
+                                player: PlayerRelation::Controller,
+                                by_opponent: true,
+                                spell_only: false,
+                                instant_or_sorcery_only: false,
+                            },
+                            TriggerEvent::Targeted {
+                                subject: ObjectFilter::permanent().controlled(),
+                                by_opponent: true,
+                                spell_only: false,
+                                instant_or_sorcery_only: false,
+                            },
+                        ]),
+                        TriggerGrouping::OneOrMoreByPlayer,
+                    ));
+                }
+                "an opponent plays a nonbasic land" => {
+                    return Ok((
+                        TriggerEvent::PlayerAction {
+                            player: PlayerRelation::Opponent,
+                            action: PlayerTriggerAction::LandPlayedFiltered(ObjectFilter::Clause(
+                                ObjectClause {
+                                    forbidden_supertypes: SupertypeMask::BASIC,
+                                    ..ObjectClause::land()
+                                },
+                            )),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "a creature you own but don't control attacks" => {
+                    return Ok((
+                        TriggerEvent::Attacks {
+                            subject: ObjectFilter::Clause(ObjectClause {
+                                owner: ControllerFilter::You,
+                                controller: ControllerFilter::Opponent,
+                                ..ObjectClause::creature()
+                            }),
+                            mode: AttackTriggerMode::Individual {
+                                capture_defender: false,
+                            },
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "you cast an instant or sorcery spell with a single target" => {
+                    return Ok((
+                        TriggerEvent::SpellCast {
+                            caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                            filter: SpellFilter::instant_or_sorcery().single_target(),
+                            self_cast: false,
+                            include_copy: false,
+                            min_mana_value: None,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "~ or another creature you control leaves the battlefield without dying" => {
+                    return Ok((
+                        TriggerEvent::LeavesBattlefieldWithoutDying {
+                            subject: ObjectFilter::creature().controlled().or_self(),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "another creature you control leaves the battlefield without dying" => {
+                    return Ok((
+                        TriggerEvent::LeavesBattlefieldWithoutDying {
+                            subject: ObjectFilter::creature()
+                                .controlled()
+                                .other_than_ability_source(),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "one or more other creatures you control leave the battlefield without dying" => {
+                    return Ok((
+                        TriggerEvent::LeavesBattlefieldWithoutDying {
+                            subject: ObjectFilter::creature()
+                                .controlled()
+                                .other_than_ability_source(),
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "one or more creatures you control leave the battlefield without dying" => {
+                    return Ok((
+                        TriggerEvent::LeavesBattlefieldWithoutDying {
+                            subject: ObjectFilter::creature().controlled(),
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
                 _ => {}
+            }
+            if let Some(after_play) = low.strip_prefix("you play ")
+                && let Some((land_raw, spell_raw)) = after_play.split_once(" or cast ")
+                && !low.contains(" from ")
+            {
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                let land_flt = spellwake_oracle_compiler::filter::parse_object_filter(
+                    land_raw.trim(),
+                    &compiler_vocab,
+                )
+                .map_err(|_| "oracle:unsupported-trigger-event")?;
+                let spell_flt = spellwake_oracle_compiler::filter::parse_object_filter(
+                    spell_raw.trim(),
+                    &compiler_vocab,
+                )
+                .map_err(|_| "oracle:unsupported-trigger-event")?;
+                if land_flt.zone.is_some()
+                    || !land_flt.extra_zones.is_empty()
+                    || land_flt.any_spell
+                    || spell_flt.zone.is_some()
+                    || !spell_flt.extra_zones.is_empty()
+                    || land_flt.any_types != AstCardTypeMask::LAND
+                {
+                    return Err("oracle:unsupported-trigger-event");
+                }
+                let land_obj = lower_object_filter(&land_flt, vocabulary)
+                    .map_err(|_| "oracle:unsupported-trigger-event")?;
+                let land_action = if land_obj == ObjectFilter::land() {
+                    PlayerTriggerAction::LandPlayed
+                } else {
+                    PlayerTriggerAction::LandPlayedFiltered(land_obj)
+                };
+                let sf = lower_spell_filter(&spell_flt, vocabulary)
+                    .map_err(|_| "oracle:unsupported-trigger-event")?;
+                return Ok((
+                    TriggerEvent::AnyOf(vec![
+                        TriggerEvent::PlayerAction {
+                            player: PlayerRelation::Controller,
+                            action: land_action,
+                        },
+                        TriggerEvent::SpellCast {
+                            caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                            filter: sf,
+                            self_cast: false,
+                            include_copy: false,
+                            min_mana_value: None,
+                        },
+                    ]),
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            if !low.contains(" from ")
+                && !low.contains(" or ")
+                && !low.contains(" exiled ")
+                && let Some((play_rel, flt_raw)) = low
+                    .strip_prefix("you play ")
+                    .map(|r| (PlayerRelation::Controller, r.trim()))
+                    .or_else(|| {
+                        low.strip_prefix("an opponent plays ")
+                            .map(|r| (PlayerRelation::Opponent, r.trim()))
+                    })
+                    .or_else(|| {
+                        low.strip_prefix("a player plays ")
+                            .map(|r| (PlayerRelation::AnyParticipant, r.trim()))
+                    })
+            {
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                if let Ok(parsed) =
+                    spellwake_oracle_compiler::filter::parse_object_filter(flt_raw, &compiler_vocab)
+                    && parsed.zone.is_none()
+                    && parsed.extra_zones.is_empty()
+                    && !parsed.any_spell
+                    && let Ok(obj) = lower_object_filter(&parsed, vocabulary)
+                {
+                    let is_pure_land = parsed.any_types == AstCardTypeMask::LAND
+                        || (parsed.any_types.is_empty()
+                            && matches!(
+                                obj,
+                                ObjectFilter::Clause(c) if matches!(c.subtypes, SubtypeFilter::Land(_))
+                            ));
+                    if is_pure_land {
+                        let land_action = if obj == ObjectFilter::land() {
+                            PlayerTriggerAction::LandPlayed
+                        } else {
+                            PlayerTriggerAction::LandPlayedFiltered(obj)
+                        };
+                        return Ok((
+                            TriggerEvent::PlayerAction {
+                                player: play_rel,
+                                action: land_action,
+                            },
+                            TriggerGrouping::EachOccurrence,
+                        ));
+                    }
+                }
+            }
+            if let Some(into_raw) = low.strip_prefix("a permanent you control transforms into ") {
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+                    into_raw.trim(),
+                    &compiler_vocab,
+                )
+                .map_err(|_| "oracle:unsupported-trigger-event")?;
+                if parsed.zone.is_some() || !parsed.extra_zones.is_empty() || parsed.any_spell {
+                    return Err("oracle:unsupported-trigger-event");
+                }
+                let subject = lower_object_filter(&parsed, vocabulary)
+                    .map_err(|_| "oracle:unsupported-trigger-event")?
+                    .controlled();
+                return Ok((
+                    TriggerEvent::StatusChanged {
+                        subject,
+                        kind: StatusTriggerKind::Transforms,
+                    },
+                    TriggerGrouping::EachOccurrence,
+                ));
             }
             if let Some(ord_raw) = low.strip_prefix("you cast your ").and_then(|r| {
                 r.strip_suffix(" spell each turn")
@@ -7647,7 +8874,6 @@ pub(super) fn lower_trigger_event(
             by_opponent,
             by_text,
         } => {
-            let subjects = lower_trigger_subject_filters(subject, vocabulary)?;
             let mut grouping = TriggerGrouping::EachOccurrence;
             let mut opp = *by_opponent;
             let mut by_controller = false;
@@ -7692,25 +8918,43 @@ pub(super) fn lower_trigger_event(
             } else {
                 (false, false)
             };
-            let sub_events = subjects
-                .into_iter()
-                .map(|subj| {
+            let mut parts = Vec::new();
+            expand_trigger_subject_parts(subject, &mut parts);
+            if parts.is_empty() {
+                return Err("oracle:unsupported-trigger-subject");
+            }
+            let mut sub_events = Vec::with_capacity(parts.len());
+            for part in parts {
+                if let SubjectRefAst::Player(p) = part {
                     if by_controller {
-                        TriggerEvent::TargetedByController {
-                            subject: subj,
-                            spell_only,
-                            instant_or_sorcery_only: inst_sorc,
-                        }
-                    } else {
-                        TriggerEvent::Targeted {
-                            subject: subj,
-                            by_opponent: opp,
-                            spell_only,
-                            instant_or_sorcery_only: inst_sorc,
+                        return Err("oracle:unsupported-targeted-by");
+                    }
+                    let rel = lower_player_relation(*p)?;
+                    sub_events.push(TriggerEvent::PlayerTargeted {
+                        player: rel,
+                        by_opponent: opp,
+                        spell_only,
+                        instant_or_sorcery_only: inst_sorc,
+                    });
+                } else {
+                    for subj in lower_trigger_subject_filters(part, vocabulary)? {
+                        if by_controller {
+                            sub_events.push(TriggerEvent::TargetedByController {
+                                subject: subj,
+                                spell_only,
+                                instant_or_sorcery_only: inst_sorc,
+                            });
+                        } else {
+                            sub_events.push(TriggerEvent::Targeted {
+                                subject: subj,
+                                by_opponent: opp,
+                                spell_only,
+                                instant_or_sorcery_only: inst_sorc,
+                            });
                         }
                     }
-                })
-                .collect();
+                }
+            }
             Ok((wrap_trigger_events_any_of(sub_events)?, grouping))
         }
         TriggerEventAst::PlayerOrPermanentBecomesTargeted {
@@ -7741,7 +8985,7 @@ pub(super) fn lower_trigger_event(
                         instant_or_sorcery_only: false,
                     },
                 ]),
-                TriggerGrouping::OneOrMoreTogether,
+                TriggerGrouping::OneOrMoreByPlayer,
             ))
         }
         TriggerEventAst::CountersChanged {
@@ -7981,7 +9225,50 @@ pub(super) fn lower_trigger_event(
                 || (!filter.any_types.is_empty()
                     && (filter.any_types.0 & AstCardTypeMask::LAND.0) == 0);
             if !excludes_land {
-                return Err("oracle:unsupported-trigger-event");
+                // LandPlayedFiltered matches the played land's battlefield appearance and does
+                // not verify origin zones; fail closed on any zone qualifier or spell-only filter.
+                if filter.zone.is_some() || !filter.extra_zones.is_empty() || filter.any_spell {
+                    return Err("oracle:unsupported-trigger-event");
+                }
+                let rel = lower_player_relation(*player)?;
+                let obj = lower_object_filter(filter, vocabulary)?;
+                let is_pure_land = filter.any_types == AstCardTypeMask::LAND
+                    || (filter.any_types.is_empty()
+                        && matches!(
+                            obj,
+                            ObjectFilter::Clause(c) if matches!(c.subtypes, SubtypeFilter::Land(_))
+                        ));
+                let land_action = if obj == ObjectFilter::land() {
+                    PlayerTriggerAction::LandPlayed
+                } else {
+                    PlayerTriggerAction::LandPlayedFiltered(obj)
+                };
+                if is_pure_land {
+                    return Ok((
+                        TriggerEvent::PlayerAction {
+                            player: rel,
+                            action: land_action,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                let sf = lower_spell_filter(filter, vocabulary)?;
+                return Ok((
+                    TriggerEvent::AnyOf(vec![
+                        TriggerEvent::PlayerAction {
+                            player: rel,
+                            action: land_action,
+                        },
+                        TriggerEvent::SpellCast {
+                            caster: TriggerPlayerScope::Relation(rel),
+                            filter: sf,
+                            self_cast: false,
+                            include_copy: false,
+                            min_mana_value: None,
+                        },
+                    ]),
+                    TriggerGrouping::EachOccurrence,
+                ));
             }
             let scope = match player {
                 PlayerRefAst::EnchantedPlayer => TriggerPlayerScope::EnchantedPlayer,
@@ -8215,6 +9502,36 @@ fn lower_regenerates_subject(
         {
             return Some(lowered);
         }
+    }
+    None
+}
+
+fn parse_attack_count_word(raw: &str) -> Option<u8> {
+    match raw.trim() {
+        "two" | "2" => Some(2),
+        "three" | "3" => Some(3),
+        "four" | "4" => Some(4),
+        "five" | "5" => Some(5),
+        "six" | "6" => Some(6),
+        "seven" | "7" => Some(7),
+        "eight" | "8" => Some(8),
+        "nine" | "9" => Some(9),
+        "ten" | "10" => Some(10),
+        other => other.parse::<u8>().ok().filter(|&n| (2..=20).contains(&n)),
+    }
+}
+
+fn parse_attack_count_prefix(raw: &str) -> Option<(u8, &str)> {
+    if let Some((num_raw, rest)) = raw.split_once(" or more ")
+        && let Some(n) = parse_attack_count_word(num_raw)
+    {
+        return Some((n, rest.trim()));
+    }
+    if let Some(after) = raw.strip_prefix("at least ")
+        && let Some((num_raw, rest)) = after.split_once(' ')
+        && let Some(n) = parse_attack_count_word(num_raw)
+    {
+        return Some((n, rest.trim()));
     }
     None
 }
@@ -8558,6 +9875,19 @@ fn filter_supported_by_zone_move_record(filter: &ObjectFilter) -> bool {
     }
 }
 
+fn filter_supported_by_cast_spell_record(filter: &ObjectFilter) -> bool {
+    let clause_ok = |c: ObjectClause| {
+        clause_supported_by_zone_move_record(c)
+            && !matches!(c.subtypes, SubtypeFilter::Artifact(_))
+            && c.controller == ControllerFilter::Any
+            && c.owner == ControllerFilter::Any
+    };
+    match filter {
+        ObjectFilter::Clause(c) => clause_ok(*c),
+        ObjectFilter::Either(a, b) => clause_ok(*a) && clause_ok(*b),
+    }
+}
+
 pub(super) fn lower_player_relation(p: PlayerRefAst) -> Result<PlayerRelation, &'static str> {
     match p {
         PlayerRefAst::You => Ok(PlayerRelation::Controller),
@@ -8815,6 +10145,25 @@ fn try_lower_specialized_trigger_condition(
             }
             _ => None,
         },
+        ConditionAst::HandCount {
+            player:
+                p @ (PlayerRefAst::ThatPlayer
+                | PlayerRefAst::DefendingPlayer
+                | PlayerRefAst::ActivePlayer),
+            op,
+            value,
+        } => {
+            let rp = match p {
+                PlayerRefAst::DefendingPlayer => ResolvingPlayer::DefendingPlayer,
+                PlayerRefAst::ActivePlayer => ResolvingPlayer::ActivePlayer,
+                _ => ResolvingPlayer::UniqueRelatedPlayer,
+            };
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)),
+                comparison: lower_comparison(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            })))
+        }
         ConditionAst::HasStatus { subject, status }
             if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
         {
@@ -8872,8 +10221,41 @@ fn try_lower_specialized_trigger_condition(
                         ..ObjectClause::any()
                     }),
                 ))),
+                "suspected" => Some(TriggerCondition::SourceMatches(Box::new(
+                    ObjectFilter::Clause(ObjectClause {
+                        flags: ObjectFilterFlags::SUSPECTED,
+                        ..ObjectClause::any()
+                    }),
+                ))),
+                "monstrous" => Some(TriggerCondition::SourceMatches(Box::new(
+                    ObjectFilter::Clause(ObjectClause {
+                        flags: ObjectFilterFlags::MONSTROUS,
+                        ..ObjectClause::any()
+                    }),
+                ))),
+                "goaded" => Some(TriggerCondition::SourceMatches(Box::new(
+                    ObjectFilter::Clause(ObjectClause {
+                        flags: ObjectFilterFlags::GOADED,
+                        ..ObjectClause::any()
+                    }),
+                ))),
+                "exerted" => Some(TriggerCondition::SourceMatches(Box::new(
+                    ObjectFilter::Clause(ObjectClause {
+                        flags: ObjectFilterFlags::EXERTED,
+                        ..ObjectClause::any()
+                    }),
+                ))),
+                "kicked" => Some(TriggerCondition::SourceMatches(Box::new(
+                    ObjectFilter::Clause(ObjectClause {
+                        flags: ObjectFilterFlags::KICKED,
+                        ..ObjectClause::any()
+                    }),
+                ))),
                 "solved" => Some(TriggerCondition::SourceIsSolved),
                 "unsolved" => Some(TriggerCondition::SourceIsUnsolved),
+                "renowned" => Some(TriggerCondition::Not(Box::new(
+                    TriggerCondition::UnrenownedSource,
+                ))),
                 "unrenowned" | "not renowned" => Some(TriggerCondition::UnrenownedSource),
                 "not_owned_by_you" | "not owned by you" | "not_owned_by_controller" => {
                     Some(TriggerCondition::SourceNotOwnedByController)
@@ -8893,6 +10275,114 @@ fn try_lower_specialized_trigger_condition(
                     }
                 }
             }
+        }
+        ConditionAst::HasStatus { subject, status }
+            if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_))
+                || matches!(
+                    subject.as_ref(),
+                    SubjectRefAst::Anaphora(a)
+                        if matches!(
+                            a.trim().to_ascii_lowercase().as_str(),
+                            "it" | "this creature" | "this permanent" | "~" | "that creature"
+                        )
+                ) =>
+        {
+            let match_ref = if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_)) {
+                MatchObjectRef::AttachedHost
+            } else {
+                MatchObjectRef::TriggerSubject
+            };
+            let clause = match status.trim().to_ascii_lowercase().as_str() {
+                "tapped" => Some(ObjectClause {
+                    tapped: Some(true),
+                    ..ObjectClause::any()
+                }),
+                "untapped" => Some(ObjectClause {
+                    tapped: Some(false),
+                    ..ObjectClause::any()
+                }),
+                "attacking" => Some(ObjectClause {
+                    combat: CombatFilter::Attacking,
+                    ..ObjectClause::any()
+                }),
+                "blocking" => Some(ObjectClause {
+                    combat: CombatFilter::Blocking,
+                    ..ObjectClause::any()
+                }),
+                "attacking or blocking" => Some(ObjectClause {
+                    combat: CombatFilter::AttackingOrBlocking,
+                    ..ObjectClause::any()
+                }),
+                "blocked" => Some(ObjectClause {
+                    combat: CombatFilter::Blocked,
+                    ..ObjectClause::any()
+                }),
+                "unblocked" => Some(ObjectClause {
+                    combat: CombatFilter::Unblocked,
+                    ..ObjectClause::any()
+                }),
+                "enchanted" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::ENCHANTED,
+                    ..ObjectClause::any()
+                }),
+                "equipped" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::EQUIPPED,
+                    ..ObjectClause::any()
+                }),
+                "modified" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::MODIFIED,
+                    ..ObjectClause::any()
+                }),
+                "face down" | "face-down" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::FACE_DOWN,
+                    ..ObjectClause::any()
+                }),
+                "suspected" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::SUSPECTED,
+                    ..ObjectClause::any()
+                }),
+                "renowned" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::RENOWNED,
+                    ..ObjectClause::any()
+                }),
+                "saddled" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::SADDLED,
+                    ..ObjectClause::any()
+                }),
+                "monstrous" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::MONSTROUS,
+                    ..ObjectClause::any()
+                }),
+                "goaded" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::GOADED,
+                    ..ObjectClause::any()
+                }),
+                "exerted" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::EXERTED,
+                    ..ObjectClause::any()
+                }),
+                "kicked" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::KICKED,
+                    ..ObjectClause::any()
+                }),
+                "solved" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::SOLVED,
+                    ..ObjectClause::any()
+                }),
+                "prepared" => Some(ObjectClause {
+                    flags: ObjectFilterFlags::PREPARED,
+                    ..ObjectClause::any()
+                }),
+                _ => None,
+            }?;
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::ObjectMatches {
+                    subject: match_ref,
+                    filter: Box::new(ObjectFilter::Clause(clause)),
+                },
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
         }
         ConditionAst::CounterCompare {
             subject,
@@ -8953,6 +10443,72 @@ fn try_lower_specialized_trigger_condition(
             )),
             _ => None,
         },
+        ConditionAst::LifeCompare {
+            player: PlayerRefAst::EachPlayer,
+            op,
+            value,
+        } if *value >= 0 => match op {
+            CompareOp::Le => Some(TriggerCondition::And(
+                Box::new(TriggerCondition::ControllerLifeAtMost(
+                    u16::try_from(*value).ok()?,
+                )),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife),
+                    comparison: Comparison::LessOrEqual,
+                    right: ValueExpr::literal(i64::from(*value)),
+                }))),
+            )),
+            CompareOp::Lt if *value > 0 => Some(TriggerCondition::And(
+                Box::new(TriggerCondition::ControllerLifeAtMost(
+                    u16::try_from(*value - 1).ok()?,
+                )),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife),
+                    comparison: Comparison::Less,
+                    right: ValueExpr::literal(i64::from(*value)),
+                }))),
+            )),
+            CompareOp::Ge => Some(TriggerCondition::And(
+                Box::new(TriggerCondition::ControllerLifeAtLeast(
+                    u16::try_from(*value).ok()?,
+                )),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(i64::from(*value)),
+                }))),
+            )),
+            CompareOp::Gt => Some(TriggerCondition::And(
+                Box::new(TriggerCondition::ControllerLifeAtLeast(
+                    value.checked_add(1).and_then(|n| u16::try_from(n).ok())?,
+                )),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife),
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::literal(i64::from(*value)),
+                }))),
+            )),
+            _ => None,
+        },
+        ConditionAst::LifeCompare {
+            player:
+                p @ (PlayerRefAst::ThatPlayer
+                | PlayerRefAst::DefendingPlayer
+                | PlayerRefAst::ActivePlayer),
+            op,
+            value,
+        } => {
+            let rp = match p {
+                PlayerRefAst::DefendingPlayer => ResolvingPlayer::DefendingPlayer,
+                PlayerRefAst::ActivePlayer => ResolvingPlayer::ActivePlayer,
+                _ => ResolvingPlayer::UniqueRelatedPlayer,
+            };
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerLife(rp)),
+                comparison: lower_comparison(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            })))
+        }
         ConditionAst::ControlsCount {
             player: PlayerRefAst::You,
             filter,
@@ -9266,8 +10822,377 @@ fn try_lower_specialized_trigger_condition(
             | "you don't own this creature"
             | "you don't own this permanent"
             | "not_owned_by_controller" => Some(TriggerCondition::SourceNotOwnedByController),
+            "your team gained life this turn" => {
+                Some(TriggerCondition::ControllerGainedLifeThisTurn)
+            }
+            "no permanents left the battlefield this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Not(Box::new(TriggerCondition::Or(
+                    Box::new(TriggerCondition::PermanentLeftBattlefieldThisTurn),
+                    Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            OpponentTurnStat::PermanentLeft,
+                        )),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    }))),
+                ))))
+            }
+            "a creature died under an opponent's control this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(
+                        PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                            filter: Box::new(ObjectFilter::creature().opposing()),
+                            from_battlefield_only: true,
+                            controller: None,
+                        },
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an enchantment was put into your graveyard from the battlefield this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(
+                        PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                            filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                                owner: ControllerFilter::You,
+                                ..ObjectClause::enchantment()
+                            })),
+                            from_battlefield_only: true,
+                            controller: None,
+                        },
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a land you controlled was put into a graveyard from the battlefield this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(
+                        PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                            filter: Box::new(ObjectFilter::land()),
+                            from_battlefield_only: true,
+                            controller: Some(ResolvingPlayer::Controller),
+                        },
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "that player controls more lands than each other player" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerControlsMost {
+                        player: ResolvingPlayer::UniqueRelatedPlayer,
+                        zone: ValueZone::Battlefield,
+                        filter: Box::new(ObjectFilter::land()),
+                        allow_tie: false,
+                    }),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "no creatures died this turn" => {
+                Some(TriggerCondition::Not(Box::new(TriggerCondition::Morbid)))
+            }
+            "an opponent is poisoned" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::AnyOpponentPoisoned),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you've activated a loyalty ability this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::LoyaltyActivatedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you didn't play a land this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                })))
+            }
+            "you didn't lose life this turn" => Some(TriggerCondition::Not(Box::new(
+                TriggerCondition::ControllerLostLifeThisTurn,
+            ))),
+            "you've drawn more than one card this turn" => {
+                Some(TriggerCondition::ControllerDrewCardsThisTurn(2))
+            }
+            "one or more cards were put into exile this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CardsExiledThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "~ attacked or blocked this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::AttackedOrBlockedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "~ was dealt damage this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::DamageDealtThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "~ dealt damage to an opponent this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::DamageDealtThisTurn {
+                        subject: ValueObjectRef::AbilitySource,
+                        to_opponent_only: true,
+                        combat_only: false,
+                    }),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you're the defending player" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsDefending),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you've rolled three or more dice this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::DiceRolledThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(3),
+                })))
+            }
+            "an opponent has been dealt noncombat damage this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentDealtDamageThisTurn {
+                        noncombat_only: true,
+                    }),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you have a card in hand" => Some(TriggerCondition::HandSizeAtLeast(1)),
+            "~ is your ring-bearer" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::IsRingBearer),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "your library has no cards in it" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerLibrarySize(
+                        ResolvingPlayer::Controller,
+                    )),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                })))
+            }
+            "an enchantment is on the battlefield" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::enchantment()),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "ten or more lands are on the battlefield" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::land()),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(10),
+                })))
+            }
+            "you have less life than an opponent" => Some(TriggerCondition::OpponentHasMoreLife),
+            "you put a counter on a creature this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CountersPlacedOnCreaturesThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you control more creatures than attacking player" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::creature().controlled()),
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::count_player_battlefield(
+                        ResolvingPlayer::ActivePlayer,
+                        ObjectFilter::creature(),
+                    ),
+                })))
+            }
+            "you control more lands than attacking player" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::land().controlled()),
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::count_player_battlefield(
+                        ResolvingPlayer::ActivePlayer,
+                        ObjectFilter::land(),
+                    ),
+                })))
+            }
+            "you didn't activate a loyalty ability of a planeswalker this turn" => {
+                Some(TriggerCondition::NoLoyaltyActivationThisTurn)
+            }
+            "there are five colors among permanents you control" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::DistinctColors {
+                        filter: Box::new(ObjectFilter::permanent().controlled()),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(5),
+                })))
+            }
+            "~ is in your graveyard or on the battlefield" => Some(TriggerCondition::Or(
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                        spellwake_engine::program::SourceZoneKind::Graveyard,
+                    )),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                }))),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                        spellwake_engine::program::SourceZoneKind::Battlefield,
+                    )),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                }))),
+            )),
+            "that land was nonbasic" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            forbidden_supertypes: SupertypeMask::BASIC,
+                            ..ObjectClause::land()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "that creature attacked this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::ATTACKED_THIS_TURN,
+                            ..ObjectClause::any()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "~ dealt damage to it this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN,
+                            ..ObjectClause::any()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "that creature was dealt excess damage this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::DamageReceivedThisTurn {
+                        subject: ValueObjectRef::TriggerSubject,
+                        excess_only: true,
+                    }),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "it's the second creature spell you cast this turn" => Some(TriggerCondition::And(
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::creature()),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }))),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::SpellsCastMatchingThisTurn {
+                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                        filter: Box::new(ObjectFilter::creature()),
+                        from_zone: None,
+                    }),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(2),
+                }))),
+            )),
             _ => None,
         },
+        ConditionAst::PlayerActionThisTurn {
+            player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
+            action,
+        } => {
+            use spellwake_engine::program::OpponentTurnStat;
+            let stat = match action.as_str() {
+                "discarded_card" | "discarded" | "discard" => Some(OpponentTurnStat::Discarded),
+                "drew_card" | "drew" => Some(OpponentTurnStat::DrewCards),
+                "gained_life" | "gain_life" => Some(OpponentTurnStat::GainedLife),
+                "lost_life" | "lose_life" => Some(OpponentTurnStat::LostLife),
+                "sacrificed_permanent" | "sacrificed" | "sacrifice" => {
+                    Some(OpponentTurnStat::Sacrificed)
+                }
+                "attacked" | "attack" => Some(OpponentTurnStat::Attacked),
+                _ => None,
+            }?;
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(stat)),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::PlayerActionThisTurn {
+            player: PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer,
+            action,
+        } => {
+            use spellwake_engine::program::OpponentTurnStat;
+            let (ctrl_cond, opp_stat) = match action.as_str() {
+                "discarded_card" | "discarded" | "discard" => (
+                    TriggerCondition::ControllerDiscardedThisTurn,
+                    OpponentTurnStat::Discarded,
+                ),
+                "gained_life" | "gain_life" => (
+                    TriggerCondition::ControllerGainedLifeThisTurn,
+                    OpponentTurnStat::GainedLife,
+                ),
+                "lost_life" | "lose_life" => (
+                    TriggerCondition::ControllerLostLifeThisTurn,
+                    OpponentTurnStat::LostLife,
+                ),
+                "sacrificed_permanent" | "sacrificed" | "sacrifice" => (
+                    TriggerCondition::ControllerSacrificedThisTurn,
+                    OpponentTurnStat::Sacrificed,
+                ),
+                "attacked" | "attack" => (
+                    TriggerCondition::ControllerAttackedThisTurn,
+                    OpponentTurnStat::Attacked,
+                ),
+                _ => return None,
+            };
+            Some(TriggerCondition::Or(
+                Box::new(ctrl_cond),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(opp_stat)),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }))),
+            ))
+        }
         ConditionAst::MatchesFilter { subject, filter }
             if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
                 || matches!(
@@ -9313,12 +11238,33 @@ fn try_lower_specialized_trigger_condition(
             Some(TriggerCondition::SourceMatches(Box::new(obj)))
         }
         ConditionAst::HasKeyword { subject, keyword }
-            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+            if matches!(
+                subject.as_ref(),
+                SubjectRefAst::SelfObject | SubjectRefAst::AttachedHost(_)
+            ) =>
         {
-            let kw = lower_keyword_ability_name(keyword)?;
-            Some(TriggerCondition::SourceMatches(Box::new(
-                ObjectFilter::any().with_keyword(kw),
-            )))
+            let kw_low = keyword.trim().to_ascii_lowercase();
+            let obj = if kw_low == "toxic" {
+                ObjectFilter::Clause(ObjectClause {
+                    flags: ObjectFilterFlags::HAS_TOXIC,
+                    ..ObjectClause::any()
+                })
+            } else {
+                let kw = lower_keyword_ability_name(keyword)?;
+                ObjectFilter::any().with_keyword(kw)
+            };
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) {
+                Some(TriggerCondition::SourceMatches(Box::new(obj)))
+            } else {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::AttachedHost,
+                        filter: Box::new(obj),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
         }
         ConditionAst::Marker(GameMarker::NotManaAbility) => {
             Some(TriggerCondition::TriggeringAbilityNotMana)
@@ -9328,6 +11274,78 @@ fn try_lower_specialized_trigger_condition(
         }
         ConditionAst::Marker(GameMarker::CommittedCrimeThisTurn) => {
             Some(TriggerCondition::CommittedCrimeThisTurn)
+        }
+        ConditionAst::Marker(GameMarker::NonlandPermanentLeftThisTurn) => {
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(
+                    PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn,
+                ),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::Marker(GameMarker::SpellWarpedThisTurn) => {
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::AnySpellWarpedThisTurn),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::Marker(GameMarker::CardLeftGraveyardThisTurn) => {
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::CardsLeftGraveyardThisTurn),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::Marker(GameMarker::YouAreAttacking) => {
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsAttacking),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::Marker(GameMarker::YouAreDefending) => {
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsDefending),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::Compare { lhs, op, rhs }
+            if matches!(
+                (lhs.as_ref(), rhs.as_ref()),
+                (
+                    ValueExprAst::PlayerStat {
+                        player: PlayerRefAst::You,
+                        stat: PlayerStatKind::LifeTotal,
+                    },
+                    ValueExprAst::PlayerStat {
+                        player: PlayerRefAst::AnyOpponent,
+                        stat: PlayerStatKind::LifeTotal,
+                    },
+                )
+            ) =>
+        {
+            match op {
+                CompareOp::Gt => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife),
+                }))),
+                CompareOp::Ge => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife),
+                }))),
+                CompareOp::Lt => Some(TriggerCondition::OpponentHasMoreLife),
+                CompareOp::Le => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                    comparison: Comparison::LessOrEqual,
+                    right: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife),
+                }))),
+                _ => None,
+            }
         }
         ConditionAst::Marker(GameMarker::CastSpellsThisTurn {
             player: PlayerRefAst::You,
@@ -9685,9 +11703,7 @@ pub(super) fn lower_trigger_condition(
             Box::new(lower_trigger_condition(a, vocabulary)?),
             Box::new(lower_trigger_condition(b, vocabulary)?),
         )),
-        ConditionAst::ZoneChangeThisTurn { .. } | ConditionAst::GameStateFlag(_) => {
-            Err("oracle:unsupported-trigger-condition")
-        }
+        ConditionAst::GameStateFlag(_) => Err("oracle:unsupported-trigger-condition"),
         other => {
             let mut tmp_builder = BodyBuilder::new();
             let mut rc =
