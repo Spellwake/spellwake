@@ -1208,6 +1208,13 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
     };
     match expr {
         ValueExpr::Literal(v) => v.clone(),
+        ValueExpr::BoundInt(_)
+        | ValueExpr::BoundCount { .. }
+        | ValueExpr::BoundStat { .. }
+        | ValueExpr::QueryCount(_)
+        | ValueExpr::QueryAggregate { .. }
+        | ValueExpr::StateTrackInt(_)
+        | ValueExpr::ChoiceHistoryCount { .. } => 0.into(),
         ValueExpr::Scale { expr, factor } => eval_world_value_expr(ctx, expr).times(factor),
         ValueExpr::DivConst {
             expr,

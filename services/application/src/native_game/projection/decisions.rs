@@ -1533,6 +1533,153 @@ impl Projection<'_, '_> {
                 let options = frame.colors().iter().map(|color| self.option(NativeReference::ManaColor(*color), mana_label(*color).to_owned())).collect::<Result<_, _>>()?;
                 (DecisionKind::ManaColor, PlayerDomain::Options { options, query: None })
             }
+            RuleFrame::PromptChoice(frame) => {
+                use spellwake_engine::toolbox::{ChoiceCategory, ResolvedPromptDomain};
+                use crate::player_wire::{PlayerPromptCategory, PlayerPromptDomain};
+                let category = match frame.category {
+                    ChoiceCategory::Generic => PlayerPromptCategory::Generic,
+                    ChoiceCategory::Modal => PlayerPromptCategory::Modal,
+                    ChoiceCategory::VillainousChoice => PlayerPromptCategory::VillainousChoice,
+                    ChoiceCategory::Dilemma => PlayerPromptCategory::Dilemma,
+                    ChoiceCategory::Vote => PlayerPromptCategory::Vote,
+                    ChoiceCategory::PileSplit => PlayerPromptCategory::PileSplit,
+                    ChoiceCategory::Search => PlayerPromptCategory::Search,
+                    ChoiceCategory::Tribute => PlayerPromptCategory::Tribute,
+                    ChoiceCategory::Clash => PlayerPromptCategory::Clash,
+                    ChoiceCategory::Custom(_) => PlayerPromptCategory::Custom,
+                };
+                let prompt = match &frame.domain {
+                    ResolvedPromptDomain::Objects { candidates, min, max, hidden } => {
+                        let handles = candidates
+                            .iter()
+                            .map(|id| self.visible_object(*id))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Objects {
+                            candidates: handles,
+                            minimum: count(*min)?,
+                            maximum: count(*max)?,
+                            hidden: *hidden,
+                        }
+                    }
+                    ResolvedPromptDomain::Players { candidates, min, max } => {
+                        let seats = candidates
+                            .iter()
+                            .map(|seat| self.app_seat(*seat))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Players {
+                            seats,
+                            minimum: *min,
+                            maximum: *max,
+                        }
+                    }
+                    ResolvedPromptDomain::Options { labels, min, max, allow_repeat } => {
+                        let options = labels
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, label)| {
+                                let i = u8::try_from(idx).map_err(|_| NativeProjectionError::MissingNativeValue)?;
+                                self.option(NativeReference::OptionIndex(i), label.clone())
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Options {
+                            options,
+                            minimum: *min,
+                            maximum: *max,
+                            allow_repeat: *allow_repeat,
+                        }
+                    }
+                    ResolvedPromptDomain::Number { min, max } => PlayerPromptDomain::Number {
+                        minimum: min.clone(),
+                        maximum: max.clone(),
+                    },
+                    ResolvedPromptDomain::Color { allowed } => {
+                        let options = allowed
+                            .iter()
+                            .map(|c| self.option(NativeReference::ManaColor(*c), mana_label(*c).to_owned()))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Options {
+                            options,
+                            minimum: 1,
+                            maximum: 1,
+                            allow_repeat: false,
+                        }
+                    }
+                    ResolvedPromptDomain::CardType { allowed } => {
+                        let options = allowed
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, ty)| {
+                                let i = u8::try_from(idx).map_err(|_| NativeProjectionError::MissingNativeValue)?;
+                                self.option(NativeReference::OptionIndex(i), format!("{ty:?}"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Options {
+                            options,
+                            minimum: 1,
+                            maximum: 1,
+                            allow_repeat: false,
+                        }
+                    }
+                    ResolvedPromptDomain::CreatureType { allowed } => {
+                        let options = allowed
+                            .iter()
+                            .map(|ct| {
+                                let label = self.scope.source.execution().creature_vocabulary().label(*ct).unwrap_or("Creature").to_owned();
+                                self.option(NativeReference::CreatureType(*ct), label)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Options {
+                            options,
+                            minimum: 1,
+                            maximum: 1,
+                            allow_repeat: false,
+                        }
+                    }
+                    ResolvedPromptDomain::BasicLandType { allowed } => {
+                        let options = allowed
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, lt)| {
+                                let i = u8::try_from(idx).map_err(|_| NativeProjectionError::MissingNativeValue)?;
+                                self.option(NativeReference::OptionIndex(i), format!("{lt:?}"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Options {
+                            options,
+                            minimum: 1,
+                            maximum: 1,
+                            allow_repeat: false,
+                        }
+                    }
+                    ResolvedPromptDomain::PlaneswalkerType { allowed } => {
+                        let options = allowed
+                            .iter()
+                            .map(|pw| self.option(NativeReference::PlaneswalkerType(*pw), pw.label().to_owned()))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Options {
+                            options,
+                            minimum: 1,
+                            maximum: 1,
+                            allow_repeat: false,
+                        }
+                    }
+                    ResolvedPromptDomain::CardName { nonland_only } => PlayerPromptDomain::CardName {
+                        nonland_only: *nonland_only,
+                    },
+                    ResolvedPromptDomain::Partition { candidates, pile_count, min_per_pile } => {
+                        let handles = candidates
+                            .iter()
+                            .map(|id| self.visible_object(*id))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PlayerPromptDomain::Partition {
+                            candidates: handles,
+                            pile_count: *pile_count,
+                            min_per_pile: *min_per_pile,
+                        }
+                    }
+                };
+                (DecisionKind::PromptChoice, PlayerDomain::PromptChoice { category, prompt })
+            }
             RuleFrame::OptionIndex(frame) => {
                 let options = (0..frame.count())
                     .map(|idx| {

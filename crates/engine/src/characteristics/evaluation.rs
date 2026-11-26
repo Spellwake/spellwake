@@ -2447,13 +2447,14 @@ fn generate(
             else {
                 return Err(CharacteristicInvariantError::NoEligibleComponent);
             };
-            let (controller, sentinel) = match instance.origin {
+            let (controller, sentinel, locked_objects) = match instance.origin {
                 InstanceOrigin::EmblemStatic { emblem, .. } => {
-                    (emblem.controller, ObjectId::SENTINEL)
+                    (emblem.controller, ObjectId::SENTINEL, None)
                 }
                 InstanceOrigin::TemporaryStatic(temp) => (
                     temp.controller,
                     temp.source_object.unwrap_or(ObjectId::SENTINEL),
+                    temp.locked_objects.as_ref(),
                 ),
                 _ => unreachable!(),
             };
@@ -2472,16 +2473,22 @@ fn generate(
                 {
                     BTreeSet::new()
                 }
-                _ => select_affected(
-                    selector,
-                    sentinel,
-                    controller,
-                    objects,
-                    battlefield,
-                    name_rules,
-                    world.combat,
-                    Some(world.state),
-                ),
+                _ => {
+                    let mut selected = select_affected(
+                        selector,
+                        sentinel,
+                        controller,
+                        objects,
+                        battlefield,
+                        name_rules,
+                        world.combat,
+                        Some(world.state),
+                    );
+                    if let Some(locked) = locked_objects {
+                        selected.retain(|id| locked.contains(id));
+                    }
+                    selected
+                }
             };
             let operation = if affected.is_empty() {
                 None

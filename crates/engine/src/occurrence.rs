@@ -1427,6 +1427,14 @@ pub enum RulesOccurrence {
         object: ObjectId,
         opponent: ObjectId,
     },
+    /// A player resolved a universal toolbox `PromptChoice` (modal, villainous choice, dilemma, vote, etc.).
+    ChoiceMade {
+        chooser: SeatId,
+        source: Option<ObjectId>,
+        category: crate::toolbox::ChoiceCategory,
+        option_indices: Vec<u8>,
+        chosen_count: usize,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventOccurrence {

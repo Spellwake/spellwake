@@ -243,6 +243,9 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::OptionIndex(index) => {
             json!({"tag":"OptionIndex","index":index})
         }
+        DecisionReply::PromptChoice(reply) => {
+            json!({"tag":"PromptChoice","reply":format!("{reply:?}")})
+        }
         DecisionReply::ZoneReplacement(reply) => match reply {
             spellwake_engine::effects::ZoneReplacementReply::Devour(id) => {
                 json!({"tag":"Devour","object":id.map(opaque)})
@@ -2486,6 +2489,9 @@ pub fn effect_frame(value: &EffectDecision, execution: &EffectWindow) -> Result<
 }
 fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, String> {
     Ok(match value {
+        RuleFrame::PromptChoice(value) => {
+            json!({"tag":"PromptChoice","revision":value.revision.to_string(),"chooser":value.chooser.0,"category":format!("{:?}", value.category)})
+        }
         RuleFrame::ZoneReplacement(value) => {
             json!({"tag":"ZoneReplacement","schema":"zone-replacement-native-frame-v2","revision":value.revision().to_string(),"cause":cause(value.cause()),"stage":value.stage().to_string(),"chooser":value.chooser().0,"request":match value.request(){
                 spellwake_engine::effects::ZoneReplacementRequest::Devour { entrant, choices } => json!({"tag":"Devour","entrant":opaque(entrant),"choices":choices.iter().map(opaque).collect::<Vec<_>>()}),
@@ -3859,6 +3865,14 @@ pub fn library_action(value: &spellwake_engine::effects::LibraryAction) -> Value
 }
 pub fn occurrence(value: &RulesOccurrence) -> Value {
     match value {
+        RulesOccurrence::ChoiceMade {
+            chooser,
+            category,
+            chosen_count,
+            ..
+        } => {
+            json!({"tag":"ChoiceMade","chooser":chooser.0,"category":format!("{category:?}"),"chosen_count":chosen_count})
+        }
         RulesOccurrence::LibraryAction(value) => {
             json!({"tag":"LibraryAction","action":library_action(value)})
         }

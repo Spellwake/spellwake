@@ -30,6 +30,7 @@ pub mod shuffle;
 pub mod stack_window;
 pub mod targets;
 pub mod token;
+pub mod toolbox;
 pub mod turn;
 
 use spellwake_contracts::RulesInteger;

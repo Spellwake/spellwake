@@ -3009,6 +3009,13 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
     }
     match expr {
         ValueExpr::Literal(v) => *v >= 0.into(),
+        ValueExpr::BoundInt(_)
+        | ValueExpr::BoundCount { .. }
+        | ValueExpr::BoundStat { .. }
+        | ValueExpr::QueryCount(_)
+        | ValueExpr::QueryAggregate { .. }
+        | ValueExpr::StateTrackInt(_)
+        | ValueExpr::ChoiceHistoryCount { .. } => false,
         ValueExpr::Count {
             zone,
             filter,

@@ -55,6 +55,22 @@ fn choice<'a>(value: &'a PlayerChoice, out: &mut BTreeSet<&'a PlayerHandle>) {
         PlayerChoice::Option { option } => {
             out.insert(option);
         }
+        PlayerChoice::PromptChoice { reply } => match reply {
+            crate::player_wire::PlayerPromptReply::Objects { objects } => {
+                out.extend(objects);
+            }
+            crate::player_wire::PlayerPromptReply::Options { options } => {
+                out.extend(options);
+            }
+            crate::player_wire::PlayerPromptReply::Partition { piles } => {
+                for pile in piles {
+                    out.extend(pile);
+                }
+            }
+            crate::player_wire::PlayerPromptReply::Players { .. }
+            | crate::player_wire::PlayerPromptReply::Number { .. }
+            | crate::player_wire::PlayerPromptReply::CardName { .. } => {}
+        },
         PlayerChoice::Objects { objects } | PlayerChoice::Ordering { ordered: objects } => {
             out.extend(objects);
         }

@@ -349,12 +349,67 @@ function validDomain(v: RawDomain): boolean {
 const singleDomain = rawDomain.refine(validDomain);
 const castFace = singleDomain.refine((d): d is Extract<RawDomain, { spell: string }> =>
   ["impulse-cast", "madness-cast", "cascade-cast", "rebound-cast", "suspended-cast"].includes(d.kind));
+export const playerPromptCategorySchema = z.enum([
+  "generic",
+  "modal",
+  "villainous-choice",
+  "dilemma",
+  "vote",
+  "pile-split",
+  "search",
+  "tribute",
+  "clash",
+  "custom",
+]);
+export const playerPromptDomainSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("objects"),
+    candidates: z.array(playerHandleSchema).max(PLAYER_ITEMS).refine((xs) => uniquePlayerValues(xs, (x) => x)),
+    minimum: rulesCountSchema,
+    maximum: rulesCountSchema,
+    hidden: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("players"),
+    seats: z.array(identifierSchema).max(6).refine((xs) => uniquePlayerValues(xs, (x) => x)),
+    minimum: z.number().int().min(0).max(6),
+    maximum: z.number().int().min(0).max(6),
+  }),
+  z.strictObject({
+    kind: z.literal("options"),
+    options: z.array(playerOptionSchema).max(PLAYER_ITEMS),
+    minimum: z.number().int().min(0).max(255),
+    maximum: z.number().int().min(0).max(255),
+    allowRepeat: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("number"),
+    minimum: rulesIntegerSchema,
+    maximum: rulesIntegerSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("card-name"),
+    nonlandOnly: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("partition"),
+    candidates: z.array(playerHandleSchema).max(PLAYER_ITEMS).refine((xs) => uniquePlayerValues(xs, (x) => x)),
+    pileCount: z.number().int().min(2).max(16),
+    minPerPile: z.number().int().min(0).max(255),
+  }),
+]);
 export const playerDomainSchema = z.union([singleDomain,z.strictObject({
   kind:z.literal("split-cast"),left:castFace.nullable(),right:castFace,
 }).refine(d=>d.left===null || (d.left.kind===d.right.kind && d.left.spell===d.right.spell)), z.strictObject({
   kind: z.literal("adventure-cast"), normal: castFace.nullable(), adventure: castFace,
 }).refine(d => d.normal === null || (d.normal.kind === d.adventure.kind &&
-  "spell" in d.normal && "spell" in d.adventure && d.normal.spell === d.adventure.spell))]);
+  "spell" in d.normal && "spell" in d.adventure && d.normal.spell === d.adventure.spell)),
+  z.strictObject({
+    kind: z.literal("prompt-choice"),
+    category: playerPromptCategorySchema,
+    prompt: playerPromptDomainSchema,
+  }),
+]);
 export const playerDecisionKindSchema = z.enum([
   "library-search",
   "select-resolution",
@@ -400,6 +455,7 @@ export const playerDecisionKindSchema = z.enum([
   "card-name",
   "number",
   "distribution",
+  "prompt-choice",
 ]);
 const utcMicrosecond = z.string().refine((v) => {
   if (
@@ -519,6 +575,8 @@ function supports(domain: PlayerDomain, kind: PlayerDecision["kind"]): boolean {
       return kind === "resolution-payment" || kind === "cast-recovery";
     case "distribution":
       return kind === "distribution";
+    case "prompt-choice":
+      return kind === "prompt-choice";
     case "attack-cost":
     case "attackers":
       return kind === "declare-attackers";
@@ -583,6 +641,41 @@ function allows(
   extra: readonly string[],
 ): boolean {
   switch (d.kind) {
+    case "prompt-choice": {
+      if (r.kind !== "prompt-choice") return false;
+      const p = d.prompt;
+      const rep = r.reply;
+      if (p.kind === "objects" && rep.kind === "objects") {
+        return BigInt(rep.objects.length) >= BigInt(p.minimum) && BigInt(rep.objects.length) <= BigInt(p.maximum)
+          && uniquePlayerValues(rep.objects, (x) => x)
+          && rep.objects.every((h) => p.candidates.includes(h));
+      }
+      if (p.kind === "players" && rep.kind === "players") {
+        return rep.seats.length >= p.minimum && rep.seats.length <= p.maximum
+          && uniquePlayerValues(rep.seats, (x) => x)
+          && rep.seats.every((s) => p.seats.includes(s));
+      }
+      if (p.kind === "options" && rep.kind === "options") {
+        return rep.options.length >= p.minimum && rep.options.length <= p.maximum
+          && (p.allowRepeat || uniquePlayerValues(rep.options, (x) => x))
+          && rep.options.every((h) => p.options.some((o) => o.handle === h));
+      }
+      if (p.kind === "number" && rep.kind === "number") {
+        return BigInt(rep.value) >= BigInt(p.minimum) && BigInt(rep.value) <= BigInt(p.maximum);
+      }
+      if (p.kind === "card-name" && rep.kind === "card-name") {
+        return rep.name.trim().length > 0;
+      }
+      if (p.kind === "partition" && rep.kind === "partition") {
+        if (rep.piles.length !== p.pileCount) return false;
+        if (!rep.piles.every((pile) => pile.length >= p.minPerPile)) return false;
+        const flat = rep.piles.flat();
+        return flat.length === p.candidates.length
+          && uniquePlayerValues(flat, (x) => x)
+          && flat.every((h) => p.candidates.includes(h));
+      }
+      return false;
+    }
     case "split-cast": {
       if (r.kind==="decline") return true;
       const face="face" in r && r.face==="split-right" ? d.right : d.left;

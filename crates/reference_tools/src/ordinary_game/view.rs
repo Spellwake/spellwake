@@ -379,6 +379,9 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
             .collect::<Result<Vec<_>, _>>()
     };
     Ok(match value {
+        DecisionReply::PromptChoice(_) => {
+            return Err("prompt choice exceeds historical scope".into());
+        }
         DecisionReply::RemoveCounters(_) => {
             return Err("counter removal exceeds historical scope".into());
         }
@@ -1165,6 +1168,9 @@ fn decision(
             .collect::<Result<Vec<_>, _>>()
     };
     let frame = match value.frame() {
+        RuleFrame::PromptChoice(_) => {
+            return Err("historical ordinary scopes exclude prompt choices".into());
+        }
         RuleFrame::LoyaltyRemoval(_) => {
             return Err("historical ordinary scopes exclude loyalty removal choices".into());
         }

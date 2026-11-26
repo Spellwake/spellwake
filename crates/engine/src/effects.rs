@@ -56,6 +56,7 @@ mod monarch;
 mod pass_c_ops;
 mod progress_rules;
 mod rule_resume;
+mod toolbox_exec;
 pub use commanders::CommanderRecord;
 mod draw_replacement;
 pub(crate) mod event_replacement;
@@ -798,6 +799,8 @@ pub enum EffectDecision {
     ManaColor(ManaColorChoice),
     ResolutionManaColor(ResolutionManaColorChoice),
     OptionIndex(OptionIndexFrame),
+    /// Single generic interactive choice packet for the Universal Rules Toolbox.
+    PromptChoice(crate::toolbox::PromptChoiceFrame),
     RevealedPiles(PileChoiceFrame),
     MyriadDefender(MyriadDefenderFrame),
     ReselectAttackDefender(AttackDefenderFrame),
@@ -844,6 +847,7 @@ impl EffectDecision {
             Self::ManaColor(f) => f.chooser(),
             Self::ResolutionManaColor(f) => f.chooser,
             Self::OptionIndex(f) => f.chooser,
+            Self::PromptChoice(f) => f.chooser,
             Self::Mutation(f) => f.chooser(),
             Self::RevealedPiles(f) => f.chooser,
             Self::MyriadDefender(f) => f.chooser(),
@@ -888,6 +892,7 @@ impl EffectDecision {
             Self::ManaColor(_)
             | Self::ResolutionManaColor(_)
             | Self::OptionIndex(_)
+            | Self::PromptChoice(_)
             | Self::DrawReplacement(_)
             | Self::Mutation(_)
             | Self::RevealedPiles(_)
@@ -986,6 +991,8 @@ pub enum DecisionReply {
     DrawReplacement(DrawReplacementChoice),
     ChoosePile(u8),
     OptionIndex(u8),
+    /// Single generic reply paired with `EffectDecision::PromptChoice`.
+    PromptChoice(crate::toolbox::PromptChoiceReply),
     ChooseLandKind(bool),
     TransformOrder(Vec<ObjectId>),
     TimestampOrder(Vec<TokenBatchMember>),
@@ -1314,6 +1321,7 @@ pub(crate) struct ActiveTemporaryRule {
 /// reflexive triggered ability can read values from the parent resolution (CR 603.12).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct ReflexiveTriggerContext {
+    pub(crate) env: crate::toolbox::ExecEnv,
     last_sacrificed_creature: Option<crate::characteristics::PowerToughness>,
     last_sacrificed_mv: Option<RulesInteger>,
     resolution_x: Option<RulesInteger>,
@@ -1498,6 +1506,10 @@ pub struct EffectWindow {
     failed_draws: BTreeSet<SeatId>,
     state_based_losses: BTreeSet<SeatId>,
     pub(crate) won_by_effect: Option<(SeatId, ObjectId)>,
+    object_tags: crate::toolbox::ObjectTagStore,
+    state_tracks: crate::toolbox::StateTrackStore,
+    side_decks: crate::toolbox::SideDeckStore,
+    choice_history: Vec<crate::toolbox::ChoiceRecord>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct SpellCastPositions {
@@ -2154,6 +2166,9 @@ impl Default for ResolutionResults {
 /// Points into the owned payload. Tokens never own another mutable program counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolutionCursor {
+    pub(crate) env: crate::toolbox::ExecEnv,
+    pub(crate) pending_prompt_frame: Option<crate::toolbox::PromptChoiceFrame>,
+    pub(crate) pending_prompt_reply: Option<crate::toolbox::PromptChoiceReply>,
     chosen_opponent: Option<SeatId>,
     chosen_damage_recipient: Option<TargetRef>,
     chosen_damage_source: Option<crate::damage::DamageSourceId>,
@@ -2704,6 +2719,10 @@ impl EffectWindow {
             failed_draws: BTreeSet::new(),
             state_based_losses: BTreeSet::new(),
             won_by_effect: None,
+            object_tags: crate::toolbox::ObjectTagStore::default(),
+            state_tracks: crate::toolbox::StateTrackStore::default(),
+            side_decks: crate::toolbox::SideDeckStore::default(),
+            choice_history: Vec::new(),
         };
         let evaluated = result.evaluated_characteristics()?;
         result.reconcile_day_night(None, &evaluated)?;
@@ -7405,6 +7424,9 @@ impl EffectWindow {
                     destroyed_permanents: None,
                     chosen_loyalty_removals: None,
                     discarded_nonland_mana_value: None,
+                    env: crate::toolbox::ExecEnv::new(),
+                    pending_prompt_frame: None,
+                    pending_prompt_reply: None,
                     impulse: ImpulseState::default(),
                     entry: entry.id(),
                     instruction: 0,
@@ -7552,6 +7574,9 @@ impl EffectWindow {
             destroyed_permanents: None,
             chosen_loyalty_removals: None,
             discarded_nonland_mana_value: None,
+            env: crate::toolbox::ExecEnv::new(),
+            pending_prompt_frame: None,
+            pending_prompt_reply: None,
             impulse: ImpulseState::default(),
             entry: entry.id(),
             instruction: 0,
@@ -10793,6 +10818,16 @@ impl EffectWindow {
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
+            | Instruction::ZoneOp(_)
+            | Instruction::ApplyContinuous(_)
+            | Instruction::PromptChoice(_)
+            | Instruction::BranchCondition { .. }
+            | Instruction::ForEach { .. }
+            | Instruction::ForEachPlayerQuery { .. }
+            | Instruction::BindEnv { .. }
+            | Instruction::SetObjectTag { .. }
+            | Instruction::UpdateStateTrack { .. }
+            | Instruction::SideDeckOp(_)
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }

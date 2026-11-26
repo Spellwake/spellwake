@@ -154,6 +154,7 @@ fn family(input: &GameInput) -> (&'static str, Option<&'static str>) {
                     DecisionReply::RemoveCounters(_) => "counter-removal",
                     DecisionReply::CreatureType(_) => "creature-type",
                     DecisionReply::OptionIndex(_) => "option-index",
+                    DecisionReply::PromptChoice(_) => "prompt-choice",
                     DecisionReply::UntapKeepTapped(_) => "untap-keep-tapped",
                     DecisionReply::OpeningBattlefield(_) => "opening-battlefield",
                 }),

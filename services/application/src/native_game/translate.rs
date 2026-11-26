@@ -2648,6 +2648,134 @@ impl NativeScope<'_> {
                 };
                 DecisionReply::ManaColor(value)
             }
+            (RuleFrame::PromptChoice(frame), PlayerChoice::PromptChoice { reply }) => {
+                use crate::player_wire::PlayerPromptReply;
+                use spellwake_engine::toolbox::{PromptChoiceReply, ResolvedPromptDomain};
+                let translated = match (&frame.domain, reply) {
+                    (
+                        ResolvedPromptDomain::Objects { .. },
+                        PlayerPromptReply::Objects { objects },
+                    ) => {
+                        let ids = objects
+                            .iter()
+                            .map(|h| self.object(h))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PromptChoiceReply::Objects(ids)
+                    }
+                    (
+                        ResolvedPromptDomain::Players { .. },
+                        PlayerPromptReply::Players { seats },
+                    ) => {
+                        let native_seats = seats
+                            .iter()
+                            .map(|s| self.seat(*s))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        PromptChoiceReply::Players(native_seats)
+                    }
+                    (
+                        ResolvedPromptDomain::Options { .. },
+                        PlayerPromptReply::Options { options },
+                    ) => {
+                        let mut indices = Vec::with_capacity(options.len());
+                        for opt in options {
+                            let NativeReference::OptionIndex(idx) = self.reference(opt)? else {
+                                return Err(NativeBridgeError::WrongReferenceKind);
+                            };
+                            indices.push(idx);
+                        }
+                        PromptChoiceReply::Options(indices)
+                    }
+                    (ResolvedPromptDomain::Number { .. }, PlayerPromptReply::Number { value }) => {
+                        PromptChoiceReply::Number(value.clone())
+                    }
+                    (
+                        ResolvedPromptDomain::Color { .. },
+                        PlayerPromptReply::Options { options },
+                    ) => {
+                        let [opt] = options.as_slice() else {
+                            return Err(NativeBridgeError::Unsupported);
+                        };
+                        let NativeReference::ManaColor(color) = self.reference(opt)? else {
+                            return Err(NativeBridgeError::WrongReferenceKind);
+                        };
+                        PromptChoiceReply::Color(color)
+                    }
+                    (
+                        ResolvedPromptDomain::CardType { allowed },
+                        PlayerPromptReply::Options { options },
+                    ) => {
+                        let [opt] = options.as_slice() else {
+                            return Err(NativeBridgeError::Unsupported);
+                        };
+                        let NativeReference::OptionIndex(idx) = self.reference(opt)? else {
+                            return Err(NativeBridgeError::WrongReferenceKind);
+                        };
+                        let ty = *allowed
+                            .get(usize::from(idx))
+                            .ok_or(NativeBridgeError::InvalidReference)?;
+                        PromptChoiceReply::CardType(ty)
+                    }
+                    (
+                        ResolvedPromptDomain::CreatureType { .. },
+                        PlayerPromptReply::Options { options },
+                    ) => {
+                        let [opt] = options.as_slice() else {
+                            return Err(NativeBridgeError::Unsupported);
+                        };
+                        let NativeReference::CreatureType(ct) = self.reference(opt)? else {
+                            return Err(NativeBridgeError::WrongReferenceKind);
+                        };
+                        PromptChoiceReply::CreatureType(ct)
+                    }
+                    (
+                        ResolvedPromptDomain::BasicLandType { allowed },
+                        PlayerPromptReply::Options { options },
+                    ) => {
+                        let [opt] = options.as_slice() else {
+                            return Err(NativeBridgeError::Unsupported);
+                        };
+                        let NativeReference::OptionIndex(idx) = self.reference(opt)? else {
+                            return Err(NativeBridgeError::WrongReferenceKind);
+                        };
+                        let lt = *allowed
+                            .get(usize::from(idx))
+                            .ok_or(NativeBridgeError::InvalidReference)?;
+                        PromptChoiceReply::BasicLandType(lt)
+                    }
+                    (
+                        ResolvedPromptDomain::PlaneswalkerType { .. },
+                        PlayerPromptReply::Options { options },
+                    ) => {
+                        let [opt] = options.as_slice() else {
+                            return Err(NativeBridgeError::Unsupported);
+                        };
+                        let NativeReference::PlaneswalkerType(pw) = self.reference(opt)? else {
+                            return Err(NativeBridgeError::WrongReferenceKind);
+                        };
+                        PromptChoiceReply::PlaneswalkerType(pw)
+                    }
+                    (
+                        ResolvedPromptDomain::CardName { .. },
+                        PlayerPromptReply::CardName { name },
+                    ) => PromptChoiceReply::CardName(name.clone()),
+                    (
+                        ResolvedPromptDomain::Partition { .. },
+                        PlayerPromptReply::Partition { piles },
+                    ) => {
+                        let mut native_piles = Vec::with_capacity(piles.len());
+                        for pile in piles {
+                            let ids = pile
+                                .iter()
+                                .map(|h| self.object(h))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            native_piles.push(ids);
+                        }
+                        PromptChoiceReply::Partition(native_piles)
+                    }
+                    _ => return Err(NativeBridgeError::Unsupported),
+                };
+                DecisionReply::PromptChoice(translated)
+            }
             (RuleFrame::OptionIndex(_), PlayerChoice::Option { option }) => {
                 let NativeReference::OptionIndex(index) = self.reference(option)? else {
                     return Err(NativeBridgeError::WrongReferenceKind);

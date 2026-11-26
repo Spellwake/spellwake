@@ -3640,6 +3640,37 @@ pub(super) fn match_trigger_event(
                 });
             }
         }
+        TriggerEvent::ChoiceMade { category, player } => {
+            if let RulesOccurrence::ChoiceMade {
+                chooser,
+                category: actual_category,
+                ..
+            } = value
+                && category.is_none_or(|want| want == *actual_category)
+            {
+                let scope_ok = match player {
+                    TriggerPlayerScope::Relation(crate::program::PlayerRelation::Controller) => {
+                        *chooser == controller
+                    }
+                    TriggerPlayerScope::Relation(crate::program::PlayerRelation::Opponent) => {
+                        *chooser != controller
+                    }
+                    TriggerPlayerScope::Relation(
+                        crate::program::PlayerRelation::AnyParticipant,
+                    ) => true,
+                    TriggerPlayerScope::EnchantedPlayer
+                    | TriggerPlayerScope::AttachedHostController
+                    | TriggerPlayerScope::Monarch => *chooser == controller,
+                };
+                if scope_ok {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*chooser),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+        }
         TriggerEvent::DealtDamage {
             subject,
             linked_player,

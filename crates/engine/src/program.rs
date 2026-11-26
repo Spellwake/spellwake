@@ -4209,6 +4209,47 @@ pub enum Instruction {
         optional: bool,
         all: bool,
     },
+    /// Universal composable zone-operation pipeline (`Source -> Select -> Move/Reveal/Look -> Bind/Tag`).
+    ZoneOp(Box<crate::toolbox::ZoneOpSpec>),
+    /// Universal continuous effect, restriction, replacement, cost modifier, or emblem applicator.
+    ApplyContinuous(Box<crate::toolbox::ApplyContinuousSpec>),
+    /// Universal interactive player choice with automatic `ExecEnv` binding, history, and `ChoiceMade` event.
+    PromptChoice(Box<crate::toolbox::PromptChoiceSpec>),
+    /// Branch forward to `destination` if `condition` evaluates to `false`.
+    BranchCondition {
+        condition: Box<crate::toolbox::ConditionExpr>,
+        destination: usize,
+    },
+    /// Execute `body` once per object returned by `query`, binding each item in `ExecEnv` at `bind_item`.
+    ForEach {
+        query: Box<crate::toolbox::ObjectQuery>,
+        bind_item: crate::toolbox::BindingId,
+        body: Box<ExecutableBody>,
+    },
+    /// Execute `body` once per player returned by `selector`, binding each seat in `ExecEnv` at `bind_player`.
+    ForEachPlayerQuery {
+        selector: Box<crate::toolbox::PlayerSelector>,
+        bind_player: crate::toolbox::BindingId,
+        body: Box<ExecutableBody>,
+    },
+    /// Bind a typed value directly into `ExecEnv` at `binding`.
+    BindEnv {
+        binding: crate::toolbox::BindingId,
+        value: Box<crate::toolbox::ExecValue>,
+    },
+    /// Set (`Some`) or remove (`None`) a metadata tag or partition membership on queried objects.
+    SetObjectTag {
+        query: Box<crate::toolbox::ObjectQuery>,
+        key: crate::toolbox::TagKey,
+        value: Option<crate::toolbox::TagValue>,
+    },
+    /// Update a generic global, player, or object state track in `StateTrackStore`.
+    UpdateStateTrack {
+        key: Box<crate::toolbox::StateTrackKeySpec>,
+        op: crate::toolbox::StateTrackOp,
+    },
+    /// Advance, cycle, or recycle a supplemental side-deck in `SideDeckStore`.
+    SideDeckOp(Box<crate::toolbox::SideDeckOpSpec>),
 }
 impl Instruction {
     /// Relocate absolute instruction jump destinations `>= min_dest` by `delta`.
@@ -4221,9 +4262,20 @@ impl Instruction {
             }
         };
         match self {
-            Self::BranchIfFalse { destination, .. } | Self::Jump { destination } => {
+            Self::BranchIfFalse { destination, .. }
+            | Self::BranchCondition { destination, .. }
+            | Self::Jump { destination } => {
                 adjust(destination);
             }
+            Self::ZoneOp(_)
+            | Self::ApplyContinuous(_)
+            | Self::PromptChoice(_)
+            | Self::ForEach { .. }
+            | Self::ForEachPlayerQuery { .. }
+            | Self::BindEnv { .. }
+            | Self::SetObjectTag { .. }
+            | Self::UpdateStateTrack { .. }
+            | Self::SideDeckOp(_) => {}
             Self::FlipCoin { lose_destination } => {
                 adjust(lose_destination);
             }
@@ -5439,6 +5491,36 @@ impl Instruction {
             Self::CreateAuraTokenAttached { host: source, .. } | Self::ExploreSubject(source) => {
                 matches!(source, MoveSubjectRef::TargetObject)
             }
+            Self::ZoneOp(spec) => spec.uses_target(),
+            Self::ApplyContinuous(spec) => spec.uses_target(),
+            Self::PromptChoice(spec) => spec.uses_target(),
+            Self::BranchCondition { condition, .. } => condition.uses_target(),
+            Self::ForEach { query, body, .. } => {
+                query.uses_target() || body.instructions.iter().any(Self::uses_mode_target)
+            }
+            Self::ForEachPlayerQuery { selector, body, .. } => {
+                selector.uses_target() || body.instructions.iter().any(Self::uses_mode_target)
+            }
+            Self::BindEnv { .. } => false,
+            Self::SetObjectTag { query, .. } => query.uses_target(),
+            Self::UpdateStateTrack { key, op } => {
+                let key_uses = match &key.scope {
+                    crate::toolbox::StateTrackScope::Global => false,
+                    crate::toolbox::StateTrackScope::Player(p) => p.uses_target(),
+                    crate::toolbox::StateTrackScope::Object(q) => q.uses_target(),
+                };
+                let op_uses = match op {
+                    crate::toolbox::StateTrackOp::SetInt(e)
+                    | crate::toolbox::StateTrackOp::AddInt(e) => e.uses_target(),
+                    crate::toolbox::StateTrackOp::SetSeat(p) => p.uses_target(),
+                    _ => false,
+                };
+                key_uses || op_uses
+            }
+            Self::SideDeckOp(spec) => spec
+                .owner
+                .as_ref()
+                .is_some_and(crate::toolbox::PlayerSelector::uses_target),
             Self::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
                 TemporaryRuleKind::CantBeCountered { filter, .. }
                 | TemporaryRuleKind::CantBeCounteredByColors { filter, .. }
@@ -6220,6 +6302,16 @@ impl Instruction {
             | Self::ChooseOneLastMoved { .. }
             | Self::SkipNextUntap { .. }
             | Self::RequireCombatAction { .. }
+            | Self::ZoneOp(_)
+            | Self::ApplyContinuous(_)
+            | Self::PromptChoice(_)
+            | Self::BranchCondition { .. }
+            | Self::ForEach { .. }
+            | Self::ForEachPlayerQuery { .. }
+            | Self::BindEnv { .. }
+            | Self::SetObjectTag { .. }
+            | Self::UpdateStateTrack { .. }
+            | Self::SideDeckOp(_)
             | Self::CreateTemporaryRule { .. }
             | Self::DestroySubject { .. }
             | Self::GrantCardPlayPermission { .. }
@@ -7630,6 +7722,77 @@ impl ExecutableBody {
                 return Err(DefinitionError::UndefinedCreatureTypeSlot);
             }
             let family = match instruction {
+                Instruction::ZoneOp(spec) => {
+                    spec.validate_vocabulary(vocabulary)?;
+                    None
+                }
+                Instruction::ApplyContinuous(spec) => {
+                    spec.validate_vocabulary(vocabulary)?;
+                    None
+                }
+                Instruction::PromptChoice(spec) => {
+                    spec.validate_vocabulary(vocabulary)?;
+                    None
+                }
+                Instruction::BranchCondition {
+                    condition,
+                    destination,
+                } => {
+                    if *destination <= index || *destination > self.instructions.len() {
+                        return Err(DefinitionError::InvalidControlFlow);
+                    }
+                    condition.validate_vocabulary(vocabulary)?;
+                    None
+                }
+                Instruction::ForEach {
+                    query, body: inner, ..
+                } => {
+                    query.validate_vocabulary(vocabulary)?;
+                    inner.validate(vocabulary)?;
+                    None
+                }
+                Instruction::ForEachPlayerQuery {
+                    selector,
+                    body: inner,
+                    ..
+                } => {
+                    selector.validate_vocabulary(vocabulary)?;
+                    inner.validate(vocabulary)?;
+                    None
+                }
+                Instruction::BindEnv { .. } => None,
+                Instruction::SetObjectTag { query, .. } => {
+                    query.validate_vocabulary(vocabulary)?;
+                    None
+                }
+                Instruction::UpdateStateTrack { key, op } => {
+                    match &key.scope {
+                        crate::toolbox::StateTrackScope::Global => {}
+                        crate::toolbox::StateTrackScope::Player(p) => {
+                            p.validate_vocabulary(vocabulary)?;
+                        }
+                        crate::toolbox::StateTrackScope::Object(q) => {
+                            q.validate_vocabulary(vocabulary)?;
+                        }
+                    }
+                    match op {
+                        crate::toolbox::StateTrackOp::SetInt(e)
+                        | crate::toolbox::StateTrackOp::AddInt(e) => {
+                            e.validate_vocabulary(vocabulary)?;
+                        }
+                        crate::toolbox::StateTrackOp::SetSeat(p) => {
+                            p.validate_vocabulary(vocabulary)?;
+                        }
+                        _ => {}
+                    }
+                    None
+                }
+                Instruction::SideDeckOp(spec) => {
+                    if let Some(p) = &spec.owner {
+                        p.validate_vocabulary(vocabulary)?;
+                    }
+                    None
+                }
                 Instruction::BranchIfFalse {
                     condition,
                     destination,
@@ -16545,6 +16708,21 @@ impl ExecutableBody {
                 match instruction {
                     Instruction::Jump { destination } => {
                         facts.merge_into(&mut incoming[*destination])
+                    }
+                    Instruction::BranchCondition { destination, .. } => {
+                        facts.merge_into(&mut incoming[next]);
+                        facts.merge_into(&mut incoming[*destination]);
+                    }
+                    Instruction::ZoneOp(_)
+                    | Instruction::ApplyContinuous(_)
+                    | Instruction::PromptChoice(_)
+                    | Instruction::ForEach { .. }
+                    | Instruction::ForEachPlayerQuery { .. }
+                    | Instruction::BindEnv { .. }
+                    | Instruction::SetObjectTag { .. }
+                    | Instruction::UpdateStateTrack { .. }
+                    | Instruction::SideDeckOp(_) => {
+                        facts.merge_into(&mut incoming[next]);
                     }
                     Instruction::FlipCoin {
                         lose_destination: destination,
