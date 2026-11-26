@@ -871,6 +871,7 @@ fn mega_batch_1_has_toxic_and_no_abilities_filters_execute_accurately() {
 }
 
 #[test]
+#[ignore = "requires pinned Oracle catalogue and creature vocabulary"]
 fn mega_batch_1_pinned_real_cards_compile_cleanly() {
     let (inventory, vocabulary, _) = crate::keyword_creatures::tests::current_catalogue();
     let pinned = [
