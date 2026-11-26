@@ -90,7 +90,8 @@ impl EffectWindow {
                             crate::program::SourceZoneFilter::Exile => {
                                 obj.zone() == ObjectZone::Exile
                             }
-                            crate::program::SourceZoneFilter::Battlefield => {
+                            crate::program::SourceZoneFilter::Battlefield
+                            | crate::program::SourceZoneFilter::AnyBattlefield => {
                                 obj.zone() == ObjectZone::Battlefield
                                     && self.window.cards().phased_out_under(obj.id()).is_none()
                             }

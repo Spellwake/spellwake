@@ -393,6 +393,31 @@ impl EffectWindow {
                             }
                         }
                     }
+                    ResolutionChoiceDomain::RandomPlayer { opponents_only } => {
+                        let seats: Vec<SeatId> = if opponents_only {
+                            self.combat_rules
+                                .opponents(self.window.participants(), actor)?
+                        } else {
+                            self.window.participants().to_vec()
+                        };
+                        match seats.as_slice() {
+                            [] => {}
+                            [only] => {
+                                if let Some(cur) = self.resolution_cursor_mut() {
+                                    cur.chosen_opponent = Some(*only);
+                                }
+                            }
+                            _ => {
+                                if !cursor_snap.results.random_player_ready {
+                                    self.suspend_for_random_resolution(actor)?;
+                                    return Ok(StepOutcome::Continue);
+                                }
+                                if let Some(cur) = self.resolution_cursor_mut() {
+                                    cur.results.random_player_ready = false;
+                                }
+                            }
+                        }
+                    }
                     ResolutionChoiceDomain::CardType(allowed) => {
                         let types = if allowed.is_empty() {
                             vec![
@@ -2049,6 +2074,10 @@ impl EffectWindow {
                                         .get(obj.id())
                                         .and_then(|v| v.controller)
                                         .is_some_and(|c| seats.contains(&c))
+                            }
+                            crate::program::SourceZoneFilter::AnyBattlefield => {
+                                obj.zone() == ObjectZone::Battlefield
+                                    && self.window.cards().phased_out_under(obj.id()).is_none()
                             }
                             crate::program::SourceZoneFilter::YourLibrary => {
                                 matches!(obj.zone(), ObjectZone::Library(p) if seats.contains(&p))

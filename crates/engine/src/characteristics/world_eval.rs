@@ -12,8 +12,8 @@ use crate::{
         AttachedCountKind, CardType, CombatFilter, ControllerFilter, CounterSubjectRef,
         DynamicStatAnchor, EventValueKind, ManaValueFilter, MatchObjectRef, ObjectClause,
         ObjectFilter, ObjectFilterFlags, ObjectStatKind, PlayerStatExpr, PowerFilter, Program,
-        ResolutionCondition, ResolvingPlayer, SourceRelation, SourceStateExpr, StatAggregate,
-        ToughnessFilter, ValueExpr, ValueObjectRef, ValueZone,
+        ResolutionCondition, ResolvingPlayer, SourceRelation, SourceStateExpr, ToughnessFilter,
+        ValueExpr, ValueObjectRef, ValueZone,
     },
     targets::TargetRef,
 };
@@ -1427,11 +1427,7 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     ),
                 }
             });
-            match op {
-                StatAggregate::Max => values.max().unwrap_or_else(|| 0.into()),
-                StatAggregate::Min => values.min().unwrap_or_else(|| 0.into()),
-                StatAggregate::Sum => values.fold(0.into(), |acc: RulesInteger, v| acc.plus(&v)),
-            }
+            op.evaluate(values)
         }
         ValueExpr::ObjectStat { subject, stat } => match subject {
             ValueObjectRef::AbilitySource | ValueObjectRef::TriggerSource => ctx
@@ -1994,6 +1990,9 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     })
                     .max();
                 i64::from(max.is_some_and(|(_, ours)| ours)).into()
+            }
+            PlayerStatExpr::PlayerIsActivePlayer(role) => {
+                i64::from(resolve_world_player(ctx, *role) == Some(ctx.active_player)).into()
             }
             PlayerStatExpr::ControllerIsActivePlayer => {
                 i64::from(ctx.active_player == ctx.controller).into()

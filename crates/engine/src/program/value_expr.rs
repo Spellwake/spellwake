@@ -41,6 +41,20 @@ pub enum StatAggregate {
     Max,
     Min,
     Sum,
+    /// Number of distinct values, with objects lacking the statistic omitted.
+    CountDistinct,
+}
+
+impl StatAggregate {
+    /// Reduce the actual values of matching objects without narrowing rules integers.
+    pub(crate) fn evaluate(self, values: impl Iterator<Item = RulesInteger>) -> RulesInteger {
+        match self {
+            Self::Max => values.max().unwrap_or_else(|| 0.into()),
+            Self::Min => values.min().unwrap_or_else(|| 0.into()),
+            Self::Sum => values.fold(0.into(), |total: RulesInteger, value| total.plus(&value)),
+            Self::CountDistinct => RulesInteger::from_usize(values.collect::<BTreeSet<_>>().len()),
+        }
+    }
 }
 
 /// Subject whose statistic is read by [`ValueExpr::ObjectStat`].
@@ -243,6 +257,8 @@ pub enum PlayerStatExpr {
     NoMonarch,
     ControlsGreatestCreature,
     ControllerIsActivePlayer,
+    /// `1` when the resolved player is the active player, otherwise `0`.
+    PlayerIsActivePlayer(ResolvingPlayer),
     ControllerIsAttacking,
     ControllerIsDefending,
     ControllerSpeed,
@@ -512,7 +528,7 @@ pub enum ValueExpr {
     CountOtherSharingSourceSubtype,
     /// Count creatures currently attacking the resolving controller directly (not a planeswalker).
     CountAttackingController,
-    /// Aggregate (max or sum) a stat across battlefield objects matching `filter`.
+    /// Aggregate a statistic across battlefield objects matching `filter`.
     Aggregate {
         filter: Box<ObjectFilter>,
         stat: ObjectStatKind,
@@ -870,7 +886,8 @@ impl ValueExpr {
             ),
             Self::PlayerStat(stat) => match stat {
                 PlayerStatExpr::CardsShortOfHandSize(_) => false,
-                PlayerStatExpr::PlayerLife(p)
+                PlayerStatExpr::PlayerIsActivePlayer(p)
+                | PlayerStatExpr::PlayerLife(p)
                 | PlayerStatExpr::PlayerHandSize(p)
                 | PlayerStatExpr::PlayerLibrarySize(p)
                 | PlayerStatExpr::PlayerGraveyardSize(p)
@@ -1055,7 +1072,8 @@ impl ValueExpr {
             ),
             Self::PlayerStat(stat) => match stat {
                 PlayerStatExpr::CardsShortOfHandSize(_) => false,
-                PlayerStatExpr::PlayerLife(p)
+                PlayerStatExpr::PlayerIsActivePlayer(p)
+                | PlayerStatExpr::PlayerLife(p)
                 | PlayerStatExpr::PlayerHandSize(p)
                 | PlayerStatExpr::PlayerLibrarySize(p)
                 | PlayerStatExpr::PlayerGraveyardSize(p)
@@ -1364,7 +1382,8 @@ impl ValueExpr {
                     )
                 };
                 match stat {
-                    PlayerStatExpr::PlayerLife(r)
+                    PlayerStatExpr::PlayerIsActivePlayer(r)
+                    | PlayerStatExpr::PlayerLife(r)
                     | PlayerStatExpr::PlayerHandSize(r)
                     | PlayerStatExpr::PlayerLibrarySize(r)
                     | PlayerStatExpr::PlayerGraveyardSize(r)
@@ -1578,7 +1597,8 @@ impl ValueExpr {
                 }
             }
             Self::PlayerStat(stat) => match stat {
-                PlayerStatExpr::PlayerLife(r)
+                PlayerStatExpr::PlayerIsActivePlayer(r)
+                | PlayerStatExpr::PlayerLife(r)
                 | PlayerStatExpr::PlayerHandSize(r)
                 | PlayerStatExpr::PlayerLibrarySize(r)
                 | PlayerStatExpr::PlayerGraveyardSize(r)
@@ -2364,6 +2384,26 @@ impl ValueExpr {
                     }
                     _ => Ok(()),
                 },
+                PlayerStatExpr::PlayerIsActivePlayer(role) => {
+                    // Target-dependent roles are checked against the actual body target by
+                    // required_operand_family. Other roles must exist in this entry context.
+                    if matches!(
+                        role,
+                        ResolvingPlayer::TargetPlayer
+                            | ResolvingPlayer::TargetController
+                            | ResolvingPlayer::TargetOwner
+                            | ResolvingPlayer::TargetSpellController
+                    ) {
+                        Ok(())
+                    } else {
+                        role.validate(
+                            context,
+                            super::BodyTarget::None,
+                            facts.definitely_exiled_target,
+                        )
+                        .map(|_| ())
+                    }
+                }
                 PlayerStatExpr::PlayerLife(role)
                 | PlayerStatExpr::PlayerHandSize(role)
                 | PlayerStatExpr::PlayerLibrarySize(role)

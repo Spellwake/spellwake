@@ -1669,13 +1669,15 @@ impl EffectWindow {
             | ResolutionSelectionOperation::AttachToSource { .. }
             | ResolutionSelectionOperation::EnterAurasAttachedToSource { .. }
             | ResolutionSelectionOperation::CopyDifferentlyNamedTokens
+            | ResolutionSelectionOperation::Populate
             | ResolutionSelectionOperation::Bolster { .. }
             | ResolutionSelectionOperation::Amass { .. }
             | ResolutionSelectionOperation::Untap { .. }
             | ResolutionSelectionOperation::TapOrUntapControlled { .. }
             | ResolutionSelectionOperation::Blight { .. }
             | ResolutionSelectionOperation::CollectEvidence { .. }
-            | ResolutionSelectionOperation::SelectZoneCards { .. } => {
+            | ResolutionSelectionOperation::SelectZoneCards { .. }
+            | ResolutionSelectionOperation::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }

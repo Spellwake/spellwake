@@ -824,6 +824,7 @@ impl Projection<'_, '_> {
                             spellwake_engine::mana::ManaRestriction::SpellWithMinManaValueOrX(_) => crate::player_wire::PlayerManaRestriction::SpellWithMinManaValueOrX,
                             spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellWithMinManaValueOrX,
                             spellwake_engine::mana::ManaRestriction::CreatureOrEnchantmentSpell => crate::player_wire::PlayerManaRestriction::CreatureOrEnchantmentSpell,
+                            spellwake_engine::mana::ManaRestriction::Predicate(_) => crate::player_wire::PlayerManaRestriction::Predicate,
                         },
                         creature_type: match restriction {
                             spellwake_engine::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(Some(kind)) | spellwake_engine::mana::ManaRestriction::CreatureSpellOfType(Some(kind)) | spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(kind)) => Some(PlayerCreatureTypeLabel::try_from(source.execution().creature_vocabulary().label(*kind).ok_or(NativeProjectionError::MissingNativeValue)?.to_owned()).map_err(|_| NativeProjectionError::InvalidSnapshot)?),
@@ -834,6 +835,15 @@ impl Projection<'_, '_> {
                             | spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValue(n)
                             | spellwake_engine::mana::ManaRestriction::SpellWithMinManaValueOrX(n)
                             | spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(n) => Some(*n),
+                            _ => None,
+                        },
+                        predicate: match restriction {
+                            spellwake_engine::mana::ManaRestriction::Predicate(pred) => {
+                                Some(project_mana_predicate(
+                                    pred,
+                                    source.execution().creature_vocabulary(),
+                                )?)
+                            }
                             _ => None,
                         },
                     })
@@ -2034,4 +2044,148 @@ pub(super) fn ensure_public_damage_source(
         return Err(NativeProjectionError::HiddenReference);
     }
     Ok(())
+}
+
+fn project_color_to_mana(color: spellwake_engine::characteristics::Color) -> ManaColor {
+    match color {
+        spellwake_engine::characteristics::Color::White => ManaColor::White,
+        spellwake_engine::characteristics::Color::Blue => ManaColor::Blue,
+        spellwake_engine::characteristics::Color::Black => ManaColor::Black,
+        spellwake_engine::characteristics::Color::Red => ManaColor::Red,
+        spellwake_engine::characteristics::Color::Green => ManaColor::Green,
+    }
+}
+
+fn project_card_type_to_wire(kind: spellwake_engine::program::CardType) -> PlayerCardType {
+    match kind {
+        spellwake_engine::program::CardType::Battle => PlayerCardType::Battle,
+        spellwake_engine::program::CardType::Planeswalker => PlayerCardType::Planeswalker,
+        spellwake_engine::program::CardType::Land => PlayerCardType::Land,
+        spellwake_engine::program::CardType::Artifact => PlayerCardType::Artifact,
+        spellwake_engine::program::CardType::Creature => PlayerCardType::Creature,
+        spellwake_engine::program::CardType::Enchantment => PlayerCardType::Enchantment,
+        spellwake_engine::program::CardType::Kindred => PlayerCardType::Kindred,
+        spellwake_engine::program::CardType::Instant => PlayerCardType::Instant,
+        spellwake_engine::program::CardType::Sorcery => PlayerCardType::Sorcery,
+    }
+}
+
+fn project_mana_predicate(
+    pred: &spellwake_engine::mana::ManaSpendPredicate,
+    vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+) -> Result<crate::player_wire::PlayerManaPredicate, NativeProjectionError> {
+    use crate::player_wire::{
+        PlayerAbilityManaClause, PlayerAbilitySpendKind, PlayerManaPredicate,
+        PlayerManaSpecialAction, PlayerManaSpellKeyword, PlayerSpellCastMode, PlayerSpellColorRule,
+        PlayerSpellManaClause,
+    };
+    use spellwake_engine::mana::{
+        AbilitySpendKind, ManaSpecialAction, ManaSpellKeyword, SpellCastMode, SpellColorRule,
+    };
+    let spell_clauses = pred
+        .spell_clauses
+        .iter()
+        .map(|c| {
+            Ok(PlayerSpellManaClause {
+                card_type: c.card_type.map(project_card_type_to_wire),
+                exclude_card_type: c.exclude_card_type.map(project_card_type_to_wire),
+                supertype: c.supertype.map(|s| s.wire_label().to_owned()),
+                creature_type: c
+                    .creature_type
+                    .map(|k| {
+                        let label = vocabulary
+                            .label(k)
+                            .ok_or(NativeProjectionError::MissingNativeValue)?;
+                        PlayerCreatureTypeLabel::try_from(label.to_owned())
+                            .map_err(|_| NativeProjectionError::InvalidSnapshot)
+                    })
+                    .transpose()?,
+                artifact_subtype: c.artifact_subtype.map(|s| s.wire_label().to_owned()),
+                enchantment_subtype: c.enchantment_subtype.map(|s| s.wire_label().to_owned()),
+                is_aura: c.is_aura,
+                spell_subtype: c.spell_subtype.map(|s| s.wire_label().to_owned()),
+                planeswalker_subtype: c.planeswalker_subtype.map(|s| s.label().to_owned()),
+                color_rule: c.color_rule.map(|r| match r {
+                    SpellColorRule::Colorless => PlayerSpellColorRule::Colorless,
+                    SpellColorRule::Colored => PlayerSpellColorRule::Colored,
+                    SpellColorRule::ExactColor(col) => PlayerSpellColorRule::ExactColor {
+                        color: project_color_to_mana(col),
+                    },
+                    SpellColorRule::MonocoloredOf(col) => PlayerSpellColorRule::MonocoloredOf {
+                        color: project_color_to_mana(col),
+                    },
+                    SpellColorRule::Multicolored => PlayerSpellColorRule::Multicolored,
+                    SpellColorRule::ExactColorCount(count) => {
+                        PlayerSpellColorRule::ExactColorCount { count }
+                    }
+                }),
+                keyword: c.keyword.map(|k| match k {
+                    ManaSpellKeyword::Devoid => PlayerManaSpellKeyword::Devoid,
+                    ManaSpellKeyword::Freerunning => PlayerManaSpellKeyword::Freerunning,
+                    ManaSpellKeyword::Foretell => PlayerManaSpellKeyword::Foretell,
+                    ManaSpellKeyword::Flashback => PlayerManaSpellKeyword::Flashback,
+                    ManaSpellKeyword::Disturb => PlayerManaSpellKeyword::Disturb,
+                }),
+                cast_mode: c.cast_mode.map(|m| match m {
+                    SpellCastMode::FaceDown => PlayerSpellCastMode::FaceDown,
+                    SpellCastMode::Kicked => PlayerSpellCastMode::Kicked,
+                    SpellCastMode::Disturb => PlayerSpellCastMode::Disturb,
+                    SpellCastMode::FromGraveyard => PlayerSpellCastMode::FromGraveyard,
+                    SpellCastMode::FromExile => PlayerSpellCastMode::FromExile,
+                    SpellCastMode::NotFromHand => PlayerSpellCastMode::NotFromHand,
+                    SpellCastMode::NotOwned => PlayerSpellCastMode::NotOwned,
+                    SpellCastMode::SecondSpellThisTurn => PlayerSpellCastMode::SecondSpellThisTurn,
+                }),
+                no_abilities: c.no_abilities,
+                min_mana_value: c.min_mana_value,
+            })
+        })
+        .collect::<Result<Vec<_>, NativeProjectionError>>()?;
+    let ability_clauses = pred
+        .ability_clauses
+        .iter()
+        .map(|c| {
+            Ok(PlayerAbilityManaClause {
+                source_card_type: c.source_card_type.map(project_card_type_to_wire),
+                source_creature_type: c
+                    .source_creature_type
+                    .map(|k| {
+                        let label = vocabulary
+                            .label(k)
+                            .ok_or(NativeProjectionError::MissingNativeValue)?;
+                        PlayerCreatureTypeLabel::try_from(label.to_owned())
+                            .map_err(|_| NativeProjectionError::InvalidSnapshot)
+                    })
+                    .transpose()?,
+                source_colorless: c.source_colorless,
+                kind: c.kind.map(|k| match k {
+                    AbilitySpendKind::Equip => PlayerAbilitySpendKind::Equip,
+                    AbilitySpendKind::PowerUp => PlayerAbilitySpendKind::PowerUp,
+                    AbilitySpendKind::GainClassLevel => PlayerAbilitySpendKind::GainClassLevel,
+                }),
+            })
+        })
+        .collect::<Result<Vec<_>, NativeProjectionError>>()?;
+    let special_actions = pred
+        .special_actions
+        .iter()
+        .map(|a| match a {
+            ManaSpecialAction::Foretell => PlayerManaSpecialAction::Foretell,
+            ManaSpecialAction::TurnFaceUp => PlayerManaSpecialAction::TurnFaceUp,
+            ManaSpecialAction::TurnCreatureFaceUp => PlayerManaSpecialAction::TurnCreatureFaceUp,
+            ManaSpecialAction::UnlockDoor => PlayerManaSpecialAction::UnlockDoor,
+            ManaSpecialAction::CumulativeUpkeep => PlayerManaSpecialAction::CumulativeUpkeep,
+        })
+        .collect();
+    Ok(PlayerManaPredicate {
+        allow_any_spell: pred.allow_any_spell,
+        spell_clauses,
+        allow_any_ability: pred.allow_any_ability,
+        ability_clauses,
+        special_actions,
+        makes_spell_uncounterable: pred.makes_spell_uncounterable,
+        disallow_generic: pred.disallow_generic,
+        allow_cost_containing_colorless: pred.allow_cost_containing_colorless,
+        allow_cost_containing_x: pred.allow_cost_containing_x,
+    })
 }

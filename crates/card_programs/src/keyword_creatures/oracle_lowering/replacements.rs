@@ -3943,7 +3943,7 @@ fn is_plain_controlled_creatures_filter(
         && !f.is_ability
 }
 
-fn value_expr_contains_prior_result(expr: &ValueExprAst) -> bool {
+pub(super) fn value_expr_contains_prior_result(expr: &ValueExprAst) -> bool {
     match expr {
         ValueExprAst::PriorResult => true,
         ValueExprAst::Add(a, b)

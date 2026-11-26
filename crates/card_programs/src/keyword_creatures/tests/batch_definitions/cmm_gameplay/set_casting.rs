@@ -2414,7 +2414,7 @@ fn innistrad_altar_mana_works_for_flashback_and_rejects_hand_casts() {
     let restriction = ManaRestriction::SpellWithFlashbackFromGraveyard;
     let same_color = command(&start, A, tap(&[(red, 2)])).into_state();
     assert_eq!(
-        same_color.execution().restricted_mana()[&(A, red, restriction)],
+        same_color.execution().restricted_mana()[&(A, red, restriction.clone())],
         2.into()
     );
     let funded = command(&start, A, tap(&[(red, 1), (black, 1)])).into_state();
@@ -2428,7 +2428,7 @@ fn innistrad_altar_mana_works_for_flashback_and_rejects_hand_casts() {
                     .iter()
                     .map(|&mana_type| RestrictedManaSpend {
                         mana_type,
-                        restriction,
+                        restriction: restriction.clone(),
                         amount: 1.into(),
                     })
                     .collect(),

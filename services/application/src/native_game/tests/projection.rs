@@ -329,14 +329,51 @@ pub(super) fn verify_view(view: &mut NativeScope<'_>, original: Option<&PlayerCo
             )
             .unwrap();
     }
+    let mut revealed_by_decision: BTreeSet<_> = source
+        .search_reveals()
+        .into_iter()
+        .chain(source.cascade_reveals())
+        .chain(source.face_down_reveals())
+        .map(|(obj, _)| obj.id())
+        .collect();
+    if let Some(pending) = source
+        .pending_decision()
+        .filter(|pending| pending.chooser() == view.binding.actor)
+        && let spellwake_engine::game::RuleFrame::RevealedPiles(frame) = pending.frame()
+    {
+        use spellwake_engine::effects::PileChoice;
+        match frame.choice() {
+            PileChoice::OneToHand(ids)
+            | PileChoice::OneToHandRestBottom(ids)
+            | PileChoice::Creature(ids)
+            | PileChoice::Divide(ids)
+            | PileChoice::BottomOrder(ids)
+            | PileChoice::GraveyardOrder(ids) => {
+                revealed_by_decision.extend(ids.iter().copied());
+            }
+            PileChoice::OptionalCreatureToBattlefield { looked, eligible }
+            | PileChoice::OptionalUpTo {
+                looked, eligible, ..
+            } => {
+                revealed_by_decision.extend(looked.iter().copied());
+                revealed_by_decision.extend(eligible.iter().copied());
+            }
+            PileChoice::Take { first, second } | PileChoice::Sacrifice { first, second } => {
+                revealed_by_decision.extend(first.iter().copied());
+                revealed_by_decision.extend(second.iter().copied());
+            }
+            PileChoice::DividePermanents(_) => {}
+        }
+    }
     let hidden: BTreeSet<_> = source
         .execution()
         .window()
         .cards()
         .iter()
         .filter(|object| {
-            matches!(object.zone(), ObjectZone::Library(_))
-                || matches!(object.zone(),ObjectZone::Hand(seat) if seat!=view.binding.actor && !source.execution().revealed_by_ninjutsu(object.id()))
+            !revealed_by_decision.contains(&object.id())
+                && (matches!(object.zone(), ObjectZone::Library(_))
+                    || matches!(object.zone(),ObjectZone::Hand(seat) if seat!=view.binding.actor && !source.execution().revealed_by_ninjutsu(object.id())))
         })
         .map(GameObject::id)
         .collect();
@@ -365,7 +402,12 @@ pub(super) fn verify_view(view: &mut NativeScope<'_>, original: Option<&PlayerCo
             .borrow()
             .iter()
             .flatten()
-            .all(|id| !hidden_cards.contains(id))
+            .all(|id| !hidden_cards.contains(id)),
+        "hidden card leaked: seen={:?}, hidden_cards={:?}, revealed_by_decision={:?}, pending={:?}",
+        display.seen.borrow(),
+        hidden_cards,
+        revealed_by_decision,
+        source.pending_decision().map(|d| (d.chooser(), d.frame()))
     );
     assert_eq!(source, &before);
     capture(&snapshot);
@@ -1150,6 +1192,43 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
             RuleFrame::Damage(DamageDecision::Allocation(frame)) => {
                 for attempt in frame.eligible() {
                     expected.push(DisplayCall::Prevention(attempt.clone()));
+                }
+            }
+            RuleFrame::RevealedPiles(frame) => {
+                use spellwake_engine::effects::PileChoice;
+                let ids: &[_] = match frame.choice() {
+                    PileChoice::OneToHand(ids)
+                    | PileChoice::OneToHandRestBottom(ids)
+                    | PileChoice::Creature(ids)
+                    | PileChoice::Divide(ids)
+                    | PileChoice::BottomOrder(ids)
+                    | PileChoice::GraveyardOrder(ids) => ids,
+                    PileChoice::OptionalCreatureToBattlefield { looked, eligible }
+                    | PileChoice::OptionalUpTo {
+                        looked, eligible, ..
+                    } => {
+                        for &id in looked.iter().chain(eligible.iter()) {
+                            let obj = source.execution().window().cards().get(id).unwrap();
+                            let prog = source.execution().copiable_program(id).unwrap();
+                            expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
+                        }
+                        &[]
+                    }
+                    PileChoice::Take { first, second }
+                    | PileChoice::Sacrifice { first, second } => {
+                        for &id in first.iter().chain(second.iter()) {
+                            let obj = source.execution().window().cards().get(id).unwrap();
+                            let prog = source.execution().copiable_program(id).unwrap();
+                            expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
+                        }
+                        &[]
+                    }
+                    PileChoice::DividePermanents(_) => &[],
+                };
+                for &id in ids {
+                    let obj = source.execution().window().cards().get(id).unwrap();
+                    let prog = source.execution().copiable_program(id).unwrap();
+                    expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
                 }
             }
             _ => {}

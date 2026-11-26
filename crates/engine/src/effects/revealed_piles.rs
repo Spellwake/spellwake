@@ -322,6 +322,21 @@ impl EffectWindow {
             )),
             _ => None,
         };
+        let reveal_two_piles = match self.current_instruction()? {
+            Instruction::RevealTopTwoPiles {
+                controller_divides,
+                target_opponent,
+                chosen_dest,
+                other_dest,
+                ..
+            } => Some((
+                *controller_divides,
+                *target_opponent,
+                *chosen_dest,
+                *other_dest,
+            )),
+            _ => None,
+        };
         let ext_keep_dest = look_top_choose_ext
             .as_ref()
             .map(|(_, _, _, _, keep_dest, ..)| *keep_dest)
@@ -329,7 +344,8 @@ impl EffectWindow {
                 reveal_until_ext
                     .as_ref()
                     .map(|(_, _, _, match_dest, _)| *match_dest)
-            });
+            })
+            .or_else(|| reveal_two_piles.map(|(_, _, chosen_dest, _)| chosen_dest));
         let ext_rest_dest = look_top_choose_ext
             .as_ref()
             .map(|(_, _, _, _, _, rest_dest, _)| *rest_dest)
@@ -337,8 +353,31 @@ impl EffectWindow {
                 reveal_until_ext
                     .as_ref()
                     .map(|(_, _, _, _, rest_dest)| *rest_dest)
-            });
+            })
+            .or_else(|| reveal_two_piles.map(|(_, _, _, other_dest)| other_dest));
         let (count, private, take_all, other_pile_to_bottom) = match self.current_instruction()? {
+            Instruction::RevealTopTwoPiles {
+                count, other_dest, ..
+            } => (
+                self.resolve_value_expr(
+                    self.window.resolving().map_or(player, |e| e.controller()),
+                    count,
+                )?
+                .max(0.into())
+                .min(RulesInteger::from_usize(
+                    self.window.cards().library(player).len(),
+                ))
+                .to_usize()
+                .ok_or(EffectError::InconsistentProgram)?,
+                false,
+                false,
+                matches!(
+                    other_dest,
+                    crate::program::LookTopRestDest::BottomRandom
+                        | crate::program::LookTopRestDest::BottomOrder
+                        | crate::program::LookTopRestDest::TopOrder
+                ),
+            ),
             Instruction::LookTopChoose {
                 count,
                 reveal,
@@ -590,7 +629,15 @@ impl EffectWindow {
         let opponents = self
             .combat_rules
             .opponents(self.window.participants(), player)?;
-        let opponent = if private
+        let opponent = if reveal_two_piles.is_some_and(|(_, target_opp, ..)| target_opp) {
+            let Some(resolving) = self.window.resolving() else {
+                return Err(EffectError::WrongResolutionFrame);
+            };
+            let TargetRef::Player(opp) = self.instruction_target(resolving)?.choice().target else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            opp
+        } else if private
             || take_all
             || hand_filter.is_some()
             || revealed_name.is_some()
@@ -994,8 +1041,13 @@ impl EffectWindow {
                     .copied()
                     .filter(|id| !first.contains(id))
                     .collect();
+                let taker = if reveal_two_piles.is_some_and(|(ctrl_div, ..)| ctrl_div) {
+                    opponent
+                } else {
+                    player
+                };
                 Some((
-                    player,
+                    taker,
                     PileChoice::Take {
                         first: first.clone(),
                         second,
@@ -1005,7 +1057,12 @@ impl EffectWindow {
                 None
             }
         } else {
-            Some((opponent, PileChoice::Divide(work.cards.clone())))
+            let divider = if reveal_two_piles.is_some_and(|(ctrl_div, ..)| ctrl_div) {
+                player
+            } else {
+                opponent
+            };
+            Some((divider, PileChoice::Divide(work.cards.clone())))
         };
         if let Some((chooser, choice)) = choice {
             let frame = PileChoiceFrame {

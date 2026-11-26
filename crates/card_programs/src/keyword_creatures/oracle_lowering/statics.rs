@@ -778,12 +778,14 @@ pub(super) fn lower_static(
                 );
             }
             // Battlefield permanent discounting spells
-            if is_spell || per.is_some() || scale_expr.is_some() {
+            if is_spell {
                 return Err("oracle:unsupported-cost-modifier");
             }
             let generic_n =
                 parse_generic_mana_amount(delta).ok_or("oracle:non-generic-discount")?;
-            let amount = NonZeroU8::new(generic_n).ok_or("oracle:zero-discount")?;
+            let unit = NonZeroU8::new(generic_n).ok_or("oracle:zero-discount")?;
+            let amount =
+                lower_static_spell_discount_amount(unit, per.as_deref(), scale_expr.as_deref())?;
             let (any_player, matching) = lower_spell_subject_filter(subject, vocabulary)?;
             push_conditional_static(
                 program,
@@ -792,7 +794,7 @@ pub(super) fn lower_static(
                     modifier: SpellCostModifier::Discount {
                         any_player,
                         matching,
-                        amount: SpellDiscount::Fixed(amount),
+                        amount,
                     },
                 },
                 condition.as_deref(),
@@ -13091,5 +13093,321 @@ fn lower_cant_be_blocked_except_by_any(
             }
         }
         _ => None,
+    }
+}
+
+/// Preserve the engine's live cost-discount quantities instead of snapshotting them at resolution.
+fn lower_static_spell_discount_amount(
+    unit: NonZeroU8,
+    per: Option<&ObjectFilterAst>,
+    scale: Option<&ValueExprAst>,
+) -> Result<SpellDiscount, &'static str> {
+    match (per, scale) {
+        (None, None) => Ok(SpellDiscount::Fixed(unit)),
+        (Some(filter), None)
+            if unit.get() == 1
+                && lower_cast_cost_count(filter)
+                    == Ok(CastCostCount::ControlledCreaturesWithPlusOneCounters) =>
+        {
+            Ok(SpellDiscount::ControlledCreaturesWithPlusOneCounters)
+        }
+        (
+            None,
+            Some(ValueExprAst::CounterCount {
+                subject,
+                counter_kind,
+            }),
+        ) if unit.get() == 1
+            && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+            && counter_kind.eq_ignore_ascii_case("+1/+1") =>
+        {
+            Ok(SpellDiscount::SourcePlusOneCounters)
+        }
+        (
+            None,
+            Some(ValueExprAst::PlayerCounterCount {
+                player: PlayerRefAst::You,
+                counter_kind,
+            }),
+        ) if counter_kind.eq_ignore_ascii_case("experience") => {
+            Ok(SpellDiscount::PerExperienceCounter(unit))
+        }
+        _ => Err("oracle:unsupported-cost-modifier"),
+    }
+}
+
+#[cfg(test)]
+mod wave10_discount_tests {
+    use super::*;
+
+    #[test]
+    fn wave10_static_discount_reads_source_plus_counters_only() {
+        let unit = NonZeroU8::new(1).unwrap();
+        let source = ValueExprAst::CounterCount {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            counter_kind: "+1/+1".into(),
+        };
+        assert_eq!(
+            lower_static_spell_discount_amount(unit, None, Some(&source)),
+            Ok(SpellDiscount::SourcePlusOneCounters)
+        );
+        assert!(
+            lower_static_spell_discount_amount(NonZeroU8::new(2).unwrap(), None, Some(&source))
+                .is_err()
+        );
+        let oil = ValueExprAst::CounterCount {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            counter_kind: "oil".into(),
+        };
+        assert!(lower_static_spell_discount_amount(unit, None, Some(&oil)).is_err());
+    }
+
+    #[test]
+    fn wave10_static_discount_preserves_experience_multiplier_and_player() {
+        let unit = NonZeroU8::new(2).unwrap();
+        let experience = ValueExprAst::PlayerCounterCount {
+            player: PlayerRefAst::You,
+            counter_kind: "experience".into(),
+        };
+        assert_eq!(
+            lower_static_spell_discount_amount(unit, None, Some(&experience)),
+            Ok(SpellDiscount::PerExperienceCounter(unit))
+        );
+        let other_player = ValueExprAst::PlayerCounterCount {
+            player: PlayerRefAst::TargetPlayer,
+            counter_kind: "experience".into(),
+        };
+        assert!(lower_static_spell_discount_amount(unit, None, Some(&other_player)).is_err());
+    }
+
+    #[test]
+    fn wave10_static_discount_counts_creatures_not_counter_quantity() {
+        let unit = NonZeroU8::new(1).unwrap();
+        let mut creatures = ObjectFilterAst {
+            any_types: AstCardTypeMask::CREATURE,
+            controller: Some(ControllerRelation::You),
+            counter_kind: Some("+1/+1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            lower_static_spell_discount_amount(unit, Some(&creatures), None),
+            Ok(SpellDiscount::ControlledCreaturesWithPlusOneCounters)
+        );
+        creatures.tapped = Some(true);
+        assert!(lower_static_spell_discount_amount(unit, Some(&creatures), None).is_err());
+    }
+}
+
+// Typed station bands must consume every nested semantic channel. Raw payload text
+// is diagnostic provenance only once the parser has supplied a compiled face.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_compiled_station_band(
+    source_face: &FaceAst,
+    power: Option<&str>,
+    toughness: Option<&str>,
+    compiled: Option<&FaceAst>,
+    condition: StaticSourceCondition,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    match (power, toughness, compiled) {
+        (None, None, Some(face)) => {
+            if !face.failures.is_empty()
+                || !face.spell_effects.is_empty()
+                || !face.level_bands.is_empty()
+                || !face.class_levels.is_empty()
+                || !face.case_solved.is_empty()
+            {
+                return Err("oracle:unsupported-station-band");
+            }
+            lower_gated_section(
+                source_face,
+                &face.keywords,
+                &face.statics,
+                &face.abilities,
+                &face.replacements,
+                GatedSectionMode::LevelerBand(condition),
+                program,
+                vocabulary,
+                ids,
+            )
+        }
+        (Some(power), Some(toughness), None) => {
+            let power = power
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| "oracle:station-band-bad-pt")?;
+            let toughness = toughness
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| "oracle:station-band-bad-pt")?;
+            push_static_ability(
+                program,
+                StaticContinuousAbility::Battlefield {
+                    id: ids.static_id(),
+                    selector: PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        source_condition: Some(condition),
+                        ..PermanentSelector::default()
+                    },
+                    parts: StaticParts(vec![
+                        StaticPart::Type(spellwake_engine::characteristics::StaticTypeChange {
+                            supertypes: TypeOperation::Keep,
+                            types: TypeOperation::Add(BTreeSet::from([CardType::Creature])),
+                            subtypes: SubtypeOperation::Keep,
+                            land_subtypes: SubtypeOperation::Keep,
+                        }),
+                        StaticPart::SetPT(NumericPair {
+                            power: NumericExpression::Literal(power.into()),
+                            toughness: NumericExpression::Literal(toughness.into()),
+                        }),
+                    ]),
+                },
+            )
+        }
+        _ => Err("oracle:unsupported-station-band"),
+    }
+}
+
+#[cfg(test)]
+mod wave12_station_tests {
+    use super::*;
+
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new("wave12-station".into(), [0; 32], vec!["Robot".into()])
+            .expect("test vocabulary")
+    }
+
+    fn station_face() -> FaceAst {
+        compile_card(
+            &CardInput {
+                oracle_id: "",
+                name: "Station fixture",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Station fixture",
+                    type_line: "Artifact",
+                    oracle_text: "Flying",
+                }],
+            },
+            &cached_compiler_vocab(&vocabulary()),
+        )
+        .faces
+        .remove(0)
+    }
+
+    #[test]
+    fn wave12_station_compiled_keywords_keep_charge_threshold() {
+        let card = InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            name: "Wedgelight Rammer".into(), layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: "Wedgelight Rammer".into(), type_line: Some("Artifact \u{2014} Spacecraft".into()),
+                oracle_text: Some("When this Spacecraft enters, create a 2/2 colorless Robot artifact creature token.\nStation (Tap another creature you control: Put charge counters equal to its power on this Spacecraft. Station only as a sorcery. It's an artifact creature at 9+.)\n9+ | Flying, first strike".into()),
+                mana_cost: Some("{3}{W}".into()), power: Some("3".into()), toughness: Some("4".into()),
+            }],
+            legalities: BTreeMap::new(), eligible_formats: Vec::new(),
+            required_by_base_formats: true, program_evidence: "test",
+        };
+        let program = compile_with_reason(&card, &vocabulary()).expect("typed station card");
+        assert!(!program.printed_keywords.contains(&KeywordAbility::Flying));
+        assert!(program.continuous.iter().chain(program.additional_battlefield_abilities.iter()).any(|ability| matches!(ability,
+            StaticContinuousAbility::Battlefield { selector, parts, .. }
+                if selector.source_condition == Some(StaticSourceCondition::SourceCounterAtLeast {
+                    kind: CounterKind::Charge, minimum: 9,
+                }) && parts.0.iter().any(|part| matches!(part,
+                    StaticPart::Abilities(change) if change.granted_keywords.contains(&KeywordAbility::Flying))))));
+    }
+
+    #[test]
+    fn wave12_station_rejects_partial_pt_and_unconsumed_nested_effects() {
+        let face = station_face();
+        let condition = StaticSourceCondition::SourceCounterAtLeast {
+            kind: CounterKind::Charge,
+            minimum: 9,
+        };
+        let mut program = Program::artifact(Some(ManaCost::free()), vec![]);
+        let mut ids = LoweringIds::default();
+        assert!(
+            lower_compiled_station_band(
+                &face,
+                Some("3"),
+                None,
+                None,
+                condition.clone(),
+                &mut program,
+                &vocabulary(),
+                &mut ids
+            )
+            .is_err()
+        );
+        let mut invalid = face.clone();
+        invalid
+            .spell_effects
+            .push(InstructionAst::AbilityRestriction {
+                restriction: "unsupported station payload".into(),
+                condition: None,
+            });
+        assert!(
+            lower_compiled_station_band(
+                &face,
+                None,
+                None,
+                Some(&invalid),
+                condition,
+                &mut program,
+                &vocabulary(),
+                &mut ids
+            )
+            .is_err()
+        );
+        assert!(program.continuous.is_none());
+        assert!(program.additional_battlefield_abilities.is_empty());
+    }
+    #[test]
+    fn wave12_station_mana_preserves_plain_tap_and_rejects_extra_costs() {
+        for (text, supported) in [
+            ("{T}: Add {G}.", true),
+            ("{1}, {T}: Add {G}.", false),
+            ("{T}, Sacrifice this artifact: Add {G}.", false),
+            ("{T}: Add {G}. You gain 1 life.", false),
+        ] {
+            let compiled = compile_card(
+                &CardInput {
+                    oracle_id: "",
+                    name: "Station fixture",
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name: "Station fixture",
+                        type_line: "Artifact",
+                        oracle_text: text,
+                    }],
+                },
+                &cached_compiler_vocab(&vocabulary()),
+            );
+            assert!(compiled.strictly_compiled, "{text}");
+            let mut program = Program::artifact(Some(ManaCost::free()), vec![]);
+            let result = lower_compiled_station_band(
+                &compiled.faces[0],
+                None,
+                None,
+                Some(&compiled.faces[0]),
+                StaticSourceCondition::SourceCounterAtLeast {
+                    kind: CounterKind::Charge,
+                    minimum: 3,
+                },
+                &mut program,
+                &vocabulary(),
+                &mut LoweringIds::default(),
+            );
+            assert_eq!(result.is_ok(), supported, "{text}: {result:?}");
+            if supported {
+                assert!(program.continuous.iter().chain(program.additional_battlefield_abilities.iter())
+                    .any(|ability| matches!(ability, StaticContinuousAbility::Battlefield { parts, .. }
+                        if matches!(parts.0.as_slice(), [StaticPart::GrantFixedColorMana(ManaType::Green)]))));
+            }
+        }
     }
 }
