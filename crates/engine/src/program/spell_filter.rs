@@ -381,12 +381,36 @@ impl SpellFilter {
             {
                 return false;
             }
-            if c.flags.contains(ObjectFilterFlags::HISTORIC)
-                && !(spell.has_type(CardType::Artifact)
-                    || spell.current_supertypes.contains(&Supertype::Legendary)
-                    || spell
-                        .current_enchantment_subtypes
-                        .contains(&super::EnchantmentSubtype::Saga))
+            let is_historic = spell.has_type(CardType::Artifact)
+                || spell.current_supertypes.contains(&Supertype::Legendary)
+                || spell
+                    .current_enchantment_subtypes
+                    .contains(&super::EnchantmentSubtype::Saga);
+            if c.flags.contains(ObjectFilterFlags::HISTORIC) && !is_historic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+                && !spell.has_minus_one_counter
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SADDLED) && !spell.saddled {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !spell.defined.has_adventure {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::KICKED)
+                || c.flags.contains(ObjectFilterFlags::RENOWNED)
+                || c.flags.contains(ObjectFilterFlags::MONSTROUS)
+                || c.flags.contains(ObjectFilterFlags::SUSPECTED)
+                || c.flags.contains(ObjectFilterFlags::GOADED)
+                || c.flags.contains(ObjectFilterFlags::SOLVED)
+                || c.flags.contains(ObjectFilterFlags::PREPARED)
+                || c.flags.contains(ObjectFilterFlags::EXERTED)
             {
                 return false;
             }

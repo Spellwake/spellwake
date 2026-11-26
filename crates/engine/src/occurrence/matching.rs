@@ -440,6 +440,7 @@ fn check_intervening_if(
                 | RulesOccurrence::ArtifactTappedForMana { .. }
                 | RulesOccurrence::PermanentTappedForMana { .. }
         ),
+        TriggerCondition::SourceNotOwnedByController => source.object.owner() != controller,
         TriggerCondition::Eval(cond) => {
             let ctx = crate::characteristics::WorldEvalCtx {
                 active_player: after.window.active_player(),
@@ -456,7 +457,14 @@ fn check_intervening_if(
                 name_rules: after.name_rules,
                 trigger_subject: None,
                 related_player: None,
-                defending_player: None,
+                defending_player: after.combat.and_then(|c| {
+                    c.attacker(source.object.id())
+                        .or_else(|| match source.attached_to {
+                            Some(crate::targets::TargetRef::Object(host)) => c.attacker(host),
+                            _ => None,
+                        })
+                        .map(crate::combat::AttackingCreature::defender)
+                }),
             };
             crate::characteristics::eval_world_condition(&ctx, cond)
         }
@@ -592,7 +600,16 @@ fn check_intervening_if_with_ctx(
                 name_rules: after.name_rules,
                 trigger_subject,
                 related_player,
-                defending_player,
+                defending_player: defending_player.or_else(|| {
+                    after.combat.and_then(|c| {
+                        c.attacker(source.object.id())
+                            .or_else(|| match source.attached_to {
+                                Some(crate::targets::TargetRef::Object(host)) => c.attacker(host),
+                                _ => None,
+                            })
+                            .map(crate::combat::AttackingCreature::defender)
+                    })
+                }),
             };
             crate::characteristics::eval_world_condition(&ctx, rc)
         }
@@ -816,6 +833,89 @@ fn matches_evaluated_permanent(
         if c.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS) && candidate.has_any_counter {
             return false;
         }
+        if c.flags.contains(ObjectFilterFlags::DIED_THIS_TURN)
+            && !after
+                .characteristics
+                .died_this_turn
+                .contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN)
+            && !after
+                .characteristics
+                .put_into_gy_this_turn
+                .contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags
+            .contains(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN)
+            && !after
+                .characteristics
+                .put_into_gy_from_library_this_turn
+                .contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::KICKED)
+            && !(after.characteristics.kicked.contains(&candidate.object)
+                || after
+                    .characteristics
+                    .kicker_counts
+                    .get(&candidate.object)
+                    .is_some_and(|counts| !counts.is_empty()))
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::RENOWNED)
+            && !after.characteristics.renowned.contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::SADDLED)
+            && !after.characteristics.saddled.contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::MONSTROUS)
+            && !after.characteristics.monstrous.contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::SUSPECTED)
+            && !after
+                .characteristics
+                .suspect_counters
+                .get(&candidate.object)
+                .is_some_and(RulesInteger::is_positive)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::GOADED) {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::SOLVED)
+            && !after
+                .characteristics
+                .solved_cases
+                .contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::PREPARED)
+            && !after.characteristics.prepared.contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::EXERTED)
+            && !after
+                .characteristics
+                .exerted_objects_this_turn
+                .contains(&candidate.object)
+        {
+            return false;
+        }
         c.matches_static_characteristics(candidate, &BTreeSet::new(), || {
             Some(candidate.defined.mana_value.clone())
         })
@@ -845,6 +945,34 @@ impl AppearanceFilterExt for ObjectFilter {
         after: &RulesView<'_>,
     ) -> bool {
         let clause_ok = |mut clause: crate::program::ObjectClause| -> bool {
+            if clause.flags.contains(ObjectFilterFlags::DIED_THIS_TURN)
+                && !after
+                    .characteristics
+                    .died_this_turn
+                    .contains(&object.object.id())
+            {
+                return false;
+            }
+            if clause
+                .flags
+                .contains(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN)
+                && !after
+                    .characteristics
+                    .put_into_gy_this_turn
+                    .contains(&object.object.id())
+            {
+                return false;
+            }
+            if clause
+                .flags
+                .contains(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN)
+                && !after
+                    .characteristics
+                    .put_into_gy_from_library_this_turn
+                    .contains(&object.object.id())
+            {
+                return false;
+            }
             if clause.source_relation
                 == crate::program::SourceRelation::SharingNameWithAbilitySource
             {
@@ -3556,6 +3684,23 @@ pub(super) fn match_trigger_event(
                     });
                 }
             }
+            StatusTriggerKind::Fought => {
+                if let RulesOccurrence::PermanentFought { object, .. } = value
+                    && after.appearance(*object).is_some_and(|app| {
+                        subject.matches_appearance_with_names(source, controller, &app, after)
+                    })
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: after
+                            .evaluated
+                            .get(*object)
+                            .and_then(|v| v.controller)
+                            .or(Some(controller)),
+                        related: TriggerRelated::StateTriggerSource(*object),
+                    });
+                }
+            }
             StatusTriggerKind::Exerted => {
                 if let RulesOccurrence::KeywordActionPerformed {
                     player: actor,
@@ -4069,7 +4214,8 @@ pub(super) fn match_trigger_event(
             | PlayerTriggerAction::Trained
             | PlayerTriggerAction::KickedSpell
             | PlayerTriggerAction::ScryToBottom
-            | PlayerTriggerAction::Waterbended) => {
+            | PlayerTriggerAction::Waterbended
+            | PlayerTriggerAction::Earthbent) => {
                 if let RulesOccurrence::KeywordActionPerformed {
                     player: actor,
                     action: seen,
@@ -4442,7 +4588,22 @@ fn matches_cast_spell_filter(
     {
         return false;
     }
-    if !filter.matches_spell_appearance(cast.spell()) {
+    let clause_matches_spell = |c: crate::program::ObjectClause| {
+        !c.flags.contains(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN)
+            && !c
+                .flags
+                .contains(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN)
+            && SpellFilter {
+                object: ObjectFilter::Clause(c),
+                ..filter
+            }
+            .matches_spell_appearance(cast.spell())
+    };
+    let spell_ok = match filter.object {
+        ObjectFilter::Clause(c) => clause_matches_spell(c),
+        ObjectFilter::Either(a, b) => clause_matches_spell(a) || clause_matches_spell(b),
+    };
+    if !spell_ok {
         return false;
     }
     match filter.special {

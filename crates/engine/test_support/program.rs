@@ -4646,6 +4646,7 @@ impl Body {
                         "PutPlusOneCounterOnOthers" => spellwake_engine::program::PermanentTargetAction::PutPlusOneCounterOnOthers,
                         "PutCountersByCurrentType" => spellwake_engine::program::PermanentTargetAction::PutCountersByCurrentType,
                         "PutPlusOneCounter" => spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter,
+                        "Regenerate" => spellwake_engine::program::PermanentTargetAction::Regenerate,
                         _ => return Err("unknown simultaneous target action".into()),
                     }},
                     Op::MillEachPlayer {amount} => Instruction::MillEachPlayer(amount),
@@ -6507,6 +6508,12 @@ fn effect_group_wire(group: spellwake_engine::program::EffectSubject) -> Value {
         EffectSubject::TargetAndSameNameMatching(filter) => {
             json!({"target_and_same_name_matching": permanent_group_wire(filter)})
         }
+        EffectSubject::MatchingOtherThanTarget(filter) => {
+            json!({"matching_other_than_target": permanent_group_wire(filter)})
+        }
+        EffectSubject::TargetAndSharingColorMatching(filter) => {
+            json!({"target_and_sharing_color_matching": permanent_group_wire(filter)})
+        }
     }
 }
 fn permanent_group(
@@ -8187,6 +8194,7 @@ pub fn decode_for_owner(
         cannot_be_copied: false,
         conditional_flash: None,
         activation_cost_reductions: BTreeMap::new(),
+        activation_target_cost_reductions: BTreeMap::new(),
         zone_replacement_extras: BTreeMap::new(),
         cast_timing: None,
         activation_modes: Default::default(),
@@ -8408,6 +8416,7 @@ pub fn decode_for_owner(
                         "PowerUp" => spellwake_engine::activated::ActivationRestriction::PowerUp,
                         "OnceEachTurn" => spellwake_engine::activated::ActivationRestriction::OnceEachTurn,
                         "Exhaust" => spellwake_engine::activated::ActivationRestriction::Exhaust,
+                        "Boast" => spellwake_engine::activated::ActivationRestriction::Boast,
                         _ => return Err("invalid activation restriction".to_owned()),
                     },
                 ))
@@ -9346,6 +9355,14 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 } => {
                     json!({"tag":"AlternativeForMatching","id":id.0,"filter":format!("{filter:?}"),"mana":cost(mana),"once_each_turn":once_each_turn,"own_turn_only":own_turn_only})
                 }
+                SpellCostModifier::KeywordCastCost {
+                    keyword,
+                    controller,
+                    delta,
+                    less,
+                } => {
+                    json!({"tag":"KeywordCastCost","id":id.0,"keyword":format!("{keyword:?}"),"controller":format!("{controller:?}"),"delta":delta,"less":less})
+                }
             };
         }
         StaticContinuousAbility::DamageRule { id, rule } => {
@@ -9784,6 +9801,16 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticModifierRule::ModifyMaxHandSize { player, delta } => {
                     json!({"tag":"ModifyMaxHandSize","id":id.0,"player":format!("{player:?}"),"delta":delta})
                 }
+                StaticModifierRule::ActivatedAbilityCost {
+                    scope,
+                    controller,
+                    delta,
+                    less,
+                    scale,
+                    minimum_total_mana,
+                } => {
+                    json!({"tag":"ActivatedAbilityCost","id":id.0,"scope":format!("{scope:?}"),"controller":format!("{controller:?}"),"delta":delta,"less":less,"scale":scale.as_deref().map(instruction_amount),"minimum_total_mana":minimum_total_mana})
+                }
             };
         }
         StaticContinuousAbility::CommandZoneActive { id, agenda } => {
@@ -9846,6 +9873,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
         }
         StaticPart::ModifyPT(value) => {
             json!({"tag":"ModifyPT","power":expression(&value.power),"toughness":expression(&value.toughness)})
+        }
+        StaticPart::ModifyPTPerOwnColor { power, toughness } => {
+            json!({"tag":"ModifyPTPerOwnColor","power":power,"toughness":toughness})
         }
         StaticPart::SetPTToOwnManaValue => json!({"tag":"SetPTToOwnManaValue"}),
         StaticPart::SwitchPT => json!({"tag":"SwitchPT"}),
@@ -10892,6 +10922,9 @@ pub fn body(value: &ExecutableBody) -> Value {
                     SearchManaValue::EqualToSourceCounters(kind) => {
                         json!({"tag":"EqualToSourceCounters","kind":format!("{kind:?}")})
                     }
+                    SearchManaValue::ExactManaCostOneOf(costs) => {
+                        json!({"tag":"ExactManaCostOneOf","costs":costs.iter().map(cost).collect::<Vec<_>>()})
+                    }
                 });
                 let count = match &filter.count {
                     SearchCount::UpTo(n) => json!({"tag":"UpTo","count":n}),
@@ -11597,6 +11630,16 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ReturnCardsExiledWithLinkExt { group, under_controller_control, tapped } => json!({"op":"ReturnCardsExiledWithLinkExt","group":format!("{group:?}"),"under_controller_control":under_controller_control,"tapped":tapped}),
             Instruction::DrawGame => json!({"op":"DrawGame"}),
             Instruction::TurnFaceUpSubject { subject } => json!({"op":"TurnFaceUpSubject","subject":effect_group_wire(**subject)}),
+            Instruction::DiscardUpToExt { players, max_count, filter, any_number } => json!({"op":"DiscardUpToExt","players":format!("{players:?}"),"max_count":instruction_amount(max_count),"filter":filter.as_deref().map(|f| permanent_group_wire(*f)),"any_number":any_number}),
+            Instruction::Earthbend { amount } => json!({"op":"Earthbend","amount":instruction_amount(amount)}),
+            Instruction::ReturnEarthbentCard => json!({"op":"ReturnEarthbentCard"}),
+            Instruction::RegenerateSubject { subject } => json!({"op":"RegenerateSubject","subject":effect_group_wire(**subject)}),
+            Instruction::AddManaForPlayer { player, yield_kind } => json!({"op":"AddManaForPlayer","player":format!("{player:?}"),"yield_kind":format!("{yield_kind:?}")}),
+            Instruction::SkipNextTurns { player, count } => json!({"op":"SkipNextTurns","player":format!("{player:?}"),"count":count}),
+            Instruction::SelectExtremeLifePlayer { highest, tie_mode } => json!({"op":"SelectExtremeLifePlayer","highest":highest,"tie_mode":format!("{tie_mode:?}")}),
+            Instruction::AttachFixedTargets => json!({"op":"AttachFixedTargets"}),
+            Instruction::AttachPermanentToPlayer { attachment, player } => json!({"op":"AttachPermanentToPlayer","attachment":format!("{attachment:?}"),"player":format!("{player:?}")}),
+            Instruction::AttachChoosingPermanent { chooser, attachment, host, optional, all } => json!({"op":"AttachChoosingPermanent","chooser":format!("{chooser:?}"),"attachment":format!("{attachment:?}"),"host":format!("{host:?}"),"optional":optional,"all":all}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});
@@ -13339,6 +13382,9 @@ fn mana_output_view(output: &ManaOutput) -> Value {
             TriggeredManaRule::LandTappedChosenColor { controller_only } => {
                 json!({"tag":"LandTappedChosenColor","controller_only":controller_only})
             }
+            TriggeredManaRule::EnchantedLandTapped { extra } => {
+                json!({"tag":"EnchantedLandTapped","extra":format!("{extra:?}")})
+            }
         },
         ManaOutput::CounterBased(kind) => match kind {
             CounterManaYield::SourceChargeCounters => json!({"tag":"SourceChargeCounters"}),
@@ -14164,7 +14210,8 @@ mod tests {
                 | ResolvingPlayer::DefendingPlayer
                 | ResolvingPlayer::ChosenPlayer
                 | ResolvingPlayer::LoopPlayer
-                | ResolvingPlayer::RandomOpponent => {
+                | ResolvingPlayer::RandomOpponent
+                | ResolvingPlayer::SourceOwner => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -14193,7 +14240,8 @@ mod tests {
                 | ResolvingPlayer::DefendingPlayer
                 | ResolvingPlayer::ChosenPlayer
                 | ResolvingPlayer::LoopPlayer
-                | ResolvingPlayer::RandomOpponent => {
+                | ResolvingPlayer::RandomOpponent
+                | ResolvingPlayer::SourceOwner => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -14486,7 +14534,8 @@ mod tests {
                         | ResolvingPlayer::DefendingPlayer
                         | ResolvingPlayer::ChosenPlayer
                         | ResolvingPlayer::LoopPlayer
-                        | ResolvingPlayer::RandomOpponent,
+                        | ResolvingPlayer::RandomOpponent
+                        | ResolvingPlayer::SourceOwner,
                     ) => unreachable!("role is not in this fixed fixture"),
                 };
                 let mut instructions = vec![];

@@ -101,6 +101,8 @@ pub enum ActivationRestriction {
     SourceEntryOption(u8),
     /// Spend only mana of this type to activate this ability (e.g. Crypt Rats).
     OnlySpendManaType(crate::mana::ManaType),
+    /// CR 702.142 Boast: activate only if this creature attacked this turn and only once each turn.
+    Boast,
     /// Activate only if every sub-restriction is satisfied.
     All(Vec<ActivationRestriction>),
 }
@@ -110,9 +112,10 @@ impl ActivationRestriction {
     #[must_use]
     pub fn max_per_turn(&self) -> Option<u8> {
         match self {
-            Self::OnceEachTurn | Self::SorceryOnceEachTurn | Self::DuringYourTurnOnceEachTurn => {
-                Some(1)
-            }
+            Self::OnceEachTurn
+            | Self::SorceryOnceEachTurn
+            | Self::DuringYourTurnOnceEachTurn
+            | Self::Boast => Some(1),
             Self::MaxPerTurn(limit) => Some(*limit),
             Self::All(items) => items.iter().filter_map(Self::max_per_turn).min(),
             _ => None,
@@ -129,10 +132,21 @@ impl ActivationRestriction {
     #[must_use]
     pub fn has_once_each_turn(&self) -> bool {
         match self {
-            Self::OnceEachTurn | Self::SorceryOnceEachTurn | Self::DuringYourTurnOnceEachTurn => {
-                true
-            }
+            Self::OnceEachTurn
+            | Self::SorceryOnceEachTurn
+            | Self::DuringYourTurnOnceEachTurn
+            | Self::Boast => true,
             Self::All(items) => items.iter().any(Self::has_once_each_turn),
+            _ => false,
+        }
+    }
+
+    /// Whether this restriction represents a boast ability (CR 702.142).
+    #[must_use]
+    pub fn is_boast(&self) -> bool {
+        match self {
+            Self::Boast => true,
+            Self::All(items) => items.iter().any(Self::is_boast),
             _ => false,
         }
     }

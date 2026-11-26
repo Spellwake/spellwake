@@ -189,6 +189,8 @@ pub enum SourceStateExpr {
     },
     /// `1` if the ability source entered the battlefield from `zone`.
     EnteredFromZone(super::SourceZoneFilter),
+    /// `1` if the related donor player is the ability source's controller, else `0`.
+    DonorControlledByController,
 }
 
 /// Coarse turn phase tested by [`PlayerStatExpr::IsInPhase`].
@@ -801,6 +803,8 @@ impl ValueExpr {
                     | ResolvingPlayer::EnchantedPlayer
                     | ResolvingPlayer::AttachedHostController
                     | ResolvingPlayer::SourceChosenPlayer
+                    | ResolvingPlayer::DefendingPlayer
+                    | ResolvingPlayer::SourceOwner
             )
         };
         let world_filter =
@@ -981,6 +985,7 @@ impl ValueExpr {
                     | ResolvingPlayer::DefendingPlayer
                     | ResolvingPlayer::TargetController
                     | ResolvingPlayer::TargetOwner
+                    | ResolvingPlayer::SourceOwner
             )
         };
         let world_filter = |f: &ObjectFilter| f.chosen_type_slot().is_none();
@@ -2152,6 +2157,7 @@ impl ValueExpr {
                                 | ResolvingPlayer::ChosenPlayer
                                 | ResolvingPlayer::LoopPlayer
                                 | ResolvingPlayer::RandomOpponent
+                                | ResolvingPlayer::SourceOwner
                         ) {
                             Ok(None)
                         } else {
@@ -2298,6 +2304,7 @@ impl ValueExpr {
                             | ResolvingPlayer::ChosenPlayer
                             | ResolvingPlayer::LoopPlayer
                             | ResolvingPlayer::RandomOpponent
+                            | ResolvingPlayer::SourceOwner
                     ) {
                         Ok(())
                     } else {
@@ -2325,6 +2332,7 @@ impl ValueExpr {
                                 | ResolvingPlayer::ChosenPlayer
                                 | ResolvingPlayer::LoopPlayer
                                 | ResolvingPlayer::RandomOpponent
+                                | ResolvingPlayer::SourceOwner
                         )
                     {
                         return Err(DefinitionError::UnboundResolvingPlayer);
@@ -2382,6 +2390,7 @@ impl ValueExpr {
                             | ResolvingPlayer::ChosenPlayer
                             | ResolvingPlayer::LoopPlayer
                             | ResolvingPlayer::RandomOpponent
+                            | ResolvingPlayer::SourceOwner
                     ) {
                         Ok(())
                     } else {

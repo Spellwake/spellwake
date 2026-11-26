@@ -1285,6 +1285,11 @@ pub enum StaticPart {
     SetPTToOwnManaValue,
     SetPT(NumericPair),
     ModifyPT(NumericPair),
+    /// Modify each recipient's power and toughness by `(power, toughness)` for each of its own colors.
+    ModifyPTPerOwnColor {
+        power: RulesInteger,
+        toughness: RulesInteger,
+    },
     SwitchPT,
 }
 impl StaticPart {
@@ -1309,7 +1314,7 @@ impl StaticPart {
             | Self::BlockingRestriction(_)
             | Self::GrantRestriction(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetPTToOwnManaValue => CharacteristicBucket::SetPT,
-            Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
+            Self::ModifyPT(_) | Self::ModifyPTPerOwnColor { .. } => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
         }
     }
@@ -2031,6 +2036,8 @@ pub struct DefinedCharacteristics {
     pub planeswalker_subtypes: BTreeSet<crate::program::PlaneswalkerSubtype>,
     pub colors: BTreeSet<Color>,
     pub printed_pt: Option<PrintedPowerToughness>,
+    /// Whether this object's copiable definition has an Adventure alternative face (CR 715).
+    pub has_adventure: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PrintedAbilityKind {
@@ -2174,6 +2181,8 @@ pub struct PrintedText {
         std::collections::BTreeMap<ActivatedAbilityId, Vec<crate::activated::ExtraActivationCost>>,
     pub activation_cost_reductions:
         std::collections::BTreeMap<ActivatedAbilityId, crate::program::ValueExpr>,
+    pub activation_target_cost_reductions:
+        std::collections::BTreeMap<ActivatedAbilityId, (crate::program::ObjectFilter, u8)>,
     pub zone_replacement_extras: std::collections::BTreeMap<
         crate::program::ZoneReplacementAbilityId,
         crate::program::ZoneReplacementExtra,
@@ -2234,6 +2243,7 @@ impl PrintedText {
             activation_hybrid_symbols: program.activation_hybrid_symbols.clone(),
             extra_activation_costs: program.extra_activation_costs.clone(),
             activation_cost_reductions: program.activation_cost_reductions.clone(),
+            activation_target_cost_reductions: program.activation_target_cost_reductions.clone(),
             zone_replacement_extras: program.zone_replacement_extras.clone(),
             extra_cast_costs: program.extra_cast_costs.clone(),
             loyalty_costs: program.loyalty_costs.clone(),

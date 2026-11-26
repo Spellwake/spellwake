@@ -84,6 +84,7 @@ fn defined(program: &Program) -> DefinedCharacteristics {
         printed_pt: program
             .permanent()
             .and_then(|value| value.printed_pt.clone()),
+        has_adventure: program.adventure.is_some(),
     }
 }
 fn initial_pt(object: ObjectId, defined: &DefinedCharacteristics) -> PowerToughnessEvaluation {
@@ -1791,7 +1792,7 @@ fn static_source_condition_met(
                 name_rules: world.name_rules,
                 trigger_subject: None,
                 related_player: None,
-                defending_player: None,
+                defending_player: defending_player_for_source(world.combat, objects, source),
             };
             super::eval_world_condition(&ctx, cond)
         }
@@ -2015,11 +2016,28 @@ fn numeric(
                 name_rules: world.name_rules,
                 trigger_subject: None,
                 related_player: None,
-                defending_player: None,
+                defending_player: defending_player_for_source(world.combat, objects, source),
             };
             super::eval_world_value_expr(&ctx, expr)
         }
     }
+}
+
+fn defending_player_for_source(
+    combat: Option<&crate::combat::CombatState>,
+    objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+    source: ObjectId,
+) -> Option<SeatId> {
+    combat.and_then(|c| {
+        c.attacker(source)
+            .or_else(|| {
+                objects.get(&source).and_then(|o| match o.attached_to {
+                    Some(crate::targets::TargetRef::Object(host)) => c.attacker(host),
+                    _ => None,
+                })
+            })
+            .map(crate::combat::AttackingCreature::defender)
+    })
 }
 // Private wrapper forwarding the same borrowed layer-evaluation context to select_affected.
 #[allow(clippy::too_many_arguments)]
@@ -2273,6 +2291,29 @@ fn generate(
                                         ResolvedPart::SetPT(PowerToughness {
                                             power: value.clone(),
                                             toughness: value.clone(),
+                                        }),
+                                    )
+                                })
+                                .collect();
+                            return Ok(GeneratedComponent {
+                                key: instance.key,
+                                bucket,
+                                present: true,
+                                affected,
+                                generated,
+                            });
+                        }
+                        StaticPart::ModifyPTPerOwnColor { power, toughness } => {
+                            let generated = affected
+                                .iter()
+                                .map(|id| {
+                                    let n =
+                                        RulesInteger::from_usize(objects[id].current_colors.len());
+                                    (
+                                        *id,
+                                        ResolvedPart::ModifyPT(PowerToughness {
+                                            power: power.times(&n),
+                                            toughness: toughness.times(&n),
                                         }),
                                     )
                                 })
@@ -2625,6 +2666,29 @@ fn generate(
                                         ResolvedPart::SetPT(PowerToughness {
                                             power: value.clone(),
                                             toughness: value.clone(),
+                                        }),
+                                    )
+                                })
+                                .collect();
+                            return Ok(GeneratedComponent {
+                                key: instance.key,
+                                bucket,
+                                present: true,
+                                affected,
+                                generated,
+                            });
+                        }
+                        StaticPart::ModifyPTPerOwnColor { power, toughness } => {
+                            let generated = affected
+                                .iter()
+                                .map(|id| {
+                                    let n =
+                                        RulesInteger::from_usize(objects[id].current_colors.len());
+                                    (
+                                        *id,
+                                        ResolvedPart::ModifyPT(PowerToughness {
+                                            power: power.times(&n),
+                                            toughness: toughness.times(&n),
                                         }),
                                     )
                                 })
