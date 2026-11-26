@@ -613,6 +613,10 @@ pub enum PlayerChoice {
     Number {
         value: RulesInteger,
     },
+    PromptChoice {
+        #[serde(deserialize_with = "crate::provider_json::object")]
+        reply: PlayerPromptReply,
+    },
     TargetList {
         #[serde(deserialize_with = "crate::provider_json::objects")]
         targets: Vec<PlayerTarget>,
@@ -848,6 +852,7 @@ impl PlayerChoice {
             return false;
         }
         match self {
+            Self::PromptChoice { reply } => reply.valid(),
             Self::CounterRemoval { counters } => counter_quantities(counters),
             Self::Prevention { allocations } => {
                 list(allocations) && unique(allocations.iter().map(|x| &x.attempt))
@@ -1562,6 +1567,47 @@ impl PlayerCommand {
             Err(InvalidPlayerWire)
         } else {
             Ok(())
+        }
+    }
+}
+
+/// Single generic reply payload for universal toolbox `PromptChoice`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PlayerPromptReply {
+    Objects {
+        objects: Vec<PlayerHandle>,
+    },
+    Players {
+        #[serde(deserialize_with = "crate::identifiers::uuid_list")]
+        seats: Vec<Uuid>,
+    },
+    Options {
+        options: Vec<PlayerHandle>,
+    },
+    Number {
+        value: RulesInteger,
+    },
+    CardName {
+        name: String,
+    },
+    Partition {
+        piles: Vec<Vec<PlayerHandle>>,
+    },
+}
+impl PlayerPromptReply {
+    pub(super) fn valid(&self) -> bool {
+        match self {
+            Self::Objects { objects } => list(objects) && unique(objects.iter()),
+            Self::Players { seats } => {
+                seats.len() <= 6 && unique(seats.iter()) && seats.iter().all(|s| !s.is_nil())
+            }
+            Self::Options { options } => list(options),
+            Self::Number { .. } => true,
+            Self::CardName { name } => !name.trim().is_empty() && name.len() <= 256,
+            Self::Partition { piles } => {
+                (2..=16).contains(&piles.len()) && piles.iter().all(|p| list(p) && unique(p.iter()))
+            }
         }
     }
 }

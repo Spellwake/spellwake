@@ -2303,3 +2303,119 @@ fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_inva
     let after_c2 = resolve(&ping_c2);
     assert_eq!(after_c2.execution().life_total(A), Some(&18.into()));
 }
+
+#[test]
+fn prompt_choice_single_wire_packet_round_trips_and_rejects_invalid_atomically() {
+    use crate::player_wire::{
+        DecisionKind, PlayerDomain, PlayerPromptCategory, PlayerPromptDomain, PlayerPromptReply,
+    };
+    use spellwake_engine::{
+        program::{Instruction, ObjectFilter, Program, ResolvingPlayer},
+        toolbox::{
+            BindingId, ChoiceCategory, ObjectQuery, PlayerSelector, PromptChoiceReply,
+            PromptChoiceSpec, PromptDomain, QueryZone, TagKey,
+        },
+    };
+    let bear = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    let pending = start(
+        vec![Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+            chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            domain: PromptDomain::Partition {
+                query: ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature()),
+                pile_count: 2,
+                min_per_pile: 0,
+            },
+            category: ChoiceCategory::PileSplit,
+            bind_to: BindingId(0),
+            bind_unchosen: None,
+            tag_partition: Some(TagKey::Partition(3)),
+            auto_resolve_trivial: false,
+        }))],
+        vec![
+            card(
+                2,
+                A,
+                ObjectDestination::Battlefield { controller: A },
+                bear.clone(),
+            ),
+            card(3, B, ObjectDestination::Battlefield { controller: B }, bear),
+        ],
+    );
+    let dec = pending
+        .pending_decision()
+        .expect("expected PromptChoice pending");
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::PromptChoice);
+    let PlayerDomain::PromptChoice {
+        category,
+        prompt:
+            PlayerPromptDomain::Partition {
+                candidates,
+                pile_count,
+                min_per_pile,
+            },
+    } = &snap.decisions[0].domain
+    else {
+        panic!("expected PlayerDomain::PromptChoice(Partition)");
+    };
+    assert_eq!(*category, PlayerPromptCategory::PileSplit);
+    assert_eq!(*pile_count, 2);
+    assert_eq!(*min_per_pile, 0);
+    assert_eq!(candidates.len(), 2);
+
+    let c2 = object(&pending, 2);
+    let c3 = object(&pending, 3);
+    let h2 = view.issue(NativeReference::Object(c2)).unwrap();
+    let dec_handle = view.issue(NativeReference::Decision(dec.id())).unwrap();
+
+    // Atomic rejection: wrong payload kind (Number for Partition).
+    let wrong_kind = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle.clone(),
+            response: PlayerChoice::PromptChoice {
+                reply: PlayerPromptReply::Number { value: 1.into() },
+            },
+        },
+    );
+    assert!(rejected_proposal(&view, &wrong_kind).is_err());
+
+    // Atomic rejection: incomplete partition missing c3.
+    let incomplete = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle,
+            response: PlayerChoice::PromptChoice {
+                reply: PlayerPromptReply::Partition {
+                    piles: vec![vec![h2.clone()], vec![]],
+                },
+            },
+        },
+    );
+    assert!(rejected_proposal(&view, &incomplete).is_err());
+
+    // Legal wire round-trip partitioning c2 into pile 0 and c3 into pile 1.
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::PromptChoice {
+            reply: PlayerPromptReply::Partition {
+                piles: vec![
+                    vec![v.issue(NativeReference::Object(c2)).unwrap()],
+                    vec![v.issue(NativeReference::Object(c3)).unwrap()],
+                ],
+            },
+        },
+        DecisionReply::PromptChoice(PromptChoiceReply::Partition(vec![vec![c2], vec![c3]])),
+    );
+    assert!(done.pending_decision().is_none());
+    assert_eq!(
+        done.execution().object_tags().partition_members(3, 0),
+        vec![object(&done, 2)]
+    );
+    assert_eq!(
+        done.execution().object_tags().partition_members(3, 1),
+        vec![object(&done, 3)]
+    );
+}

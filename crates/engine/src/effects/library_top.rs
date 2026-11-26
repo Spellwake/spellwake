@@ -537,6 +537,16 @@ impl EffectWindow {
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
+            | Instruction::ZoneOp(_)
+            | Instruction::ApplyContinuous(_)
+            | Instruction::PromptChoice(_)
+            | Instruction::BranchCondition { .. }
+            | Instruction::ForEach { .. }
+            | Instruction::ForEachPlayerQuery { .. }
+            | Instruction::BindEnv { .. }
+            | Instruction::SetObjectTag { .. }
+            | Instruction::UpdateStateTrack { .. }
+            | Instruction::SideDeckOp(_)
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }

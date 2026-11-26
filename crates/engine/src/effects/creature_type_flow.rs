@@ -389,6 +389,11 @@ impl EffectWindow {
                 _ => None,
             }
         };
+        if let Some(value) =
+            self.resolve_toolbox_value_expr(controller, expr, cursor, explicit_source)?
+        {
+            return Ok(value);
+        }
         match expr {
             ValueExpr::Literal(value) => Ok(value.clone()),
             ValueExpr::Scale { expr, factor } => Ok(self
@@ -503,6 +508,15 @@ impl EffectWindow {
                     }
                 }
                 Ok(RulesInteger::from_usize(total))
+            }
+            ValueExpr::BoundInt(_)
+            | ValueExpr::BoundCount { .. }
+            | ValueExpr::BoundStat { .. }
+            | ValueExpr::QueryCount(_)
+            | ValueExpr::QueryAggregate { .. }
+            | ValueExpr::StateTrackInt(_)
+            | ValueExpr::ChoiceHistoryCount { .. } => {
+                unreachable!("handled by resolve_toolbox_value_expr")
             }
             ValueExpr::Conditional {
                 left,

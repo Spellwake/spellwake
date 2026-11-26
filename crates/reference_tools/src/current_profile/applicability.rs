@@ -324,6 +324,16 @@ native!(ExecutableBody, self, {
         | Instruction::SkipNextUntap { .. }
         | Instruction::RequireCombatAction { .. }
         | Instruction::CreateTemporaryRule { .. }
+        | Instruction::ZoneOp(_)
+        | Instruction::ApplyContinuous(_)
+        | Instruction::PromptChoice(_)
+        | Instruction::BranchCondition { .. }
+        | Instruction::ForEach { .. }
+        | Instruction::ForEachPlayerQuery { .. }
+        | Instruction::BindEnv { .. }
+        | Instruction::SetObjectTag { .. }
+        | Instruction::UpdateStateTrack { .. }
+        | Instruction::SideDeckOp(_)
         | Instruction::CreateTokenCopy { .. }
         | Instruction::BindResolutionX(_)
         | Instruction::PutResolvingSpellInLibrary(_)
@@ -1552,6 +1562,7 @@ native!(RuleFrame, self, {
         RuleFrame::LoyaltyRemoval(_)
         | RuleFrame::ResolutionManaColor(_)
         | RuleFrame::OptionIndex(_)
+        | RuleFrame::PromptChoice(_)
         | RuleFrame::Proliferate(_)
         | RuleFrame::CounterRemoval(_)
         | RuleFrame::UntapKeepTapped(_) => Err(ApplicabilityError),
@@ -1604,6 +1615,7 @@ native!(EffectDecision, self, {
         EffectDecision::LoyaltyRemoval(_)
         | EffectDecision::ResolutionManaColor(_)
         | EffectDecision::OptionIndex(_)
+        | EffectDecision::PromptChoice(_)
         | EffectDecision::Proliferate(_)
         | EffectDecision::CounterRemoval(_)
         | EffectDecision::UntapKeepTapped(_) => Err(ApplicabilityError),
@@ -1687,7 +1699,9 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::TokenAuraChoice(_)
         | DecisionReply::LinkedReturnOrder(_)
         | DecisionReply::LinkedAuraChoice(_) => Err(ApplicabilityError),
-        DecisionReply::TransformOrder(_) => Err(ApplicabilityError),
+        DecisionReply::TransformOrder(_) | DecisionReply::PromptChoice(_) => {
+            Err(ApplicabilityError)
+        }
         DecisionReply::ChooseLandKind(_)
         | DecisionReply::MutateOnTop(_)
         | DecisionReply::ChoosePile(_)
@@ -2188,7 +2202,8 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::DieRolled { .. }
         | RulesOccurrence::VotesCast { .. }
         | RulesOccurrence::BecameMonstrous { .. }
-        | RulesOccurrence::PermanentFought { .. } => Ok(()),
+        | RulesOccurrence::PermanentFought { .. }
+        | RulesOccurrence::ChoiceMade { .. } => Ok(()),
     }
 });
 

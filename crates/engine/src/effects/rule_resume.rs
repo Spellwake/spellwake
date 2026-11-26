@@ -475,6 +475,39 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
+            EffectDecision::PromptChoice(bound) => {
+                let revision = self.next_revision(expected)?;
+                let DecisionReply::PromptChoice(prompt_reply) = reply else {
+                    return Err(EffectError::WrongDecisionKind);
+                };
+                let cursor = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                if bound.revision != self.revision
+                    || bound.entry != cursor.entry
+                    || bound.instruction != cursor.instruction
+                    || bound.chooser != actor
+                    || cursor.pending_prompt_frame.as_ref() != Some(bound)
+                    || cursor.pending_prompt_reply.is_some()
+                {
+                    return Err(EffectError::WrongResolutionFrame);
+                }
+                crate::toolbox::validate_prompt_reply(bound, &prompt_reply)?;
+                let mut next = self.clone();
+                next.revision = revision;
+                let next_cursor = next
+                    .resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                next_cursor.pending_prompt_frame = None;
+                next_cursor.pending_prompt_reply = Some(prompt_reply);
+                next.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    RulesJournal::default(),
+                )
+            }
             EffectDecision::OptionIndex(bound) => {
                 let revision = self.next_revision(expected)?;
                 let DecisionReply::OptionIndex(chosen) = reply else {

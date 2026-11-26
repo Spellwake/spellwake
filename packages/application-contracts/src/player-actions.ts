@@ -211,6 +211,23 @@ const playerCastResource = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("exile-creature-for-reduction"), source: playerHandleSchema }),
   z.strictObject({ kind: z.literal("delve"), source: playerHandleSchema }),
 ]);
+export const playerPromptReplySchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("objects"), objects: handles }),
+  z.strictObject({
+    kind: z.literal("players"),
+    seats: z.array(identifierSchema).max(6).refine((xs) => uniquePlayerValues(xs, (x) => x)),
+  }),
+  z.strictObject({
+    kind: z.literal("options"),
+    options: z.array(playerHandleSchema).max(PLAYER_ITEMS),
+  }),
+  z.strictObject({ kind: z.literal("number"), value: rulesIntegerSchema }),
+  z.strictObject({ kind: z.literal("card-name"), name: z.string().min(1).max(256) }),
+  z.strictObject({
+    kind: z.literal("partition"),
+    piles: z.array(handles).min(2).max(16),
+  }),
+]);
 export const playerChoiceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("trigger-modes"),
@@ -234,6 +251,7 @@ export const playerChoiceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("ordering"), ordered: handles }),
   z.strictObject({ kind: z.literal("number"), value: rulesIntegerSchema }),
   z.strictObject({ kind: z.literal("counter-removal"), counters: playerCounterQuantitiesSchema }),
+  z.strictObject({ kind: z.literal("prompt-choice"), reply: playerPromptReplySchema }),
   z.strictObject({ kind: z.literal("target-list"), targets: z.array(playerTargetSchema).max(PLAYER_ITEMS).refine(xs=>uniquePlayerValues(xs,playerTargetKey)) }),
   z.strictObject({ kind: z.literal("target"), target: playerTargetSchema }),
   z.strictObject({

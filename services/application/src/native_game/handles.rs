@@ -268,6 +268,7 @@ impl NativeScope<'_> {
             }
             NativeReference::PlaneswalkerType(_) => {
                 matches!(self.frame()?, RuleFrame::PlaneswalkerType(_))
+                    || matches!(self.frame()?, RuleFrame::PromptChoice(frame) if matches!(&frame.domain, spellwake_engine::toolbox::ResolvedPromptDomain::PlaneswalkerType { allowed } if true))
             }
             NativeReference::AttackDirection(_) => {
                 matches!(self.frame()?, RuleFrame::AttackDirection(_))
@@ -286,6 +287,12 @@ impl NativeScope<'_> {
             }
             NativeReference::OptionIndex(index) => {
                 matches!(self.frame()?, RuleFrame::OptionIndex(frame) if index < frame.count())
+                    || matches!(self.frame()?, RuleFrame::PromptChoice(frame) if match &frame.domain {
+                        spellwake_engine::toolbox::ResolvedPromptDomain::Options { labels, .. } => usize::from(index) < labels.len(),
+                        spellwake_engine::toolbox::ResolvedPromptDomain::CardType { allowed } => usize::from(index) < allowed.len(),
+                        spellwake_engine::toolbox::ResolvedPromptDomain::BasicLandType { allowed } => usize::from(index) < allowed.len(),
+                        _ => false,
+                    })
                     || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if frame.rule().option_labels().is_some_and(|labels| usize::from(index) < labels.len()))
                     || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if frame.rule().option_labels().is_some_and(|labels| usize::from(index) < labels.len()))
             }
@@ -301,6 +308,7 @@ impl NativeScope<'_> {
             }
             NativeReference::ManaColor(color) => {
                 matches!(self.frame()?, RuleFrame::ManaColor(frame) if frame.colors().contains(&color))
+                    || matches!(self.frame()?, RuleFrame::PromptChoice(frame) if matches!(&frame.domain, spellwake_engine::toolbox::ResolvedPromptDomain::Color { allowed } if allowed.contains(&color)))
                     || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if match frame.rule() {
                         spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded)
                         | spellwake_engine::land::EntryTap::ChooseColorExcept(excluded) => color != excluded && color != ManaType::Colourless,
@@ -320,6 +328,7 @@ impl NativeScope<'_> {
             }
             NativeReference::CreatureType(member) => {
                 matches!(self.frame()?, RuleFrame::CreatureType(frame) if frame.vocabulary() == member.vocabulary() && !frame.excluding().contains(&member) && self.source.execution().creature_vocabulary().label(member).is_some())
+                    || matches!(self.frame()?, RuleFrame::PromptChoice(frame) if matches!(&frame.domain, spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { allowed } if allowed.contains(&member)))
                     || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::ChooseCreatureType) && self.source.execution().creature_vocabulary().label(member).is_some())
                     || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::ChooseCreatureType) && self.source.execution().creature_vocabulary().label(member).is_some())
             }

@@ -50,6 +50,7 @@ pub enum DecisionKind {
     CardName,
     Number,
     Distribution,
+    PromptChoice,
 }
 impl TryFrom<String> for DecisionKind {
     type Error = InvalidPlayerWire;
@@ -101,6 +102,7 @@ impl TryFrom<String> for DecisionKind {
             "card-name" => Ok(Self::CardName),
             "number" => Ok(Self::Number),
             "distribution" => Ok(Self::Distribution),
+            "prompt-choice" => Ok(Self::PromptChoice),
             _ => Err(InvalidPlayerWire),
         }
     }

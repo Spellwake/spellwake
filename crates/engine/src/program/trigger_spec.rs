@@ -652,6 +652,11 @@ pub enum TriggerEvent {
         subject: ObjectFilter,
         fully_unlocked_only: bool,
     },
+    /// Universal interactive choice event (modal, villainous choice, dilemma, vote, etc.).
+    ChoiceMade {
+        category: Option<crate::toolbox::ChoiceCategory>,
+        player: TriggerPlayerScope,
+    },
     /// A permanent matching `subject` enters the battlefield without being played as a land.
     EntersWithoutBeingPlayed {
         subject: ObjectFilter,
@@ -789,7 +794,8 @@ impl TriggerEvent {
             | Self::Planar(_)
             | Self::DayNightChanged
             | Self::SchemeSetInMotion
-            | Self::ManualTabletopClaim { .. } => {}
+            | Self::ManualTabletopClaim { .. }
+            | Self::ChoiceMade { .. } => {}
         }
     }
 
@@ -889,7 +895,8 @@ impl TriggerEvent {
             | Self::Planar(_)
             | Self::DayNightChanged
             | Self::SchemeSetInMotion
-            | Self::ManualTabletopClaim { .. } => Ok(()),
+            | Self::ManualTabletopClaim { .. }
+            | Self::ChoiceMade { .. } => Ok(()),
         }
     }
 }

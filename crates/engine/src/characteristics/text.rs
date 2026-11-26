@@ -620,6 +620,16 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::MoveSubject { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseValue { .. }
+            | Instruction::ZoneOp(_)
+            | Instruction::ApplyContinuous(_)
+            | Instruction::PromptChoice(_)
+            | Instruction::BranchCondition { .. }
+            | Instruction::ForEach { .. }
+            | Instruction::ForEachPlayerQuery { .. }
+            | Instruction::BindEnv { .. }
+            | Instruction::SetObjectTag { .. }
+            | Instruction::UpdateStateTrack { .. }
+            | Instruction::SideDeckOp(_)
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }

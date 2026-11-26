@@ -91,7 +91,7 @@ impl EffectWindow {
         }
     }
 
-    fn splice_replacing_current(
+    pub(super) fn splice_replacing_current(
         &mut self,
         entry_id: StackEntryId,
         index: usize,

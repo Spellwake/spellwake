@@ -596,6 +596,35 @@ pub enum ValueExpr {
         then_value: Box<ValueExpr>,
         else_value: Box<ValueExpr>,
     },
+    /// Read an integer bound in `ExecEnv` (defaults to 0 when unset).
+    BoundInt(crate::toolbox::BindingId),
+    /// Count objects/snapshots/players/piles bound in `ExecEnv`, optionally filtered.
+    BoundCount {
+        binding: crate::toolbox::BindingId,
+        filter: Option<Box<ObjectFilter>>,
+    },
+    /// Aggregate power, toughness, or mana value across objects or LKI snapshots bound in `ExecEnv`.
+    BoundStat {
+        binding: crate::toolbox::BindingId,
+        stat: ObjectStatKind,
+        op: StatAggregate,
+    },
+    /// Count objects returned by any composable `ObjectQuery`.
+    QueryCount(Box<crate::toolbox::ObjectQuery>),
+    /// Aggregate a stat across objects returned by any composable `ObjectQuery`.
+    QueryAggregate {
+        query: Box<crate::toolbox::ObjectQuery>,
+        stat: ObjectStatKind,
+        op: StatAggregate,
+    },
+    /// Read a numeric generic state track from `StateTrackStore` (summed across matched keys).
+    StateTrackInt(Box<crate::toolbox::StateTrackKeySpec>),
+    /// Count recorded interactive choices in `EffectWindow::choice_history`.
+    ChoiceHistoryCount {
+        category: Option<crate::toolbox::ChoiceCategory>,
+        chooser: Option<Box<crate::toolbox::PlayerSelector>>,
+        this_turn_only: bool,
+    },
 }
 
 impl ValueExpr {
@@ -845,7 +874,14 @@ impl ValueExpr {
             | Self::Devotion(_)
             | Self::PartyCount(_)
             | Self::CountOtherSharingSourceSubtype
-            | Self::CountAttackingController => true,
+            | Self::CountAttackingController
+            | Self::BoundInt(_)
+            | Self::BoundCount { .. }
+            | Self::BoundStat { .. }
+            | Self::QueryCount(_)
+            | Self::QueryAggregate { .. }
+            | Self::StateTrackInt(_)
+            | Self::ChoiceHistoryCount { .. } => true,
             Self::SourceState(kind) => !matches!(kind, SourceStateExpr::Goaded),
             Self::Count {
                 zone,
@@ -1031,7 +1067,14 @@ impl ValueExpr {
             | Self::Devotion(_)
             | Self::PartyCount(_)
             | Self::CountOtherSharingSourceSubtype
-            | Self::CountAttackingController => true,
+            | Self::CountAttackingController
+            | Self::BoundInt(_)
+            | Self::BoundCount { .. }
+            | Self::BoundStat { .. }
+            | Self::QueryCount(_)
+            | Self::QueryAggregate { .. }
+            | Self::StateTrackInt(_)
+            | Self::ChoiceHistoryCount { .. } => true,
             Self::SourceState(kind) => !matches!(kind, SourceStateExpr::Goaded),
             Self::Count {
                 zone,
@@ -1248,6 +1291,13 @@ impl ValueExpr {
                 | PlayerStatExpr::PlayerControlsMost { filter, .. }
                 | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. },
             ) => filter.validate_vocabulary(vocabulary),
+            Self::BoundInt(_)
+            | Self::BoundCount { .. }
+            | Self::BoundStat { .. }
+            | Self::QueryCount(_)
+            | Self::QueryAggregate { .. }
+            | Self::StateTrackInt(_)
+            | Self::ChoiceHistoryCount { .. } => Ok(()),
             Self::PartyCount(roles) => {
                 if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
                     return Err(DefinitionError::ForeignCreatureType);
@@ -1372,6 +1422,51 @@ impl ValueExpr {
     }
 
     /// True if this expression directly reads from the resolving spell or ability's target.
+    /// Validate creature-type vocabulary references inside this expression.
+    pub(crate) fn validate_vocabulary(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        match self {
+            Self::BoundCount {
+                filter: Some(f), ..
+            } => f
+                .validate_vocabulary(vocabulary)
+                .map_err(|_| DefinitionError::InvalidInstruction),
+            Self::QueryCount(q) | Self::QueryAggregate { query: q, .. } => {
+                q.validate_vocabulary(vocabulary)
+            }
+            Self::StateTrackInt(spec) => match &spec.scope {
+                crate::toolbox::StateTrackScope::Global => Ok(()),
+                crate::toolbox::StateTrackScope::Player(p) => p.validate_vocabulary(vocabulary),
+                crate::toolbox::StateTrackScope::Object(q) => q.validate_vocabulary(vocabulary),
+            },
+            Self::ChoiceHistoryCount {
+                chooser: Some(p), ..
+            } => p.validate_vocabulary(vocabulary),
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
+                expr.validate_vocabulary(vocabulary)
+            }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.validate_vocabulary(vocabulary)?;
+                b.validate_vocabulary(vocabulary)
+            }
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.validate_vocabulary(vocabulary)?;
+                right.validate_vocabulary(vocabulary)?;
+                then_value.validate_vocabulary(vocabulary)?;
+                else_value.validate_vocabulary(vocabulary)
+            }
+            _ => Ok(()),
+        }
+    }
+
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
@@ -1505,6 +1600,20 @@ impl ValueExpr {
                     || right.uses_target()
                     || then_value.uses_target()
                     || else_value.uses_target()
+            }
+            Self::BoundInt(_) => false,
+            Self::BoundCount { filter, .. } => {
+                filter.as_ref().is_some_and(|f| f.uses_target_permanent())
+            }
+            Self::BoundStat { .. } => false,
+            Self::QueryCount(q) | Self::QueryAggregate { query: q, .. } => q.uses_target(),
+            Self::StateTrackInt(spec) => match &spec.scope {
+                crate::toolbox::StateTrackScope::Global => false,
+                crate::toolbox::StateTrackScope::Player(p) => p.uses_target(),
+                crate::toolbox::StateTrackScope::Object(q) => q.uses_target(),
+            },
+            Self::ChoiceHistoryCount { chooser, .. } => {
+                chooser.as_ref().is_some_and(|p| p.uses_target())
             }
             _ => false,
         }
@@ -1793,6 +1902,13 @@ impl ValueExpr {
             | Self::LastActionMatchingCount(filter)
             | Self::Aggregate { filter, .. }
             | Self::ObjectMatches { filter, .. } => filter.rewrite_creature_type(from, to),
+            Self::BoundInt(_)
+            | Self::BoundCount { .. }
+            | Self::BoundStat { .. }
+            | Self::QueryCount(_)
+            | Self::QueryAggregate { .. }
+            | Self::StateTrackInt(_)
+            | Self::ChoiceHistoryCount { .. } => {}
             Self::PartyCount(roles) => {
                 for role in roles.iter_mut() {
                     if *role == from {
@@ -1858,6 +1974,28 @@ impl ValueExpr {
                 } else {
                     Ok(())
                 }
+            }
+            Self::BoundInt(_) | Self::BoundStat { .. } => Ok(()),
+            Self::BoundCount { filter, .. } => {
+                if let Some(f) = filter {
+                    f.validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                Ok(())
+            }
+            Self::QueryCount(q) | Self::QueryAggregate { query: q, .. } => {
+                q.validate_vocabulary(vocabulary)
+            }
+            Self::StateTrackInt(spec) => match &spec.scope {
+                crate::toolbox::StateTrackScope::Global => Ok(()),
+                crate::toolbox::StateTrackScope::Player(p) => p.validate_vocabulary(vocabulary),
+                crate::toolbox::StateTrackScope::Object(q) => q.validate_vocabulary(vocabulary),
+            },
+            Self::ChoiceHistoryCount { chooser, .. } => {
+                if let Some(p) = chooser {
+                    p.validate_vocabulary(vocabulary)?;
+                }
+                Ok(())
             }
             Self::Scale { expr, factor } => {
                 if !factor.is_positive() {
@@ -2696,7 +2834,30 @@ impl ValueExpr {
         match self {
             Self::Literal(_)
             | Self::CountAttackingController
-            | Self::DistinctManaValuesInGraveyard(_) => Ok(()),
+            | Self::DistinctManaValuesInGraveyard(_)
+            | Self::BoundInt(_)
+            | Self::BoundStat { .. } => Ok(()),
+            Self::BoundCount { filter, .. } => {
+                if let Some(f) = filter {
+                    f.validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                Ok(())
+            }
+            Self::QueryCount(q) | Self::QueryAggregate { query: q, .. } => {
+                q.validate_vocabulary(vocabulary)
+            }
+            Self::StateTrackInt(spec) => match &spec.scope {
+                crate::toolbox::StateTrackScope::Global => Ok(()),
+                crate::toolbox::StateTrackScope::Player(p) => p.validate_vocabulary(vocabulary),
+                crate::toolbox::StateTrackScope::Object(q) => q.validate_vocabulary(vocabulary),
+            },
+            Self::ChoiceHistoryCount { chooser, .. } => {
+                if let Some(p) = chooser {
+                    p.validate_vocabulary(vocabulary)?;
+                }
+                Ok(())
+            }
             Self::PlayerStat(stat) => match stat {
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }

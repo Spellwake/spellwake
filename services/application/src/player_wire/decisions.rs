@@ -550,6 +550,11 @@ pub enum PlayerDomain {
         #[serde(deserialize_with = "crate::provider_json::objects")]
         sources: Vec<CombatDamageDomain>,
     },
+    PromptChoice {
+        category: PlayerPromptCategory,
+        #[serde(deserialize_with = "crate::provider_json::object")]
+        prompt: PlayerPromptDomain,
+    },
     Prevention {
         #[serde(deserialize_with = "crate::provider_json::objects")]
         attempts: Vec<PreventionDomain>,
@@ -621,6 +626,7 @@ impl PlayerDomain {
                             && face.valid()
                     })
             }
+            Self::PromptChoice { prompt, .. } => prompt.valid(),
             Self::TriggerModes {
                 minimum,
                 maximum,
@@ -1022,6 +1028,7 @@ impl PlayerDomain {
             Self::Blockers { .. } => kind == K::DeclareBlockers,
             Self::CombatDamage { .. } => kind == K::AssignCombatDamage,
             Self::Prevention { .. } => kind == K::AllocatePrevention,
+            Self::PromptChoice { .. } => kind == K::PromptChoice,
         }
     }
     fn allows(&self, response: &PlayerChoice, extra_options: &[PlayerHandle]) -> bool {
@@ -1668,6 +1675,9 @@ impl PlayerDomain {
                         && s.permits_trample(assignments)
                 })
             }
+            (Self::PromptChoice { prompt, .. }, PlayerChoice::PromptChoice { reply }) => {
+                prompt.allows(reply)
+            }
             (Self::Prevention { attempts, required }, PlayerChoice::Prevention { allocations }) => {
                 sum(allocations.iter().map(|x| &x.amount)) == *required.as_rules_integer()
                     && allocations.iter().all(|a| {
@@ -1869,6 +1879,20 @@ impl PlayerDecision {
                             && c.attackers.iter().all(|x| objects.contains(x))
                     })
             }
+            PlayerDomain::PromptChoice { prompt, .. } => match prompt {
+                PlayerPromptDomain::Objects {
+                    candidates, hidden, ..
+                } => *hidden || candidates.iter().all(|h| objects.contains(h)),
+                PlayerPromptDomain::Partition { candidates, .. } => {
+                    candidates.iter().all(|h| objects.contains(h))
+                }
+                PlayerPromptDomain::Players { seats, .. } => {
+                    seats.iter().all(|s| roster.contains(s))
+                }
+                PlayerPromptDomain::Options { .. }
+                | PlayerPromptDomain::Number { .. }
+                | PlayerPromptDomain::CardName { .. } => true,
+            },
             PlayerDomain::CombatDamage { sources } => sources
                 .iter()
                 .all(|s| objects.contains(&s.source) && s.targets.iter().all(check)),
@@ -2006,6 +2030,167 @@ impl PlayerChoicePage {
             Ok(())
         } else {
             Err(InvalidPlayerWire)
+        }
+    }
+}
+
+/// Semantic category projected for universal `PromptChoice` decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerPromptCategory {
+    Generic,
+    Modal,
+    VillainousChoice,
+    Dilemma,
+    Vote,
+    PileSplit,
+    Search,
+    Tribute,
+    Clash,
+    Custom,
+}
+/// Single generic domain payload for universal toolbox `PromptChoice`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PlayerPromptDomain {
+    Objects {
+        candidates: Vec<PlayerHandle>,
+        minimum: RulesCount,
+        maximum: RulesCount,
+        hidden: bool,
+    },
+    Players {
+        #[serde(deserialize_with = "crate::identifiers::uuid_list")]
+        seats: Vec<Uuid>,
+        minimum: u8,
+        maximum: u8,
+    },
+    Options {
+        #[serde(deserialize_with = "crate::provider_json::objects")]
+        options: Vec<PlayerOption>,
+        minimum: u8,
+        maximum: u8,
+        #[serde(rename = "allowRepeat")]
+        allow_repeat: bool,
+    },
+    Number {
+        minimum: RulesInteger,
+        maximum: RulesInteger,
+    },
+    CardName {
+        #[serde(rename = "nonlandOnly")]
+        nonland_only: bool,
+    },
+    Partition {
+        candidates: Vec<PlayerHandle>,
+        #[serde(rename = "pileCount")]
+        pile_count: u8,
+        #[serde(rename = "minPerPile")]
+        min_per_pile: u8,
+    },
+}
+impl PlayerPromptDomain {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Objects {
+                candidates,
+                minimum,
+                maximum,
+                ..
+            } => {
+                list(candidates)
+                    && unique(candidates.iter())
+                    && minimum.as_rules_integer() <= maximum.as_rules_integer()
+            }
+            Self::Players {
+                seats,
+                minimum,
+                maximum,
+            } => {
+                seats.len() <= 6
+                    && unique(seats.iter())
+                    && seats.iter().all(|s| !s.is_nil())
+                    && minimum <= maximum
+            }
+            Self::Options {
+                options: opts,
+                minimum,
+                maximum,
+                ..
+            } => options(opts) && minimum <= maximum,
+            Self::Number { minimum, maximum } => minimum <= maximum,
+            Self::CardName { .. } => true,
+            Self::Partition {
+                candidates,
+                pile_count,
+                ..
+            } => list(candidates) && unique(candidates.iter()) && (2..=16).contains(pile_count),
+        }
+    }
+    fn allows(&self, reply: &PlayerPromptReply) -> bool {
+        match (self, reply) {
+            (
+                Self::Objects {
+                    candidates,
+                    minimum,
+                    maximum,
+                    ..
+                },
+                PlayerPromptReply::Objects { objects },
+            ) => {
+                within(objects.len(), minimum, maximum)
+                    && unique(objects.iter())
+                    && objects.iter().all(|h| candidates.contains(h))
+            }
+            (
+                Self::Players {
+                    seats,
+                    minimum,
+                    maximum,
+                },
+                PlayerPromptReply::Players { seats: chosen },
+            ) => {
+                (usize::from(*minimum)..=usize::from(*maximum)).contains(&chosen.len())
+                    && unique(chosen.iter())
+                    && chosen.iter().all(|s| seats.contains(s))
+            }
+            (
+                Self::Options {
+                    options: opts,
+                    minimum,
+                    maximum,
+                    allow_repeat,
+                },
+                PlayerPromptReply::Options { options: chosen },
+            ) => {
+                (usize::from(*minimum)..=usize::from(*maximum)).contains(&chosen.len())
+                    && (*allow_repeat || unique(chosen.iter()))
+                    && chosen.iter().all(|h| opts.iter().any(|o| &o.handle == h))
+            }
+            (Self::Number { minimum, maximum }, PlayerPromptReply::Number { value }) => {
+                value >= minimum && value <= maximum
+            }
+            (Self::CardName { .. }, PlayerPromptReply::CardName { name }) => {
+                !name.trim().is_empty()
+            }
+            (
+                Self::Partition {
+                    candidates,
+                    pile_count,
+                    min_per_pile,
+                },
+                PlayerPromptReply::Partition { piles },
+            ) => {
+                piles.len() == usize::from(*pile_count)
+                    && piles.iter().all(|p| p.len() >= usize::from(*min_per_pile))
+                    && {
+                        let flat: Vec<_> = piles.iter().flat_map(|p| p.iter()).collect();
+                        flat.len() == candidates.len()
+                            && unique(flat.iter().copied())
+                            && flat.iter().all(|h| candidates.contains(h))
+                    }
+            }
+            _ => false,
         }
     }
 }

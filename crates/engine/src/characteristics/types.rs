@@ -2178,6 +2178,8 @@ pub struct TemporaryBattlefieldStatic {
     pub timestamp: CharacteristicTimestamp,
     pub duration: ResolvedDuration,
     pub ability: StaticContinuousAbility,
+    /// Optional resolution-locked set of affected objects (CR 611.2c).
+    pub locked_objects: Option<BTreeSet<ObjectId>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharacteristicsError {

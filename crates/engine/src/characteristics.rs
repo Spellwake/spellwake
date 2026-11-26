@@ -999,6 +999,17 @@ impl CharacteristicState {
         duration: ResolvedDuration,
         ability: StaticContinuousAbility,
     ) -> Result<u64, CharacteristicsError> {
+        self.add_temporary_static_locked(controller, source_object, duration, ability, None)
+    }
+
+    pub(crate) fn add_temporary_static_locked(
+        &mut self,
+        controller: SeatId,
+        source_object: Option<ObjectId>,
+        duration: ResolvedDuration,
+        ability: StaticContinuousAbility,
+        locked_objects: Option<BTreeSet<ObjectId>>,
+    ) -> Result<u64, CharacteristicsError> {
         let id = self.next_temp_static;
         let next_id = id
             .checked_add(1)
@@ -1019,6 +1030,7 @@ impl CharacteristicState {
                 timestamp,
                 duration,
                 ability,
+                locked_objects,
             },
         );
         Ok(id)

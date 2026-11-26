@@ -3123,6 +3123,10 @@ impl EffectWindow {
                 .map(|card| card.current_creature_subtypes)
                 .unwrap_or_default();
         }
+        let instruction = match self.progress_toolbox_instruction(ctx, entry, index, instruction)? {
+            StepOutcome::Next(rest) => rest,
+            other => return Ok(other),
+        };
         let instruction = match self.progress_pass_c_instruction(ctx, entry, index, instruction)? {
             StepOutcome::Next(rest) => rest,
             other => return Ok(other),
@@ -6079,6 +6083,7 @@ impl EffectWindow {
             let reflexive_ctx =
                 self.resolution_cursor()
                     .map(|cursor| super::ReflexiveTriggerContext {
+                        env: cursor.env.clone(),
                         last_sacrificed_creature: cursor.results.last_sacrificed_creature.clone(),
                         last_sacrificed_mv: cursor.results.last_sacrificed_mv.clone(),
                         resolution_x: entry.chosen_x().cloned(),
