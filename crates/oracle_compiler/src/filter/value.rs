@@ -456,12 +456,11 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             }
         }
     }
-    if low == "the amount of mana spent to cast ~"
-        || low == "the amount of mana spent to cast it"
-        || low == "the amount of mana spent to cast her"
-        || low == "the amount of mana spent to cast him"
-        || low == "the amount of mana spent to cast this spell"
-        || low == "the amount of mana spent to cast that spell"
+    if let Some(target) = low.strip_prefix("the amount of mana spent to cast ")
+        && matches!(
+            target.trim(),
+            "~" | "it" | "her" | "him" | "this spell" | "that spell"
+        )
     {
         return Ok(ValueExprAst::ManaSpentToCast { mana_filter: None });
     }
@@ -770,24 +769,24 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         }
     }
 
-    if low == "the lowest life total among all players"
-        || low == "the lowest life total among players"
+    if let Some((op, rest)) = low
+        .strip_prefix("the lowest ")
+        .map(|r| (AggregateOp::Min, r))
+        .or_else(|| {
+            low.strip_prefix("the highest ")
+                .map(|r| (AggregateOp::Max, r))
+        })
+        && let Some(who_raw) = rest.strip_prefix("life total among ")
     {
+        let player = if who_raw.contains("opponent") {
+            PlayerRefAst::EachOpponent
+        } else {
+            PlayerRefAst::EachPlayer
+        };
         return Ok(ValueExprAst::AggregateOverPlayers {
-            op: AggregateOp::Min,
+            op,
             metric: Box::new(ValueExprAst::PlayerStat {
-                player: PlayerRefAst::EachPlayer,
-                stat: PlayerStatKind::LifeTotal,
-            }),
-        });
-    }
-    if low == "the highest life total among all players"
-        || low == "the highest life total among players"
-    {
-        return Ok(ValueExprAst::AggregateOverPlayers {
-            op: AggregateOp::Max,
-            metric: Box::new(ValueExprAst::PlayerStat {
-                player: PlayerRefAst::EachPlayer,
+                player,
                 stat: PlayerStatKind::LifeTotal,
             }),
         });
@@ -879,14 +878,12 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
         });
     }
-    if low == "an amount of damage of your choice"
-        || low == "an amount of life of your choice"
-        || low == "the chosen number"
+    if low == "the chosen number"
+        || (low.starts_with("an amount of ") && low.ends_with(" of your choice"))
     {
         return Ok(ValueExprAst::ChosenX);
     }
-    if low == "the number of cards shuffled into your library this way"
-        || low == "the number of cards drawn this way"
+    if (low.starts_with("the number of cards ") && low.ends_with(" this way"))
         || low.starts_with("the number of curses attached to ")
         || (low.starts_with("the number of ") && low.ends_with(" votes"))
     {
@@ -1051,19 +1048,19 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             }),
         ));
     }
-    if low == "the power of the creature that died" {
-        return Ok(ValueExprAst::ObjectStat {
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "the creature that died".to_string(),
-            )),
-            stat: StatKind::Power,
-        });
-    }
-    if low == "the power of that blocked creature" {
-        return Ok(ValueExprAst::ObjectStat {
-            subject: Box::new(SubjectRefAst::Anaphora("that blocked creature".to_string())),
-            stat: StatKind::Power,
-        });
+    for (prefix, stat) in [
+        ("the power of ", StatKind::Power),
+        ("the toughness of ", StatKind::Toughness),
+        ("the mana value of ", StatKind::ManaValue),
+    ] {
+        if let Some(subj_raw) = low.strip_prefix(prefix) {
+            let subj = parse_subject_or_target(subj_raw.trim(), vocab)
+                .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
+            return Ok(ValueExprAst::ObjectStat {
+                subject: Box::new(subj),
+                stat,
+            });
+        }
     }
     if low == "the amount of {e} you have" {
         return Ok(ValueExprAst::EventCountThisTurn {
@@ -1077,21 +1074,29 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             player: None,
         });
     }
-    if low == "the total amount of life your opponents lost this turn" {
-        return Ok(ValueExprAst::LifeChangedThisTurn {
-            player: PlayerRefAst::EachOpponent,
-            gained: false,
-        });
+    if let Some(after_life) = low.strip_prefix("the total amount of life ")
+        && let Some((who_raw, gained)) = after_life
+            .strip_suffix(" lost this turn")
+            .map(|w| (w, false))
+            .or_else(|| {
+                after_life
+                    .strip_suffix(" gained this turn")
+                    .map(|w| (w, true))
+            })
+        && let Some(player) = parse_player_ref(who_raw.trim())
+    {
+        return Ok(ValueExprAst::LifeChangedThisTurn { player, gained });
     }
     // Compositional turn/game event & damage counters (replaces verbatim single-card literal walls)
-    if low == "the number of colors of mana spent to cast ~"
-        || low == "the number of colors of mana spent to cast it"
+    if let Some(tgt) = low.strip_prefix("the number of colors of mana spent to cast ")
+        && matches!(tgt.trim(), "~" | "it" | "this spell" | "that spell")
     {
         return Ok(ValueExprAst::ColorsOfManaSpent);
     }
-    if low == "the number of times ~ was kicked"
-        || low == "the number of times it was kicked"
-        || low == "the number of times that spell was kicked"
+    if let Some(inner) = low
+        .strip_prefix("the number of times ")
+        .and_then(|r| r.strip_suffix(" was kicked"))
+        && matches!(inner.trim(), "~" | "it" | "that spell" | "this spell")
     {
         return Ok(ValueExprAst::TimesKicked);
     }

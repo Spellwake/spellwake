@@ -3568,39 +3568,52 @@ pub(super) fn parse_control_piles_combat_extended(
             )),
         }]);
     }
-    if low == "each blocking creature is sacrificed by its controller"
-        || low == "each blocked creature is sacrificed by its controller"
+    if let Some(kind_raw) = low
+        .strip_prefix("each ")
+        .and_then(|r| r.strip_suffix(" creature is sacrificed by its controller"))
+        && matches!(kind_raw, "attacking" | "blocking" | "blocked")
+        && let Ok(flt) = parse_object_filter(&format!("{kind_raw} creatures"), vocab)
     {
-        let flt_raw = if low.contains("blocking") {
-            "blocking creatures"
-        } else {
-            "blocked creatures"
-        };
-        if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
-            return Some(vec![InstructionAst::Sacrifice {
-                player: PlayerRefAst::ItsController,
-                count: None,
-                subject: Box::new(SubjectRefAst::Each(Box::new(flt))),
-                except: None,
-                half: false,
-                rounding: None,
-                chooser: None,
+        return Some(vec![InstructionAst::Sacrifice {
+            player: PlayerRefAst::ItsController,
+            count: None,
+            subject: Box::new(SubjectRefAst::Each(Box::new(flt))),
+            except: None,
+            half: false,
+            rounding: None,
+            chooser: None,
+        }]);
+    }
+    if let Some((subj_raw, cond_raw)) = low
+        .split_once("'s goaded for as long as ")
+        .or_else(|| low.split_once(" is goaded for as long as "))
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+    {
+        let cond = parse_condition(cond_raw.trim(), vocab).ok().or_else(|| {
+            let (who_raw, obj_raw) = cond_raw
+                .trim()
+                .split_once(" control ")
+                .or_else(|| cond_raw.trim().split_once(" controls "))?;
+            let player = parse_player_ref(who_raw.trim())?;
+            let obj = parse_subject_or_target(obj_raw.trim(), vocab).ok()?;
+            Some(ConditionAst::SubjectControlledBy {
+                subject: Box::new(obj),
+                player,
+            })
+        });
+        if let Some(cond) = cond {
+            return Some(vec![InstructionAst::CombatRuleMod {
+                subject: Box::new(subj),
+                rule: "goaded".to_string(),
+                duration: DurationAst::ForAsLongAs(Box::new(cond)),
             }]);
         }
     }
-    if low == "it's goaded for as long as they control it" {
+    if let Some(subj_raw) = low.strip_suffix(" can't be blocked that combat")
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+    {
         return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            rule: "goaded".to_string(),
-            duration: DurationAst::ForAsLongAs(Box::new(ConditionAst::SubjectControlledBy {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                player: PlayerRefAst::ThatPlayer,
-            })),
-        }]);
-    }
-    if low == "it can't be blocked that combat" {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            subject: Box::new(subj),
             rule: "CantBeBlocked".to_string(),
             duration: DurationAst::UntilEndOfCombat,
         }]);
