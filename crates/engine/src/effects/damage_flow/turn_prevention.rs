@@ -20,7 +20,24 @@ impl EffectWindow {
                             attempt.target, DamageRecipient::Creature(id) | DamageRecipient::Planeswalker(id) | DamageRecipient::Battle(id) if protected_source == Some(id)
                         )
                     }
-                    TurnPreventionFilter::CombatToOrFromAbilitySource => {
+                    TurnPreventionFilter::FromAbilitySource | TurnPreventionFilter::FromTarget => {
+                        matches!(attempt.source.id(), crate::damage::DamageSourceId::Object(id) if protected_source == Some(id))
+                    }
+                    TurnPreventionFilter::CombatFromAbilitySource
+                    | TurnPreventionFilter::CombatFromTarget => {
+                        batch.kind() == DamageKind::Combat
+                            && matches!(attempt.source.id(), crate::damage::DamageSourceId::Object(id) if protected_source == Some(id))
+                    }
+                    TurnPreventionFilter::Creatures | TurnPreventionFilter::CombatFromCreatures => {
+                        (filter == TurnPreventionFilter::Creatures
+                            || batch.kind() == DamageKind::Combat)
+                            && matches!(attempt.source.id(), crate::damage::DamageSourceId::Object(id)
+                            if evaluated.get(id).map_or_else(
+                                || self.departed_damage_sources.get(&id).is_some_and(|source| source.was_creature),
+                                |source| source.zone == ObjectZone::Battlefield && source.is_creature()))
+                    }
+                    TurnPreventionFilter::CombatToOrFromAbilitySource
+                    | TurnPreventionFilter::CombatToOrFromTarget => {
                         batch.kind() == DamageKind::Combat
                             && (matches!(attempt.target, DamageRecipient::Creature(id) | DamageRecipient::Planeswalker(id) | DamageRecipient::Battle(id)
                             if protected_source == Some(id))

@@ -1,0 +1,230 @@
+[
+  {
+    "oracle_id": "01546b7d-a233-4176-8843-d732074dc5b6",
+    "name": "Doubling Season",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Doubling Season",
+        "type_line": "Enchantment",
+        "oracle_text": "If an effect would create one or more tokens under your control, it creates twice that many of those tokens instead.\nIf an effect would put one or more counters on a permanent you control, it puts twice that many of those counters on that permanent instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "01c39670-3677-49df-a4f6-e5062e0909d5",
+    "name": "Embermaw Hellion",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Embermaw Hellion",
+        "type_line": "Creature \u2014 Hellion",
+        "oracle_text": "Trample (This creature can deal excess combat damage to the player or planeswalker it's attacking.)\nIf another red source you control would deal damage to a permanent or player, it deals that much damage plus 1 to that permanent or player instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "01dbf1bc-ca62-4fb6-959c-ef7c0dc03bb0",
+    "name": "Benevolent Hydra",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Benevolent Hydra",
+        "type_line": "Creature \u2014 Hydra",
+        "oracle_text": "This creature enters with X +1/+1 counters on it.\nIf one or more +1/+1 counters would be put on another creature you control, that many plus one +1/+1 counters are put on it instead.\n{T}, Remove a +1/+1 counter from this creature: Put a +1/+1 counter on another target creature you control."
+      }
+    ]
+  },
+  {
+    "oracle_id": "078def07-ae5d-4591-8db6-d156834aab97",
+    "name": "Etali, Primal Storm",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Etali, Primal Storm",
+        "type_line": "Legendary Creature \u2014 Elder Dinosaur",
+        "oracle_text": "Whenever Etali attacks, exile the top card of each player's library, then you may cast any number of spells from among those cards without paying their mana costs."
+      }
+    ]
+  },
+  {
+    "oracle_id": "20f3bc44-c7fa-4d5a-adb9-2dd1d2d66ffe",
+    "name": "Sardian Cliffstomper",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Sardian Cliffstomper",
+        "type_line": "Creature \u2014 Minotaur Barbarian",
+        "oracle_text": "As long as it's your turn and you control four or more Mountains, this creature gets +X/+0, where X is the number of Mountains you control."
+      }
+    ]
+  },
+  {
+    "oracle_id": "29358dcd-b26a-4720-9daa-7baa648e3540",
+    "name": "Exoskeletal Armor",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Exoskeletal Armor",
+        "type_line": "Enchantment \u2014 Aura",
+        "oracle_text": "Enchant creature\nEnchanted creature gets +X/+X, where X is the number of creature cards in all graveyards."
+      }
+    ]
+  },
+  {
+    "oracle_id": "373ccd23-5c98-4368-995a-e6503cd0dbd8",
+    "name": "Elturel Survivors",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Elturel Survivors",
+        "type_line": "Creature \u2014 Tiefling Peasant",
+        "oracle_text": "Trample, myriad (Whenever this creature attacks, for each opponent other than defending player, you may create a token copy that's tapped and attacking that player or a planeswalker they control. Exile the tokens at end of combat.)\nAs long as this creature is attacking, it gets +X/+0, where X is the number of lands defending player controls."
+      }
+    ]
+  },
+  {
+    "oracle_id": "386faeef-f5cc-4ef9-b8cb-6ef06b33cbd0",
+    "name": "Righteous Authority",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Righteous Authority",
+        "type_line": "Enchantment \u2014 Aura",
+        "oracle_text": "Enchant creature\nEnchanted creature gets +1/+1 for each card in its controller's hand.\nAt the beginning of the draw step of enchanted creature's controller, that player draws an additional card."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3b8eea0b-6f8c-449c-9ab8-a22a035465d6",
+    "name": "Meishin, the Mind Cage",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Meishin, the Mind Cage",
+        "type_line": "Legendary Enchantment",
+        "oracle_text": "All creatures get -X/-0, where X is the number of cards in your hand."
+      }
+    ]
+  },
+  {
+    "oracle_id": "8406b724-a824-4905-83e0-a6c02d7f72e3",
+    "name": "Aven Windreader",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Aven Windreader",
+        "type_line": "Creature \u2014 Bird Soldier Wizard",
+        "oracle_text": "Flying (This creature can't be blocked except by creatures with flying or reach.)\n{1}{U}: Target player reveals the top card of their library."
+      }
+    ]
+  },
+  {
+    "oracle_id": "8de3eabe-9a8f-4865-beef-a4888c081d39",
+    "name": "Training Grounds",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Training Grounds",
+        "type_line": "Enchantment",
+        "oracle_text": "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana."
+      }
+    ]
+  },
+  {
+    "oracle_id": "d7b476ed-fc50-4804-8375-488a9e2ab184",
+    "name": "Chain of Silence",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Chain of Silence",
+        "type_line": "Instant",
+        "oracle_text": "Prevent all damage target creature would deal this turn. That creature's controller may sacrifice a land of their choice. If the player does, they may copy this spell and may choose a new target for that copy."
+      }
+    ]
+  },
+  {
+    "oracle_id": "ec9c35f2-6a68-45e7-a86e-9f5af9fe28fc",
+    "name": "Phyrexian Ingester",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Phyrexian Ingester",
+        "type_line": "Creature \u2014 Phyrexian Beast",
+        "oracle_text": "Imprint \u2014 When this creature enters, you may exile target nontoken creature.\nThis creature gets +X/+Y, where X is the exiled creature card's power and Y is its toughness."
+      }
+    ]
+  },
+  {
+    "oracle_id": "ec9e8611-e785-4d5d-b6e1-bf63daf408df",
+    "name": "Empyrial Armor",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Empyrial Armor",
+        "type_line": "Enchantment \u2014 Aura",
+        "oracle_text": "Enchant creature\nEnchanted creature gets +1/+1 for each card in your hand."
+      }
+    ]
+  },
+  {
+    "oracle_id": "7b515c56-7b1e-42a8-82b0-1b30201fb162",
+    "name": "Zirda, the Dawnwaker",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Zirda, the Dawnwaker",
+        "type_line": "Legendary Creature \u2014 Elemental Fox",
+        "oracle_text": "Companion \u2014 Each permanent card in your starting deck has an activated ability. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} as a sorcery.)\nAbilities you activate that aren't mana abilities cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.\n{1}, {T}: Target creature can't block this turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "8f8ebf49-37c5-4da0-9cee-84ad22ab5d37",
+    "name": "Heartstone",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Heartstone",
+        "type_line": "Artifact",
+        "oracle_text": "Activated abilities of creatures cost {1} less to activate. This effect can't reduce the mana in that cost to less than one mana."
+      }
+    ]
+  },
+  {
+    "oracle_id": "923d44a9-774d-459c-9cec-1d5b081b51f0",
+    "name": "Biomancer's Familiar",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Biomancer's Familiar",
+        "type_line": "Creature \u2014 Mutant",
+        "oracle_text": "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.\n{T}: The next time target creature adapts this turn, it adapts as though it had no +1/+1 counters on it."
+      }
+    ]
+  },
+  {
+    "oracle_id": "9a8c8d52-1701-4ae0-9d2d-cce4e476673b",
+    "name": "Power Artifact",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Power Artifact",
+        "type_line": "Enchantment \u2014 Aura",
+        "oracle_text": "Enchant artifact\nEnchanted artifact's activated abilities cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana."
+      }
+    ]
+  },
+  {
+    "oracle_id": "f398d222-f8e7-4983-9a77-267adef7f551",
+    "name": "Agatha of the Vile Cauldron",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Agatha of the Vile Cauldron",
+        "type_line": "Legendary Creature \u2014 Human Warlock",
+        "oracle_text": "Activated abilities of creatures you control cost {X} less to activate, where X is Agatha's power. This effect can't reduce the mana in that cost to less than one mana.\n{4}{R}{G}: Other creatures you control get +1/+1 and gain trample and haste until end of turn."
+      }
+    ]
+  }
+]

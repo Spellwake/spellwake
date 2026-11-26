@@ -39,6 +39,8 @@ pub enum ResolutionSelectionKind {
     /// Place any of the selected hand or graveyard Auras attached to the source.
     AttachAurasFromHandOrGraveyard,
     CopyDifferentlyNamedTokens,
+    /// CR 701.30a Populate: choose one controlled creature token to copy.
+    Populate,
     Untap,
     /// An effect's selected objects would enter the battlefield.
     EnterBattlefield,
@@ -65,6 +67,8 @@ pub enum ResolutionSelectionKind {
     CollectEvidence,
     /// Interactive SelectZoneCardsToZone: choose filtered cards from a zone to move to a destination.
     SelectZoneCards,
+    /// Universal non-target object selection with optional power constraints and keep-vs-rest action.
+    ChooseObjects,
 }
 
 /// The original operation retained by the sole work owner.
@@ -120,6 +124,8 @@ pub enum ResolutionSelectionOperation {
         eligible: BTreeSet<ObjectId>,
     },
     CopyDifferentlyNamedTokens,
+    /// CR 701.30a Populate: choose one controlled creature token to copy.
+    Populate,
     Untap {
         kind: CardType,
     },
@@ -237,6 +243,15 @@ pub enum ResolutionSelectionOperation {
         reveal: bool,
         last_moved: BTreeSet<ObjectId>,
     },
+    ChooseObjects {
+        source_zone: crate::program::SourceZoneFilter,
+        filter: Box<ObjectFilter>,
+        min: usize,
+        distinct_powers: bool,
+        max_total_power: Option<RulesInteger>,
+        unchosen_action: Option<crate::program::UnchosenObjectsAction>,
+        last_moved: BTreeSet<ObjectId>,
+    },
 }
 impl ResolutionSelectionOperation {
     fn is_sacrifice(&self) -> bool {
@@ -309,6 +324,7 @@ impl ResolutionSelectionOperation {
                 optional: false, ..
             } => ResolutionSelectionKind::AttachAllEquipment,
             Self::CopyDifferentlyNamedTokens => ResolutionSelectionKind::CopyDifferentlyNamedTokens,
+            Self::Populate => ResolutionSelectionKind::Populate,
             Self::ChooseVow => ResolutionSelectionKind::VowCreature,
             Self::ChooseCreaturesToKeep => ResolutionSelectionKind::ChooseCreatureToKeep,
             Self::PayLifeToSaveCreatures { .. } => ResolutionSelectionKind::PayLifeToSaveCreatures,
@@ -362,6 +378,7 @@ impl ResolutionSelectionOperation {
             Self::Blight { .. } => ResolutionSelectionKind::BlightCreature,
             Self::CollectEvidence { .. } => ResolutionSelectionKind::CollectEvidence,
             Self::SelectZoneCards { .. } => ResolutionSelectionKind::SelectZoneCards,
+            Self::ChooseObjects { .. } => ResolutionSelectionKind::ChooseObjects,
         }
     }
     fn movement(
@@ -444,13 +461,15 @@ impl ResolutionSelectionOperation {
             | Self::AttachToSource { .. }
             | Self::EnterAurasAttachedToSource { .. }
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::Bolster { .. }
             | Self::Amass { .. }
             | Self::Untap { .. }
             | Self::TapOrUntapControlled { .. }
             | Self::Blight { .. }
             | Self::CollectEvidence { .. }
-            | Self::SelectZoneCards { .. } => {
+            | Self::SelectZoneCards { .. }
+            | Self::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             Self::ShuffleAnnouncedTargets { .. }
@@ -520,13 +539,15 @@ impl ResolutionSelectionOperation {
             | Self::AttachToSource { .. }
             | Self::EnterAurasAttachedToSource { .. }
             | Self::CopyDifferentlyNamedTokens
+            | Self::Populate
             | Self::Bolster { .. }
             | Self::Amass { .. }
             | Self::Untap { .. }
             | Self::TapOrUntapControlled { .. }
             | Self::Blight { .. }
             | Self::CollectEvidence { .. }
-            | Self::SelectZoneCards { .. } => {
+            | Self::SelectZoneCards { .. }
+            | Self::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             Self::WholeGroup { destination, .. } => match destination {
@@ -978,7 +999,8 @@ impl ResolutionSelectionWork {
                         domain: requirement.domain.clone(),
                         required: requirement.required,
                         custom_minimum: match &self.operation {
-                            ResolutionSelectionOperation::SelectZoneCards { min, .. } => Some(*min),
+                            ResolutionSelectionOperation::SelectZoneCards { min, .. }
+                            | ResolutionSelectionOperation::ChooseObjects { min, .. } => Some(*min),
                             ResolutionSelectionOperation::AttachToSource { .. }
                                 if attach_choosing_optional.is_some() =>
                             {
@@ -2470,6 +2492,14 @@ impl EffectWindow {
                     ResolutionSelectionOperation::CopyDifferentlyNamedTokens,
                 )
             }
+            Instruction::Populate => {
+                all = ValueExpr::Literal(1.into());
+                (
+                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
+                    &all,
+                    ResolutionSelectionOperation::Populate,
+                )
+            }
             Instruction::Amass {
                 army,
                 subtype,
@@ -2985,6 +3015,50 @@ impl EffectWindow {
                     },
                 )
             }
+            Instruction::ChooseObjects {
+                players,
+                source_zone,
+                filter,
+                min,
+                max,
+                distinct_powers,
+                max_total_power,
+                unchosen_action,
+            } => {
+                let entry = self
+                    .window
+                    .resolving()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let min_val = self
+                    .resolve_value_expr(entry.controller(), min)?
+                    .max(0.into())
+                    .to_usize()
+                    .unwrap_or(0);
+                let max_power = match max_total_power {
+                    Some(expr) => Some(self.resolve_value_expr(entry.controller(), expr)?),
+                    None => None,
+                };
+                let last_moved = if *source_zone == crate::program::SourceZoneFilter::LastMoved {
+                    self.resolution_cursor()
+                        .map(|cursor| cursor.results.last_moved_objects.iter().copied().collect())
+                        .unwrap_or_default()
+                } else {
+                    BTreeSet::new()
+                };
+                (
+                    *players,
+                    max,
+                    ResolutionSelectionOperation::ChooseObjects {
+                        source_zone: *source_zone,
+                        filter: filter.clone(),
+                        min: min_val,
+                        distinct_powers: *distinct_powers,
+                        max_total_power: max_power,
+                        unchosen_action: *unchosen_action,
+                        last_moved,
+                    },
+                )
+            }
             Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
@@ -3422,6 +3496,7 @@ impl EffectWindow {
             | Instruction::ExileLibraryTopLinked { .. }
             | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
@@ -3539,6 +3614,9 @@ impl EffectWindow {
                 ResolutionSelectionOperation::SelectZoneCards { min, .. }
                     if domain.len() < *min =>
                 {
+                    required = 0;
+                }
+                ResolutionSelectionOperation::ChooseObjects { .. } if domain.is_empty() => {
                     required = 0;
                 }
                 _ => {}
@@ -4013,11 +4091,20 @@ impl EffectWindow {
                             ResolutionSelectionOperation::Amass { .. }
                                 | ResolutionSelectionOperation::ChooseCreaturesToKeep
                                 | ResolutionSelectionOperation::Blight { .. }
+                                | ResolutionSelectionOperation::Populate
                         ) && requirement.domain.len() == 1;
                         let forced_select_all = matches!(
                             operation,
                             ResolutionSelectionOperation::SelectZoneCards { min, .. }
                                 if min == requirement.required && requirement.required == requirement.domain.len()
+                        ) || matches!(
+                            operation,
+                            ResolutionSelectionOperation::ChooseObjects {
+                                min,
+                                distinct_powers: false,
+                                max_total_power: None,
+                                ..
+                            } if min == requirement.required && requirement.required == requirement.domain.len()
                         );
                         let forced_graveyard_cards = matches!(
                             operation,
@@ -4211,7 +4298,11 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         return Ok(None);
                     }
-                    if operation == ResolutionSelectionOperation::CopyDifferentlyNamedTokens {
+                    if matches!(
+                        operation,
+                        ResolutionSelectionOperation::CopyDifferentlyNamedTokens
+                            | ResolutionSelectionOperation::Populate
+                    ) {
                         let [selection] = accepted.as_slice() else {
                             return Err(EffectError::InconsistentSelectionWork);
                         };
@@ -4522,6 +4613,170 @@ impl EffectWindow {
                         cursor.results.last_action_count =
                             Some(RulesInteger::from_usize(moved_ids.len()));
                         cursor.results.last_moved_objects = moved_ids;
+                        self.pending_work = Some(PendingWork::Resolution(cursor));
+                        self.advance_instruction()?;
+                        return Ok(None);
+                    }
+                    if let ResolutionSelectionOperation::ChooseObjects {
+                        source_zone,
+                        ref filter,
+                        unchosen_action,
+                        ref last_moved,
+                        ..
+                    } = operation
+                    {
+                        let entry = self
+                            .window
+                            .resolving()
+                            .cloned()
+                            .ok_or(EffectError::WrongResolutionFrame)?;
+                        let chosen_ids: Vec<ObjectId> = accepted
+                            .iter()
+                            .flat_map(|row| row.objects.iter().copied())
+                            .collect();
+                        let chosen_set: BTreeSet<ObjectId> = chosen_ids.iter().copied().collect();
+                        cursor.vowed_creatures.extend(chosen_ids.iter().copied());
+                        cursor.results.last_moved_objects = chosen_ids.clone();
+                        cursor.results.last_action_succeeded = !chosen_ids.is_empty();
+                        cursor.results.last_action_count =
+                            Some(RulesInteger::from_usize(chosen_ids.len()));
+                        if let Some(action) = unchosen_action {
+                            let evaluated = self.evaluated_characteristics()?;
+                            let ability_source = match entry.kind() {
+                                StackKind::ActivatedAbility { source }
+                                | StackKind::TriggeredAbility { source } => Some(source.id()),
+                                StackKind::CardSpell(id) => Some(*id),
+                                _ => None,
+                            };
+                            let mut unchosen = Vec::new();
+                            let mut seen = BTreeSet::new();
+                            let excluded = BTreeSet::new();
+                            let probe_op = ResolutionSelectionOperation::ChooseObjects {
+                                source_zone,
+                                filter: filter.clone(),
+                                min: 0,
+                                distinct_powers: false,
+                                max_total_power: None,
+                                unchosen_action: None,
+                                last_moved: last_moved.clone(),
+                            };
+                            for row in &accepted {
+                                for object in self.window.cards().iter() {
+                                    let oid = object.id();
+                                    if chosen_set.contains(&oid) || !seen.insert(oid) {
+                                        continue;
+                                    }
+                                    if self.selection_eligible(
+                                        &probe_op,
+                                        row.player,
+                                        object,
+                                        ability_source,
+                                        &evaluated,
+                                        &excluded,
+                                    ) {
+                                        unchosen.push((row.player, oid));
+                                    }
+                                }
+                            }
+                            if !unchosen.is_empty() {
+                                match action {
+                                    crate::program::UnchosenObjectsAction::Tap => {
+                                        let to_tap: Vec<ObjectId> = unchosen
+                                            .iter()
+                                            .map(|(_, id)| *id)
+                                            .filter(|id| {
+                                                self.window
+                                                    .cards()
+                                                    .get(*id)
+                                                    .and_then(GameObject::tapped)
+                                                    == Some(false)
+                                            })
+                                            .collect();
+                                        if !to_tap.is_empty() {
+                                            let before = self.rules_snapshot(None)?;
+                                            let (window, changes) = self
+                                                .window
+                                                .tap_for_effect(cursor.entry, &to_tap)?;
+                                            self.window = window;
+                                            let occs = occurrence_flow::status_occurrences(
+                                                changes,
+                                                crate::occurrence::StatusReason::Effect,
+                                            );
+                                            self.emit_from(
+                                                EventCause::Instruction {
+                                                    entry: cursor.entry,
+                                                    instruction: cursor.instruction,
+                                                },
+                                                &before,
+                                                None,
+                                                append,
+                                                |_, _, _| Ok(occs),
+                                            )?;
+                                        }
+                                    }
+                                    crate::program::UnchosenObjectsAction::Destroy => {
+                                        let dest_ids: Vec<ObjectId> = unchosen
+                                            .iter()
+                                            .map(|(_, id)| *id)
+                                            .filter(|id| {
+                                                evaluated.get(*id).is_some_and(|v| {
+                                                    !v.has_keyword(KeywordAbility::Indestructible)
+                                                })
+                                            })
+                                            .collect();
+                                        if !dest_ids.is_empty() {
+                                            let _ = self.move_objects_to_subject_destination_ids(
+                                                &entry,
+                                                cursor.instruction,
+                                                entry.controller(),
+                                                &dest_ids,
+                                                crate::program::SubjectDestination::Graveyard,
+                                                append,
+                                            )?;
+                                        }
+                                    }
+                                    crate::program::UnchosenObjectsAction::Exile => {
+                                        let ids: Vec<ObjectId> =
+                                            unchosen.iter().map(|(_, id)| *id).collect();
+                                        let _ = self.move_objects_to_subject_destination_ids(
+                                            &entry,
+                                            cursor.instruction,
+                                            entry.controller(),
+                                            &ids,
+                                            crate::program::SubjectDestination::Exile {
+                                                delayed_return: None,
+                                            },
+                                            append,
+                                        )?;
+                                    }
+                                    crate::program::UnchosenObjectsAction::ReturnToHand => {
+                                        let ids: Vec<ObjectId> =
+                                            unchosen.iter().map(|(_, id)| *id).collect();
+                                        let _ = self.move_objects_to_subject_destination_ids(
+                                            &entry,
+                                            cursor.instruction,
+                                            entry.controller(),
+                                            &ids,
+                                            crate::program::SubjectDestination::Hand,
+                                            append,
+                                        )?;
+                                    }
+                                    crate::program::UnchosenObjectsAction::Sacrifice
+                                    | crate::program::UnchosenObjectsAction::Discard => {
+                                        let ids: Vec<ObjectId> =
+                                            unchosen.iter().map(|(_, id)| *id).collect();
+                                        let _ = self.move_objects_to_subject_destination_ids(
+                                            &entry,
+                                            cursor.instruction,
+                                            entry.controller(),
+                                            &ids,
+                                            crate::program::SubjectDestination::Graveyard,
+                                            append,
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
                         return Ok(None);
@@ -4898,6 +5153,12 @@ impl EffectWindow {
                             return Err(EffectError::InvalidSelectionCount);
                         }
                     }
+                    ResolutionSelectionOperation::ChooseObjects { min, .. } => {
+                        let eff_min = (*min).min(requirement.required);
+                        if objects.len() < eff_min {
+                            return Err(EffectError::InvalidSelectionCount);
+                        }
+                    }
                     ResolutionSelectionOperation::TapOrUntapControlled { .. }
                         if up_to_tap_select => {}
                     ResolutionSelectionOperation::DiscardFiltered { .. } if discard_up_to_ext => {}
@@ -4927,6 +5188,36 @@ impl EffectWindow {
                     .all(|object| requirement.domain.contains(object))
                 {
                     return Err(EffectError::SelectionOutsideDomain);
+                }
+                if let ResolutionSelectionOperation::ChooseObjects {
+                    distinct_powers,
+                    max_total_power,
+                    ..
+                } = &work.operation
+                    && (*distinct_powers || max_total_power.is_some())
+                    && !objects.is_empty()
+                {
+                    let current = self.evaluated_characteristics()?;
+                    let mut seen_powers = BTreeSet::new();
+                    let mut total_power = RulesInteger::from(0);
+                    for id in &objects {
+                        let Some(power) = current
+                            .get(*id)
+                            .and_then(|view| view.power_toughness.as_ref())
+                            .map(|pt| pt.derived.power.clone())
+                        else {
+                            return Err(EffectError::SelectionOutsideDomain);
+                        };
+                        if *distinct_powers && !seen_powers.insert(power.clone()) {
+                            return Err(EffectError::SelectionOutsideDomain);
+                        }
+                        total_power = total_power.plus(&power);
+                    }
+                    if let Some(limit) = max_total_power
+                        && total_power > *limit
+                    {
+                        return Err(EffectError::SelectionOutsideDomain);
+                    }
                 }
                 if work.operation == ResolutionSelectionOperation::CopyDifferentlyNamedTokens {
                     let current = self.evaluated_characteristics()?;
@@ -6512,6 +6803,13 @@ impl EffectWindow {
                             && (view.has_type(CardType::Artifact) || view.is_creature())
                     })
             }
+            ResolutionSelectionOperation::Populate => {
+                object.zone() == ObjectZone::Battlefield
+                    && object.is_token()
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|view| view.controller == Some(player) && view.is_creature())
+            }
             ResolutionSelectionOperation::Bolster { eligible, .. }
             | ResolutionSelectionOperation::Amass { eligible, .. } => {
                 eligible.contains(&object.id())
@@ -6551,6 +6849,12 @@ impl EffectWindow {
                 filter,
                 last_moved,
                 ..
+            }
+            | ResolutionSelectionOperation::ChooseObjects {
+                source_zone,
+                filter,
+                last_moved,
+                ..
             } => {
                 let zone_ok = match source_zone {
                     crate::program::SourceZoneFilter::Hand => {
@@ -6568,9 +6872,14 @@ impl EffectWindow {
                     }
                     crate::program::SourceZoneFilter::Battlefield => {
                         object.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(object.id()).is_none()
                             && evaluated
                                 .get(object.id())
                                 .is_some_and(|card| card.controller == Some(player))
+                    }
+                    crate::program::SourceZoneFilter::AnyBattlefield => {
+                        object.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(object.id()).is_none()
                     }
                     crate::program::SourceZoneFilter::Exile => {
                         object.card_id().is_some() && object.zone() == ObjectZone::Exile

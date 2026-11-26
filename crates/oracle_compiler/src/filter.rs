@@ -3682,12 +3682,12 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " that were put there from the battlefield this turn",
-                ObjectFilterFlags::EMPTY,
+                ObjectFilterFlags::DIED_THIS_TURN,
                 None,
             ),
             (
                 " that was put there from the battlefield this turn",
-                ObjectFilterFlags::EMPTY,
+                ObjectFilterFlags::DIED_THIS_TURN,
                 None,
             ),
             (" that was exiled with ~", ObjectFilterFlags::EMPTY, None),
@@ -6911,13 +6911,27 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                     stat,
                 });
             }
-            if let Some(subj_raw) = owner_raw.strip_suffix("'s")
-                && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-            {
-                return Ok(ValueExprAst::ObjectStat {
-                    subject: Box::new(subj),
-                    stat,
-                });
+            if let Some(subj_raw) = owner_raw.strip_suffix("'s") {
+                if let Ok(subj) = parse_subject_or_target(subj_raw, vocab) {
+                    return Ok(ValueExprAst::ObjectStat {
+                        subject: Box::new(subj),
+                        stat,
+                    });
+                }
+                if subj_raw.starts_with("the ")
+                    && (subj_raw.contains("exiled")
+                        || subj_raw.contains("sacrificed")
+                        || subj_raw.contains("discarded")
+                        || subj_raw.contains("revealed")
+                        || subj_raw.contains("milled")
+                        || subj_raw.contains("returned")
+                        || subj_raw.contains("destroyed"))
+                {
+                    return Ok(ValueExprAst::ObjectStat {
+                        subject: Box::new(SubjectRefAst::Anaphora(subj_raw.to_string())),
+                        stat,
+                    });
+                }
             }
         }
     }
@@ -7211,11 +7225,14 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         }
     }
     if let Some(after_ms) = low.strip_prefix("the number of ")
-        && let Some((_color_tok, flt_raw)) =
+        && let Some((color_tok, flt_raw)) =
             after_ms.split_once(" mana symbols in the mana costs of ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(ValueExprAst::Count(Box::new(flt)));
+        return Ok(ValueExprAst::ColorPipsIn {
+            color: color_tok.trim().to_string(),
+            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+        });
     }
     if low == "an amount of damage of your choice"
         || low == "an amount of life of your choice"
@@ -7978,9 +7995,6 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
             | "permanent type"
             | "different power among creatures on the battlefield"
             | "aura and equipment attached to ~"
-            | "other creature you control"
-            | "other red creature you control"
-            | "other green creature you control"
     ) {
         return Ok(ValueExprAst::EventCountThisTurn {
             event: fe.clone(),
@@ -7998,6 +8012,24 @@ fn parse_possessive_player(who: &str) -> PlayerRefAst {
         "an opponent's" | "target opponent's" => PlayerRefAst::TargetOpponent,
         "target player's" => PlayerRefAst::TargetPlayer,
         "each player's" => PlayerRefAst::EachPlayer,
+        "each opponent's" | "opponents'" | "your opponents'" => PlayerRefAst::EachOpponent,
+        "each other player's" => PlayerRefAst::EachOtherPlayer,
+        "each other opponent's" => PlayerRefAst::EachOtherOpponent,
+        "any player's" | "a player's" => PlayerRefAst::AnyPlayer,
+        "any opponent's" => PlayerRefAst::AnyOpponent,
+        "its controller's"
+        | "enchanted creature's controller's"
+        | "enchanted permanent's controller's"
+        | "equipped creature's controller's" => PlayerRefAst::ItsController,
+        "its owner's" => PlayerRefAst::ItsOwner,
+        "that creature's controller's"
+        | "that permanent's controller's"
+        | "that spell's controller's"
+        | "the exiled card's controller's" => PlayerRefAst::ThatObjectController,
+        "enchanted player's" => PlayerRefAst::EnchantedPlayer,
+        "defending player's" | "the defending player's" => PlayerRefAst::DefendingPlayer,
+        "active player's" | "the active player's" => PlayerRefAst::ActivePlayer,
+        "chosen player's" | "the chosen player's" => PlayerRefAst::ChosenPlayer,
         _ => PlayerRefAst::ThatPlayer,
     }
 }
@@ -8261,12 +8293,27 @@ fn parse_wave_e8_condition(low: &str, vocab: &Vocabulary) -> Option<ConditionAst
     // "<player> own(s) <N> or more <flt>" (Etrata, the Silencer)
     if let Some((who_raw, rest)) = low.split_once(" own ").or_else(|| low.split_once(" owns "))
         && let Some((cnt_raw, flt_raw)) = rest.split_once(" or more ")
-        && let (Some(_player), Some(n), Ok(flt)) = (
+        && let (Some(player), Some(n), Ok(mut flt)) = (
             parse_player_ref(who_raw.trim()),
             parse_number_word(cnt_raw.trim()),
             parse_object_filter(flt_raw.trim(), vocab),
         )
     {
+        if flt.owner.is_none() {
+            flt.owner = match player {
+                PlayerRefAst::You => Some(ControllerRelation::OwnerYou),
+                PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
+                    Some(ControllerRelation::OwnerOpponent)
+                }
+                PlayerRefAst::TargetOpponent => Some(ControllerRelation::TargetOpponent),
+                PlayerRefAst::TargetPlayer => Some(ControllerRelation::TargetPlayer),
+                PlayerRefAst::ThatPlayer => Some(ControllerRelation::OwnerThatPlayer),
+                PlayerRefAst::DefendingPlayer => Some(ControllerRelation::DefendingPlayer),
+                PlayerRefAst::ActivePlayer => Some(ControllerRelation::ActivePlayer),
+                PlayerRefAst::ChosenPlayer => Some(ControllerRelation::ChosenPlayer),
+                _ => None,
+            };
+        }
         return Some(ConditionAst::ZoneObjectCount {
             filter: Box::new(flt),
             op: CompareOp::Ge,
@@ -11572,9 +11619,13 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     }
     if let Some(after) = low.strip_prefix("you attacked with ")
         && let Some(flt_raw) = after.strip_suffix(" this turn")
-        && let Ok(_flt) = parse_object_filter(flt_raw, vocab)
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(ConditionAst::AttackedThisTurn);
+        return Ok(ConditionAst::AttackedWithFilteredThisTurn {
+            player: PlayerRefAst::You,
+            filter: Box::new(flt),
+            min_count: 1,
+        });
     }
     if let Some(after) = low
         .strip_prefix("it targets one or more ")
@@ -11588,6 +11639,12 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         .or_else(|| low.strip_prefix("~ is enchanted by "))
         && !after.is_empty()
     {
+        if let Ok(host) = parse_subject_or_target(after, vocab) {
+            return Ok(ConditionAst::AttachedTo {
+                subject: Box::new(SubjectRefAst::SelfObject),
+                host: Box::new(host),
+            });
+        }
         return Ok(ConditionAst::HasStatus {
             subject: Box::new(SubjectRefAst::SelfObject),
             status: format!("attached:{after}"),
@@ -11927,6 +11984,24 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some((lhs_raw, rhs_raw)) = low.split_once(" is ").or_else(|| low.split_once(" was "))
         && let Ok(lhs) = parse_value_expr(lhs_raw, vocab)
     {
+        // An offset from a reference value is not an equality with an unknown
+        // possessive player (Elenda's second, independent starting-life threshold).
+        if let Some(offset_and_base) = rhs_raw.strip_prefix("at least ")
+            && let Some((offset, base)) = offset_and_base.split_once(" greater than ")
+        {
+            let amount = parse_number_word(offset)
+                .filter(|amount| *amount >= 0)
+                .ok_or_else(|| format!("unparsed_comparison_offset:{offset}"))?;
+            let base = parse_value_expr(base, vocab)?;
+            return Ok(ConditionAst::Compare {
+                lhs: Box::new(lhs),
+                op: CompareOp::Ge,
+                rhs: Box::new(ValueExprAst::Add(
+                    Box::new(base),
+                    Box::new(ValueExprAst::Const(amount)),
+                )),
+            });
+        }
         let parsed_cmp = if let Some(r) = rhs_raw.strip_prefix("greater than or equal to ") {
             Some((CompareOp::Ge, r))
         } else if let Some(r) = rhs_raw.strip_prefix("less than or equal to ") {
@@ -13761,27 +13836,55 @@ fn apply_rel_suffix_predicate(
                     PriorActionRefKind::PutIntoGraveyardThisWay,
                 ));
         }
-        " milled this way"
-        | " they milled this way"
-        | " dealt damage this way"
-        | " created this way"
-        | " put onto the battlefield this way"
-        | " with greater power"
+        " milled this way" | " they milled this way" => {
+            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+                kind: "milled_this_way".to_string(),
+            });
+        }
+        " dealt damage this way" => {
+            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+                kind: "dealt_damage_this_way".to_string(),
+            });
+        }
+        " created this way" => {
+            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+                kind: "created_this_way".to_string(),
+            });
+        }
+        " put onto the battlefield this way" => {
+            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+                kind: "put_onto_battlefield_this_way".to_string(),
+            });
+        }
+        " that has an adventure" | " that have an adventure" => {
+            flt.predicates.push(FilterPredicateAst::HasAbilityKind {
+                kind: "adventure".to_string(),
+                negated: false,
+            });
+        }
+        " that didn't attack this turn" => {
+            flt.flags = flt.flags.union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
+        }
+        " in your party" => {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "in_your_party".to_string(),
+            ));
+        }
+        " cast from a graveyard" => {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "cast_from_graveyard".to_string(),
+            ));
+        }
+        " with greater power"
         | " with power less than ~'s"
         | " with lesser mana value"
         | " with equal or lesser mana value"
         | " with lesser mana value than the creature that died"
         | " that don't have a name"
-        | " that has an adventure"
-        | " that have an adventure"
-        | " cast from a graveyard"
         | " that's not historic"
-        | " in your party"
         | " other than that creature"
         | " other than that permanent"
         | " other than that card"
-        | " that didn't attack this turn"
-        | " that were put there from the battlefield this turn"
         | " controlled by the same player"
         | " or suspended card" => {
             flt.predicates.push(FilterPredicateAst::StateQualification(

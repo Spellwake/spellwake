@@ -143,7 +143,7 @@ pub fn production(value: &ManaProductionRecord) -> Value {
     if let Some(recipient) = value.recipient {
         result["recipient"] = json!(recipient.0);
     }
-    if let Some(restriction) = value.restriction {
+    if let Some(ref restriction) = value.restriction {
         result["restriction"] = json!(format!("{restriction:?}"));
     }
     result
@@ -3364,6 +3364,8 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         ResolutionSelectionOperation::MillEachPlayer { amount, segments } => {
             json!({"tag":"MillEachPlayer","amount":amount,"segments":segments.iter().map(|(seat,cards)|json!({"player":seat.0,"cards":cards.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
         }
+        ResolutionSelectionOperation::Populate => json!({"tag":"Populate"}),
+        ResolutionSelectionOperation::ChooseObjects { .. } => json!({"tag":"ChooseObjects"}),
         ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
             json!({"tag":"DestroyAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
         }

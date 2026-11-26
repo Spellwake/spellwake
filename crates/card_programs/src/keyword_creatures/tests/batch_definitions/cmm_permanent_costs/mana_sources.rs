@@ -1017,7 +1017,7 @@ fn cmm_eldrazi_temple_and_shrine_of_the_forsaken_gods_enforce_their_land_and_spe
             );
             let amount = RestrictedManaSpend {
                 mana_type: Colourless,
-                restriction: rule,
+                restriction: rule.clone(),
                 amount: 2.into(),
             };
             let cast = |n| GameCommand::CastWithResources {

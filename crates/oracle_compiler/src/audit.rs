@@ -578,6 +578,17 @@ fn check_instruction_structure(
                 opaque,
             );
         }
+        InstructionAst::CreateTokenWithAbilities {
+            compiled_abilities, ..
+        } => {
+            audit_face_contents(
+                compiled_abilities,
+                false,
+                &format!("{path}.compiled_abilities"),
+                critical,
+                opaque,
+            );
+        }
         InstructionAst::ExtremeLifePlayerAction { action, .. } => {
             check_instruction_structure(action, &format!("{path}.action"), critical, opaque);
         }
@@ -672,6 +683,23 @@ fn check_static_structure(
                 path: path.to_string(),
                 detail: payload.clone(),
             });
+        }
+        StaticAbilityAst::CompiledStationBand { compiled, .. }
+        | StaticAbilityAst::CompiledStickerOption { compiled, .. } => {
+            if let Some(sub_face) = compiled {
+                audit_face_contents(
+                    sub_face,
+                    false,
+                    &format!("{path}.compiled"),
+                    critical,
+                    opaque,
+                );
+            }
+        }
+        StaticAbilityAst::CompiledDieRollBand { body, .. } => {
+            for (i, ins) in body.iter().enumerate() {
+                check_instruction_structure(ins, &format!("{path}.body[{i}]"), critical, opaque);
+            }
         }
         StaticAbilityAst::GrantAbilityText {
             ability_text,

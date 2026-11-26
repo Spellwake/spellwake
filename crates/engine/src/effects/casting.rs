@@ -1010,6 +1010,37 @@ impl EffectWindow {
             return Err(EffectError::InvalidCastResource);
         }
         let mut consumed_temp_rules = Vec::new();
+        let mut temporary_flash = false;
+        // Every matching "next spell" effect is used by the cast, even when another
+        // permission or ordinary timing already allows it. Commit consumption only
+        // on the successful candidate below, after all cast checks have passed.
+        for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
+            if self
+                .next_spell_keyword_for_cast(active, &current, current_spell, actor)
+                .is_some()
+            {
+                consumed_temp_rules.push(rule_idx);
+            }
+            if !active.consumed
+                && active.resolved_players.contains(&actor)
+                && let crate::program::TemporaryRuleKind::FilteredFlash {
+                    filter, next_only, ..
+                } = &active.rule
+                && self.matches_object_filter(
+                    *filter,
+                    current_spell,
+                    active.controller,
+                    None,
+                    &BTreeSet::new(),
+                    &current,
+                )
+            {
+                temporary_flash = true;
+                if *next_only {
+                    consumed_temp_rules.push(rule_idx);
+                }
+            }
+        }
         let mut flash_extra_mana: Option<ManaCost> = None;
         let mut flash = sneak_defender.is_some()
             || current_spell.has_keyword(KeywordAbility::Flash)
@@ -1021,38 +1052,7 @@ impl EffectWindow {
                 Some(aura_or_equipment),
             )
             || self.flash_through_cleanup.contains(&actor)
-            || {
-                let mut matched_idx = None;
-                let mut matched_any = false;
-                for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
-                    if !active.consumed
-                        && active.resolved_players.contains(&actor)
-                        && let crate::program::TemporaryRuleKind::FilteredFlash {
-                            filter,
-                            next_only,
-                            ..
-                        } = &active.rule
-                        && self.matches_object_filter(
-                            *filter,
-                            current_spell,
-                            active.controller,
-                            None,
-                            &BTreeSet::new(),
-                            &current,
-                        )
-                    {
-                        matched_any = true;
-                        if *next_only {
-                            matched_idx = Some(rule_idx);
-                        }
-                        break;
-                    }
-                }
-                if let Some(idx) = matched_idx {
-                    consumed_temp_rules.push(idx);
-                }
-                matched_any
-            }
+            || temporary_flash
             || current.objects.values().any(|source| {
                 source.zone == ObjectZone::Battlefield
                 && source
@@ -3302,6 +3302,29 @@ impl EffectWindow {
         }
     }
 
+    fn next_spell_keyword_for_cast(
+        &self,
+        active: &ActiveTemporaryRule,
+        evaluated: &EvaluatedCharacteristics,
+        spell: &crate::characteristics::ObjectCharacteristics,
+        actor: SeatId,
+    ) -> Option<KeywordAbility> {
+        let crate::program::TemporaryRuleKind::NextSpellKeyword { filter, keyword } = &active.rule
+        else {
+            return None;
+        };
+        (!active.consumed
+            && active.controller == actor
+            && self.matches_object_filter(
+                *filter,
+                spell,
+                active.controller,
+                None,
+                &BTreeSet::new(),
+                evaluated,
+            ))
+        .then_some(*keyword)
+    }
     pub(super) fn spell_has_granted_keyword(
         &self,
         evaluated: &EvaluatedCharacteristics,
@@ -3384,8 +3407,10 @@ impl EffectWindow {
             return true;
         }
         self.temporary_rules.iter().any(|active| {
-            self.active_temporary_static(active, evaluated)
-                .is_some_and(|ability| rule_grants(ability, active.controller == actor, None))
+            self.next_spell_keyword_for_cast(active, evaluated, spell, actor) == Some(keyword)
+                || self
+                    .active_temporary_static(active, evaluated)
+                    .is_some_and(|ability| rule_grants(ability, active.controller == actor, None))
         })
     }
 

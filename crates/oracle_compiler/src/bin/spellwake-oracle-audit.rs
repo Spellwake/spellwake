@@ -67,6 +67,7 @@ fn process_line(
     all_cards: bool,
     summary: &mut CorpusAuditSummary,
     critical_reports: &mut Option<Vec<spellwake_oracle_compiler::audit::CardAuditReport>>,
+    opaque_reports: &mut Option<Vec<spellwake_oracle_compiler::audit::CardAuditReport>>,
 ) -> Result<(), String> {
     if line.trim().is_empty() {
         return Ok(());
@@ -114,6 +115,11 @@ fn process_line(
     if let Some(list) = critical_reports
         && !report.critical_defects.is_empty()
     {
+        list.push(report.clone());
+    }
+    if let Some(list) = opaque_reports
+        && !report.opaque_strings.is_empty()
+    {
         list.push(report);
     }
     Ok(())
@@ -125,6 +131,7 @@ fn run_corpus_audit(
     vocab_path: &Path,
     output: Option<&Path>,
     dump_critical: Option<&Path>,
+    dump_opaque: Option<&Path>,
     all_cards: bool,
     max_critical: Option<usize>,
     max_structural: Option<usize>,
@@ -138,6 +145,7 @@ fn run_corpus_audit(
     })?;
     let mut summary = CorpusAuditSummary::default();
     let mut critical_reports = dump_critical.map(|_| Vec::new());
+    let mut opaque_reports = dump_opaque.map(|_| Vec::new());
 
     let is_gz = snapshot
         .extension()
@@ -174,6 +182,7 @@ fn run_corpus_audit(
                 all_cards,
                 &mut summary,
                 &mut critical_reports,
+                &mut opaque_reports,
             )?;
         }
         let status = child
@@ -194,6 +203,7 @@ fn run_corpus_audit(
                 all_cards,
                 &mut summary,
                 &mut critical_reports,
+                &mut opaque_reports,
             )?;
         }
     }
@@ -221,6 +231,18 @@ fn run_corpus_audit(
             .map_err(|e| format!("failed to serialize critical reports: {e}"))?;
         std::fs::write(crit_path, format!("{crit_json}\n"))
             .map_err(|e| format!("failed to write {}: {e}", crit_path.display()))?;
+    }
+    if let (Some(op_path), Some(reports)) = (dump_opaque, opaque_reports) {
+        if let Some(parent) = op_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+        }
+        let op_json = serde_json::to_string_pretty(&reports)
+            .map_err(|e| format!("failed to serialize opaque reports: {e}"))?;
+        std::fs::write(op_path, format!("{op_json}\n"))
+            .map_err(|e| format!("failed to write {}: {e}", op_path.display()))?;
     }
 
     let total = summary.total_cards.max(1) as f64;
@@ -315,6 +337,7 @@ fn main() -> ExitCode {
             let mut vocab: Option<PathBuf> = None;
             let mut output: Option<PathBuf> = None;
             let mut dump_critical: Option<PathBuf> = None;
+            let mut dump_opaque: Option<PathBuf> = None;
             let mut all_cards = false;
             let mut max_critical: Option<usize> = None;
             let mut max_structural: Option<usize> = None;
@@ -337,6 +360,10 @@ fn main() -> ExitCode {
                     }
                     "--dump-critical" if i + 1 < args.len() => {
                         dump_critical = Some(PathBuf::from(&args[i + 1]));
+                        i += 2;
+                    }
+                    "--dump-opaque" if i + 1 < args.len() => {
+                        dump_opaque = Some(PathBuf::from(&args[i + 1]));
                         i += 2;
                     }
                     "--all-cards" => {
@@ -389,6 +416,7 @@ fn main() -> ExitCode {
                 &voc,
                 output.as_deref(),
                 dump_critical.as_deref(),
+                dump_opaque.as_deref(),
                 all_cards,
                 max_critical,
                 max_structural,
