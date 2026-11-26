@@ -9,10 +9,7 @@ use spellwake_engine::{
     program::{BodyTarget, DamageGroup, ExecutableBody, Instruction, TriggerGrouping},
 };
 use spellwake_engine::{
-    characteristics::{
-        PowerToughness, PowerToughnessCounters, ResolvedDuration, ResolvedPartSpec,
-        ResolvedPartsSpec,
-    },
+    characteristics::{PowerToughness, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec},
     program::{ObjectFilter, PlayerRelation, ResolvingPlayer},
 };
 pub(super) fn compile(
@@ -108,12 +105,10 @@ pub(super) fn compile(
                     BodyTarget::FilteredPermanent(
                         ObjectFilter::creature_or_enchantment().controlled(),
                     ),
-                    vec![Instruction::PutPowerToughnessCounters {
-                        counters: PowerToughnessCounters {
-                            plus_one: 1.into(),
-                            minus_one: 0.into(),
-                        },
-                    }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        spellwake_engine::effects::CounterKind::PlusOne,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    )],
                 ),
             });
         } else if line
@@ -135,9 +130,9 @@ pub(super) fn compile(
                             instructions: 2,
                         },
                         Instruction::PayControllerLife(2),
-                        Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
                     ],
                 ),
             });
@@ -182,10 +177,11 @@ pub(super) fn compile(
                     source_cost,
                     body: ExecutableBody::new(
                         target,
-                        vec![Instruction::CreateContinuousEffect {
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: ResolvedDuration::UntilEndOfTurn,
-                        }],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ResolvedPartsSpec(vec![part]),
+                            ResolvedDuration::UntilEndOfTurn,
+                        )],
                     ),
                 });
                 continue;

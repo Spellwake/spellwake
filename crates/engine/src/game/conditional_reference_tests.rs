@@ -56,7 +56,16 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
         ),
         "CF4" => (
             BodyTarget::SingleCreature,
-            vec![branch(21, 2), Instruction::ReturnToOwnersHand, gain(1)],
+            vec![
+                branch(21, 2),
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                )),
+                gain(1),
+            ],
         ),
         _ => panic!("unknown frozen case"),
     };
@@ -81,7 +90,12 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
             destination: ObjectDestination::Hand,
             program: spell(
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         });
         names.push((CardId(3), "R".into()));

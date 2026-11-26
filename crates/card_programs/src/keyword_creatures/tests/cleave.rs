@@ -1,7 +1,7 @@
 use super::*;
 use spellwake_engine::{
     mana::CastingPayment,
-    program::{BodyTarget, ExecutableBody, Instruction},
+    program::{BodyTarget, ExecutableBody},
     targets::TargetRef,
 };
 
@@ -26,9 +26,11 @@ fn wash_away_uses_the_zone_of_casting_and_removes_its_restriction_when_cleaved()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                ],
             ),
         );
         test_spell.flashback = Some(ManaCost::free());

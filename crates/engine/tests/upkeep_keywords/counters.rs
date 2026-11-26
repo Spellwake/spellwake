@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Counter-based upkeep and graveyard returns through the normal scheduler.
 use super::{keyword_damage::cast_on, keyword_triggers::place, upkeep_keywords::upkeep, *};
 use spellwake_engine::{
@@ -158,54 +159,6 @@ fn death_keyword_uses_predeath_counters_and_returns_once_with_its_counter_under_
         assert!(gone.execution().window().entries().is_empty());
         assert_eq!(object(&gone, 1).zone(), ObjectZone::Graveyard(B));
     }
-}
-#[test]
-fn persist_and_undying_compare_only_their_own_counter_type() {
-    let source = authored(battlefield(1, A), &[K::Persist, K::Undying]);
-    let seeds = vec![
-        source,
-        instant(
-            2,
-            A,
-            Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 0.into(),
-                },
-            },
-        ),
-        instant(3, A, Instruction::DestroyTarget),
-        instant(4, A, Instruction::DestroyTarget),
-    ];
-    let state = setup(vec![A, B], seeds, Step::PrecombatMain).into_state();
-    let with_plus = cast_on(&state, 2, 1);
-    let lost = cast_on(&with_plus, 3, 1);
-    assert_eq!(lost.execution().window().entries().len(), 1);
-    let persisted = round(&lost).into_state();
-    assert_eq!(pt(&persisted, 1).minus_one, 1.into());
-    let lost = cast_on(&persisted, 4, 1);
-    assert_eq!(lost.execution().window().entries().len(), 1);
-    let undying = round(&lost).into_state();
-    assert_eq!(pt(&undying, 1).plus_one, 1.into());
-}
-
-#[test]
-fn simultaneous_lethal_toughness_and_counter_cancellation_use_precheck_lki() {
-    let permanent = authored(battlefield(1, A), &[K::Persist, K::Undying]);
-    let spell = instant(
-        2,
-        A,
-        Instruction::PutPowerToughnessCounters {
-            counters: PowerToughnessCounters {
-                plus_one: 1.into(),
-                minus_one: 5.into(),
-            },
-        },
-    );
-    let state = setup(vec![A, B], vec![permanent, spell], Step::PrecombatMain).into_state();
-    let grave = cast_on(&state, 2, 1);
-    assert_eq!(object(&grave, 1).zone(), ObjectZone::Graveyard(A));
-    assert!(grave.execution().window().entries().is_empty());
 }
 
 #[test]

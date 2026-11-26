@@ -3924,7 +3924,7 @@ pub(super) fn lower_static(
                         Instruction::OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        Instruction::ExertAbilitySource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exert_source(),
                     ],
                 );
                 program.triggered.push(TriggeredAbility {
@@ -8476,7 +8476,11 @@ fn lower_exert_attack_followup(
         },
     );
     apply_trigger_body_rewrites(&mut body, &spec, TriggerGrouping::EachOccurrence, true);
-    prepend_instruction_at(&mut body.instructions, 0, Instruction::ExertAbilitySource);
+    prepend_instruction_at(
+        &mut body.instructions,
+        0,
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::exert_source(),
+    );
     let inner_len = body.instructions.len();
     prepend_instruction_at(
         &mut body.instructions,
@@ -14654,7 +14658,7 @@ fn parse_granted_equip_or_crew_part(
                 source_cost: SourceCost::Tap,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(CounterKind::PlusOne, ValueExpr::literal(1))],
                 ),
             }),
             restriction: Box::new(ActivationRestriction::Sorcery),
@@ -14997,14 +15001,15 @@ pub(super) fn lower_ability_change(
                                 maximum: 1,
                                 action: PermanentTargetAction::Untap,
                             },
-                            Instruction::CreateContinuousEffect {
-                                parts: ResolvedPartsSpec(vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![
                                     ResolvedPartSpec::BlockingRestriction(
                                         BlockingRestriction::MustBlockSource,
                                     ),
                                 ]),
-                                duration: ResolvedDuration::UntilEndOfTurn,
-                            },
+                                ResolvedDuration::UntilEndOfTurn,
+                            ),
                         ],
                     ),
                 });

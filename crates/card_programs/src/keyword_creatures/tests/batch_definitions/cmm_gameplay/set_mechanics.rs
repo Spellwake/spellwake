@@ -166,7 +166,10 @@ fn cmm_harsh_mercy_collects_all_choices_before_destroying_unchosen_types() {
         id: ActivatedAbilityId(0),
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::RegenerateSource]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+        ),
     });
     let initial = game(
         vec![A, B, C],
@@ -599,7 +602,19 @@ fn cmm_shirei_restores_its_owners_small_creature_only_if_same_source_survives() 
             id,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         )
     };
     let cost = [(ManaType::Colourless, 4), (ManaType::Black, 1)];

@@ -200,7 +200,19 @@ fn avacyn_rules_demonic_rising_rechecks_the_creature_count_at_resolution() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &[],
@@ -252,9 +264,7 @@ fn avacyn_rules_arcane_melee_reduces_spells_for_both_players() {
                         ManaCost::generic(2.into()),
                         ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::DrawController {
-                                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                            }],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(0.into()))],
                         ),
                     ),
                 ),

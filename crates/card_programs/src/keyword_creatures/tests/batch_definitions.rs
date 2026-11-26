@@ -576,9 +576,9 @@ fn wurmcoil_larva_death_uses_last_controller_and_creates_both_tokens_together() 
     let larva = source(LARVA, A, ObjectDestination::Hand);
     let mut escape = free_instant(
         BodyTarget::None,
-        Instruction::DrawController {
-            amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-        },
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            spellwake_engine::program::ValueExpr::Literal(0.into()),
+        ),
     );
     escape.conditional_cost = Some(ConditionalCastCost::Escape {
         mana: ManaCost::free(),
@@ -588,12 +588,13 @@ fn wurmcoil_larva_death_uses_last_controller_and_creates_both_tokens_together() 
     for exile in [false, true] {
         let seize = free_instant(
             BodyTarget::SinglePermanent,
-            Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                     ControlRecipient::ResolvingController,
                 )]),
-                duration: ResolvedDuration::NoStatedDuration,
-            },
+                ResolvedDuration::NoStatedDuration,
+            ),
         );
         let mut cards = vec![
             larva.clone(),
@@ -904,7 +905,19 @@ fn cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure() {
             .unwrap();
         let peer = || Program::creature(None, 4.into(), 4.into(), [sliver].into());
         let other = Program::creature(None, 4.into(), 4.into(), BTreeSet::new());
-        let removal = free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget);
+        let removal = free_instant(
+            BodyTarget::SingleCreature,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        );
         let initial = game(
             vec![A, B],
             vec![

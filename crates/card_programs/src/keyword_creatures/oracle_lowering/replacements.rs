@@ -6773,18 +6773,6 @@ fn lower_inline_replacement_body(
         for op in &mut body.instructions {
             match op {
                 Instruction::ZoneOp(_) => {}
-                Instruction::ExileLibraryTop { player, amount } => {
-                    *op = Instruction::ExileTopPlay {
-                        count: ValueExpr::literal(i64::from(*amount)),
-                        library_owner: AffectedPlayers::One(*player),
-                        duration: spellwake_engine::program::ImpulsePlayDuration::ThisTurn,
-                        cast_only: false,
-                        free: false,
-                        any_color: false,
-                        face_down: false,
-                        grant_play: false,
-                    };
-                }
                 Instruction::ExileTopForPlay {
                     until_next_from_source,
                 } => {
@@ -9318,12 +9306,19 @@ fn rewrite_remove_counters_subject_prior_result(
 ) {
     for op in &mut body.instructions {
         match op {
-            Instruction::RemoveCountersFromSubject {
-                amount: Some(amount),
-                ..
-            } => {
-                rewrite_value_expr_prior_result(amount, replacement);
-            }
+            Instruction::MutateObject(spec) => match &mut spec.op {
+                spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
+                | spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. } => {
+                    rewrite_value_expr_prior_result(amount, replacement);
+                }
+                spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                    amount: Some(amount),
+                    ..
+                } => {
+                    rewrite_value_expr_prior_result(amount, replacement);
+                }
+                _ => {}
+            },
             Instruction::RemoveCountersFromPermanent { amount, .. } => {
                 rewrite_value_expr_prior_result(amount, replacement);
             }
@@ -9405,11 +9400,11 @@ fn parse_prevent_followup(
             {
                 let body = ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::PutCountersOnSubject {
-                        subject: Box::new(EffectSubject::AbilitySource),
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
+                        EffectSubject::AbilitySource,
                         kind,
-                        amount: ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
-                    }],
+                        ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
+                    )],
                 );
                 if validate_inline_followup_body(&body, vocabulary) {
                     return Some(DamagePreventFollowup::InlineBody(Box::new(body)));
@@ -9418,11 +9413,11 @@ fn parse_prevent_followup(
             if per_from_tail && let Some((kind, 1)) = parse_counter_spec_phrase(before_on) {
                 let body = ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::PutCountersOnSubject {
-                        subject: Box::new(EffectSubject::AbilitySource),
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
+                        EffectSubject::AbilitySource,
                         kind,
-                        amount: ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
-                    }],
+                        ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
+                    )],
                 );
                 if validate_inline_followup_body(&body, vocabulary) {
                     return Some(DamagePreventFollowup::InlineBody(Box::new(body)));
@@ -9445,11 +9440,11 @@ fn parse_prevent_followup(
         if target_ref.trim() == "~" {
             let body = ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::PutCountersOnSubject {
-                    subject: Box::new(EffectSubject::AbilitySource),
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
+                    EffectSubject::AbilitySource,
                     kind,
-                    amount: ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
-                }],
+                    ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
+                )],
             );
             if validate_inline_followup_body(&body, vocabulary) {
                 return Some(DamagePreventFollowup::InlineBody(Box::new(body)));
@@ -9533,9 +9528,11 @@ fn parse_prevent_followup(
     ) {
         let body = ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
+                ),
+            ],
         );
         if validate_inline_followup_body(&body, vocabulary) {
             return Some(DamagePreventFollowup::InlineBody(Box::new(body)));

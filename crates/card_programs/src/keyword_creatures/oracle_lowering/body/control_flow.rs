@@ -1174,11 +1174,11 @@ pub(super) fn lower_look_top_intermediate_grant(
         } if is_moved_anaphora(subject) => {
             let kind = parse_counter_kind(counter_kind)?;
             let amount = lower_value_expr(resolve_x(count, bound_x), vocabulary).ok()?;
-            Some(Instruction::PutCountersOnSubject {
-                subject: Box::new(EffectSubject::LastMoved),
+            Some(super::super::toolbox_emit::put_counters_on_subject(
+                EffectSubject::LastMoved,
                 kind,
                 amount,
-            })
+            ))
         }
         _ => None,
     }
@@ -1894,70 +1894,95 @@ pub(super) fn lower_multi_target_fixed_clauses(
                         action,
                     } => match action {
                         spellwake_engine::program::PermanentTargetAction::Tap => {
-                            normalized_ops.push(Instruction::SetSubjectTapped {
-                                subject: Box::new(EffectSubject::TargetObject),
-                                tapped: true,
-                            });
+                            normalized_ops.push(super::super::toolbox_emit::set_subject_tapped(
+                                EffectSubject::TargetObject,
+                                true,
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::Untap => {
-                            normalized_ops.push(Instruction::SetSubjectTapped {
-                                subject: Box::new(EffectSubject::TargetObject),
-                                tapped: false,
-                            });
+                            normalized_ops.push(super::super::toolbox_emit::set_subject_tapped(
+                                EffectSubject::TargetObject,
+                                false,
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::SkipNextUntap => {
-                            normalized_ops.push(Instruction::SkipNextUntap {
-                                subject: Box::new(EffectSubject::TargetObject),
-                            });
+                            normalized_ops.push(super::super::toolbox_emit::skip_next_untap(
+                                EffectSubject::TargetObject,
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::TapAndSkipNextUntap
                             if !has_internal_jumps =>
                         {
-                            normalized_ops.push(Instruction::SetSubjectTapped {
-                                subject: Box::new(EffectSubject::TargetObject),
-                                tapped: true,
-                            });
-                            normalized_ops.push(Instruction::SkipNextUntap {
-                                subject: Box::new(EffectSubject::TargetObject),
-                            });
+                            normalized_ops.push(super::super::toolbox_emit::set_subject_tapped(
+                                EffectSubject::TargetObject,
+                                true,
+                            ));
+                            normalized_ops.push(super::super::toolbox_emit::skip_next_untap(
+                                EffectSubject::TargetObject,
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::Destroy => {
-                            normalized_ops.push(Instruction::DestroyTarget);
+                            normalized_ops.push(super::super::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                        semantics:
+                                            spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                                allow_regenerate: true,
+                                            },
+                                    },
+                                ),
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::Exile => {
-                            normalized_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target());
+                            normalized_ops.push(super::super::toolbox_emit::exile_target());
                         }
                         spellwake_engine::program::PermanentTargetAction::ReturnToHand => {
-                            normalized_ops.push(Instruction::ReturnToOwnersHand);
+                            normalized_ops
+                                .push(super::super::toolbox_emit::return_to_owners_hand());
                         }
                         spellwake_engine::program::PermanentTargetAction::MoveTo(destination) => {
                             normalized_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, destination));
                         }
                         spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter => {
-                            normalized_ops.push(Instruction::PutCountersOnSubject {
-                                subject: Box::new(EffectSubject::TargetObject),
-                                kind: spellwake_engine::effects::CounterKind::PlusOne,
-                                amount: ValueExpr::literal(1),
-                            });
+                            normalized_ops.push(
+                                super::super::toolbox_emit::put_counters_on_subject(
+                                    EffectSubject::TargetObject,
+                                    spellwake_engine::effects::CounterKind::PlusOne,
+                                    ValueExpr::literal(1),
+                                ),
+                            );
                         }
                         spellwake_engine::program::PermanentTargetAction::PutCounters {
                             kind,
                             amount,
                         } => {
-                            normalized_ops.push(Instruction::PutCountersOnSubject {
-                                subject: Box::new(EffectSubject::TargetObject),
-                                kind,
-                                amount,
-                            });
+                            normalized_ops.push(
+                                super::super::toolbox_emit::put_counters_on_subject(
+                                    EffectSubject::TargetObject,
+                                    kind,
+                                    amount,
+                                ),
+                            );
                         }
                         spellwake_engine::program::PermanentTargetAction::RemoveCounters {
                             kind,
                             amount,
                         } => {
-                            normalized_ops.push(Instruction::RemoveCountersFromSubject {
-                                subject: Box::new(EffectSubject::TargetObject),
-                                kind,
-                                amount,
+                            normalized_ops.push(match amount {
+                                Some(a) => {
+                                    super::super::toolbox_emit::remove_counters_from_subject(
+                                        EffectSubject::TargetObject,
+                                        kind,
+                                        a,
+                                    )
+                                }
+                                None => super::super::toolbox_emit::mutate_subject(
+                                    EffectSubject::TargetObject,
+                                    spellwake_engine::toolbox::ObjectMutation::ClearCounters {
+                                        kind,
+                                    },
+                                ),
                             });
                         }
                         spellwake_engine::program::PermanentTargetAction::Modify {
@@ -1973,15 +1998,15 @@ pub(super) fn lower_multi_target_fixed_clauses(
                         spellwake_engine::program::PermanentTargetAction::RequireCombatAction(
                             kind,
                         ) => {
-                            normalized_ops.push(Instruction::RequireCombatAction {
-                                subject: Box::new(EffectSubject::TargetObject),
+                            normalized_ops.push(super::super::toolbox_emit::require_combat_action(
+                                EffectSubject::TargetObject,
                                 kind,
-                            });
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::Regenerate => {
-                            normalized_ops.push(Instruction::RegenerateSubject {
-                                subject: Box::new(EffectSubject::TargetObject),
-                            });
+                            normalized_ops.push(super::super::toolbox_emit::regenerate_subject(
+                                EffectSubject::TargetObject,
+                            ));
                         }
                         spellwake_engine::program::PermanentTargetAction::Damage(amount)
                             if single_instruction =>
@@ -2380,8 +2405,22 @@ pub(super) fn lower_bound_x_for_resolution(
             Instruction::LookTopChoose {
                 reveal_only: true, ..
             }
-            | Instruction::MayRevealLibraryTop
-            | Instruction::ExileLibraryTop { .. } => Some(ValueObjectRef::RevealedTop),
+            | Instruction::MayRevealLibraryTop => Some(ValueObjectRef::RevealedTop),
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        ..
+                    }
+                ) && matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                ) =>
+            {
+                Some(ValueObjectRef::RevealedTop)
+            }
             _ => None,
         });
         if let Some(repl) = replacement {
@@ -6725,35 +6764,30 @@ pub(in super::super) fn lower_instruction_seq(
             let ab_change = lower_ability_change(keywords, vocabulary)?;
             let pure_kws = lower_keyword_list(keywords).ok();
             match builder.instructions.last_mut() {
-                Some(Instruction::BoostSource {
-                    keywords: prev_kws, ..
-                }) if pure_kws.is_some() => {
-                    if let Some(kws) = pure_kws {
-                        prev_kws.extend(kws);
+                Some(Instruction::ApplyContinuous(spec)) => match &mut spec.payload {
+                    spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                        keywords: prev_kws,
+                        ..
+                    } if pure_kws.is_some() => {
+                        if let Some(kws) = pure_kws {
+                            prev_kws.extend(kws);
+                        }
+                        i += 2;
+                        continue;
                     }
-                    i += 2;
-                    continue;
-                }
-                Some(Instruction::BoostTargetPower {
-                    keywords: prev_kws, ..
-                }) if pure_kws.is_some() => {
-                    if let Some(kws) = pure_kws {
-                        prev_kws.extend(kws);
+                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts)
+                        if !parts
+                            .0
+                            .iter()
+                            .any(|p| matches!(p, ResolvedPartSpec::Abilities(_))) =>
+                    {
+                        parts.0.push(ResolvedPartSpec::Abilities(ab_change));
+                        i += 2;
+                        continue;
                     }
-                    i += 2;
-                    continue;
-                }
-                Some(Instruction::ModifyGroupUntilEndOfTurn {
-                    keywords: prev_kws, ..
-                }) if pure_kws.is_some() => {
-                    if let Some(kws) = pure_kws {
-                        prev_kws.extend(kws);
-                    }
-                    i += 2;
-                    continue;
-                }
-                Some(Instruction::CreateContinuousEffect { parts, .. })
-                | Some(Instruction::ChangeAbilitySource { parts, .. })
+                    _ => {}
+                },
+                Some(Instruction::ChangeAbilitySource { parts, .. })
                 | Some(Instruction::ChangeGroup { parts, .. })
                 | Some(Instruction::ModifyAnyNumberOfPermanents { parts, .. })
                 | Some(Instruction::AffectPermanentTargets {
@@ -8653,11 +8687,8 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::ForEachPlayerQuery { .. }
                         | Instruction::Sacrifice { .. }
                         | Instruction::SacrificeMatching(_)
-                        | Instruction::SacrificeToContinue { .. }
                         | Instruction::Discard { .. }
-                        | Instruction::ExileLibraryTop { .. }
                         | Instruction::ExileTopPlay { .. }
-                        | Instruction::DestroyTarget
                         | Instruction::LookTopChoose { .. }
                         | Instruction::LookTopChooseExt { .. }
                         | Instruction::RevealUntilMatch { .. }
@@ -8667,14 +8698,26 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::SearchLibrary { .. }
                         | Instruction::Clash { .. }
                         | Instruction::ChooseOneLastMoved { .. }
-                        | Instruction::GrantLastMovedPlayPermission { .. }
-                        | Instruction::RemoveCountersFromSubject { .. }
-                        | Instruction::SetSubjectTapped { .. }
                         | Instruction::UntapOrTapSelect { .. }
-                        | Instruction::TurnFaceUpSubject { .. }
-                        | Instruction::TurnFaceDownSubject { .. }
                         | Instruction::Mill { .. }
                         | Instruction::CounterTriggeringStackObject
+                ) || matches!(
+                    op,
+                    Instruction::ApplyContinuous(spec)
+                        if matches!(
+                            spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. }
+                        )
+                ) || matches!(
+                    op,
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::RemoveCounters { .. }
+                                | spellwake_engine::toolbox::ObjectMutation::SetTapped(_)
+                                | spellwake_engine::toolbox::ObjectMutation::TurnFaceUp
+                                | spellwake_engine::toolbox::ObjectMutation::TurnFaceDown
+                        )
                 )
             });
             let prev_tracks_action = i > 0
@@ -8945,14 +8988,26 @@ pub(in super::super) fn lower_instruction_seq(
                     )
                     .is_ok()
                         && probe.instructions.len() > start
-                        && matches!(
-                            probe.instructions.get(start),
-                            Some(
-                                Instruction::ExileLibraryTop { .. }
-                                    | Instruction::ExileTopPlay { .. }
+                        && probe.instructions.get(start).is_some_and(|op| {
+                            matches!(
+                                op,
+                                Instruction::ExileTopPlay { .. }
                                     | Instruction::ExileTopForPlay { .. }
+                            ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(
+                                |spec| {
+                                    matches!(
+                                        &spec.source,
+                                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                                            ..
+                                        }
+                                    ) && matches!(
+                                        spec.destination,
+                                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                                    )
+                                },
                             )
-                        )
+                        })
                     {
                         let span = probe.instructions.len() - start;
                         if span == 1 {
@@ -8978,19 +9033,28 @@ pub(in super::super) fn lower_instruction_seq(
                 }
             }
         }
-        // Route card-anaphora GrantCastPermission after ExileLibraryTop / LookTopChoose(reveal_only) / MayRevealLibraryTop
+        // Route card-anaphora GrantCastPermission after library-top exile / LookTopChoose(reveal_only) / MayRevealLibraryTop
         // to MoveSubjectRef::RevealedCard even inside triggered abilities (e.g. Daredevil).
         if builder.target == BodyTarget::None
             && builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ExileLibraryTop { .. }
-                        | Instruction::LookTopChoose {
-                            reveal_only: true,
+                    Instruction::LookTopChoose {
+                        reveal_only: true,
+                        ..
+                    } | Instruction::MayRevealLibraryTop
+                ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                    matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
                             ..
                         }
-                        | Instruction::MayRevealLibraryTop
-                )
+                    ) && matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    )
+                })
             })
             && let Some(grant_op) = is_card_anaphora_grant_cast(&ins[i])
         {
@@ -9250,22 +9314,41 @@ pub(in super::super) fn lower_instruction_seq(
                 builder.instructions.push(Instruction::ChooseOneLastMoved {
                     chooser: chooser_rp,
                 });
+                let play_dur = match impulse_dur {
+                    spellwake_engine::program::ImpulsePlayDuration::ThisTurn => {
+                        ResolvedDuration::UntilEndOfTurn
+                    }
+                    spellwake_engine::program::ImpulsePlayDuration::UntilEndOfNextTurn => {
+                        ResolvedDuration::ThroughControllerNextTurn
+                    }
+                    spellwake_engine::program::ImpulsePlayDuration::UntilNextEndStep
+                    | spellwake_engine::program::ImpulsePlayDuration::UntilEndOfNextEndStep
+                    | spellwake_engine::program::ImpulsePlayDuration::UntilNextUpkeep => {
+                        ResolvedDuration::UntilControllerNextTurn
+                    }
+                    spellwake_engine::program::ImpulsePlayDuration::WhileExiled
+                    | spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource => {
+                        ResolvedDuration::NoStatedDuration
+                    }
+                };
                 builder
                     .instructions
-                    .push(Instruction::GrantCardPlayPermission {
-                        player: ResolvingPlayer::Controller,
-                        subject: MoveSubjectRef::LastMoved,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    .push(super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    });
+                    ));
                 i += step;
                 continue;
             }
         }
         // Lower GrantCastPermission (direct, Optional, or ForAsLongAs("remains exiled")) after a
-        // prior move into Exile/Graveyard/Hand via Instruction::GrantLastMovedPlayPermission.
+        // prior move into Exile/Graveyard/Hand via ApplyContinuous(PlayPermission).
         {
             type GrantCandidate<'a> = (
                 PlayerRefAst,
@@ -9361,15 +9444,11 @@ pub(in super::super) fn lower_instruction_seq(
                     parse_grant_cast_duration_resolved(grant_dur)
             {
                 // Verify the most recent non-transparent instruction populated last_moved_objects
-                // in a zone GrantLastMovedPlayPermission can grant from (Exile/Graveyard/Hand).
+                // in a zone PlayPermission can grant from (Exile/Graveyard/Hand).
                 let playable_producer: Option<bool /* single_card_only */> = {
                     let mut found = None;
                     for op in builder.instructions.iter().rev() {
                         match op {
-                            Instruction::ExileLibraryTop { amount, .. } => {
-                                found = Some(*amount == 1);
-                                break;
-                            }
                             Instruction::ZoneOp(spec) => {
                                 match &spec.destination {
                                     spellwake_engine::toolbox::ZoneDest::Exile { .. }
@@ -9432,9 +9511,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 found = Some(single);
                                 break;
                             }
-                            Instruction::Mill { .. }
-                            | Instruction::MillEachPlayer(_)
-                            | Instruction::Discard { .. } => {
+                            Instruction::Mill { .. } | Instruction::Discard { .. } => {
                                 found = Some(false);
                                 break;
                             }
@@ -9461,15 +9538,21 @@ pub(in super::super) fn lower_instruction_seq(
                             | Instruction::BranchIfFalse { .. }
                             | Instruction::Jump { .. }
                             | Instruction::BindResolutionX(_)
-                            | Instruction::CreateTemporaryRule { .. }
                             | Instruction::ChooseValue { .. }
                             | Instruction::AdjustControllerLife { .. }
                             | Instruction::AdjustPlayersLife { .. }
                             | Instruction::GainControllerLife { .. }
                             | Instruction::AddMana(_)
-                            | Instruction::AddManaForPlayer { .. }
-                            | Instruction::GrantLastMovedPlayPermission { .. }
-                            | Instruction::GrantCardPlayPermission { .. } => continue,
+                            | Instruction::AddManaForPlayer { .. } => continue,
+                            Instruction::ApplyContinuous(spec)
+                                if matches!(
+                                    spec.payload,
+                                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(_)
+                                        | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. }
+                                ) =>
+                            {
+                                continue;
+                            }
                             _ => break,
                         }
                     }
@@ -9617,17 +9700,26 @@ pub(in super::super) fn lower_instruction_seq(
                             PlayerRefAst::EachOtherPlayer => Some(AffectedPlayers::EachOtherPlayer),
                             _ => None,
                         };
+                        let play_selector = match opt_filter {
+                            Some(f) => spellwake_engine::toolbox::ObjectQuery::filtered(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                f,
+                            ),
+                            None => spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                        };
                         if let Some(players) = group_players {
                             push_for_each_player(
                                 players,
-                                vec![Instruction::GrantLastMovedPlayPermission {
-                                    player: ResolvingPlayer::LoopPlayer,
-                                    filter: opt_filter.map(Box::new),
-                                    duration: resolved_dur,
-                                    free,
+                                vec![super::super::toolbox_emit::grant_play_permission(
+                                    play_selector,
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::LoopPlayer,
+                                    ),
+                                    resolved_dur,
                                     cast_only,
+                                    free,
                                     any_color,
-                                }],
+                                )],
                                 builder,
                             );
                             i += step;
@@ -9640,16 +9732,16 @@ pub(in super::super) fn lower_instruction_seq(
                             in_trigger,
                         ) {
                             *builder = p_probe;
-                            builder
-                                .instructions
-                                .push(Instruction::GrantLastMovedPlayPermission {
-                                    player: rp,
-                                    filter: opt_filter.map(Box::new),
-                                    duration: resolved_dur,
-                                    free,
+                            builder.instructions.push(
+                                super::super::toolbox_emit::grant_play_permission(
+                                    play_selector,
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                    resolved_dur,
                                     cast_only,
+                                    free,
                                     any_color,
-                                });
+                                ),
+                            );
                             i += step;
                             continue;
                         }
@@ -12306,14 +12398,32 @@ pub(in super::super) fn lower_instruction_seq(
         }
         // Fold trailing "you may spend mana as though it were mana of any color/type"
         // (direct, Optional, or wrapped in IfCondition(CastSpellThisWay)) onto prior
-        // GrantCardPlayPermission / ExileTopPlay / ZoneCastPermission / ExileTopForPlay.
+        // PlayPermission / ExileTopPlay / ZoneCastPermission / ExileTopForPlay.
         if is_any_color_spend_restriction(&ins[i]) {
             let mut patched = false;
             for op in builder.instructions.iter_mut().rev() {
                 match op {
-                    Instruction::GrantCardPlayPermission { any_color, .. }
-                    | Instruction::GrantLastMovedPlayPermission { any_color, .. }
-                    | Instruction::ExileTopPlay { any_color, .. }
+                    Instruction::ApplyContinuous(spec) => match &mut spec.payload {
+                        spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                            any_color,
+                            ..
+                        } => {
+                            *any_color = true;
+                            patched = true;
+                            break;
+                        }
+                        spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) => {
+                            if let TemporaryRuleKind::ZoneCastPermission { any_color, .. } =
+                                rule.as_mut()
+                            {
+                                *any_color = true;
+                                patched = true;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    },
+                    Instruction::ExileTopPlay { any_color, .. }
                     | Instruction::LookTopChooseExt {
                         keep_dest:
                             spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. },
@@ -12327,15 +12437,6 @@ pub(in super::super) fn lower_instruction_seq(
                         *any_color = true;
                         patched = true;
                         break;
-                    }
-                    Instruction::CreateTemporaryRule { rule, .. } => {
-                        if let TemporaryRuleKind::ZoneCastPermission { any_color, .. } =
-                            rule.as_mut()
-                        {
-                            *any_color = true;
-                            patched = true;
-                            break;
-                        }
                     }
                     Instruction::ExileTopForPlay {
                         until_next_from_source,
@@ -12367,7 +12468,7 @@ pub(in super::super) fn lower_instruction_seq(
             }
         }
         // Fold trailing "Sorcery" cast-timing restriction directly onto an immediately preceding
-        // CreateTemporaryRule { rule: ZoneCastPermission { sorcery_only, .. }, .. } (e.g. Lilah).
+        // ApplyContinuous(TemporaryRule(ZoneCastPermission { sorcery_only, .. })) (e.g. Lilah).
         if let InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
@@ -12386,8 +12487,9 @@ pub(in super::super) fn lower_instruction_seq(
                     | "cast it only as a sorcery"
                     | "play it only as a sorcery"
             )
-            && let Some(Instruction::CreateTemporaryRule { rule, .. }) =
-                builder.instructions.last_mut()
+            && let Some(Instruction::ApplyContinuous(spec)) = builder.instructions.last_mut()
+            && let spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) =
+                &mut spec.payload
             && let TemporaryRuleKind::ZoneCastPermission { sorcery_only, .. } = rule.as_mut()
         {
             *sorcery_only = true;
@@ -12401,10 +12503,13 @@ pub(in super::super) fn lower_instruction_seq(
                 && builder.instructions.iter().rev().any(|op| {
                     matches!(
                         op,
-                        Instruction::ExileTopPlay { .. }
-                            | Instruction::ExileTopForPlay { .. }
-                            | Instruction::ExileLibraryTop { .. }
-                    )
+                        Instruction::ExileTopPlay { .. } | Instruction::ExileTopForPlay { .. }
+                    ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        )
+                    })
                 }))
                 || (ll == "ref"
                     && builder.instructions.iter().rev().any(|op| {
@@ -12412,10 +12517,16 @@ pub(in super::super) fn lower_instruction_seq(
                             op,
                             Instruction::LookTopChoose { .. }
                                 | Instruction::SearchLibrary { .. }
-                                | Instruction::DrawController { .. }
-                                | Instruction::DrawPlayer { .. }
-                                | Instruction::ExileLibraryTop { .. }
-                        )
+                                | Instruction::DrawCards(_)
+                        ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                            matches!(
+                                &spec.source,
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                                    ..
+                                }
+                            )
+                        })
                     }))
             {
                 i += 1;
@@ -12732,7 +12843,7 @@ pub(in super::super) fn lower_instruction_seq(
                     if let Some(draw_amt) = trailing_target_draw {
                         builder
                             .instructions
-                            .push(Instruction::DrawTargetPlayer { amount: draw_amt });
+                            .push(super::super::toolbox_emit::draw_target_player(draw_amt));
                     }
                     i += fused_step;
                     continue;
@@ -13321,7 +13432,7 @@ pub(in super::super) fn lower_instruction_seq(
             }
         }
         // Fuse 2-target Attach (direct, Optional, or prefix-on-target-A + Attach) into FixedTargetClause pair
-        // + AttachPermanent { attachment, host } (e.g. Brass Squire, Kor Outfitter, Crown of the Ages).
+        // + MutateObject(Attach) (e.g. Brass Squire, Kor Outfitter, Crown of the Ages).
         let attach_parts = match &ins[i] {
             InstructionAst::Attach {
                 subject,
@@ -13384,10 +13495,16 @@ pub(in super::super) fn lower_instruction_seq(
                             chooser: ResolvingPlayer::Controller,
                         });
                     }
-                    builder.instructions.push(Instruction::AttachPermanent {
-                        attachment: MoveSubjectRef::RememberedFirst,
-                        host: MoveSubjectRef::RememberedSecond,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::attach_query(
+                            super::super::toolbox_emit::move_subject_to_query(
+                                MoveSubjectRef::RememberedFirst,
+                            ),
+                            super::super::toolbox_emit::move_subject_to_query(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                        ));
                     i += 1;
                     continue;
                 }
@@ -13471,7 +13588,10 @@ pub(in super::super) fn lower_instruction_seq(
                     };
                     builder
                         .instructions
-                        .push(Instruction::AttachPermanent { attachment, host });
+                        .push(super::super::toolbox_emit::attach_query(
+                            super::super::toolbox_emit::move_subject_to_query(attachment),
+                            super::super::toolbox_emit::move_subject_to_query(host),
+                        ));
                     i += 1;
                     continue;
                 }

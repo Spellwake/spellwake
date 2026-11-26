@@ -7,6 +7,7 @@
 //! - [`query`]: composable player and object selector algebra.
 //! - [`expr`]: composable boolean condition algebra integrated with `ValueExpr`.
 //! - [`zone_op`]: unified zone-move / reveal / look / destroy / sacrifice / discard / mill pipeline.
+//! - [`mutate`]: unified draw and permanent/object state mutation primitives.
 //! - [`continuous`]: unified continuous effect, restriction, replacement, and emblem applicator.
 //! - [`choice`]: unified interactive choice engine, history, and `ChoiceMade` event metadata.
 
@@ -14,6 +15,7 @@ pub mod choice;
 pub mod continuous;
 pub mod env;
 pub mod expr;
+pub mod mutate;
 pub mod query;
 pub mod tags;
 pub mod zone_op;
@@ -22,9 +24,10 @@ pub use choice::{
     ChoiceCategory, ChoiceRecord, PromptChoiceFrame, PromptChoiceReply, PromptChoiceSpec,
     PromptDomain, ResolvedPromptDomain, SubtypeChoiceKind, validate_prompt_reply,
 };
-pub use continuous::ApplyContinuousSpec;
+pub use continuous::{ApplyContinuousSpec, ContinuousPayload};
 pub use env::{BindingId, ExecEnv, ExecValue, ObjectSnapshot};
 pub use expr::ConditionExpr;
+pub use mutate::{DrawCardsSpec, MutateObjectSpec, ObjectMutation};
 pub use query::{ObjectQuery, PlayerSelector, QuerySlice, QueryZone};
 pub use tags::{
     ObjectTagStore, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec, SideDeckStore,

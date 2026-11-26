@@ -114,7 +114,7 @@ fn spell_body(
     if text.trim()
         == "Search your library and/or graveyard for a creature card with mana value X or less and put it onto the battlefield. If you search your library this way, shuffle. If X is 10 or more, creatures you control get +X/+X and gain haste until end of turn."
     {
-        use spellwake_engine::characteristics::{KeywordAbility, PowerToughness};
+        use spellwake_engine::characteristics::KeywordAbility;
         use spellwake_engine::program::{
             CardType, Comparison, EffectSubject, LibrarySearch, ObjectFilter, ResolutionCondition,
             ResolvingPlayer, SearchCardMatcher, SearchManaValue, SearchSource,
@@ -146,17 +146,13 @@ fn spell_body(
                     },
                     destination: 6,
                 },
-                Instruction::ModifyGroupByAmount {
-                    group: Box::new(EffectSubject::Matching(
-                        ObjectFilter::creature().controlled(),
-                    )),
-                    scale: PowerToughness {
-                        power: 1.into(),
-                        toughness: 1.into(),
-                    },
-                    amount: ValueExpr::chosen_x(),
-                    keywords: [KeywordAbility::Haste].into(),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::Matching(ObjectFilter::creature().controlled()),
+                    ValueExpr::chosen_x(),
+                    ValueExpr::chosen_x(),
+                    [KeywordAbility::Haste].into(),
+                    std::collections::BTreeSet::new(),
+                ),
             ],
         ));
     }
@@ -175,29 +171,27 @@ fn spell_body(
         ),
         "All creatures get -X/-X until end of turn." => (
             BodyTarget::None,
-            Instruction::ModifyGroupByAmount {
-                group: Box::new(spellwake_engine::program::EffectSubject::Matching(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                spellwake_engine::program::EffectSubject::Matching(
                     spellwake_engine::program::ObjectFilter::creature(),
-                )),
-                scale: spellwake_engine::characteristics::PowerToughness {
-                    power: (-1).into(),
-                    toughness: (-1).into(),
-                },
-                amount: ValueExpr::chosen_x(),
-                keywords: Default::default(),
-            },
+                ),
+                ValueExpr::chosen_x().scaled(-1),
+                ValueExpr::chosen_x().scaled(-1),
+                Default::default(),
+                Default::default(),
+            ),
         ),
         "Draw X cards." => (
             BodyTarget::None,
-            Instruction::DrawController {
-                amount: ValueExpr::chosen_x(),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                ValueExpr::chosen_x(),
+            ),
         ),
         "Target player draws X cards." => (
             BodyTarget::SinglePlayer,
-            Instruction::DrawTargetPlayer {
-                amount: ValueExpr::chosen_x(),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                ValueExpr::chosen_x(),
+            ),
         ),
         other => {
             if let Some(recipient) = other

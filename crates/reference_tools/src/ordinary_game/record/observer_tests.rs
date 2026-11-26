@@ -8,7 +8,7 @@ use crate::projection;
 use serde::Serialize;
 use serde_json::{Value, json};
 use spellwake_engine::{
-    characteristics::{Color, PowerToughnessCounters},
+    characteristics::Color,
     combat::CombatRules,
     effects::SeedCard,
     game::{GameCommand, GameContext, GameId, GameInput, GameState, OpeningSetup},
@@ -203,18 +203,25 @@ fn fixture() -> Fixture {
         ),
         (
             BodyTarget::SingleCreature,
-            Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: 2.into(),
-                    minus_one: 0.into(),
+            Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                    kind: spellwake_engine::effects::CounterKind::PlusOne,
+                    amount: spellwake_engine::program::ValueExpr::literal(2),
                 },
-            },
+            ))),
         ),
         (
             BodyTarget::SingleCreature,
             Instruction::Damage { amount: 1.into() },
         ),
-        (BodyTarget::SingleCreature, Instruction::ReturnToOwnersHand),
+        (
+            BodyTarget::SingleCreature,
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Hand,
+            ))),
+        ),
     ];
     let cards: Vec<_> = programs
         .into_iter()

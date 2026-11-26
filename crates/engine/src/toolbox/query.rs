@@ -249,7 +249,8 @@ impl ObjectQuery {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Targets | Self::LinkedTarget { .. } => true,
+            Self::Targets => true,
+            Self::LinkedTarget { .. } => false,
             Self::Empty
             | Self::Fixed(_)
             | Self::Bound(_)

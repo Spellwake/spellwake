@@ -13,7 +13,12 @@ use spellwake_engine::{
 fn madness_projects_private_replacement_choices_and_replays_the_paid_exile_cast() {
     let mut madness = instant(
         BodyTarget::SinglePermanent,
-        vec![Instruction::ReturnToOwnersHand],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Hand,
+            ),
+        ))],
     );
     madness.madness = Some(ManaCost::one(ManaType::Green));
     let discard = instant(

@@ -152,9 +152,28 @@ fn instant(id: u64, owner: SeatId, target: BodyTarget, instruction: Instruction)
 }
 
 fn continuous(part: ResolvedPartSpec, duration: ResolvedDuration) -> Instruction {
-    Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(vec![part]),
-        duration,
+    {
+        struct _Tmp {
+            parts: spellwake_engine::characteristics::ResolvedPartsSpec,
+            duration: spellwake_engine::characteristics::ResolvedDuration,
+        }
+        let _t = _Tmp {
+            parts: ResolvedPartsSpec(vec![part]),
+            duration,
+        };
+        spellwake_engine::program::Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec {
+                selector: Some(spellwake_engine::toolbox::ObjectQuery::Targets),
+                payload: spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                    _t.parts,
+                )),
+                duration: _t.duration,
+                condition: None,
+                one_shot: false,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        ))
     }
 }
 
@@ -350,7 +369,12 @@ fn knighthood_tracks_current_controller_types_and_source_departure() {
                 9,
                 ALICE,
                 BodyTarget::SinglePermanent,
-                Instruction::ReturnToOwnersHand,
+                spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                )),
             ),
         ],
     );
@@ -420,7 +444,12 @@ fn knighthood_leaving_between_damage_steps_does_not_let_its_attacker_strike_twic
                 4,
                 ALICE,
                 BodyTarget::SinglePermanent,
-                Instruction::ReturnToOwnersHand,
+                spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                )),
             ),
         ],
     );
@@ -527,7 +556,12 @@ fn defiant_elf_tramples_after_lethal_even_with_prevention_and_when_all_blockers_
                 5,
                 ALICE,
                 BodyTarget::SinglePermanent,
-                Instruction::ReturnToOwnersHand,
+                spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                )),
             ),
         ],
     );

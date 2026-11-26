@@ -392,7 +392,19 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[6, 7],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::GoadOtherPlayersCreatures],
+                    vec![Instruction::MutateObject(Box::new(
+                        crate::toolbox::MutateObjectSpec::all(
+                            crate::toolbox::ObjectQuery::zone(
+                                crate::toolbox::QueryZone::Battlefield,
+                                crate::program::ObjectFilter::creature().not_controlled(),
+                            ),
+                            crate::toolbox::ObjectMutation::Goad {
+                                by: crate::toolbox::PlayerSelector::Resolving(
+                                    crate::program::ResolvingPlayer::Controller,
+                                ),
+                            },
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -470,7 +482,15 @@ pub fn incubator_token_creation(
             id: ActivatedAbilityId(1),
             mana_cost: ManaCost::generic(2.into()),
             source_cost: SourceCost::None,
-            body: ExecutableBody::new(BodyTarget::None, vec![Instruction::TransformSource]),
+            body: ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::all(
+                        crate::toolbox::ObjectQuery::Source,
+                        crate::toolbox::ObjectMutation::Transform,
+                    ),
+                ))],
+            ),
         }],
     );
     front.artifact_subtypes.insert(ArtifactSubtype::Incubator);

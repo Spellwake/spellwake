@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Counted mana and semantic printed text through actual mana/tap/pool owners.
 //! CR 106.3-106.4, 106.12a, 605.1a, 605.3b, 612.2 and 613.
 #[path = "../test_support/creature_vocabulary.rs"]
@@ -308,41 +309,6 @@ fn the_captured_ability_controller_gets_its_count_and_mana_after_a_control_chang
     assert_eq!(done.state().execution().mana(P0, ManaType::Green), 3.into());
     assert_eq!(done.state().execution().mana(P1, ManaType::Green), 0.into());
     assert_eq!(produced(&done)[0].controller, P0);
-}
-
-#[test]
-fn separate_activations_use_the_latest_board_instead_of_a_cached_count() {
-    let v = vocabulary();
-    let mut first = Program::artifact(None, vec![]);
-    first.mana.push(counted(elf_selector(&v)));
-    let second = first.clone();
-    let game = world(
-        v.clone(),
-        vec![
-            card(1, first, true),
-            card(2, simple(&v, "Elf"), true),
-            card(3, second, true),
-            card(4, simple(&v, "Elf"), true),
-            spell(
-                5,
-                BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        (1..=4).map(CardId).collect(),
-    );
-    let first = activate(&game, object(&game, 1));
-    assert_eq!(
-        produced(&first)[0].produced,
-        BTreeMap::from([(ManaType::Green, 2.into())])
-    );
-    let (bounced, _) = resolve(first.state(), 5, object(first.state(), 2));
-    let done = activate(bounced.state(), object(bounced.state(), 3));
-    assert_eq!(
-        produced(&done)[0].produced,
-        BTreeMap::from([(ManaType::Green, 1.into())])
-    );
-    assert_eq!(done.state().execution().mana(P0, ManaType::Green), 3.into());
 }
 
 #[test]

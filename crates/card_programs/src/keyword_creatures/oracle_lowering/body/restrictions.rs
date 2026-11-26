@@ -1370,10 +1370,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         Instruction::GainControllerLife { amount }
         | Instruction::DrainTargetAndGain(amount)
         | Instruction::OpponentsLoseAndControllerGains(amount)
-        | Instruction::DrawController { amount }
-        | Instruction::DrawTargetPlayer { amount }
         | Instruction::DrawControllerAndTarget { amount }
-        | Instruction::DrawEachPlayer { amount }
         | Instruction::Mill { amount, .. }
         | Instruction::Scry { amount, .. }
         | Instruction::Surveil { amount, .. }
@@ -1387,16 +1384,12 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::Earthbend { amount }
         | Instruction::Sacrifice { amount, .. }
         | Instruction::AddPlayerCounter { amount, .. }
-        | Instruction::PutNamedCounterOnTarget { amount, .. }
-        | Instruction::PutCountersOnSubject { amount, .. }
         | Instruction::AdjustPlayersLife { amount, .. }
         | Instruction::RemoveCountersFromPermanent { amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
         | Instruction::RevealUntilMatchExt { count: amount, .. }
-        | Instruction::ModifyGroupByAmount { amount, .. }
-        | Instruction::BoostTargetPower { amount, .. }
         | Instruction::Incubate { count: amount }
         | Instruction::Discover { value: amount }
         | Instruction::Connive { count: amount, .. }
@@ -1444,9 +1437,59 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 rewrite_instruction_anaphora(inner, replacement);
             }
         }
-        Instruction::CreateContinuousEffect { parts, .. }
-        | Instruction::ChangeAbilitySource { parts, .. }
-        | Instruction::ChangeGroup { parts, .. } => {
+        Instruction::DrawCards(spec) => {
+            rewrite_value_expr_anaphora(&mut spec.amount, replacement);
+        }
+        Instruction::MutateObject(spec) => {
+            match &mut spec.selection {
+                spellwake_engine::toolbox::ZoneSelection::Random { count, .. } => {
+                    rewrite_value_expr_anaphora(count, replacement);
+                }
+                spellwake_engine::toolbox::ZoneSelection::Prompt { min, max, .. } => {
+                    rewrite_value_expr_anaphora(min, replacement);
+                    rewrite_value_expr_anaphora(max, replacement);
+                }
+                spellwake_engine::toolbox::ZoneSelection::All => {}
+            }
+            match &mut spec.op {
+                spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+                | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. } => {
+                    rewrite_value_expr_anaphora(amount, replacement);
+                }
+                spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                    amount: Some(amount),
+                    ..
+                } => {
+                    rewrite_value_expr_anaphora(amount, replacement);
+                }
+                _ => {}
+            }
+        }
+        Instruction::ApplyContinuous(spec) => match &mut spec.payload {
+            spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                for part in &mut parts.0 {
+                    match part {
+                        ResolvedPartSpec::ModifyPTExpr { power, toughness }
+                        | ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                            rewrite_value_expr_anaphora(power, replacement);
+                            rewrite_value_expr_anaphora(toughness, replacement);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                power, toughness, ..
+            } => {
+                rewrite_value_expr_anaphora(power, replacement);
+                rewrite_value_expr_anaphora(toughness, replacement);
+            }
+            spellwake_engine::toolbox::ContinuousPayload::SkipTurns { count, .. } => {
+                rewrite_value_expr_anaphora(count, replacement);
+            }
+            _ => {}
+        },
+        Instruction::ChangeAbilitySource { parts, .. } | Instruction::ChangeGroup { parts, .. } => {
             for part in &mut parts.0 {
                 match part {
                     ResolvedPartSpec::ModifyPTExpr { power, toughness }
@@ -1550,10 +1593,7 @@ pub(in super::super) fn rewrite_body_prior_result(
                 Instruction::GainControllerLife { amount }
                 | Instruction::DrainTargetAndGain(amount)
                 | Instruction::OpponentsLoseAndControllerGains(amount)
-                | Instruction::DrawController { amount }
-                | Instruction::DrawTargetPlayer { amount }
                 | Instruction::DrawControllerAndTarget { amount }
-                | Instruction::DrawEachPlayer { amount }
                 | Instruction::Mill { amount, .. }
                 | Instruction::Scry { amount, .. }
                 | Instruction::Surveil { amount, .. }
@@ -1567,16 +1607,12 @@ pub(in super::super) fn rewrite_body_prior_result(
                 | Instruction::Earthbend { amount }
                 | Instruction::Sacrifice { amount, .. }
                 | Instruction::AddPlayerCounter { amount, .. }
-                | Instruction::PutNamedCounterOnTarget { amount, .. }
-                | Instruction::PutCountersOnSubject { amount, .. }
                 | Instruction::AdjustPlayersLife { amount, .. }
                 | Instruction::RemoveCountersFromPermanent { amount, .. }
                 | Instruction::ExileTopPlay { count: amount, .. }
                 | Instruction::LookTopChoose { count: amount, .. }
                 | Instruction::LookTopChooseExt { count: amount, .. }
                 | Instruction::RevealUntilMatchExt { count: amount, .. }
-                | Instruction::ModifyGroupByAmount { amount, .. }
-                | Instruction::BoostTargetPower { amount, .. }
                 | Instruction::BindResolutionX(amount) => {
                     rewrite_value_expr_prior_result(amount, replacement);
                 }
@@ -1606,6 +1642,65 @@ pub(in super::super) fn rewrite_body_prior_result(
                         &|v| rewrite_value_expr_prior_result(v, replacement),
                     );
                 }
+                Instruction::DrawCards(spec) => {
+                    rewrite_value_expr_prior_result(&mut spec.amount, replacement);
+                }
+                Instruction::MutateObject(spec) => {
+                    match &mut spec.selection {
+                        spellwake_engine::toolbox::ZoneSelection::Random { count, .. } => {
+                            rewrite_value_expr_prior_result(count, replacement);
+                        }
+                        spellwake_engine::toolbox::ZoneSelection::Prompt { min, max, .. } => {
+                            rewrite_value_expr_prior_result(min, replacement);
+                            rewrite_value_expr_prior_result(max, replacement);
+                        }
+                        spellwake_engine::toolbox::ZoneSelection::All => {}
+                    }
+                    match &mut spec.op {
+                        spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                            amount, ..
+                        }
+                        | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
+                            amount,
+                            ..
+                        } => {
+                            rewrite_value_expr_prior_result(amount, replacement);
+                        }
+                        spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                            amount: Some(amount),
+                            ..
+                        } => {
+                            rewrite_value_expr_prior_result(amount, replacement);
+                        }
+                        _ => {}
+                    }
+                }
+                Instruction::ApplyContinuous(spec) => match &mut spec.payload {
+                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                        for part in &mut parts.0 {
+                            match part {
+                                ResolvedPartSpec::ModifyPTExpr { power, toughness }
+                                | ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                                    rewrite_value_expr_prior_result(power, replacement);
+                                    rewrite_value_expr_prior_result(toughness, replacement);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                        power,
+                        toughness,
+                        ..
+                    } => {
+                        rewrite_value_expr_prior_result(power, replacement);
+                        rewrite_value_expr_prior_result(toughness, replacement);
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::SkipTurns { count, .. } => {
+                        rewrite_value_expr_prior_result(count, replacement);
+                    }
+                    _ => {}
+                },
                 Instruction::ForEachPlayerQuery { body: inner, .. }
                 | Instruction::EmitReflexiveTrigger { body: inner }
                 | Instruction::ScheduleDelayedStepTrigger { body: inner, .. }
@@ -2556,10 +2651,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             Instruction::GainControllerLife { amount }
             | Instruction::DrainTargetAndGain(amount)
             | Instruction::OpponentsLoseAndControllerGains(amount)
-            | Instruction::DrawController { amount }
-            | Instruction::DrawTargetPlayer { amount }
             | Instruction::DrawControllerAndTarget { amount }
-            | Instruction::DrawEachPlayer { amount }
             | Instruction::Mill { amount, .. }
             | Instruction::Scry { amount, .. }
             | Instruction::Surveil { amount, .. }
@@ -2573,14 +2665,10 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::Earthbend { amount }
             | Instruction::Sacrifice { amount, .. }
             | Instruction::AddPlayerCounter { amount, .. }
-            | Instruction::PutNamedCounterOnTarget { amount, .. }
-            | Instruction::PutCountersOnSubject { amount, .. }
             | Instruction::AdjustPlayersLife { amount, .. }
             | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::LookTopChoose { count: amount, .. }
-            | Instruction::ModifyGroupByAmount { amount, .. }
-            | Instruction::BoostTargetPower { amount, .. }
             | Instruction::Incubate { count: amount }
             | Instruction::Discover { value: amount }
             | Instruction::Connive { count: amount, .. }
@@ -2626,8 +2714,63 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             Instruction::ForEachPlayerQuery { body, .. } => {
                 rewrite_body_trigger_subject_stats(body, replacement);
             }
-            Instruction::CreateContinuousEffect { parts, .. }
-            | Instruction::ChangeAbilitySource { parts, .. }
+            Instruction::DrawCards(spec) => {
+                rewrite_value_expr_trigger_subject(&mut spec.amount, replacement);
+            }
+            Instruction::MutateObject(spec) => {
+                match &mut spec.selection {
+                    spellwake_engine::toolbox::ZoneSelection::Random { count, .. } => {
+                        rewrite_value_expr_trigger_subject(count, replacement);
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::Prompt { min, max, .. } => {
+                        rewrite_value_expr_trigger_subject(min, replacement);
+                        rewrite_value_expr_trigger_subject(max, replacement);
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::All => {}
+                }
+                match &mut spec.op {
+                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
+                        amount, ..
+                    } => {
+                        rewrite_value_expr_trigger_subject(amount, replacement);
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                        amount: Some(amount),
+                        ..
+                    } => {
+                        rewrite_value_expr_trigger_subject(amount, replacement);
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::ApplyContinuous(spec) => match &mut spec.payload {
+                spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                    for part in &mut parts.0 {
+                        match part {
+                            ResolvedPartSpec::ModifyPTExpr { power, toughness }
+                            | ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                                rewrite_value_expr_trigger_subject(power, replacement);
+                                rewrite_value_expr_trigger_subject(toughness, replacement);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                    power,
+                    toughness,
+                    ..
+                } => {
+                    rewrite_value_expr_trigger_subject(power, replacement);
+                    rewrite_value_expr_trigger_subject(toughness, replacement);
+                }
+                spellwake_engine::toolbox::ContinuousPayload::SkipTurns { count, .. } => {
+                    rewrite_value_expr_trigger_subject(count, replacement);
+                }
+                _ => {}
+            },
+            Instruction::ChangeAbilitySource { parts, .. }
             | Instruction::ChangeGroup { parts, .. } => {
                 for part in &mut parts.0 {
                     match part {

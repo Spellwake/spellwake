@@ -43,12 +43,13 @@ fn cast_garrison(extra: impl IntoIterator<Item = SeedCard>) -> GameState {
                     ManaCost::free(),
                     ExecutableBody::new(
                         BodyTarget::SinglePermanent,
-                        vec![Instruction::CreateContinuousEffect {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                                 ControlRecipient::TargetOwner,
                             )]),
-                            duration: ResolvedDuration::NoStatedDuration,
-                        }],
+                            ResolvedDuration::NoStatedDuration,
+                        )],
                     ),
                 ),
             },

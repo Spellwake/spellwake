@@ -232,7 +232,7 @@ pub(super) fn compile(
         });
     }
     if let Some(life) = exile_top_cost {
-        use spellwake_engine::program::{BodyTarget, ExecutableBody, Instruction, ResolvingPlayer};
+        use spellwake_engine::program::{BodyTarget, ExecutableBody, ResolvingPlayer};
         let id = program
             .activated
             .iter()
@@ -249,10 +249,13 @@ pub(super) fn compile(
             },
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ExileLibraryTop {
-                    player: ResolvingPlayer::Controller,
-                    amount: 1,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                        false,
+                    ),
+                ],
             ),
         });
     }

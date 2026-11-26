@@ -186,9 +186,9 @@ fn cmm_smothering_tithe_offers_the_drawer_two_mana_or_creates_a_treasure() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::SinglePlayer,
-            Instruction::DrawTargetPlayer {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
         ),
     );
     let initial = game(

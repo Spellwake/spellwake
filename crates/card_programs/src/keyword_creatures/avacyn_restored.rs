@@ -77,10 +77,11 @@ fn optional_tap_change() -> Vec<Instruction> {
 }
 
 fn modify_target(parts: Vec<ResolvedPartSpec>) -> Instruction {
-    Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(parts),
-        duration: ResolvedDuration::UntilEndOfTurn,
-    }
+    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+        spellwake_engine::toolbox::ObjectQuery::Targets,
+        ResolvedPartsSpec(parts),
+        ResolvedDuration::UntilEndOfTurn,
+    )
 }
 
 fn stats(power: i64, toughness: i64) -> PowerToughness {
@@ -93,7 +94,8 @@ fn stats(power: i64, toughness: i64) -> PowerToughness {
 fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option<ExecutableBody> {
     use BodyTarget::{None as NoTarget, SingleAnyTarget, SingleCreature, SinglePlayer};
     use Instruction::*;
-    let draw = |n| DrawController { amount: literal(n) };
+    let draw =
+        |n| crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(literal(n));
     let discard = |player, amount| Discard {
         players: AffectedPlayers::One(player),
         amount,
@@ -118,7 +120,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                             KeywordAbility::Trample,
                         ])),
                     ]),
-                    RequireBlocksAgainstTargetThisTurn,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(EffectSubject::TargetObject, spellwake_engine::program::CombatActionKind::MustBeBlocked),
                 ],
             )
         }
@@ -360,7 +362,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                         spellwake_engine::program::PlayerStatExpr::LargestHandSize,
                     ),
                 },
-                DrawEachPlayer { amount: literal(7) },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(literal(7)),
             ],
         ),
         "Create X 4/4 white Angel creature tokens with flying." => {
@@ -415,7 +417,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                 modify_target(vec![ResolvedPartSpec::Abilities(
                     AbilityChange::grant_keywords([KeywordAbility::Deathtouch]),
                 )]),
-                RegenerateTarget,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_target(),
             ],
         ),
         _ if rules.strip_prefix(name)
@@ -702,10 +704,10 @@ fn enchantment(
                 ),
                 BodyTarget::None,
                 vec![
-                    Instruction::PutNamedCounterOnSource {
-                        kind: CounterKind::Despair,
-                        amount: 1,
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        CounterKind::Despair,
+                        literal(1),
+                    ),
                     Instruction::ExileFromHandOrBattlefield(
                         spellwake_engine::program::ValueExpr::counters(
                             spellwake_engine::program::CounterSubjectRef::AbilitySource,
@@ -791,7 +793,9 @@ fn enchantment(
                         ),
                         2,
                     ),
-                    Instruction::DrawController { amount: literal(1) },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        literal(1),
+                    ),
                 ],
             );
         }
@@ -807,11 +811,15 @@ fn enchantment(
                     },
                 ),
                 BodyTarget::None,
-                vec![Instruction::ModifyGroupUntilEndOfTurn {
-                    group: Box::new(EffectSubject::TriggeringTarget),
-                    power_toughness: Some(stats(3, 3)),
-                    keywords: BTreeSet::new(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::TriggeringTarget,
+                        literal(3),
+                        literal(3),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                ],
             )
         }
         "Whenever a creature you control attacks, put a charge counter on this enchantment.\nRemove a charge counter from this enchantment: Add one mana of any color." =>
@@ -825,7 +833,12 @@ fn enchantment(
                     },
                 ),
                 BodyTarget::None,
-                vec![Instruction::PutChargeCounterOnSource],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        spellwake_engine::effects::CounterKind::Charge,
+                        literal(1),
+                    ),
+                ],
             );
             program.mana.push(ManaAbility {
                 id: ManaAbilityId(0),
@@ -975,7 +988,16 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
             BodyTarget::SingleCreature,
             vec![
                 Instruction::RememberPermanentTarget,
-                Instruction::DestroyTarget,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
                 Instruction::CreateTokens { creations },
             ],
         ));
@@ -995,7 +1017,9 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
             Some((
                 BodyTarget::None,
                 vec![
-                    Instruction::DrawController { amount: literal(1) },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        literal(1),
+                    ),
                     single_subtype("Angel")?,
                     Instruction::AdjustControllerLife {
                         adjustment: LifeAdjustment::Gain(5.into()),
@@ -1136,7 +1160,12 @@ fn combat_creature(
                     .other_than_ability_source(),
             ),
             BodyTarget::None,
-            vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    literal(1),
+                ),
+            ],
         );
     }
     Some(program)
@@ -1158,7 +1187,16 @@ fn land(rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option<Program> {
             fixed_cost("{G}{U}")?,
             SourceCost::Tap,
             BodyTarget::None,
-            vec![Instruction::GrantControllerFlashUntilCleanup],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    spellwake_engine::program::TemporaryRuleKind::FilteredFlash {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        filter: spellwake_engine::program::ObjectFilter::any(),
+                        next_only: false,
+                    },
+                    spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                ),
+            ],
         ));
         return Some(program);
     }
@@ -1194,7 +1232,12 @@ fn creature(
     use Instruction::*;
 
     let base = || ordinary_creature(card, vocabulary, Profile::Current, Some("")).ok();
-    let counter = || PutCountersOnSource { amount: 1.into() };
+    let counter = || {
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+            spellwake_engine::effects::CounterKind::PlusOne,
+            literal(1),
+        )
+    };
     let (keywords, clauses) = match rules {
         "Flying, vigilance\nWhenever Bruna attacks or blocks, you may attach to it any number of Auras on the battlefield and you may put onto the battlefield attached to it any number of Aura cards that could enchant it from your graveyard and/or hand." => (
             "Flying, vigilance",
@@ -1539,15 +1582,17 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::self_attacks(),
                     NoTarget,
-                    vec![ModifyGroupUntilEndOfTurn {
-                        group: Box::new(EffectSubject::Matching(
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::Matching(
                             ObjectFilter::creature()
                                 .controlled()
                                 .with_subtype(vocabulary.resolve_label("Human")?),
-                        )),
-                        power_toughness: Some(stats(1, 0)),
-                        keywords: BTreeSet::new(),
-                    }],
+                        ),
+                        literal(1),
+                        literal(0),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    )],
                 )],
             )
         }
@@ -1605,12 +1650,13 @@ fn creature(
                 fixed_cost("{2}{G}{G}")?,
                 SourceCost::None,
                 NoTarget,
-                vec![ModifyGroupByAmount {
-                    group: Box::new(EffectSubject::AbilitySource),
-                    scale: stats(1, 1),
-                    amount: spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::AbilitySource, spellwake_engine::program::ObjectStatKind::Power),
-                    keywords: BTreeSet::new(),
-                }],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    EffectSubject::AbilitySource,
+                    spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::AbilitySource, spellwake_engine::program::ObjectStatKind::Power),
+                    spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::AbilitySource, spellwake_engine::program::ObjectStatKind::Power),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                )],
             ));
             return Some(program);
         }
@@ -1659,7 +1705,7 @@ fn creature(
                         paid_destination: 1,
                         declined_destination: 2,
                     },
-                    DrawController { amount: literal(1) },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(literal(1)),
                 ],
             )],
         ),
@@ -1821,7 +1867,18 @@ fn rain_of_thorns(cost: ManaCost) -> Program {
     let [artifact, enchantment, land] = targets.map(|filter| {
         ExecutableBody::new(
             BodyTarget::FilteredPermanent(filter),
-            vec![Instruction::DestroyTarget],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ],
         )
     });
     let mut program = Program::sorcery(cost, artifact);

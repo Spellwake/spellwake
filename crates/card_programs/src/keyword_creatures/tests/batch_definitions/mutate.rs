@@ -43,13 +43,21 @@ fn shared_mutate_dreamtail_heron_chooses_either_order_retains_host_and_draws_onl
                 5,
                 B,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::ReturnToOwnersHand),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
+                    ),
+                ),
             ),
             seed(
                 6,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::ReturnToOwnersHand),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
+                    ),
+                ),
             ),
         ],
         &price,

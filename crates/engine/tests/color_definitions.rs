@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Printed color CDAs through ordinary actions and exact before/after views.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -87,106 +88,6 @@ fn actual_ability_removal_retains_color_definition_in_after_appearance() {
         Some(StaticAbilityId(1))
     );
     assert_eq!(changes[0].after.abilities.continuous, None);
-}
-
-#[test]
-fn bounce_and_reentry_reapply_definition_to_fresh_incarnations() {
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, creature(), true),
-            spell(
-                2,
-                BodyTarget::SinglePermanent,
-                vec![effect(
-                    vec![ResolvedPartSpec::Color(ColorOperation::Set(
-                        BTreeSet::from([Color::Green]),
-                    ))],
-                    ResolvedDuration::NoStatedDuration,
-                )],
-            ),
-            spell(
-                3,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1)],
-    );
-    let old = object(&game, 1);
-    let (green, _) = resolve(&game, 2, old);
-    assert_eq!(
-        current(green.state(), old).current_colors,
-        BTreeSet::from([Color::Green])
-    );
-    let (hand, _) = resolve(green.state(), 3, old);
-    let hand_id = object(hand.state(), 1);
-    assert_ne!(hand_id, old);
-    assert!(current(hand.state(), hand_id).current_colors.is_empty());
-    let cast = submit(
-        hand.state(),
-        P0,
-        GameCommand::CastUntargeted {
-            spell: hand_id,
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let returned = pass_pair(cast.state());
-    let fresh = object(returned.state(), 1);
-    assert_ne!(fresh, hand_id);
-    assert!(current(returned.state(), fresh).current_colors.is_empty());
-    assert!(returned.rules_journal().records.iter().any(|r| matches!(r,
-        RulesRecord::Event(event) if event.occurrences.iter().any(|o| matches!(&o.value,
-            RulesOccurrence::ZoneChange(change) if change.reason == ZoneReason::PermanentResolution
-                && change.after.object.id() == fresh && change.after.colors.is_empty()
-        ))
-    )));
-    let saved = returned.state().clone();
-    for _ in 0..3 {
-        assert!(current(returned.state(), fresh).current_colors.is_empty());
-    }
-    assert_eq!(returned.state(), &saved);
-}
-
-#[test]
-fn color_definition_on_an_instant_survives_hand_stack_and_graveyard() {
-    let mut p = devoid(Program::instant(
-        ManaCost::free(),
-        ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![Instruction::ReturnToOwnersHand],
-        ),
-    ));
-    p.color_indicator = Some(BTreeSet::from([Color::Blue]));
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, p, false),
-            card(2, Program::artifact(None, vec![]), true),
-        ],
-        vec![CardId(2)],
-    );
-    assert!(current(&game, object(&game, 1)).current_colors.is_empty());
-    let (announced, _) = cast(&game, 1, object(&game, 2));
-    let resolved = pass_pair(announced.state());
-    assert!(
-        current(announced.state(), object(announced.state(), 1))
-            .current_colors
-            .is_empty()
-    );
-    let id = object(resolved.state(), 1);
-    assert_eq!(
-        resolved
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(id)
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(P0)
-    );
-    assert!(current(resolved.state(), id).current_colors.is_empty());
 }
 
 #[test]

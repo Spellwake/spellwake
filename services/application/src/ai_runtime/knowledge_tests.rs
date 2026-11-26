@@ -800,7 +800,12 @@ fn bounce_to_opponent_hand_tracks_bounced_card_and_invalidates_when_cast() {
     let unsummon = free_instant(
         "Unsummon",
         BodyTarget::SingleCreature,
-        vec![Instruction::ReturnToOwnersHand],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Hand,
+            ),
+        ))],
     );
     let mut h = Harness::scheduled(
         vec![
@@ -1166,7 +1171,16 @@ fn opponent_scry_invalidates_prior_public_library_top_knowledge_without_leaking_
     let destroy = free_instant(
         "Destroy Courser",
         BodyTarget::SinglePermanent,
-        vec![Instruction::DestroyTarget],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ),
+        ))],
     );
     let mut courser = plain_creature("Public Top Seer", 2, 4);
     courser
@@ -1275,9 +1289,12 @@ fn public_vs_private_library_top_access_and_draw_transfer_to_opponent_hand() {
     let draw1 = free_instant(
         "Draw One",
         BodyTarget::None,
-        vec![Instruction::DrawController {
-            amount: ValueExpr::literal(1),
-        }],
+        vec![Instruction::DrawCards(Box::new(
+            spellwake_engine::toolbox::DrawCardsSpec::simple(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ValueExpr::literal(1),
+            ),
+        ))],
     );
     let mut h_pub = Harness::scheduled(
         vec![

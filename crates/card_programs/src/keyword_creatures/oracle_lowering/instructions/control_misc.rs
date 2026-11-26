@@ -110,14 +110,20 @@ pub(super) fn lower_control_misc_instruction(
                             )
                         });
                     if permanent_only {
-                        builder
-                            .instructions
-                            .push(Instruction::PutHandPermanentsOntoBattlefield {
-                                player: ResolvingPlayer::Controller,
-                                types,
-                                maximum: 1,
-                                tapped: dest_low.contains("tapped"),
-                            });
+                        let mask = types.into_iter().fold(
+                            spellwake_engine::program::CardTypeMask::EMPTY,
+                            spellwake_engine::program::CardTypeMask::with,
+                        );
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_hand_permanent_filtered(
+                                ResolvingPlayer::Controller,
+                                ObjectFilter::from_clause(
+                                    spellwake_engine::program::ObjectClause::any().any_types(mask),
+                                ),
+                                1,
+                                dest_low.contains("tapped"),
+                            ),
+                        );
                         return Ok(());
                     }
                 }
@@ -691,7 +697,9 @@ pub(super) fn lower_control_misc_instruction(
         InstructionAst::Exert { subject }
             if is_self_pronoun(subject, builder, self_pronoun_valid) =>
         {
-            builder.instructions.push(Instruction::ExertAbilitySource);
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exert_source());
             Ok(())
         }
         InstructionAst::CollectEvidence { value } => {
@@ -1051,7 +1059,6 @@ pub(super) fn lower_control_misc_instruction(
                         Instruction::ZoneOp(_)
                             | Instruction::ForEachPlayerQuery { .. }
                             | Instruction::ExileTopPlay { .. }
-                            | Instruction::ExileLibraryTop { .. }
                             | Instruction::LookTopChooseExt { .. }
                             | Instruction::RevealUntilMatchExt { .. }
                             | Instruction::ChooseObjects { .. }
@@ -2093,7 +2100,6 @@ fn try_lower_choose_objects_new_primitives(
                 Instruction::ZoneOp(_)
                     | Instruction::ForEachPlayerQuery { .. }
                     | Instruction::ExileTopPlay { .. }
-                    | Instruction::ExileLibraryTop { .. }
                     | Instruction::Mill { .. }
             )
         });
@@ -2719,7 +2725,7 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             | Instruction::Mill { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
-            | Instruction::TransformSubject { .. }
+            | Instruction::MutateObject(_)
             | Instruction::MoveCounters { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::Blight { .. }
@@ -4571,8 +4577,7 @@ pub(super) fn rewrite_chosen_to_loop_rule(rule: &mut TemporaryRuleKind) {
 pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
     for op in ops {
         match op {
-            Instruction::DrawPlayer { players, amount }
-            | Instruction::AdjustPlayersLife {
+            Instruction::AdjustPlayersLife {
                 players, amount, ..
             }
             | Instruction::SetPlayersLife { players, amount }
@@ -4623,6 +4628,123 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_chosen_to_loop_ve,
                 );
                 rewrite_chosen_to_loop_ops(&mut body.instructions);
+            }
+            Instruction::DrawCards(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                rewrite_chosen_to_loop_ve(&mut spec.amount);
+            }
+            Instruction::MutateObject(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    &mut spec.source,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                match &mut spec.op {
+                    spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            by,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            host,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
+                        amount, ..
+                    } => {
+                        rewrite_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                        to, amount, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            to,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                        if let Some(amt) = amount {
+                            rewrite_chosen_to_loop_ve(amt);
+                        }
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::GainControl {
+                        controller, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            controller,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::ApplyContinuous(spec) => {
+                if let Some(sel) = &mut spec.selector {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                        sel,
+                        &rewrite_chosen_to_loop_rp,
+                        &rewrite_chosen_to_loop_ap,
+                        &rewrite_chosen_to_loop_ve,
+                    );
+                }
+                match &mut spec.payload {
+                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) => {
+                        rewrite_chosen_to_loop_rule(rule);
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                        power,
+                        toughness,
+                        ..
+                    } => {
+                        rewrite_chosen_to_loop_ve(power);
+                        rewrite_chosen_to_loop_ve(toughness);
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                        player, ..
+                    }
+                    | spellwake_engine::toolbox::ContinuousPayload::SkipStep { player, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::SkipTurns { player, count } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                        rewrite_chosen_to_loop_ve(count);
+                    }
+                    _ => {}
+                }
             }
             Instruction::ChooseOptionForPlayers { players, options } => {
                 rewrite_chosen_to_loop_ap(players);
@@ -4717,15 +4839,8 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
             }
             Instruction::WinGame(rp)
-            | Instruction::SkipNextTurns { player: rp, .. }
-            | Instruction::SkipNextStep { player: rp, .. }
-            | Instruction::AttachPermanentToPlayer { player: rp, .. }
-            | Instruction::ExileLibraryTop { player: rp, .. }
-            | Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
-            | Instruction::GrantCardPlayPermission { player: rp, .. }
             | Instruction::VentureIntoDungeon { player: rp, .. }
-            | Instruction::TakeInitiative { player: rp }
-            | Instruction::GainControlOfPermanent { controller: rp, .. } => {
+            | Instruction::TakeInitiative { player: rp } => {
                 rewrite_chosen_to_loop_rp(rp);
             }
             Instruction::CreateTokens { creations } => {
@@ -4798,9 +4913,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
             }
 
-            Instruction::CreateTemporaryRule { rule, .. } => {
-                rewrite_chosen_to_loop_rule(rule);
-            }
             Instruction::BranchIfFalse { condition, .. } => {
                 rewrite_chosen_to_loop_cond(condition);
             }
@@ -4853,29 +4965,18 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ops(&mut lb.instructions);
                 }
             }
-            Instruction::DrawController { amount }
-            | Instruction::DrawTargetPlayer { amount }
-            | Instruction::DrawEachPlayer { amount }
-            | Instruction::DrawControllerAndTarget { amount }
-            | Instruction::GainControllerLife { amount }
+            Instruction::GainControllerLife { amount }
             | Instruction::DamageAmount(amount)
             | Instruction::DamageOpponentsAmount(amount)
             | Instruction::DamageRelatedPlayerAmount(amount)
             | Instruction::DrainOpponents(amount)
             | Instruction::DrainTargetAndGain(amount)
             | Instruction::OpponentsLoseAndControllerGains(amount)
-            | Instruction::PutCountersOnSubject { amount, .. }
-            | Instruction::PutNamedCounterOnTarget { amount, .. }
             | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::DealDamageToAnnouncedTargets { amount, .. }
             | Instruction::Earthbend { amount }
             | Instruction::BindResolutionX(amount) => {
                 rewrite_chosen_to_loop_ve(amount);
-            }
-            Instruction::RemoveCountersFromSubject {
-                amount: Some(amt), ..
-            } => {
-                rewrite_chosen_to_loop_ve(amt);
             }
             Instruction::SearchLibrary { filter } => {
                 rewrite_chosen_to_loop_rp(&mut filter.searcher);

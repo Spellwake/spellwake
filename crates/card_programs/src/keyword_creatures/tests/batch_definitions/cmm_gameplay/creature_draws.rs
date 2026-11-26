@@ -16,7 +16,19 @@ fn cmm_zones_murder_of_crows_loots_for_other_deaths_but_never_for_its_own_death(
                 4,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ),
         ],
         &price,
@@ -156,9 +168,9 @@ fn cmm_zones_jolrael_rewards_only_the_second_draw_and_sets_allied_base_size_at_r
     let draw = || {
         free_instant(
             BodyTarget::None,
-            Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
         )
     };
     let mut cards = vec![
@@ -598,7 +610,19 @@ fn cmm_zones_padeem_protects_only_own_artifacts_and_rechecks_its_upkeep_lead_or_
                 n,
                 owner,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+                free_instant(
+                    BodyTarget::SinglePermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ),
             ));
         }
         let initial = game(vec![A, B], cards, &price, Step::PrecombatMain);

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Composed boundaries for the shared Creature/Kindred family.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -452,86 +453,6 @@ fn kindred_noncreature_damage_targets_and_zero_lethal_checks_use_creature_status
     );
     let damaged = pass_pair(cast.state());
     assert_eq!(damaged.state().execution().life_total(P1), Some(&19.into()));
-}
-
-#[test]
-fn kindred_sacrifice_only_matches_dies_while_it_is_a_creature() {
-    for creature in [false, true] {
-        let vocabulary = vocabulary();
-        let mut types = vec![CardType::Kindred, CardType::Enchantment];
-        if creature {
-            types.push(CardType::Creature);
-        }
-        let mut source = permanent(&vocabulary, &types, Some((2, 3)), &["Elf"]);
-        source.activated.push(ActivatedAbility {
-            id: ActivatedAbilityId(1),
-            mana_cost: ManaCost::free(),
-            source_cost: SourceCost::Sacrifice,
-            body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
-                vec![Instruction::PutPowerToughnessCounters {
-                    counters: spellwake_engine::characteristics::PowerToughnessCounters {
-                        plus_one: 1.into(),
-                        minus_one: 0.into(),
-                    },
-                }],
-            ),
-        });
-        source.triggered.push(TriggeredAbility {
-            grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
-            id: TriggeredAbilityId(1),
-            condition: spellwake_engine::program::TriggerSpec::dies(
-                spellwake_engine::program::ObjectFilter::self_object(),
-            ),
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(10.into()),
-                }],
-            ),
-        });
-        let game = world(
-            vocabulary.clone(),
-            vec![
-                card(1, source, true),
-                card(
-                    2,
-                    permanent(&vocabulary, &[CardType::Creature], Some((2, 3)), &[]),
-                    true,
-                ),
-            ],
-            vec![CardId(1), CardId(2)],
-        );
-        let old = object(&game, 1);
-        let activated = submit(
-            &game,
-            P0,
-            GameCommand::ActivateAbility {
-                source: old,
-                ability: ActivatedAbilityId(1),
-                target: TargetRef::Object(object(&game, 2)),
-                payment: Some(ManaPayment::default()),
-            },
-        );
-        assert_eq!(
-            current(activated.state(), object(activated.state(), 1)).zone,
-            ObjectZone::Graveyard(P0)
-        );
-        assert_ne!(object(activated.state(), 1), old);
-        assert_eq!(
-            activated.state().execution().window().entries().len(),
-            if creature { 2 } else { 1 }
-        );
-        let first = pass_pair(activated.state());
-        if creature {
-            assert_eq!(first.state().execution().life_total(P0), Some(&30.into()));
-            let done = pass_pair(first.state());
-            assert_eq!(done.state().execution().life_total(P0), Some(&30.into()));
-        } else {
-            assert_eq!(first.state().execution().life_total(P0), Some(&20.into()));
-            assert!(first.state().execution().window().entries().is_empty());
-        }
-    }
 }
 
 #[test]

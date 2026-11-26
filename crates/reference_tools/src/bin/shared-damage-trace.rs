@@ -147,21 +147,27 @@ impl Fixture {
                 "Unsummon",
                 B,
                 ManaType::Blue,
-                Instruction::ReturnToOwnersHand,
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Hand,
+                ))),
             )),
             "D08" => Some((
                 "Giant Growth",
                 A,
                 ManaType::Green,
-                Instruction::CreateContinuousEffect {
-                    parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![
-                        ResolvedPartSpec::ModifyPT(PowerToughness {
-                            power: 3.into(),
-                            toughness: 3.into(),
-                        }),
-                    ]),
-                    duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-                },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                            ResolvedPartSpec::ModifyPT(PowerToughness {
+                                power: 3.into(),
+                                toughness: 3.into(),
+                            }),
+                        ]),
+                        spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+                    ),
+                )),
             )),
             "D12" | "D13" | "D14" | "N01" | "N02" => Some((
                 "Healing Salve",

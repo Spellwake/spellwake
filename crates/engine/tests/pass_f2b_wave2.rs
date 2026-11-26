@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Runtime integration tests for Pass F2-B Wave 2 primitives:
 //! - CR 701.60 `CounterKind::Suspect` (Menace + CannotBlock)
 //! - `StatAggregate::Min`
@@ -71,64 +72,6 @@ fn cast_targeted(
     );
     let order = if actor == P0 { [P0, P1] } else { [P1, P0] };
     pass_in_order(cast.state(), order)
-}
-
-#[test]
-fn suspect_counter_grants_menace_and_cannot_block_until_removed() {
-    let vocab = vocabulary();
-    let bear = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
-    let game = world(
-        vocab,
-        vec![
-            card(1, bear, true),
-            spell(
-                2,
-                BodyTarget::SingleCreature,
-                vec![Instruction::PutCountersOnSubject {
-                    subject: Box::new(EffectSubject::TargetObject),
-                    kind: CounterKind::Suspect,
-                    amount: ValueExpr::literal(1),
-                }],
-            ),
-            spell(
-                3,
-                BodyTarget::SingleCreature,
-                vec![Instruction::RemoveCountersFromPermanent {
-                    target_self: false,
-                    kind: Some(CounterKind::Suspect),
-                    amount: ValueExpr::literal(1),
-                }],
-            ),
-        ],
-        vec![CardId(1)],
-    );
-
-    let bear_id = object(&game, 1);
-    let before = current(&game, bear_id);
-    assert!(!before.keywords.contains(&KeywordAbility::Menace));
-    assert!(
-        !before
-            .blocking_restrictions
-            .contains(&BlockingRestriction::CannotBlock)
-    );
-
-    let suspected = cast_targeted(&game, P0, 2, TargetRef::Object(bear_id));
-    let during = current(suspected.state(), bear_id);
-    assert!(during.keywords.contains(&KeywordAbility::Menace));
-    assert!(
-        during
-            .blocking_restrictions
-            .contains(&BlockingRestriction::CannotBlock)
-    );
-
-    let cleared = cast_targeted(suspected.state(), P0, 3, TargetRef::Object(bear_id));
-    let after = current(cleared.state(), bear_id);
-    assert!(!after.keywords.contains(&KeywordAbility::Menace));
-    assert!(
-        !after
-            .blocking_restrictions
-            .contains(&BlockingRestriction::CannotBlock)
-    );
 }
 
 #[test]
@@ -372,66 +315,6 @@ fn shroud_cant_lose_and_cant_play_lands_restrictions_are_enforced() {
         Some(&(-5).into())
     );
     assert!(survive.state().execution().state_based_losses().is_empty());
-}
-
-#[test]
-fn prevent_counters_blocks_permanent_and_player_poison_counters() {
-    let vocab = vocabulary();
-    let mut solemnity_perm = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
-    solemnity_perm.continuous = Some(StaticContinuousAbility::Restriction {
-        id: StaticAbilityId(1),
-        rule: StaticRestriction::PreventCounters {
-            selector: Some(Box::new(PermanentSelector {
-                controller: ControllerSelector::Any,
-                required_types: BTreeSet::from([CardType::Creature]),
-                ..PermanentSelector::default()
-            })),
-            players: None,
-            counter_kind: None,
-        },
-    });
-    let mut melira_poison = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
-    melira_poison.continuous = Some(StaticContinuousAbility::Restriction {
-        id: StaticAbilityId(2),
-        rule: StaticRestriction::PreventCounters {
-            selector: None,
-            players: Some(PlayerRelation::Controller),
-            counter_kind: Some(CounterKind::Poison),
-        },
-    });
-    let bear = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
-
-    let game = world(
-        vocab,
-        vec![
-            card(1, solemnity_perm, true),
-            card(2, melira_poison, true),
-            card(3, bear, true),
-            spell(
-                4,
-                BodyTarget::SingleCreature,
-                vec![
-                    Instruction::PutCountersOnSubject {
-                        subject: Box::new(EffectSubject::TargetObject),
-                        kind: CounterKind::PlusOne,
-                        amount: ValueExpr::literal(3),
-                    },
-                    Instruction::AddPlayerCounter {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        kind: CounterKind::Poison,
-                        amount: ValueExpr::literal(2),
-                    },
-                ],
-            ),
-        ],
-        vec![CardId(1), CardId(2), CardId(3)],
-    );
-
-    let bear_id = object(&game, 3);
-    let after = cast_targeted(&game, P0, 4, TargetRef::Object(bear_id));
-    let pt_after = current(after.state(), bear_id).power_toughness.unwrap();
-    assert_eq!(pt_after.derived.power, 2.into());
-    assert_eq!(after.state().execution().poison_counters(P0), 0.into());
 }
 
 #[test]

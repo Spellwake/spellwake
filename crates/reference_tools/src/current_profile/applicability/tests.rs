@@ -595,7 +595,12 @@ fn applicability_real_activation_sacrifice_cost_remains_admissible() {
             source_cost: SourceCost::Sacrifice,
             body: ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         }],
     );
@@ -669,9 +674,12 @@ fn declaration_carrier(selected: bool) -> Vec<spellwake_engine::combat::CombatDe
             vec![if selected {
                 selection(false)
             } else {
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                }
+                Instruction::DrawCards(Box::new(spellwake_engine::toolbox::DrawCardsSpec::simple(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(0.into()),
+                )))
             }],
         ),
     });
@@ -774,10 +782,13 @@ fn current10_refuses_printed_keywords_and_new_grants() {
             ManaCost::free(),
             ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(change)]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(change)]),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ))],
             ),
         );
         assert_eq!(program.check_current10().is_ok(), old_grant);

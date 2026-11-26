@@ -129,12 +129,13 @@ fn shared_siege_spikeshot_goblin_hits_invasion_of_dominaria_then_combat_defeats_
 fn shared_siege_protector_who_gains_control_must_choose_another_opponent() {
     let steal = free_instant(
         BodyTarget::SinglePermanent,
-        Instruction::CreateContinuousEffect {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                 ControlRecipient::ResolvingController,
             )]),
-            duration: ResolvedDuration::NoStatedDuration,
-        },
+            ResolvedDuration::NoStatedDuration,
+        ),
     );
     let price = [(ManaType::Colourless, 2), (ManaType::White, 1)];
     let start = game(

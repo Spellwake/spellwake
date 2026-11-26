@@ -24,13 +24,18 @@ pub(super) fn compile(
             "Put a +1/+1 counter on this creature and draw two cards." => (1, 2),
             _ => return None,
         };
-        let mut instructions = vec![Instruction::PutCountersOnSource {
-            amount: counters.into(),
-        }];
+        let mut instructions = vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                spellwake_engine::effects::CounterKind::PlusOne,
+                spellwake_engine::program::ValueExpr::Literal(counters.into()),
+            ),
+        ];
         if draw > 0 {
-            instructions.push(Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(draw.into()),
-            });
+            instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(draw.into()),
+                ),
+            );
         }
         abilities.push((
             fixed_cost(cost)?,

@@ -19,18 +19,8 @@ pub(super) fn lower_search_library_group(
                 return Err("oracle:unsupported-draw-player");
             };
             let draw_one_ops = |rp: ResolvingPlayer| -> Vec<Instruction> {
-                let draw_op = match rp {
-                    ResolvingPlayer::Controller => Instruction::DrawController {
-                        amount: ValueExpr::literal(1),
-                    },
-                    ResolvingPlayer::TargetPlayer => Instruction::DrawTargetPlayer {
-                        amount: ValueExpr::literal(1),
-                    },
-                    _ => Instruction::DrawPlayer {
-                        players: AffectedPlayers::One(rp),
-                        amount: ValueExpr::literal(1),
-                    },
-                };
+                let draw_op =
+                    super::super::toolbox_emit::draw_resolving_player(rp, ValueExpr::literal(1));
                 if n == 1 {
                     vec![Instruction::OptionalEffect { chooser: rp }, draw_op]
                 } else {
@@ -69,41 +59,45 @@ pub(super) fn lower_search_library_group(
                 PlayerRefAst::You => {
                     builder
                         .instructions
-                        .push(Instruction::DrawController { amount });
+                        .push(super::super::toolbox_emit::draw_controller(amount));
                     Ok(())
                 }
                 PlayerRefAst::EachPlayer => {
                     builder
                         .instructions
-                        .push(Instruction::DrawEachPlayer { amount });
+                        .push(super::super::toolbox_emit::draw_each_player(amount));
                     Ok(())
                 }
                 PlayerRefAst::TargetPlayer => {
                     builder.bind_target(BodyTarget::SinglePlayer)?;
                     builder
                         .instructions
-                        .push(Instruction::DrawTargetPlayer { amount });
+                        .push(super::super::toolbox_emit::draw_target_player(amount));
                     Ok(())
                 }
                 PlayerRefAst::TargetOpponent => {
                     builder.bind_target(BodyTarget::SingleOpponent)?;
                     builder
                         .instructions
-                        .push(Instruction::DrawTargetPlayer { amount });
+                        .push(super::super::toolbox_emit::draw_target_player(amount));
                     Ok(())
                 }
                 PlayerRefAst::EachOpponent => {
-                    builder.instructions.push(Instruction::DrawPlayer {
-                        players: AffectedPlayers::EachOpponent,
-                        amount,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::draw_player(
+                            AffectedPlayers::EachOpponent,
+                            amount,
+                        ));
                     Ok(())
                 }
                 PlayerRefAst::EachOtherPlayer => {
-                    builder.instructions.push(Instruction::DrawPlayer {
-                        players: AffectedPlayers::EachOtherPlayer,
-                        amount,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::draw_player(
+                            AffectedPlayers::EachOtherPlayer,
+                            amount,
+                        ));
                     Ok(())
                 }
                 PlayerRefAst::ThatPlayer => {
@@ -113,19 +107,23 @@ pub(super) fn lower_search_library_group(
                     ) {
                         builder
                             .instructions
-                            .push(Instruction::DrawTargetPlayer { amount });
+                            .push(super::super::toolbox_emit::draw_target_player(amount));
                         Ok(())
                     } else if let Ok(rp) =
                         lower_resolving_player_in_context(*player, builder, in_trigger)
                         && (rp != ResolvingPlayer::UniqueRelatedPlayer || in_trigger)
                     {
-                        builder.instructions.push(Instruction::DrawPlayer {
-                            players: AffectedPlayers::One(rp),
-                            amount,
-                        });
+                        builder.instructions.push(
+                            super::super::toolbox_emit::draw_resolving_player(rp, amount),
+                        );
                         Ok(())
-                    } else if in_trigger && amount == ValueExpr::literal(1) {
-                        builder.instructions.push(Instruction::DrawRelatedPlayer);
+                    } else if in_trigger {
+                        builder.instructions.push(
+                            super::super::toolbox_emit::draw_resolving_player(
+                                ResolvingPlayer::UniqueRelatedPlayer,
+                                amount,
+                            ),
+                        );
                         Ok(())
                     } else {
                         Err("oracle:draw-related-multi")
@@ -136,12 +134,16 @@ pub(super) fn lower_search_library_group(
                 | PlayerRefAst::ItsOwner
                 | PlayerRefAst::ActivePlayer
                 | PlayerRefAst::DefendingPlayer
-                | PlayerRefAst::EnchantedPlayer => {
+                | PlayerRefAst::EnchantedPlayer
+                | PlayerRefAst::ChosenPlayer
+                | PlayerRefAst::ThatPlayerOrPlaneswalkerController
+                | PlayerRefAst::TargetOpponentAtRandom => {
                     let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-                    builder.instructions.push(Instruction::DrawPlayer {
-                        players: AffectedPlayers::One(rp),
-                        amount,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::draw_resolving_player(
+                            rp, amount,
+                        ));
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-draw-player"),
@@ -368,7 +370,9 @@ pub(super) fn lower_search_library_group(
             any_number: false,
         } => match subject.as_ref() {
             s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                builder.instructions.push(Instruction::TapAbilitySource);
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::tap_ability_source());
                 Ok(())
             }
             SubjectRefAst::AttachedHost(_) => {
@@ -511,33 +515,38 @@ pub(super) fn lower_search_library_group(
                 let obj = builder
                     .last_group_filter
                     .ok_or("oracle:unsupported-tap-perm")?;
-                builder.instructions.push(Instruction::SetGroupTapped {
-                    filter: Box::new(obj),
-                    tapped: true,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(obj, true));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
                 if last_instruction_created_tokens(&builder.instructions) =>
             {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::CreatedTokens),
-                    tapped: true,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::CreatedTokens,
+                        true,
+                    ));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::LastMoved),
-                    tapped: true,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::LastMoved,
+                        true,
+                    ));
                 Ok(())
             }
             SubjectRefAst::TriggerSubject if in_trigger => {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                    tapped: true,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::TriggerSubject,
+                        true,
+                    ));
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -545,10 +554,12 @@ pub(super) fn lower_search_library_group(
                     && (!self_pronoun_valid || !is_self_anaphora_label(raw))
                     && builder.target == BodyTarget::None =>
             {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                    tapped: true,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::TriggerSubject,
+                        true,
+                    ));
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -570,10 +581,9 @@ pub(super) fn lower_search_library_group(
                 let obj = lower_object_filter(f, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
                 builder.last_group_filter = Some(obj);
-                builder.instructions.push(Instruction::SetGroupTapped {
-                    filter: Box::new(obj),
-                    tapped: true,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(obj, true));
                 Ok(())
             }
             SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -630,14 +640,18 @@ pub(super) fn lower_search_library_group(
         }
         InstructionAst::UntapPermanent { subject, .. } => match subject.as_ref() {
             s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                builder.instructions.push(Instruction::UntapAbilitySource);
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::untap_ability_source());
                 Ok(())
             }
             SubjectRefAst::AttachedHost(_) => {
-                builder.instructions.push(Instruction::SetGroupTapped {
-                    filter: Box::new(ObjectFilter::Clause(ObjectClause::any().attached_to_self())),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(
+                        ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                        false,
+                    ));
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -718,33 +732,38 @@ pub(super) fn lower_search_library_group(
                 let obj = builder
                     .last_group_filter
                     .ok_or("oracle:unsupported-untap-perm")?;
-                builder.instructions.push(Instruction::SetGroupTapped {
-                    filter: Box::new(obj),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(obj, false));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
                 if last_instruction_created_tokens(&builder.instructions) =>
             {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::CreatedTokens),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::CreatedTokens,
+                        false,
+                    ));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::LastMoved),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::LastMoved,
+                        false,
+                    ));
                 Ok(())
             }
             SubjectRefAst::TriggerSubject if in_trigger => {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::TriggerSubject,
+                        false,
+                    ));
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -752,10 +771,12 @@ pub(super) fn lower_search_library_group(
                     && (!self_pronoun_valid || !is_self_anaphora_label(raw))
                     && builder.target == BodyTarget::None =>
             {
-                builder.instructions.push(Instruction::SetSubjectTapped {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_subject_tapped(
+                        EffectSubject::TriggerSubject,
+                        false,
+                    ));
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -845,8 +866,11 @@ pub(super) fn lower_search_library_group(
                         },
                     ) =>
             {
-                builder.last_group_filter = Some(ObjectFilter::land().controlled());
-                builder.instructions.push(Instruction::UntapControlledLands);
+                let filter = ObjectFilter::land().controlled();
+                builder.last_group_filter = Some(filter);
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(filter, false));
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -863,16 +887,9 @@ pub(super) fn lower_search_library_group(
             {
                 let filter = ObjectFilter::creature().controlled();
                 builder.last_group_filter = Some(filter);
-                if builder.target != BodyTarget::None {
-                    builder.instructions.push(Instruction::SetGroupTapped {
-                        filter: Box::new(filter),
-                        tapped: false,
-                    });
-                } else {
-                    builder
-                        .instructions
-                        .push(Instruction::UntapControlledCreatures);
-                }
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(filter, false));
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -881,10 +898,9 @@ pub(super) fn lower_search_library_group(
                 let obj = lower_object_filter(f, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
                 builder.last_group_filter = Some(obj);
-                builder.instructions.push(Instruction::SetGroupTapped {
-                    filter: Box::new(obj),
-                    tapped: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::set_group_tapped(obj, false));
                 Ok(())
             }
             SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -927,7 +943,9 @@ pub(super) fn lower_search_library_group(
         },
         InstructionAst::SkipNextUntap { subject } => {
             if is_self_pronoun(subject, builder, self_pronoun_valid) {
-                builder.instructions.push(Instruction::ExertAbilitySource);
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::exert_source());
                 return Ok(());
             }
             if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) {
@@ -946,15 +964,19 @@ pub(super) fn lower_search_library_group(
                         | BodyTarget::SinglePlaneswalker
                         | BodyTarget::FilteredPermanent(_)
                 ) {
-                    builder.instructions.push(Instruction::SkipNextUntap {
-                        subject: Box::new(EffectSubject::TargetObject),
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::skip_next_untap(
+                            EffectSubject::TargetObject,
+                        ));
                     return Ok(());
                 }
                 if in_trigger {
-                    builder.instructions.push(Instruction::SkipNextUntap {
-                        subject: Box::new(EffectSubject::TriggerSubject),
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::skip_next_untap(
+                            EffectSubject::TriggerSubject,
+                        ));
                     return Ok(());
                 }
             }
@@ -1004,17 +1026,19 @@ pub(super) fn lower_search_library_group(
                 {
                     let obj = lower_object_filter(f, vocabulary)?;
                     bind_filter_player_target(builder, &obj)?;
-                    builder.instructions.push(Instruction::SkipNextUntap {
-                        subject: Box::new(EffectSubject::Matching(obj)),
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::skip_next_untap(
+                            EffectSubject::Matching(obj),
+                        ));
                     Ok(())
                 }
                 SubjectRefAst::AttachedHost(_) => {
-                    builder.instructions.push(Instruction::SkipNextUntap {
-                        subject: Box::new(EffectSubject::Matching(
-                            ObjectFilter::any().attached_to_self(),
-                        )),
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::skip_next_untap(
+                            EffectSubject::Matching(ObjectFilter::any().attached_to_self()),
+                        ));
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-skip-untap"),
@@ -1638,12 +1662,13 @@ pub(super) fn lower_search_library_group(
                                 },
                             });
                     } else {
-                        builder
-                            .instructions
-                            .push(Instruction::CreateContinuousEffect {
+                        builder.instructions.push(
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
                                 parts,
-                                duration: dur,
-                            });
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -1723,12 +1748,13 @@ pub(super) fn lower_search_library_group(
                     match count {
                         TargetCountAst::Exact(1) => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::CreateContinuousEffect {
+                            builder.instructions.push(
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
                                     parts,
-                                    duration: dur,
-                                });
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::Exact(n) if *n >= 2 => {
@@ -1802,12 +1828,13 @@ pub(super) fn lower_search_library_group(
                     match count {
                         TargetCountAst::Exact(1) => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::CreateContinuousEffect {
+                            builder.instructions.push(
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
                                     parts,
-                                    duration: dur,
-                                });
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::Exact(n) if *n >= 2 => {
@@ -1895,10 +1922,11 @@ pub(super) fn lower_search_library_group(
                     builder.bind_target(bt)?;
                     builder
                         .instructions
-                        .push(Instruction::CreateContinuousEffect {
+                        .push(super::super::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
                             parts,
-                            duration: dur,
-                        });
+                            dur,
+                        ));
                     Ok(())
                 }
             }
@@ -1948,10 +1976,9 @@ pub(super) fn lower_search_library_group(
                 .push(Instruction::FixedTargetClause(Box::new(
                     ExecutableBody::new(
                         player_bt,
-                        vec![Instruction::DrawPlayer {
-                            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                            amount: ValueExpr::literal(0),
-                        }],
+                        vec![super::super::toolbox_emit::draw_target_player(
+                            ValueExpr::literal(0),
+                        )],
                     ),
                 )));
             builder
@@ -2057,11 +2084,11 @@ pub(super) fn lower_search_library_group(
                 }
                 _ => return Err("oracle:unsupported-gain-control"),
             };
-            let op = Instruction::GainControlOfPermanent {
-                subject: Box::new(eff_subj),
-                controller: rp,
-                duration: dur,
-            };
+            let op = super::super::toolbox_emit::gain_control_of_subject(
+                eff_subj,
+                spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                dur,
+            );
             if let Some(players) = group_players {
                 push_for_each_player(players, vec![op], builder);
             } else {
@@ -2382,7 +2409,9 @@ pub(super) fn lower_search_library_group(
                 if let Some(subj) = unattach_subj {
                     trial
                         .instructions
-                        .push(Instruction::UnattachSubject { subject: subj });
+                        .push(super::super::toolbox_emit::unattach_query(
+                            super::super::toolbox_emit::move_subject_to_query(subj),
+                        ));
                     *builder = trial;
                     return Ok(());
                 }
@@ -2618,10 +2647,10 @@ pub(super) fn lower_search_library_group(
                         let rp = lower_resolving_player_in_context(*p, &mut trial, in_trigger)?;
                         trial
                             .instructions
-                            .push(Instruction::AttachPermanentToPlayer {
-                                attachment,
-                                player: rp,
-                            });
+                            .push(super::super::toolbox_emit::attach_to_player(
+                                super::super::toolbox_emit::move_subject_to_query(attachment),
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                            ));
                         *builder = trial;
                         return Ok(());
                     }
@@ -2746,7 +2775,10 @@ pub(super) fn lower_search_library_group(
                 if let (Some(attachment), Some(host)) = (att_ref, host_ref) {
                     trial
                         .instructions
-                        .push(Instruction::AttachPermanent { attachment, host });
+                        .push(super::super::toolbox_emit::attach_query(
+                            super::super::toolbox_emit::move_subject_to_query(attachment),
+                            super::super::toolbox_emit::move_subject_to_query(host),
+                        ));
                     *builder = trial;
                     return Ok(());
                 }
@@ -2949,25 +2981,6 @@ pub(super) fn lower_search_library_group(
                 && dur_core != "now"
             {
                 match builder.instructions.last_mut() {
-                    Some(last @ Instruction::ExileLibraryTop { .. }) => {
-                        if let Instruction::ExileLibraryTop {
-                            player: lib_p,
-                            amount,
-                        } = *last
-                        {
-                            *last = Instruction::ExileTopPlay {
-                                count: ValueExpr::literal(i64::from(amount)),
-                                library_owner: AffectedPlayers::One(lib_p),
-                                duration: impulse_dur,
-                                cast_only: *cast_only,
-                                free: *free,
-                                any_color,
-                                face_down: false,
-                                grant_play: true,
-                            };
-                            return Ok(());
-                        }
-                    }
                     Some(Instruction::ExileTopPlay {
                         duration: slot_dur,
                         cast_only: slot_cast_only,
@@ -2994,11 +3007,12 @@ pub(super) fn lower_search_library_group(
                                 p_sel.as_ref()
                             && let spellwake_engine::toolbox::ZoneDest::Exile {
                                 face_down,
-                                link_group: Some(_),
+                                link_group,
                                 ..
-                            } = spec.destination
-                            && **amount != ValueExpr::literal(1)
+                            } = &spec.destination
+                            && (link_group.is_none() || **amount != ValueExpr::literal(1))
                         {
+                            let face_down = *face_down;
                             *last = Instruction::ExileTopPlay {
                                 count: (**amount).clone(),
                                 library_owner: AffectedPlayers::One(*lib_p),
@@ -3015,6 +3029,23 @@ pub(super) fn lower_search_library_group(
                     _ => {}
                 }
             }
+            let play_dur = resolved_dur.unwrap_or(match impulse_dur {
+                spellwake_engine::program::ImpulsePlayDuration::ThisTurn => {
+                    ResolvedDuration::UntilEndOfTurn
+                }
+                spellwake_engine::program::ImpulsePlayDuration::UntilEndOfNextTurn => {
+                    ResolvedDuration::ThroughControllerNextTurn
+                }
+                spellwake_engine::program::ImpulsePlayDuration::UntilNextEndStep
+                | spellwake_engine::program::ImpulsePlayDuration::UntilEndOfNextEndStep
+                | spellwake_engine::program::ImpulsePlayDuration::UntilNextUpkeep => {
+                    ResolvedDuration::UntilControllerNextTurn
+                }
+                spellwake_engine::program::ImpulsePlayDuration::WhileExiled
+                | spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource => {
+                    ResolvedDuration::NoStatedDuration
+                }
+            });
             let emitted_op = match subject.as_ref() {
                 SubjectRefAst::TargetObject {
                     count: TargetCountAst::Exact(1),
@@ -3022,34 +3053,34 @@ pub(super) fn lower_search_library_group(
                 } if count_limit.is_none() => {
                     let bt = lower_target_subject(subject, vocabulary)?;
                     builder.bind_target(bt)?;
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::TargetObject,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::TriggerSubject if in_trigger && count_limit.is_none() => {
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::TriggeringObject,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::SelfObject if self_pronoun_valid && count_limit.is_none() => {
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::AbilitySource,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::Anaphora(_)
                     if count_limit.is_none()
@@ -3059,14 +3090,14 @@ pub(super) fn lower_search_library_group(
                             BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                         ) =>
                 {
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::TargetObject,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::Anaphora(_)
                     if count_limit.is_none()
@@ -3074,38 +3105,38 @@ pub(super) fn lower_search_library_group(
                             || (has_prior_moved_object(&builder.instructions)
                                 && !has_checked_revealed_top_strict(&builder.instructions))) =>
                 {
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::LastMoved,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::Anaphora(raw)
                     if count_limit.is_none()
                         && in_trigger
                         && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                 {
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::TriggeringObject,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::Anaphora(_) if count_limit.is_none() => {
-                    Instruction::GrantCardPlayPermission {
-                        player: rp,
-                        subject: MoveSubjectRef::RevealedCard,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
+                    super::super::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::Revealed,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        play_dur,
+                        *cast_only,
+                        *free,
                         any_color,
-                    }
+                    )
                 }
                 SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                     let resolved_dur =
@@ -3206,16 +3237,16 @@ pub(super) fn lower_search_library_group(
                             max_total_power: None,
                             unchosen_action: None,
                         });
-                        builder
-                            .instructions
-                            .push(Instruction::GrantCardPlayPermission {
-                                player: rp,
-                                subject: MoveSubjectRef::LastMoved,
-                                duration: impulse_dur,
-                                cast_only: *cast_only,
-                                free: *free,
+                        builder.instructions.push(
+                            super::super::toolbox_emit::grant_play_permission(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                resolved_dur,
+                                *cast_only,
+                                *free,
                                 any_color,
-                            });
+                            ),
+                        );
                         return Ok(());
                     }
                     let last_moved_match = !is_linked_exile
@@ -3279,17 +3310,24 @@ pub(super) fn lower_search_library_group(
                                     &builder.instructions,
                                 )));
                     if use_last_moved_perm {
-                        Instruction::GrantLastMovedPlayPermission {
-                            player: rp,
-                            filter: flt.map(Box::new),
-                            duration: resolved_dur,
-                            free: *free,
-                            cast_only: *cast_only,
+                        let selector = match flt {
+                            Some(f) => spellwake_engine::toolbox::ObjectQuery::filtered(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                f,
+                            ),
+                            None => spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                        };
+                        super::super::toolbox_emit::grant_play_permission(
+                            selector,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                            resolved_dur,
+                            *cast_only,
+                            *free,
                             any_color,
-                        }
+                        )
                     } else {
-                        Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::ZoneCastPermission {
+                        super::super::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::ZoneCastPermission {
                                 player: rp,
                                 zone,
                                 filter: flt,
@@ -3298,9 +3336,9 @@ pub(super) fn lower_search_library_group(
                                 any_color,
                                 once,
                                 sorcery_only: false,
-                            }),
-                            duration: resolved_dur,
-                        }
+                            },
+                            resolved_dur,
+                        )
                     }
                 }
                 _ => return Err("oracle:unsupported-grant-cast"),
@@ -3321,15 +3359,17 @@ pub(super) fn lower_search_library_group(
                 ManaType::Green,
                 ManaType::Colourless,
             ] {
-                builder.instructions.push(Instruction::CreateTemporaryRule {
-                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                        StaticContinuousAbility::Modifier {
-                            id: ids.static_id(),
-                            rule: StaticModifierRule::RetainMana(mt),
-                        },
-                    ))),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Modifier {
+                                id: ids.static_id(),
+                                rule: StaticModifierRule::RetainMana(mt),
+                            },
+                        )),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ));
             }
             Ok(())
         }
@@ -3392,14 +3432,26 @@ pub(super) fn lower_search_library_group(
                     bound_x,
                 )?;
                 let flash_dur = match builder.instructions.get(start_len) {
-                    Some(Instruction::CreateTemporaryRule { duration, .. })
-                    | Some(Instruction::GrantLastMovedPlayPermission { duration, .. }) => *duration,
+                    Some(Instruction::ApplyContinuous(spec))
+                        if matches!(
+                            spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(_)
+                                | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. }
+                        ) =>
+                    {
+                        spec.duration
+                    }
                     Some(Instruction::ForEachPlayer { body, .. }) => {
                         match body.instructions.first() {
-                            Some(Instruction::CreateTemporaryRule { duration, .. })
-                            | Some(Instruction::GrantLastMovedPlayPermission {
-                                duration, ..
-                            }) => *duration,
+                            Some(Instruction::ApplyContinuous(spec))
+                                if matches!(
+                                    spec.payload,
+                                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(_)
+                                        | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. }
+                                ) =>
+                            {
+                                spec.duration
+                            }
                             _ => return Err("oracle:unsupported-modified-cast-permission"),
                         }
                     }
@@ -3408,26 +3460,28 @@ pub(super) fn lower_search_library_group(
                 if let Some(players) = try_group_affected_players(perm.player) {
                     push_for_each_player(
                         players,
-                        vec![Instruction::CreateTemporaryRule {
-                            rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                        vec![super::super::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::FilteredFlash {
                                 player: ResolvingPlayer::LoopPlayer,
                                 filter: flash_filter,
                                 next_only: false,
-                            }),
-                            duration: flash_dur,
-                        }],
+                            },
+                            flash_dur,
+                        )],
                         builder,
                     );
                 } else {
                     let rp = lower_resolving_player_in_context(perm.player, builder, in_trigger)?;
-                    builder.instructions.push(Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::FilteredFlash {
-                            player: rp,
-                            filter: flash_filter,
-                            next_only: false,
-                        }),
-                        duration: flash_dur,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::FilteredFlash {
+                                player: rp,
+                                filter: flash_filter,
+                                next_only: false,
+                            },
+                            flash_dur,
+                        ));
                 }
                 return Ok(());
             }
@@ -3613,16 +3667,12 @@ pub(super) fn lower_search_library_group(
             let lib_low = library.trim().to_ascii_lowercase();
             let mut trial = builder.clone();
             if let Some(group_players) = try_group_affected_players(*player) {
-                if !*reveal {
-                    return Err("oracle:unsupported-player-look-top");
-                }
                 let (req_bt, library_owner) = match lib_low.as_str() {
                     "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" => {
                         (None, ResolvingPlayer::Controller)
                     }
-                    "their" | "their library" | "that player" | "that player's" | "thatplayer" => {
-                        (None, ResolvingPlayer::LoopPlayer)
-                    }
+                    "their" | "their library" | "that player" | "that player's" | "thatplayer"
+                    | "that opponent" | "that opponent's" => (None, ResolvingPlayer::LoopPlayer),
                     "target player" | "target player's" | "targetplayer" => (
                         Some(BodyTarget::SinglePlayer),
                         ResolvingPlayer::TargetPlayer,
@@ -3651,33 +3701,61 @@ pub(super) fn lower_search_library_group(
                     in_trigger,
                     vocabulary,
                 )?;
-                push_for_each_player(
-                    group_players,
-                    vec![Instruction::LookTopChoose {
-                        count: cnt,
-                        library_owner,
-                        filter: None,
-                        reveal: true,
-                        reveal_only: true,
-                        to_battlefield: false,
-                        enters_tapped: false,
-                        take_all_matching: false,
-                        max_picks: 0,
-                        rest_to_graveyard: false,
-                        rest_to_exile: false,
-                        rest_to_top: false,
-                        random_rest_order: false,
-                        secondary: None,
-                    }],
-                    &mut trial,
-                );
+                if *reveal {
+                    push_for_each_player(
+                        group_players,
+                        vec![Instruction::LookTopChoose {
+                            count: cnt,
+                            library_owner,
+                            filter: None,
+                            reveal: true,
+                            reveal_only: true,
+                            to_battlefield: false,
+                            enters_tapped: false,
+                            take_all_matching: false,
+                            max_picks: 0,
+                            rest_to_graveyard: false,
+                            rest_to_exile: false,
+                            rest_to_top: false,
+                            random_rest_order: false,
+                            secondary: None,
+                        }],
+                        &mut trial,
+                    );
+                } else {
+                    const LOOK_BIND: spellwake_engine::toolbox::BindingId =
+                        spellwake_engine::toolbox::BindingId(912);
+                    let lib_sel = if library_owner == ResolvingPlayer::LoopPlayer {
+                        spellwake_engine::toolbox::PlayerSelector::Bound(LOOK_BIND)
+                    } else {
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(library_owner)
+                    };
+                    let inner = super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                    lib_sel,
+                                )),
+                                filter: Box::new(ObjectFilter::any()),
+                                slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(cnt)),
+                            },
+                            spellwake_engine::toolbox::ZoneDest::LookOnly {
+                                viewer: spellwake_engine::toolbox::PlayerSelector::Bound(LOOK_BIND),
+                            },
+                        ),
+                    );
+                    trial.instructions.push(Instruction::ForEachPlayerQuery {
+                        selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                            group_players,
+                        )),
+                        bind_player: LOOK_BIND,
+                        body: Box::new(ExecutableBody::new(BodyTarget::None, vec![inner])),
+                    });
+                }
                 *builder = trial;
                 return Ok(());
             }
             let actor = lower_resolving_player_in_context(*player, &mut trial, in_trigger)?;
-            if !*reveal && actor != ResolvingPlayer::Controller {
-                return Err("oracle:unsupported-player-look-top");
-            }
             let (req_bt, library_owner) = match lib_low.as_str() {
                 "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" => {
                     (None, ResolvingPlayer::Controller)
@@ -3765,22 +3843,39 @@ pub(super) fn lower_search_library_group(
                 in_trigger,
                 vocabulary,
             )?;
-            trial.instructions.push(Instruction::LookTopChoose {
-                count: cnt,
-                library_owner,
-                filter: None,
-                reveal: *reveal,
-                reveal_only: true,
-                to_battlefield: false,
-                enters_tapped: false,
-                take_all_matching: false,
-                max_picks: 0,
-                rest_to_graveyard: false,
-                rest_to_exile: false,
-                rest_to_top: false,
-                random_rest_order: false,
-                secondary: None,
-            });
+            if !*reveal && actor != ResolvingPlayer::Controller {
+                trial.instructions.push(super::super::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(library_owner),
+                            )),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(cnt)),
+                        },
+                        spellwake_engine::toolbox::ZoneDest::LookOnly {
+                            viewer: spellwake_engine::toolbox::PlayerSelector::Resolving(actor),
+                        },
+                    ),
+                ));
+            } else {
+                trial.instructions.push(Instruction::LookTopChoose {
+                    count: cnt,
+                    library_owner,
+                    filter: None,
+                    reveal: *reveal,
+                    reveal_only: true,
+                    to_battlefield: false,
+                    enters_tapped: false,
+                    take_all_matching: false,
+                    max_picks: 0,
+                    rest_to_graveyard: false,
+                    rest_to_exile: false,
+                    rest_to_top: false,
+                    random_rest_order: false,
+                    secondary: None,
+                });
+            }
             *builder = trial;
             Ok(())
         }
@@ -3908,7 +4003,7 @@ fn try_lower_counter_matching_stack_objects(
 
 fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool) -> bool {
     match op {
-        Instruction::ExileLibraryTop { .. } | Instruction::ExileTopForPlay { .. } => true,
+        Instruction::ExileTopForPlay { .. } => true,
         Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
             if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
                 .is_some() =>
@@ -3939,9 +4034,7 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
             .iter()
             .rev()
             .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
-        Instruction::Mill { .. } | Instruction::MillEachPlayer(_) | Instruction::Discard { .. } => {
-            !expected_exile_only
-        }
+        Instruction::Mill { .. } | Instruction::Discard { .. } => !expected_exile_only,
         _ => false,
     }
 }
@@ -4030,26 +4123,28 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
             break;
         }
         match op {
-            Instruction::DrawController { .. }
-            | Instruction::DrawEachPlayer { .. }
-            | Instruction::DrawPlayer { .. }
-            | Instruction::DrawTargetPlayer { .. }
-            | Instruction::DrawRelatedPlayer
+            Instruction::DrawCards(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
-            | Instruction::GrantLastMovedPlayPermission { .. }
-            | Instruction::GrantCardPlayPermission { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::CreateTemporaryRule { .. }
             | Instruction::AdjustControllerLife { .. }
             | Instruction::AdjustPlayersLife { .. }
             | Instruction::GainControllerLife { .. }
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. } => continue,
+            Instruction::ApplyContinuous(spec)
+                if matches!(
+                    spec.payload,
+                    spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. }
+                        | spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(_)
+                ) =>
+            {
+                continue;
+            }
             Instruction::ZoneOp(spec) if spec.shuffle_library.is_some() => continue,
             _ => return false,
         }
@@ -4104,28 +4199,34 @@ fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
     for op in ops.iter().rev() {
         match op {
             Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
-                if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                    .is_some_and(|spec| {
-                        matches!(
-                            spec.destination,
-                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                        )
-                    }) =>
+                if let Some(spec) = super::super::toolbox_emit::unwrap_zone_op(op)
+                    && matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    ) =>
             {
+                if let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                    slice: spellwake_engine::toolbox::QuerySlice::Top(n),
+                    ..
+                } = &spec.source
+                {
+                    return **n == ValueExpr::literal(1);
+                }
                 return true;
             }
-            Instruction::ExileLibraryTop { amount, .. } => {
-                return *amount == 1;
-            }
-            Instruction::DrawController { .. }
-            | Instruction::DrawEachPlayer { .. }
-            | Instruction::DrawPlayer { .. }
-            | Instruction::DrawTargetPlayer { .. }
-            | Instruction::DrawRelatedPlayer
+            Instruction::DrawCards(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
-            | Instruction::CreateTemporaryRule { .. }
             | Instruction::BindResolutionX(_) => continue,
+            Instruction::ApplyContinuous(spec)
+                if matches!(
+                    spec.payload,
+                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(_)
+                ) =>
+            {
+                continue;
+            }
             Instruction::ZoneOp(spec) if spec.shuffle_library.is_some() => continue,
             _ => return false,
         }

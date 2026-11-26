@@ -128,7 +128,19 @@ fn cmm_heroic_intervention_protects_only_current_controlled_permanents_against_o
             6,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SinglePermanent,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
         seed(
             7,

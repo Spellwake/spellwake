@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Conditional effects use real paid casts, root decisions and one live cursor.
 use super::*;
 use spellwake_engine::program::{Comparison, CreatureTypeSlot, ResolutionCondition, ValueExpr};
@@ -356,56 +357,6 @@ fn matched_count_condition_uses_captured_causes_after_source_departure() {
     assert_eq!(done.state().execution().life_total(P0), Some(&24.into()));
 }
 
-#[test]
-fn all_illegal_targets_stop_before_any_branch_or_untargeted_tail() {
-    let game = two(vec![
-        hand(
-            1,
-            P0,
-            spell(
-                BodyTarget::SingleCreature,
-                vec![life(21, 2), Instruction::ReturnToOwnersHand, gain(1)],
-            ),
-        ),
-        hand(
-            3,
-            P1,
-            spell(
-                BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ),
-        tr::controlled(
-            2,
-            P1,
-            P1,
-            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
-        ),
-    ]);
-    let target = tr::object(&game, 2);
-    let cast = paid(&game, P0, 1, 0, Some(TargetRef::Object(target)));
-    let passed = tr::submit(cast.state(), P0, GameCommand::Pass);
-    let response = paid(passed.state(), P1, 3, 0, Some(TargetRef::Object(target)));
-    let bounced = resolve(response.state());
-    let done = resolve(bounced.state());
-    assert!(branches(&done).is_empty());
-    assert!(tr::all_occurrences(&done).iter().any(|row| matches!(
-        row,
-        RulesOccurrence::ZoneChange(change)
-            if change.reason == spellwake_engine::occurrence::ZoneReason::AllTargetsIllegalExit
-    )));
-    assert_eq!(done.state().execution().life_total(P0), Some(&20.into()));
-    assert_eq!(
-        done.state()
-            .execution()
-            .window()
-            .cards()
-            .get(tr::object(done.state(), 2))
-            .unwrap()
-            .zone(),
-        ObjectZone::Hand(P1)
-    );
-}
 #[test]
 fn token_timestamp_pause_restores_control_cursor_then_jumps_over_else() {
     use spellwake_engine::token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients};

@@ -143,20 +143,6 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
     }
     target_uses
         || body.instructions.iter().any(|op| match op {
-            Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
-                crate::program::TemporaryRuleKind::ExileIfDies { subject }
-                | crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
-                    subject_uses_damage_pairs(subject)
-                }
-                crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
-                    static_uses_damage_pairs(ab)
-                }
-                crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
-                    condition,
-                    ability,
-                } => static_cond_uses_damage_pairs(condition) || static_uses_damage_pairs(ability),
-                _ => false,
-            },
             Instruction::ZoneOp(spec) => match &spec.source {
                 crate::toolbox::ObjectQuery::ZoneScan { filter, .. }
                 | crate::toolbox::ObjectQuery::Filtered { filter, .. }
@@ -168,17 +154,19 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 }
                 _ => false,
             },
-            Instruction::SetGroupTapped { filter, .. } => filter_uses_damage_pairs(**filter),
-            Instruction::SetSubjectTapped { subject, .. }
-            | Instruction::PutCountersOnSubject { subject, .. }
-            | Instruction::TurnFaceUpSubject { subject }
-            | Instruction::TurnFaceDownSubject { subject }
-            | Instruction::TransformSubject { subject }
-            | Instruction::AddOneOfEachCounterKindOnSubject { subject } => {
-                subject_uses_damage_pairs(subject)
-            }
+            Instruction::MutateObject(spec) => match &spec.source {
+                crate::toolbox::ObjectQuery::EffectSubject(subject) => {
+                    subject_uses_damage_pairs(subject)
+                }
+                _ => false,
+            },
+            Instruction::ApplyContinuous(spec) => match &spec.selector {
+                Some(crate::toolbox::ObjectQuery::EffectSubject(subject)) => {
+                    subject_uses_damage_pairs(subject)
+                }
+                _ => false,
+            },
             Instruction::EmpowerJace { .. }
-            | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
             Instruction::DamageGroupAmount { group, amount } => {
@@ -579,35 +567,35 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         Instruction::ChooseOption { options, .. } => {
             options.iter().any(|b| body_uses_damage_dealt_by(&b.body))
         }
-        Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
-            crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
-                static_uses_damage_dealt_by(ab)
-            }
-            crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
-                condition,
-                ability,
+        Instruction::DrawCards(spec) => value_expr_uses_damage_dealt_by(&spec.amount),
+        Instruction::MutateObject(spec) => match &spec.op {
+            crate::toolbox::ObjectMutation::AddCounters { amount, .. }
+            | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
+            | crate::toolbox::ObjectMutation::MoveCounters {
+                amount: Some(amount),
+                ..
+            } => value_expr_uses_damage_dealt_by(amount),
+            _ => false,
+        },
+        Instruction::ApplyContinuous(spec) => match &spec.payload {
+            crate::toolbox::ContinuousPayload::DynamicBoost {
+                power, toughness, ..
             } => {
-                static_cond_uses_damage_dealt_by(condition) || static_uses_damage_dealt_by(ability)
+                value_expr_uses_damage_dealt_by(power) || value_expr_uses_damage_dealt_by(toughness)
             }
             _ => false,
         },
         Instruction::GainControllerLife { amount }
         | Instruction::DrawController { amount }
-        | Instruction::DrawPlayer { amount, .. }
         | Instruction::DamageAmount(amount)
         | Instruction::DamageGroupAmount { amount, .. }
         | Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::PutCountersOnSubject { amount, .. }
-        | Instruction::PutNamedCounterOnTarget { amount, .. }
         | Instruction::AdjustPlayersLife { amount, .. }
         | Instruction::SetPlayersLife { amount, .. }
         | Instruction::DrainOpponents(amount)
         | Instruction::DamageOpponentsAmount(amount)
         | Instruction::DamageRelatedPlayerAmount(amount)
         | Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
-        Instruction::RemoveCountersFromSubject { amount, .. } => {
-            amount.as_ref().is_some_and(value_expr_uses_damage_dealt_by)
-        }
         Instruction::DealDamageFrom { amount, .. } => matches!(
             amount.as_ref(),
             crate::program::DamageAmountSpec::Expr(e) if value_expr_uses_damage_dealt_by(e)
@@ -616,7 +604,6 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()
             .any(|c| value_expr_uses_damage_dealt_by(&c.amount)),
-        Instruction::ModifyGroupByAmount { amount, .. } => value_expr_uses_damage_dealt_by(amount),
         _ => false,
     })
 }

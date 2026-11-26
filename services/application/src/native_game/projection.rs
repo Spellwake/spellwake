@@ -1372,13 +1372,54 @@ impl Projection<'_, '_> {
                 });
                 let label = match granted.body.instructions.as_slice() {
                     [spellwake_engine::program::Instruction::Encore] => "Encore",
-                    [spellwake_engine::program::Instruction::RegenerateSource] => {
+                    [spellwake_engine::program::Instruction::MutateObject(spec)]
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::Regenerate
+                        ) && (matches!(
+                            spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::Source
+                        ) || matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                                if matches!(
+                                    s.as_ref(),
+                                    spellwake_engine::program::EffectSubject::AbilitySource
+                                )
+                        )) =>
+                    {
                         "Regenerate this permanent"
                     }
-                    [spellwake_engine::program::Instruction::RegenerateTarget] => {
+                    [spellwake_engine::program::Instruction::MutateObject(spec)]
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::Regenerate
+                        ) && (matches!(
+                            spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::Targets
+                        ) || matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                                if matches!(
+                                    s.as_ref(),
+                                    spellwake_engine::program::EffectSubject::TargetObject
+                                )
+                        )) =>
+                    {
                         "Regenerate target permanent"
                     }
-                    [spellwake_engine::program::Instruction::DestroyTarget] => {
+                    [spellwake_engine::program::Instruction::ZoneOp(spec)]
+                        if matches!(
+                            (&spec.source, &spec.destination),
+                            (
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. },
+                                },
+                            )
+                        ) =>
+                    {
                         "Destroy target permanent"
                     }
                     _ => "Granted activated ability",

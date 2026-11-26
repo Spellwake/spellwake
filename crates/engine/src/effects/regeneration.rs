@@ -3,37 +3,6 @@ use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence, StatusReason};
 
 impl EffectWindow {
-    pub(super) fn create_regeneration_shield(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        index: usize,
-        targeted: bool,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let object = if targeted {
-            let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            id
-        } else {
-            match entry.kind() {
-                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                    source.id()
-                }
-                _ => return Err(EffectError::InconsistentProgram),
-            }
-        };
-        if !self
-            .window
-            .cards()
-            .get(object)
-            .is_some_and(|o| o.zone() == ObjectZone::Battlefield)
-        {
-            return Ok(());
-        }
-        self.create_regeneration_shields(entry.id(), index, vec![object], append)
-    }
-
     pub(super) fn create_regeneration_shields(
         &mut self,
         entry: StackEntryId,

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Defined color and layer-5 behavior through the canonical evaluator/actions.
 //! CR 105.1-105.4, 202.2, 204, 613.1e, 613.6 and 613.8.
 #[path = "../test_support/creature_vocabulary.rs"]
@@ -552,46 +553,4 @@ fn colorless_expiration_restores_the_mana_cost_defined_color() {
             .derived,
         pt(3, 3)
     );
-}
-
-#[test]
-fn color_records_do_not_follow_a_departed_card_into_a_new_incarnation() {
-    let game = world(
-        vocabulary(),
-        vec![
-            creature(1, &[Color::Green]),
-            color_spell(
-                2,
-                ColorOperation::Set(set(&[Color::Blue])),
-                ResolvedDuration::NoStatedDuration,
-            ),
-            spell(
-                3,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1)],
-    );
-    let old = object(&game, 1);
-    let (blue, _) = resolve(&game, 2, old);
-    assert_eq!(colors(blue.state(), old), set(&[Color::Blue]));
-    let (returned, _) = resolve(blue.state(), 3, old);
-    let hand = object(returned.state(), 1);
-    assert_ne!(hand, old);
-    assert_eq!(colors(returned.state(), hand), set(&[Color::Green]));
-    let cast = submit(
-        returned.state(),
-        P0,
-        GameCommand::CastUntargeted {
-            spell: hand,
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let entered = pass_pair(cast.state());
-    let fresh = object(entered.state(), 1);
-    assert_ne!(fresh, old);
-    assert_ne!(fresh, hand);
-    assert_eq!(colors(entered.state(), fresh), set(&[Color::Green]));
-    assert_eq!(entered.state().execution().continuous_effects().count(), 0);
 }

@@ -77,9 +77,9 @@ pub(super) fn choose_and_gain_type(
                     chooser: ResolvingPlayer::Controller,
                     instructions: 2,
                 },
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::CountOtherSharingSourceSubtype,
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::CountOtherSharingSourceSubtype,
+                ),
                 Instruction::Discard {
                     players: AffectedPlayers::One(ResolvingPlayer::Controller),
                     amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
@@ -379,9 +379,9 @@ fn chosen_type_artifact(card: &InventoryCard) -> Option<Program> {
                     PlayerRelation::Controller,
                     spellwake_engine::program::SpellFilter::creature().of_chosen_entry_type(),
                 ),
-                Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
             )
         } else {
             let (cost, effect) = other.split_once(", {T}: ")?;

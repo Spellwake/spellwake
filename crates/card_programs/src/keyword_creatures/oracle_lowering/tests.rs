@@ -281,15 +281,27 @@ fn stage_a_and_b_fidelity_regressions() {
     if let ProgramKind::Spell(sp) = &foreach_prog.kind {
         assert!(
             sp.body.instructions.iter().any(|op| {
-                matches!(op, Instruction::PutCountersOnControlledCreatures)
-                    || matches!(
-                        op,
-                        Instruction::PutCountersOnSubject { subject, .. }
-                            if matches!(
-                                subject.as_ref(),
-                                spellwake_engine::program::EffectSubject::Matching(_)
-                            )
-                    )
+                matches!(
+                    op,
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
+                        ) && (matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(subject)
+                                if matches!(
+                                    subject.as_ref(),
+                                    spellwake_engine::program::EffectSubject::Matching(_)
+                                )
+                        ) || matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ..
+                            }
+                        ))
+                )
             }),
             "ForEachObject with 'it' must target controlled creatures group, never source: {:?}",
             sp.body.instructions
@@ -361,6 +373,13 @@ fn stage_a_and_b_fidelity_regressions() {
                             spellwake_engine::program::EffectSubject::Matching(filter)
                                 if *filter == spellwake_engine::program::ObjectFilter::creature()
                         )
+                ) || matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(_),
+                        filter,
+                        ..
+                    } if **filter == spellwake_engine::program::ObjectFilter::creature()
                 ) && matches!(
                     spec.destination,
                     spellwake_engine::toolbox::ZoneDest::Graveyard {

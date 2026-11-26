@@ -32,7 +32,19 @@ pub(super) fn compile(
     let (other, ability) = text.rsplit_once('\n').unwrap_or(("", text));
     let (cost, effect) = ability.split_once(", {T}, Sacrifice this artifact: ")?;
     let (target, op) = match effect {
-        "Destroy target permanent." => (BodyTarget::SinglePermanent, Instruction::DestroyTarget),
+        "Destroy target permanent." => (
+            BodyTarget::SinglePermanent,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ),
+        ),
         "It deals 2 damage to target creature." => (
             BodyTarget::SingleCreature,
             Instruction::Damage { amount: 2.into() },

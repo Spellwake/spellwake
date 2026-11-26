@@ -5,7 +5,7 @@ use spellwake_engine::{
     game::{DecisionReply, RuleFrame},
     mana::CastingPayment,
     object_identity::ObjectId,
-    program::{BodyTarget, CastCopyKeyword, ExecutableBody, Instruction, ProgramKind},
+    program::{BodyTarget, CastCopyKeyword, ExecutableBody, ProgramKind},
     stack_window::StackKind,
     targets::TargetRef,
 };
@@ -122,7 +122,21 @@ fn all_real_cast_copy_spells_resolve_original_and_copy() {
         }
         let removal = Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![Instruction::DestroyTarget]),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ),
+                ],
+            ),
         );
         cards.push(SeedCard {
             card: CardId(5),

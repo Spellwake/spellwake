@@ -433,10 +433,7 @@ pub(super) fn lower_zone_action_this_way_action(
         .or_else(|| core.strip_suffix(" were returned"))
         .or_else(|| core.strip_suffix(" are returned"))
     {
-        if matches!(
-            builder.instructions.last(),
-            Some(Instruction::ReturnToOwnersHand | Instruction::ZoneOp(_))
-        ) {
+        if matches!(builder.instructions.last(), Some(Instruction::ZoneOp(_))) {
             (MatchObjectRef::LastAffected, s.trim())
         } else {
             return None;
@@ -668,14 +665,23 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
             false
         }
         MatchObjectRef::LastMovedToExile
-            if matches!(
-                builder.instructions.last(),
-                Some(
-                    Instruction::ExileLibraryTop { .. }
-                        | Instruction::ExileTopForPlay { .. }
-                        | Instruction::ExileTopForFreePlay
-                )
-            ) =>
+            if builder.instructions.last().is_some_and(|op| {
+                matches!(
+                    op,
+                    Instruction::ExileTopForPlay { .. } | Instruction::ExileTopForFreePlay
+                ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                    matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                            ..
+                        }
+                    ) && matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    )
+                })
+            }) =>
         {
             false
         }
@@ -2531,14 +2537,8 @@ pub(super) fn lower_marker_or_action_condition(
                         comparison: Comparison::Equal,
                         right: ValueExpr::literal(1),
                     };
-                    let target_just_moved = matches!(
-                        builder.instructions.last(),
-                        Some(
-                            Instruction::DestroyTarget
-                                | Instruction::ReturnToOwnersHand
-                                | Instruction::ZoneOp(_)
-                        )
-                    );
+                    let target_just_moved =
+                        matches!(builder.instructions.last(), Some(Instruction::ZoneOp(_)));
                     if target_just_moved {
                         let moved_cond = ResolutionCondition {
                             left: ValueExpr::object_matches(

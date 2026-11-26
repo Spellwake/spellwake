@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     occurrence::{EventCause, RulesOccurrence, ZoneReason},
-    program::{ResolvingPlayer, ZoneActionKind},
+    program::ZoneActionKind,
     targets::TargetLegality,
 };
 
@@ -20,11 +20,6 @@ pub(super) struct GraveyardShuffleWork {
     continue_reveals: bool,
 }
 impl EffectWindow {
-    pub(super) fn begin_graveyard_shuffle(&mut self) -> Result<(), EffectError> {
-        let player = self.resolving_player(ResolvingPlayer::Controller)?;
-        self.begin_shuffle(player, false)
-    }
-
     pub(super) fn begin_targeted_graveyard_shuffle(&mut self) -> Result<(), EffectError> {
         let assessment = self
             .window

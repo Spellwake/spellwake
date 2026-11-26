@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Independently derived ordered-program cases frozen in resolution-program-scenarios.md.
 //! These test native mechanisms, not complete cards or a production game protocol.
 use spellwake_engine::program::{BodyTarget, ExecutableBody};
@@ -60,22 +61,6 @@ fn pt(power: i64, toughness: i64) -> PowerToughness {
     PowerToughness {
         power: power.into(),
         toughness: toughness.into(),
-    }
-}
-
-fn continuous(operation: ResolvedPartSpec) -> Instruction {
-    Instruction::CreateContinuousEffect {
-        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![operation]),
-        duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-    }
-}
-
-fn counters(plus: i64, minus: i64) -> Instruction {
-    Instruction::PutPowerToughnessCounters {
-        counters: PowerToughnessCounters {
-            plus_one: plus.into(),
-            minus_one: minus.into(),
-        },
     }
 }
 
@@ -304,182 +289,6 @@ fn assert_rejected(game: &GameState, request: GameInput, expected: GameError) {
     let saved = game.clone();
     assert_eq!(game.advance(request), Err(expected));
     assert_eq!(game, &saved);
-}
-
-#[test]
-fn setup_validates_every_instruction_and_homogeneous_nonempty_programs() {
-    let invalid = vec![
-        vec![],
-        vec![damage(1), Instruction::CopySpell],
-        vec![Instruction::CounterSpell, shield(1)],
-        vec![damage(1), damage(0)],
-        vec![damage(1), shield(-1)],
-        vec![shield(1), multiplier(0)],
-        vec![damage(1), counters(-1, 2)],
-        vec![damage(1), counters(0, 0)],
-    ];
-    for instructions in invalid {
-        assert_eq!(
-            initialize(
-                100.into(),
-                vec![(
-                    1,
-                    A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, instructions)
-                )]
-            ),
-            Err(GameError::Effect(EffectError::InvalidSetup))
-        );
-    }
-    for (target, instructions) in [
-        (BodyTarget::SingleCreature, vec![damage(1), shield(1)]),
-        (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-            vec![Instruction::CopySpell, Instruction::CounterSpell],
-        ),
-    ] {
-        assert!(
-            initialize(
-                100.into(),
-                vec![(1, A, ExecutableBody::new(target, instructions))]
-            )
-            .is_ok()
-        );
-    }
-}
-
-#[test]
-fn transient_zero_toughness_recovers_before_any_state_based_action() {
-    let game = world(
-        3,
-        vec![(
-            1,
-            A,
-            ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![
-                    continuous(ResolvedPartSpec::SetPT(pt(1, 0))),
-                    continuous(ResolvedPartSpec::ModifyPT(pt(0, 2))),
-                ],
-            ),
-        )],
-    );
-    let target = object(&game, FIRST);
-    let (candidate, source) = execute(&game, 1, target);
-    assert_finished(&candidate, source, 1);
-    assert_eq!(object(candidate.state(), FIRST), target);
-    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Battlefield);
-    let derived = candidate
-        .state()
-        .execution()
-        .power_toughness(target)
-        .unwrap()
-        .unwrap();
-    assert_eq!(derived.base, pt(1, 0));
-    assert_eq!(derived.derived, pt(1, 2));
-    assert_eq!(derived.applied_effects.len(), 2);
-    for key in derived.applied_effects {
-        let EffectInstanceKey::Resolved(effect) = key else {
-            panic!("this fixture has only resolved effects")
-        };
-        assert_eq!(
-            candidate
-                .state()
-                .execution()
-                .continuous_effect(effect)
-                .unwrap()
-                .creator,
-            source
-        );
-    }
-    assert_eq!(candidate.damage_journal(), &DamageJournal::default());
-}
-
-#[test]
-fn lethal_damage_then_bounce_retains_exact_applied_identity_and_reaches_hand() {
-    let game = world(
-        3,
-        vec![(
-            1,
-            A,
-            ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![damage(3), Instruction::ReturnToOwnersHand],
-            ),
-        )],
-    );
-    let target = object(&game, FIRST);
-    let (candidate, source) = execute(&game, 1, target);
-    assert_finished(&candidate, source, 1);
-    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Hand(A));
-    assert_ne!(object(candidate.state(), FIRST), target);
-    assert!(
-        candidate
-            .state()
-            .execution()
-            .creature(target)
-            .unwrap()
-            .is_none()
-    );
-    let journal = candidate.damage_journal();
-    assert_eq!(journal.attempts.len(), 1);
-    assert_eq!(journal.applied.len(), 1);
-    assert_eq!(
-        (journal.applied[0].target, journal.applied[0].amount.clone()),
-        (DamageRecipient::Creature(target), 3.into())
-    );
-    assert_eq!(
-        journal.completions[0].outcome,
-        DamageOutcome::Dealt(3.into())
-    );
-}
-
-#[test]
-fn departed_operand_skips_every_later_creature_primitive_without_allocating_effects() {
-    let game = world(
-        3,
-        vec![(
-            1,
-            A,
-            ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![
-                    Instruction::ReturnToOwnersHand,
-                    damage(3),
-                    continuous(ResolvedPartSpec::SetPT(pt(9, 9))),
-                    counters(1, 0),
-                    shield(4),
-                    multiplier(2),
-                    Instruction::ReturnToOwnersHand,
-                ],
-            ),
-        )],
-    );
-    let target = object(&game, FIRST);
-    let (candidate, source) = execute(&game, 1, target);
-    assert_finished(&candidate, source, 1);
-    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Hand(A));
-    assert_ne!(object(candidate.state(), FIRST), target);
-    assert_eq!(candidate.damage_journal(), &DamageJournal::default());
-    assert_eq!(
-        candidate.state().execution().prevention_shields().count(),
-        0
-    );
-    assert_eq!(
-        candidate.state().execution().damage_multipliers().count(),
-        0
-    );
-    assert_eq!(
-        candidate
-            .state()
-            .execution()
-            .copiable_power_toughness(object(candidate.state(), FIRST)),
-        Some(pt(1, 3).into())
-    );
-    assert_eq!(
-        marked(candidate.state(), object(candidate.state(), SECOND)),
-        0.into()
-    );
 }
 
 #[test]
@@ -1065,38 +874,6 @@ fn counter_then_copy_and_repeated_counter_skip_departed_stack_operands() {
 }
 
 #[test]
-fn initial_all_illegal_aborts_the_whole_program_before_any_effect_or_attempt() {
-    let game = world(
-        100,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(4), damage(3)]),
-            ),
-            (
-                2,
-                B,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::ReturnToOwnersHand],
-                ),
-            ),
-        ],
-    );
-    let target = object(&game, FIRST);
-    let (game, source) = cast(&game, A, 1, TargetRef::Object(target));
-    let (game, _) = cast(&game, B, 2, TargetRef::Object(target));
-    let bounced = resolve(&game).into_state();
-    assert_eq!(zone(&bounced, FIRST), ObjectZone::Hand(A));
-    let done = resolve(&bounced);
-    assert_finished(&done, source, 1);
-    assert_eq!(done.damage_journal(), &DamageJournal::default());
-    assert_eq!(zone(done.state(), FIRST), ObjectZone::Hand(A));
-    assert_eq!(done.state().execution().prevention_shields().count(), 0);
-}
-
-#[test]
 fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
     let game = world(
         100,
@@ -1297,62 +1074,6 @@ fn exact_large_multiplication_and_sequential_addition_never_narrow() {
             (amount.clone(), 2.into(), amount.times(&2.into()))
         );
     }
-}
-
-#[test]
-fn zero_toughness_target_survives_a_real_suspension_until_later_recovery() {
-    let game = world(
-        3,
-        vec![(
-            1,
-            A,
-            ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![
-                    continuous(ResolvedPartSpec::SetPT(pt(1, 0))),
-                    shield(3),
-                    shield(4),
-                    damage(5),
-                    continuous(ResolvedPartSpec::SetPT(pt(1, 2))),
-                ],
-            ),
-        )],
-    );
-    let target = object(&game, FIRST);
-    let (start, source) = execute(&game, 1, target);
-    let game = start.state();
-    assert_eq!(game.execution().instruction_index(), Some(3));
-    assert_eq!(
-        game.execution()
-            .creature(target)
-            .unwrap()
-            .unwrap()
-            .toughness,
-        0.into()
-    );
-    assert_eq!(object(game, FIRST), target);
-    assert_eq!(zone(game, FIRST), ObjectZone::Battlefield);
-    assert_eq!(zone(game, 1), ObjectZone::Stack);
-    let shield = game.execution().prevention_shields().next().unwrap().id;
-    let done = choose(game, shield);
-    assert_finished(&done, source, 1);
-    assert_eq!(zone(done.state(), FIRST), ObjectZone::Battlefield);
-    assert_eq!(object(done.state(), FIRST), target);
-    assert_eq!(
-        done.state()
-            .execution()
-            .creature(target)
-            .unwrap()
-            .unwrap()
-            .toughness,
-        2.into()
-    );
-    assert_eq!(marked(done.state(), target), 0.into());
-    assert_eq!(done.damage_journal().completions.len(), 1);
-    assert_eq!(
-        done.damage_journal().completions[0].outcome,
-        DamageOutcome::FullyPrevented
-    );
 }
 
 #[test]

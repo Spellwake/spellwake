@@ -210,12 +210,13 @@ pub(super) fn unblockable_effect() -> spellwake_engine::program::Instruction {
     use spellwake_engine::characteristics::{
         BlockingRestriction, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
     };
-    spellwake_engine::program::Instruction::CreateContinuousEffect {
-        duration: ResolvedDuration::UntilEndOfTurn,
-        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+        spellwake_engine::toolbox::ObjectQuery::Targets,
+        ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
             BlockingRestriction::CannotBeBlocked,
         )]),
-    }
+        ResolvedDuration::UntilEndOfTurn,
+    )
 }
 
 /// Compile a creature face whose only activation makes a target unblockable.
@@ -250,7 +251,7 @@ pub(super) fn sliver_selected_activation(
     use spellwake_engine::{
         activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
         mana::ManaCost,
-        program::{BodyTarget, ExecutableBody, Instruction},
+        program::{BodyTarget, ExecutableBody},
     };
     let [face] = card.faces.as_slice() else {
         return None;
@@ -272,9 +273,11 @@ pub(super) fn sliver_selected_activation(
         },
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            ],
         ),
     };
     program.continuous = Some(StaticContinuousAbility::Battlefield {

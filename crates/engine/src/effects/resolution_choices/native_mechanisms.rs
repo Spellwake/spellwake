@@ -704,7 +704,12 @@ fn optional_multiplier_creates_one_owned_effect_or_skips() {
 #[test]
 fn optional_bounce_moves_exact_target_once_or_retains_its_incarnation() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = creature_optional(Instruction::ReturnToOwnersHand);
+        let state = creature_optional(crate::program::Instruction::ZoneOp(Box::new(
+            crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::Targets,
+                crate::toolbox::ZoneDest::Hand,
+            ),
+        )));
         let original = object(&state, 2);
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
@@ -731,12 +736,29 @@ fn optional_bounce_moves_exact_target_once_or_retains_its_incarnation() {
 #[test]
 fn optional_continuous_effect_uses_real_characteristic_owner_or_skips() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = creature_optional(Instruction::CreateContinuousEffect {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
-                power: 1.into(),
-                toughness: 2.into(),
-            })]),
-            duration: ResolvedDuration::NoStatedDuration,
+        let state = creature_optional({
+            struct _Tmp {
+                parts: crate::characteristics::ResolvedPartsSpec,
+                duration: crate::characteristics::ResolvedDuration,
+            }
+            let _t = _Tmp {
+                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+                    power: 1.into(),
+                    toughness: 2.into(),
+                })]),
+                duration: ResolvedDuration::NoStatedDuration,
+            };
+            crate::program::Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec {
+                    selector: Some(crate::toolbox::ObjectQuery::Targets),
+                    payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                    duration: _t.duration,
+                    condition: None,
+                    one_shot: false,
+                    as_emblem: None,
+                    emblem_label: None,
+                },
+            ))
         });
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
@@ -771,11 +793,30 @@ fn optional_continuous_effect_uses_real_characteristic_owner_or_skips() {
 #[test]
 fn optional_counters_place_once_or_leave_physical_counters_unchanged() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = creature_optional(Instruction::PutPowerToughnessCounters {
-            counters: PowerToughnessCounters {
-                plus_one: 2.into(),
-                minus_one: 0.into(),
-            },
+        let state = creature_optional({
+            struct _Tmp {
+                counters: crate::characteristics::PowerToughnessCounters,
+            }
+            let _t = _Tmp {
+                counters: PowerToughnessCounters {
+                    plus_one: 2.into(),
+                    minus_one: 0.into(),
+                },
+            };
+            let (_k, _a) = if _t.counters.minus_one.is_positive() {
+                (crate::effects::CounterKind::MinusOne, _t.counters.minus_one)
+            } else {
+                (crate::effects::CounterKind::PlusOne, _t.counters.plus_one)
+            };
+            crate::program::Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: _k,
+                        amount: crate::program::ValueExpr::Literal(_a),
+                    },
+                ),
+            ))
         });
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
@@ -816,15 +857,39 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
                 A,
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::ReturnToOwnersHand,
+                    crate::program::Instruction::ZoneOp(Box::new(
+                        crate::toolbox::ZoneOpSpec::move_all(
+                            crate::toolbox::ObjectQuery::Targets,
+                            crate::toolbox::ZoneDest::Hand,
+                        ),
+                    )),
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::PutPowerToughnessCounters {
-                        counters: PowerToughnessCounters {
-                            plus_one: 1.into(),
-                            minus_one: 0.into(),
-                        },
+                    {
+                        struct _Tmp {
+                            counters: crate::characteristics::PowerToughnessCounters,
+                        }
+                        let _t = _Tmp {
+                            counters: PowerToughnessCounters {
+                                plus_one: 1.into(),
+                                minus_one: 0.into(),
+                            },
+                        };
+                        let (_k, _a) = if _t.counters.minus_one.is_positive() {
+                            (crate::effects::CounterKind::MinusOne, _t.counters.minus_one)
+                        } else {
+                            (crate::effects::CounterKind::PlusOne, _t.counters.plus_one)
+                        };
+                        crate::program::Instruction::MutateObject(Box::new(
+                            crate::toolbox::MutateObjectSpec::all(
+                                crate::toolbox::ObjectQuery::Targets,
+                                crate::toolbox::ObjectMutation::AddCounters {
+                                    kind: _k,
+                                    amount: crate::program::ValueExpr::Literal(_a),
+                                },
+                            ),
+                        ))
                     },
                     gain(2),
                 ],
@@ -1035,14 +1100,34 @@ fn captured_after_source_change(control: bool, body: Vec<Instruction>) -> GameSt
     let mut original = hand(1, B, BodyTarget::None, vec![gain(0)]);
     original.program.card_types.insert(CardType::Kindred);
     let response = if control {
-        Instruction::CreateContinuousEffect {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                ControlRecipient::ResolvingController,
-            )]),
-            duration: ResolvedDuration::NoStatedDuration,
+        {
+            struct _Tmp {
+                parts: crate::characteristics::ResolvedPartsSpec,
+                duration: crate::characteristics::ResolvedDuration,
+            }
+            let _t = _Tmp {
+                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                    ControlRecipient::ResolvingController,
+                )]),
+                duration: ResolvedDuration::NoStatedDuration,
+            };
+            crate::program::Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec {
+                    selector: Some(crate::toolbox::ObjectQuery::Targets),
+                    payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                    duration: _t.duration,
+                    condition: None,
+                    one_shot: false,
+                    as_emblem: None,
+                    emblem_label: None,
+                },
+            ))
         }
     } else {
-        Instruction::ReturnToOwnersHand
+        crate::program::Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
+            crate::toolbox::ObjectQuery::Targets,
+            crate::toolbox::ZoneDest::Hand,
+        )))
     };
     let mut mana = Program::artifact(None, vec![]);
     mana.mana.push(ManaAbility {

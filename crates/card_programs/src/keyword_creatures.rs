@@ -1361,7 +1361,15 @@ fn partner_cast_trigger(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::all(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                        kind: spellwake_engine::effects::CounterKind::PlusOne,
+                        amount: spellwake_engine::program::ValueExpr::literal(1),
+                    },
+                ),
+            ))],
         ),
     });
     Some(program)

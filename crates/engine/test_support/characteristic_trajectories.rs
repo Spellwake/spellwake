@@ -112,9 +112,28 @@ pub(crate) fn spell(id: u64, target: BodyTarget, instructions: Vec<Instruction>)
 }
 
 pub(crate) fn effect(parts: Vec<ResolvedPartSpec>, duration: ResolvedDuration) -> Instruction {
-    Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(parts),
-        duration,
+    {
+        struct _Tmp {
+            parts: spellwake_engine::characteristics::ResolvedPartsSpec,
+            duration: spellwake_engine::characteristics::ResolvedDuration,
+        }
+        let _t = _Tmp {
+            parts: ResolvedPartsSpec(parts),
+            duration,
+        };
+        spellwake_engine::program::Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec {
+                selector: Some(spellwake_engine::toolbox::ObjectQuery::Targets),
+                payload: spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                    _t.parts,
+                )),
+                duration: _t.duration,
+                condition: None,
+                one_shot: false,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        ))
     }
 }
 
@@ -2734,11 +2753,36 @@ fn evaluated_checkpoint(label: &'static str, state: &GameState, result: &Evaluat
 
 // Mechanical shared bodies for the six resolved reference routes.
 pub(crate) fn counters() -> Instruction {
-    Instruction::PutPowerToughnessCounters {
-        counters: PowerToughnessCounters {
-            plus_one: 1.into(),
-            minus_one: 0.into(),
-        },
+    {
+        struct _Tmp {
+            counters: spellwake_engine::characteristics::PowerToughnessCounters,
+        }
+        let _t = _Tmp {
+            counters: PowerToughnessCounters {
+                plus_one: 1.into(),
+                minus_one: 0.into(),
+            },
+        };
+        let (_k, _a) = if _t.counters.minus_one.is_positive() {
+            (
+                spellwake_engine::effects::CounterKind::MinusOne,
+                _t.counters.minus_one,
+            )
+        } else {
+            (
+                spellwake_engine::effects::CounterKind::PlusOne,
+                _t.counters.plus_one,
+            )
+        };
+        spellwake_engine::program::Instruction::MutateObject(Box::new(
+            spellwake_engine::toolbox::MutateObjectSpec::all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                    kind: _k,
+                    amount: spellwake_engine::program::ValueExpr::Literal(_a),
+                },
+            ),
+        ))
     }
 }
 
@@ -3176,7 +3220,12 @@ pub(crate) fn target_later_bounce() {
                 BodyTarget::SingleCreature,
                 vec![
                     remove_creature(ResolvedDuration::NoStatedDuration),
-                    Instruction::ReturnToOwnersHand,
+                    spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Hand,
+                        ),
+                    )),
                 ],
             ),
         ],

@@ -615,7 +615,12 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
     cards.push(instant(
         2,
         BodyTarget::SinglePermanent,
-        vec![Instruction::ReturnToOwnersHand],
+        vec![crate::program::Instruction::ZoneOp(Box::new(
+            crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::Targets,
+                crate::toolbox::ZoneDest::Hand,
+            ),
+        ))],
     ));
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
@@ -954,11 +959,30 @@ fn token_owned_copied_and_removed_sba_sources_use_actual_evaluated_abilities() {
                 1,
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                            AbilityChange::remove(AbilityRemoval::All),
-                        )]),
-                        duration: ResolvedDuration::NoStatedDuration,
+                    {
+                        struct _Tmp {
+                            parts: crate::characteristics::ResolvedPartsSpec,
+                            duration: crate::characteristics::ResolvedDuration,
+                        }
+                        let _t = _Tmp {
+                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                                AbilityChange::remove(AbilityRemoval::All),
+                            )]),
+                            duration: ResolvedDuration::NoStatedDuration,
+                        };
+                        crate::program::Instruction::ApplyContinuous(Box::new(
+                            crate::toolbox::ApplyContinuousSpec {
+                                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                                payload: crate::toolbox::ContinuousPayload::ResolvedParts(
+                                    Box::new(_t.parts),
+                                ),
+                                duration: _t.duration,
+                                condition: None,
+                                one_shot: false,
+                                as_emblem: None,
+                                emblem_label: None,
+                            },
+                        ))
                     },
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
@@ -1016,12 +1040,24 @@ fn complete_pass_run() -> Run {
                     object_filter: None,
                 },
             },
-            Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 1.into(),
-                },
-            },
+            crate::program::Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: crate::effects::CounterKind::PlusOne,
+                        amount: crate::program::ValueExpr::Literal(1.into()),
+                    },
+                ),
+            )),
+            crate::program::Instruction::MutateObject(Box::new(
+                crate::toolbox::MutateObjectSpec::all(
+                    crate::toolbox::ObjectQuery::Targets,
+                    crate::toolbox::ObjectMutation::AddCounters {
+                        kind: crate::effects::CounterKind::MinusOne,
+                        amount: crate::program::ValueExpr::Literal(1.into()),
+                    },
+                ),
+            )),
             Instruction::Damage { amount: 2.into() },
             Instruction::AdjustControllerLife {
                 adjustment: LifeAdjustment::Lose(20.into()),
@@ -1249,12 +1285,26 @@ fn later_sba_pass_uses_fresh_roster_after_source_departure() {
 fn cancellation_cessation_and_loss_only_passes_have_no_zone_intents_or_replacement_frames() {
     for mode in 0..3 {
         let body = match mode {
-            0 => vec![Instruction::PutPowerToughnessCounters {
-                counters: PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 1.into(),
-                },
-            }],
+            0 => vec![
+                crate::program::Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ObjectMutation::AddCounters {
+                            kind: crate::effects::CounterKind::PlusOne,
+                            amount: crate::program::ValueExpr::Literal(1.into()),
+                        },
+                    ),
+                )),
+                crate::program::Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ObjectMutation::AddCounters {
+                            kind: crate::effects::CounterKind::MinusOne,
+                            amount: crate::program::ValueExpr::Literal(1.into()),
+                        },
+                    ),
+                )),
+            ],
             1 => vec![gain(1)],
             _ => vec![Instruction::AdjustControllerLife {
                 adjustment: LifeAdjustment::Lose(20.into()),
@@ -1824,20 +1874,58 @@ fn cleanup_sba_after_real_expiry_uses_pass_one_and_the_actual_turn_work_parent()
                 1,
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::CreateContinuousEffect {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(
-                            crate::characteristics::PowerToughness {
-                                power: 0.into(),
-                                toughness: 1.into(),
+                    {
+                        struct _Tmp {
+                            parts: crate::characteristics::ResolvedPartsSpec,
+                            duration: crate::characteristics::ResolvedDuration,
+                        }
+                        let _t = _Tmp {
+                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(
+                                crate::characteristics::PowerToughness {
+                                    power: 0.into(),
+                                    toughness: 1.into(),
+                                },
+                            )]),
+                            duration: ResolvedDuration::UntilEndOfTurn,
+                        };
+                        crate::program::Instruction::ApplyContinuous(Box::new(
+                            crate::toolbox::ApplyContinuousSpec {
+                                selector: Some(crate::toolbox::ObjectQuery::Targets),
+                                payload: crate::toolbox::ContinuousPayload::ResolvedParts(
+                                    Box::new(_t.parts),
+                                ),
+                                duration: _t.duration,
+                                condition: None,
+                                one_shot: false,
+                                as_emblem: None,
+                                emblem_label: None,
                             },
-                        )]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
+                        ))
                     },
-                    Instruction::PutPowerToughnessCounters {
-                        counters: PowerToughnessCounters {
-                            plus_one: 0.into(),
-                            minus_one: 1.into(),
-                        },
+                    {
+                        struct _Tmp {
+                            counters: crate::characteristics::PowerToughnessCounters,
+                        }
+                        let _t = _Tmp {
+                            counters: PowerToughnessCounters {
+                                plus_one: 0.into(),
+                                minus_one: 1.into(),
+                            },
+                        };
+                        let (_k, _a) = if _t.counters.minus_one.is_positive() {
+                            (crate::effects::CounterKind::MinusOne, _t.counters.minus_one)
+                        } else {
+                            (crate::effects::CounterKind::PlusOne, _t.counters.plus_one)
+                        };
+                        crate::program::Instruction::MutateObject(Box::new(
+                            crate::toolbox::MutateObjectSpec::all(
+                                crate::toolbox::ObjectQuery::Targets,
+                                crate::toolbox::ObjectMutation::AddCounters {
+                                    kind: _k,
+                                    amount: crate::program::ValueExpr::Literal(_a),
+                                },
+                            ),
+                        ))
                     },
                 ],
             ),

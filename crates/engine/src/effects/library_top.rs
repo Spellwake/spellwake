@@ -482,7 +482,6 @@ impl EffectWindow {
             | Instruction::OfferManaPayment { .. }
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
@@ -492,12 +491,9 @@ impl EffectWindow {
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
-            | Instruction::DoublePowerToughnessSubject { .. }
-            | Instruction::DoubleCountersOnSubject { .. }
             | Instruction::WinGame(_)
             | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -525,12 +521,7 @@ impl EffectWindow {
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
-            | Instruction::AttachPermanent { .. }
-            | Instruction::UnattachSubject { .. }
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::SkipNextUntap { .. }
-            | Instruction::RequireCombatAction { .. }
-            | Instruction::CreateTemporaryRule { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -541,7 +532,6 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::SetDayNight(_)
@@ -553,20 +543,12 @@ impl EffectWindow {
             | Instruction::PayLife { .. }
             | Instruction::PayEnergy { .. }
             | Instruction::TapOrUntapControlled { .. }
-            | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
-            | Instruction::GrantControllerFlashUntilCleanup
-            | Instruction::RequireOpponentsCreaturesBlockThisTurn
-            | Instruction::RequireBlocksAgainstTargetThisTurn
-            | Instruction::SuppressGroupKeywords { .. }
-            | Instruction::ModifyGroupUntilEndOfTurn { .. }
-            | Instruction::BoostSource { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
-            | Instruction::PutCountersOnSource { .. }
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::Unattach
             | Instruction::CreateTokenAndAttach { .. }
@@ -594,12 +576,10 @@ impl EffectWindow {
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
-            | Instruction::GoadOtherPlayersCreatures
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
             | Instruction::DisallowDamagePreventionThisTurn
-            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::PreventDamageSpec(_)
             | Instruction::PutOwnHandCardOnLibraryBottom
@@ -608,44 +588,22 @@ impl EffectWindow {
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
-            | Instruction::ReturnSourceToHand
             | Instruction::PutCounterOnRelatedPermanent
-            | Instruction::PutCountersOnControlledCreatures
-            | Instruction::PutCountersOnControlledSubtype(_)
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-            | Instruction::PutCountersOnOtherCreatures
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::PutChargeCounterOnSource
-            | Instruction::PutBlessingCounterOnSource
-            | Instruction::PutNamedCounterOnSource { .. }
-            | Instruction::PutCountersOnSubject { .. }
-            | Instruction::SetGroupTapped { .. }
-            | Instruction::SetSubjectTapped { .. }
-            | Instruction::PutQuestCounterOnSource
-            | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
             | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::FightSourceWithTarget
-            | Instruction::ClearSourceCounters(_)
-            | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
-            | Instruction::UntapAbilitySource
-            | Instruction::TapAbilitySource
-            | Instruction::RegenerateSource
-            | Instruction::RegenerateControlledSubtype(_)
-            | Instruction::RegenerateTarget
-            | Instruction::DoubleCountersOnTargets
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::UntapControlledLands
-            | Instruction::UntapControlledCreatures
             | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::AttachOnEntry { .. }
             | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -711,7 +669,6 @@ impl EffectWindow {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ExileRelatedPermanents(_)
-            | Instruction::ExileTargetWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
@@ -732,7 +689,6 @@ impl EffectWindow {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOut(_)
             | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
             | Instruction::WeakenDelayedAttacker(_)
@@ -745,7 +701,6 @@ impl EffectWindow {
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
             | Instruction::DamageGroupAmount { .. }
-            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -790,8 +745,6 @@ impl EffectWindow {
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
-            | Instruction::GoadTarget
-            | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
@@ -799,14 +752,11 @@ impl EffectWindow {
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Instruction::ReturnSourceGraveyardToBattlefield { .. }
-            | Instruction::ReturnSourceGraveyardToHand
             | Instruction::ReturnOwnedCommandersToHand
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::EndControllerTurn
-            | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -819,9 +769,7 @@ impl EffectWindow {
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilSourceLeaves
             | Instruction::ExileTargetUntilOpponentMonarch
-            | Instruction::ReturnToOwnersHand
             | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
@@ -833,15 +781,9 @@ impl EffectWindow {
             | Instruction::CopyAbility
             | Instruction::CopySpell
             | Instruction::CopyTargetToSource { .. }
-            | Instruction::CreateContinuousEffect { .. }
             | Instruction::WeakenTargetByChosenX
-            | Instruction::BoostTargetPower { .. }
             | Instruction::AnimateTargetAsCountedCreature { .. }
             | Instruction::GrantProtectionChosenColor(_)
-            | Instruction::PutIndestructibleCounter
-            | Instruction::PutLoyaltyCounter
-            | Instruction::PutNamedCounterOnTarget { .. }
-            | Instruction::PutPowerToughnessCounters { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::ReturnCapturedDyingCreature
             | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
@@ -860,7 +802,6 @@ impl EffectWindow {
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
             | Instruction::ExileOrderedPermanent(_)
-            | Instruction::ExileLibraryTop { .. }
             | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
             | Instruction::LookOpponentExileForCast { .. }
             | Instruction::ExileFromTargetLibrary
@@ -904,13 +845,11 @@ impl EffectWindow {
             | Instruction::LookTopReveal { .. }
             | Instruction::LookTopTakeOne { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::DrawTargetPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
-            | Instruction::DrawEachPlayer { .. }
             | Instruction::DrawPlayersControllingName(_)
             | Instruction::DrawController { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
@@ -953,12 +892,10 @@ impl EffectWindow {
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. }
-            | Instruction::DrawPlayer { .. }
             | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
-            | Instruction::RemoveCountersFromSubject { .. }
             | Instruction::UntapOrTapSelect { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
@@ -966,24 +903,17 @@ impl EffectWindow {
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. }
-            | Instruction::TurnFaceDownSubject { .. }
-            | Instruction::TransformSubject { .. }
             | Instruction::EmpowerJace { .. }
-            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
-            | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::RegenerateSubject { .. }
             | Instruction::AddManaForPlayer { .. }
-            | Instruction::SkipNextTurns { .. }
-            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::AttachPermanentToPlayer { .. }
-            | Instruction::AttachChoosingPermanent { .. } => return Ok(false),
+            | Instruction::AttachChoosingPermanent { .. }
+            | Instruction::DrawCards(_)
+            | Instruction::MutateObject(_) => return Ok(false),
         };
         let controller = self
             .window

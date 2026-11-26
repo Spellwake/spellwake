@@ -88,7 +88,12 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
         } else {
             (
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             )
         };
         if matches!(case, "TR1" | "TR5") {
@@ -126,7 +131,12 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::ReturnToOwnersHand],
+                    vec![crate::program::Instruction::ZoneOp(Box::new(
+                        crate::toolbox::ZoneOpSpec::move_all(
+                            crate::toolbox::ObjectQuery::Targets,
+                            crate::toolbox::ZoneDest::Hand,
+                        ),
+                    ))],
                 ),
             ),
         });

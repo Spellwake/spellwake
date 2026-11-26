@@ -595,10 +595,10 @@ pub(super) fn lower_keyword(
                 },
                 body: ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::PutNamedCounterOnTarget {
-                        kind: CounterKind::PlusOne,
-                        amount: ValueExpr::Literal(power),
-                    }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        CounterKind::PlusOne,
+                        ValueExpr::Literal(power),
+                    )],
                 ),
             });
             Ok(())
@@ -622,9 +622,9 @@ pub(super) fn lower_keyword(
                             },
                             destination: 2,
                         },
-                        Instruction::DrawController {
-                            amount: ValueExpr::literal(1),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            ValueExpr::literal(1),
+                        ),
                     ],
                 ),
             });
@@ -688,9 +688,11 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling),
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            ValueExpr::literal(1),
+                        ),
+                    ],
                 ),
             });
             Ok(())
@@ -888,12 +890,13 @@ pub(super) fn lower_keyword(
                             maximum: 1,
                             action: PermanentTargetAction::Untap,
                         },
-                        Instruction::CreateContinuousEffect {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
                                 BlockingRestriction::MustBlockSource,
                             )]),
-                            duration: ResolvedDuration::UntilEndOfTurn,
-                        },
+                            ResolvedDuration::UntilEndOfTurn,
+                        ),
                     ],
                 ),
             });
@@ -923,7 +926,7 @@ pub(super) fn lower_keyword(
                             paid_destination: 1,
                             declined_destination: 3,
                         },
-                        Instruction::ReturnSourceGraveyardToHand,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
                         Instruction::Jump { destination: 4 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
                             MoveSubjectRef::AbilitySource,
@@ -958,12 +961,10 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Reinforce),
                 body: ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::PutPowerToughnessCounters {
-                        counters: PowerToughnessCounters {
-                            plus_one: n.into(),
-                            minus_one: 0.into(),
-                        },
-                    }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        CounterKind::PlusOne,
+                        ValueExpr::Literal(n.into()),
+                    )],
                 ),
             });
             Ok(())
@@ -1554,7 +1555,10 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::Tap,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        CounterKind::PlusOne,
+                        ValueExpr::literal(1),
+                    )],
                 ),
             });
             program
@@ -1579,11 +1583,10 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::PutCountersOnSubject {
-                        subject: Box::new(EffectSubject::AbilitySource),
-                        kind: CounterKind::Level,
-                        amount: ValueExpr::Literal(1.into()),
-                    }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        CounterKind::Level,
+                        ValueExpr::Literal(1.into()),
+                    )],
                 ),
             });
             program
@@ -3682,11 +3685,11 @@ fn lower_non_mana_cumulative_upkeep(
         let ck = parse_counter_kind(kind_raw.trim())
             .filter(|k| k.is_permanent())
             .ok_or("oracle:cum-upkeep-cost")?;
-        vec![Instruction::PutCountersOnSubject {
-            subject: Box::new(EffectSubject::AbilitySource),
-            kind: ck,
-            amount: age_count,
-        }]
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                ck, age_count,
+            ),
+        ]
     } else if let Some(sym) = low.strip_prefix("add ") {
         let mana_type = match sym.trim() {
             "{w}" => ManaType::White,
@@ -3727,7 +3730,7 @@ fn lower_non_mana_cumulative_upkeep(
             },
         }]
     } else if low == "draw a card" {
-        vec![Instruction::DrawController { amount: age_count }]
+        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(age_count)]
     } else if low == "discard a card" {
         vec![Instruction::Discard {
             players: AffectedPlayers::One(ResolvingPlayer::Controller),
@@ -3840,11 +3843,11 @@ fn lower_non_mana_cumulative_upkeep(
                     max_total_power: None,
                     unchosen_action: None,
                 },
-                Instruction::PutCountersOnSubject {
-                    subject: Box::new(EffectSubject::LastMoved),
-                    kind: CounterKind::PlusOne,
-                    amount: ValueExpr::literal(1),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
+                    EffectSubject::LastMoved,
+                    CounterKind::PlusOne,
+                    ValueExpr::literal(1),
+                ),
             ],
         );
         vec![Instruction::RepeatLoop {
@@ -3871,11 +3874,13 @@ fn lower_non_mana_cumulative_upkeep(
                     max_total_power: None,
                     unchosen_action: None,
                 },
-                Instruction::GainControlOfPermanent {
-                    subject: Box::new(EffectSubject::LastMoved),
-                    controller: ResolvingPlayer::Controller,
-                    duration: ResolvedDuration::NoStatedDuration,
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_control_of_subject(
+                    EffectSubject::LastMoved,
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    ResolvedDuration::NoStatedDuration,
+                ),
             ],
         );
         vec![Instruction::RepeatLoop {
@@ -3887,10 +3892,12 @@ fn lower_non_mana_cumulative_upkeep(
     };
 
     let mut instructions = Vec::with_capacity(cost_ops.len() + 5);
-    instructions.push(Instruction::PutNamedCounterOnSource {
-        kind: CounterKind::Age,
-        amount: 1,
-    });
+    instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+            CounterKind::Age,
+            ValueExpr::literal(1),
+        ),
+    );
     let sac_idx = 1 + usize::from(pre_guard.is_some()) + 1 + cost_ops.len() + 1;
     if let Some(cond) = pre_guard {
         instructions.push(Instruction::BranchIfFalse {

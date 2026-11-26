@@ -210,7 +210,19 @@ fn cmm_zones_mystic_confluence_taxes_the_spell_controller_bounces_to_owner_and_d
             2,
             B,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SingleCreature, Instruction::DestroyTarget),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ),
         ),
         creature(3, A, 1, 2, &[]),
         seed(
@@ -391,7 +403,10 @@ fn cmm_zones_kirtars_wrath_prevents_regeneration_and_creates_two_flying_spirits_
             id: ActivatedAbilityId(0),
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
-            body: ExecutableBody::new(BodyTarget::None, vec![Instruction::RegenerateSource]),
+            body: ExecutableBody::new(
+                BodyTarget::None,
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+            ),
         });
         let mut cards = vec![
             hand("Kirtar's Wrath"),

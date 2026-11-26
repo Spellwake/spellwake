@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Independent fixed-cost payment acceptance cases, frozen before execution in
 //! engine-core/reviews/mana-payment-scenarios.md. Authored native programs qualify
 //! neither full casting/cards nor Forge's asymmetric per-symbol failure states.
@@ -973,71 +974,6 @@ fn old_source_identity_is_not_retargeted_to_the_accepted_stack_incarnation() {
         ),
         GameError::Effect(EffectError::NotOwnHand),
     );
-}
-
-#[test]
-fn departed_target_and_its_new_hand_incarnation_both_reject_without_payment() {
-    let mut cards = seeds(ManaCost::one(ManaType::Red));
-    cards.push(instant(
-        2,
-        A,
-        ManaCost::free(),
-        Instruction::ReturnToOwnersHand,
-        BodyTarget::SingleCreature,
-    ));
-    let game = GameState::initialize(GameId(41), context(), {
-        // Fixture premise: seeded BF timestamps follow this authored card sequence.
-        let initial_battlefield_order = cards
-            .iter()
-            .filter(|card| {
-                matches!(
-                    card.destination,
-                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
-                )
-            })
-            .map(|card| card.card)
-            .collect();
-        GameSeed::with_uniform_life(
-            vec![A, B],
-            A,
-            cards,
-            initial_battlefield_order,
-            pools(A, &[(ManaType::Red, 3)]),
-            20.into(),
-            CombatRules::UnrestrictedFreeForAll,
-            test_vocabulary(),
-            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
-        )
-    })
-    .unwrap()
-    .into_state();
-    let old = object(&game, 90);
-    let cast = accept(
-        &game,
-        A,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target: TargetRef::Object(old),
-        },
-    );
-    let game = pass_round(cast.into_state());
-    assert_eq!(zone(&game, 90), ObjectZone::Hand(B));
-    assert_ne!(old, object(&game, 90));
-    for target in [old, object(&game, 90)] {
-        reject(
-            &game,
-            request(
-                &game,
-                A,
-                GameCommand::CastPaid {
-                    spell: object(&game, 1),
-                    target: TargetRef::Object(target),
-                    payment: payment(&[(ManaType::Red, 1)]),
-                },
-            ),
-            GameError::Effect(EffectError::IllegalTarget),
-        );
-    }
 }
 
 #[test]

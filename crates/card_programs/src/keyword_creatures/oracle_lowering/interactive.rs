@@ -885,9 +885,18 @@ fn wrap_restricted_mana_yield(
 /// trailing `"Mana of any type/color can be spent to cast spells this way"` sentence appears.
 pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
     match op {
+        Instruction::ApplyContinuous(spec) => {
+            if let spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                any_color, ..
+            } = &mut spec.payload
+            {
+                *any_color = true;
+                true
+            } else {
+                false
+            }
+        }
         Instruction::ExileTopPlay { any_color, .. }
-        | Instruction::GrantCardPlayPermission { any_color, .. }
-        | Instruction::GrantLastMovedPlayPermission { any_color, .. }
         | Instruction::LookTopChooseExt {
             keep_dest:
                 spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
@@ -1999,15 +2008,13 @@ fn has_live_interactive_last_moved(
 ) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::Mill { .. } | Instruction::MillEachPlayer(_) => {
+            Instruction::Mill { .. } => {
                 return matches!(
                     expected,
                     InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
                 );
             }
-            Instruction::ExileLibraryTop { .. }
-            | Instruction::ExileTopPlay { .. }
-            | Instruction::ExileTopForPlay { .. } => {
+            Instruction::ExileTopPlay { .. } | Instruction::ExileTopForPlay { .. } => {
                 return matches!(
                     expected,
                     InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
@@ -2036,6 +2043,12 @@ fn has_live_interactive_last_moved(
                     } => matches!(
                         expected,
                         InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Discard
+                    ),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Mill,
+                    } => matches!(
+                        expected,
+                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
                     ),
                     spellwake_engine::toolbox::ZoneDest::RevealOnly
                     | spellwake_engine::toolbox::ZoneDest::None => continue,
@@ -2068,7 +2081,7 @@ fn has_live_interactive_last_moved(
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::ApplyContinuous(_)
             | Instruction::AdjustControllerLife { .. }
             | Instruction::AdjustPlayersLife { .. }
             | Instruction::GainControllerLife { .. }
@@ -2217,7 +2230,6 @@ pub(super) fn try_lower_choose_option_ext(
             Instruction::ZoneOp(_)
                 | Instruction::ForEachPlayerQuery { .. }
                 | Instruction::ExileTopPlay { .. }
-                | Instruction::ExileLibraryTop { .. }
                 | Instruction::LookTopChooseExt { .. }
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::ChooseObjects { .. }
@@ -2705,16 +2717,16 @@ pub(super) fn lower_prevent_all_damage(
     if let Some(bt) = recipient_target_to_bind {
         builder.bind_target(bt)?;
     }
-    builder
-        .instructions
-        .push(Instruction::PreventDamageSpec(Box::new(
+    builder.instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
             TurnPreventionSpec {
                 combat_only,
                 source: PreventionSourceSpec::Any,
                 recipient: resolved_recipient,
                 both_directions: false,
             },
-        )));
+        ),
+    );
     Ok(())
 }
 
@@ -3081,16 +3093,21 @@ pub(super) fn lower_prevent_all_damage_from(
         builder.bind_target(bt)?;
     }
 
-    builder
-        .instructions
-        .push(Instruction::PreventDamageSpec(Box::new(
-            TurnPreventionSpec {
-                combat_only,
-                source: resolved_source,
-                recipient: resolved_recipient,
-                both_directions,
-            },
-        )));
+    let spec = TurnPreventionSpec {
+        combat_only,
+        source: resolved_source,
+        recipient: resolved_recipient,
+        both_directions,
+    };
+    if matches!(spec.source, PreventionSourceSpec::ChosenColor) {
+        builder
+            .instructions
+            .push(Instruction::PreventDamageSpec(Box::new(spec)));
+    } else {
+        builder.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(spec),
+        );
+    }
     Ok(())
 }
 

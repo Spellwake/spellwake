@@ -1,6 +1,7 @@
 //! Execution engine for the Universal Rules Toolbox primitives.
 
 mod eval;
+mod mutate;
 mod prompt;
 mod zone_op;
 
@@ -50,10 +51,14 @@ impl EffectWindow {
 
     fn execute_apply_continuous(
         &mut self,
+        ctx: &mut RuleStepContext<'_>,
         entry: &StackEntry,
+        index: usize,
         spec: &ApplyContinuousSpec,
     ) -> Result<StepOutcome, EffectError> {
+        use crate::toolbox::ContinuousPayload;
         let controller = entry.controller();
+        let source_object = self.entry_source_object(Some(entry));
         if let Some(cond) = &spec.condition
             && !self.eval_condition_expr_at(
                 controller,
@@ -67,6 +72,9 @@ impl EffectWindow {
         }
 
         if let Some(emblem_players) = &spec.as_emblem {
+            let ContinuousPayload::Static(rule) = &spec.payload else {
+                return Err(EffectError::InconsistentProgram);
+            };
             let seats = self.eval_player_selector_at(
                 controller,
                 Some(entry),
@@ -82,7 +90,7 @@ impl EffectWindow {
                     seat,
                     EmblemDefinition::Authored {
                         label: label.clone(),
-                        continuous: vec![spec.rule.clone()],
+                        continuous: vec![(**rule).clone()],
                         triggered: Vec::new(),
                     },
                 )?;
@@ -91,11 +99,6 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
 
-        let Some(resolved_dur) = self.resolve_duration(entry, spec.duration)? else {
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        };
-        let source_object = self.entry_source_object(Some(entry));
         let locked_objects: Option<BTreeSet<ObjectId>> = match &spec.selector {
             Some(q) => Some(
                 self.eval_object_query_at(controller, Some(entry), q, self.resolution_cursor())?
@@ -105,43 +108,281 @@ impl EffectWindow {
             None => None,
         };
 
-        if matches!(spec.rule, StaticContinuousAbility::Battlefield { .. }) {
-            self.characteristics.add_temporary_static_locked(
-                controller,
-                source_object,
-                resolved_dur,
-                spec.rule.clone(),
-                locked_objects,
-            )?;
-        } else {
-            let id = self.next_temp_rule_id;
-            self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-            let rule_kind = if spec.one_shot {
-                TemporaryRuleKind::OneShotEventReplacement(Box::new(spec.rule.clone()))
-            } else {
-                TemporaryRuleKind::TemporaryStatic(Box::new(spec.rule.clone()))
-            };
-            let bound_target = self
-                .instruction_target(entry)
-                .ok()
-                .map(|t| t.choice().target);
-            let second_bound_target = entry.targets().targets().get(1).map(|t| t.choice().target);
-            let source_damage = self.resolution_damage_source(entry).ok();
-            self.temporary_rules.push(super::ActiveTemporaryRule {
-                id,
-                controller,
-                source_object,
-                source_damage,
-                source_entry: Some(entry.id()),
-                rule: rule_kind,
-                duration: resolved_dur,
-                resolved_players: BTreeSet::new(),
-                resolved_objects: locked_objects.unwrap_or_default(),
-                target: bound_target,
-                second_target: second_bound_target,
-                consumed: false,
-                spell_cast_baselines: BTreeMap::new(),
-            });
+        match &spec.payload {
+            ContinuousPayload::Static(rule) => {
+                let Some(resolved_dur) = self.resolve_duration(entry, spec.duration)? else {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                };
+                if matches!(rule.as_ref(), StaticContinuousAbility::Battlefield { .. }) {
+                    self.characteristics.add_temporary_static_locked(
+                        controller,
+                        source_object,
+                        resolved_dur,
+                        (**rule).clone(),
+                        locked_objects,
+                    )?;
+                } else {
+                    let id = self.next_temp_rule_id;
+                    self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
+                    let rule_kind = if spec.one_shot {
+                        TemporaryRuleKind::OneShotEventReplacement(rule.clone())
+                    } else {
+                        TemporaryRuleKind::TemporaryStatic(rule.clone())
+                    };
+                    let bound_target = self
+                        .instruction_target(entry)
+                        .ok()
+                        .map(|t| t.choice().target);
+                    let second_bound_target =
+                        entry.targets().targets().get(1).map(|t| t.choice().target);
+                    let source_damage = self.resolution_damage_source(entry).ok();
+                    self.temporary_rules.push(super::ActiveTemporaryRule {
+                        id,
+                        controller,
+                        source_object,
+                        source_damage,
+                        source_entry: Some(entry.id()),
+                        rule: rule_kind,
+                        duration: resolved_dur,
+                        resolved_players: BTreeSet::new(),
+                        resolved_objects: locked_objects.unwrap_or_default(),
+                        target: bound_target,
+                        second_target: second_bound_target,
+                        consumed: false,
+                        spell_cast_baselines: BTreeMap::new(),
+                    });
+                }
+            }
+            ContinuousPayload::TemporaryRule(rule_kind) => {
+                self.install_temporary_rule(entry, index, (**rule_kind).clone(), spec.duration)?;
+            }
+            ContinuousPayload::ResolvedParts(parts_spec) => {
+                let affected = locked_objects.unwrap_or_default();
+                if !affected.is_empty() {
+                    let locals = self
+                        .resolution_state()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .locals()
+                        .clone();
+                    for obj_id in affected {
+                        let Some(card) = self
+                            .window
+                            .cards()
+                            .get(obj_id)
+                            .filter(|c| c.zone() == ObjectZone::Battlefield)
+                        else {
+                            continue;
+                        };
+                        let owner = card.owner();
+                        let parts = self.materialize_resolved_parts(
+                            entry,
+                            parts_spec,
+                            &locals,
+                            owner,
+                            source_object,
+                        )?;
+                        self.modify_objects_for_duration(
+                            entry,
+                            index,
+                            [obj_id].into(),
+                            parts,
+                            spec.duration,
+                            ctx.append,
+                        )?;
+                    }
+                }
+            }
+            ContinuousPayload::DynamicBoost {
+                power,
+                toughness,
+                keywords,
+                suppress_keywords,
+            } => {
+                let affected = locked_objects.unwrap_or_default();
+                if !affected.is_empty() {
+                    let dp = self.resolve_value_expr_with_source(
+                        controller,
+                        power,
+                        self.resolution_cursor(),
+                        source_object,
+                    )?;
+                    let dt = self.resolve_value_expr_with_source(
+                        controller,
+                        toughness,
+                        self.resolution_cursor(),
+                        source_object,
+                    )?;
+                    let mut parts = Vec::new();
+                    if dp != RulesInteger::from(0) || dt != RulesInteger::from(0) {
+                        parts.push(crate::characteristics::ResolvedPart::ModifyPT(
+                            crate::characteristics::PowerToughness {
+                                power: dp,
+                                toughness: dt,
+                            },
+                        ));
+                    }
+                    if !keywords.is_empty() || !suppress_keywords.is_empty() {
+                        parts.push(crate::characteristics::ResolvedPart::Abilities(
+                            crate::characteristics::AbilityChange {
+                                granted_keywords: keywords.clone(),
+                                suppressed_keywords: suppress_keywords.clone(),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                    if !parts.is_empty() {
+                        self.modify_objects_for_duration(
+                            entry,
+                            index,
+                            affected,
+                            crate::characteristics::ResolvedParts(parts),
+                            spec.duration,
+                            ctx.append,
+                        )?;
+                    }
+                }
+            }
+            ContinuousPayload::DoublePt { power, toughness } => {
+                if let Some(resolved_dur) = self.resolve_duration(entry, spec.duration)? {
+                    let affected = locked_objects.unwrap_or_default();
+                    let evaluated = self.evaluated_characteristics()?;
+                    for object in affected {
+                        if let Some(pt) = evaluated
+                            .get(object)
+                            .filter(|o| o.zone == ObjectZone::Battlefield)
+                            .and_then(|o| o.power_toughness.clone())
+                        {
+                            let dp = if *power { pt.derived.power } else { 0.into() };
+                            let dt = if *toughness {
+                                pt.derived.toughness
+                            } else {
+                                0.into()
+                            };
+                            self.modify_objects_for_duration(
+                                entry,
+                                index,
+                                [object].into(),
+                                crate::characteristics::ResolvedParts(vec![
+                                    crate::characteristics::ResolvedPart::ModifyPT(
+                                        crate::characteristics::PowerToughness {
+                                            power: dp,
+                                            toughness: dt,
+                                        },
+                                    ),
+                                ]),
+                                resolved_dur,
+                                ctx.append,
+                            )?;
+                        }
+                    }
+                }
+            }
+            ContinuousPayload::CombatAction(kind) => {
+                let affected: Vec<ObjectId> =
+                    locked_objects.unwrap_or_default().into_iter().collect();
+                self.apply_combat_action(entry, index, &affected, *kind, ctx.append)?;
+            }
+            ContinuousPayload::PlayPermission {
+                player,
+                cast_only,
+                free,
+                any_color,
+            } => {
+                let grantee = self
+                    .eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        player,
+                        self.resolution_cursor(),
+                    )?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(controller);
+                let play_duration = match spec.duration {
+                    crate::characteristics::ResolvedDuration::UntilEndOfTurn
+                    | crate::characteristics::ResolvedDuration::UntilEndOfCombat => {
+                        CardPlayDuration::ThroughTurn
+                    }
+                    crate::characteristics::ResolvedDuration::ThroughControllerNextTurn
+                    | crate::characteristics::ResolvedDuration::UntilControllerNextTurn
+                    | crate::characteristics::ResolvedDuration::ThroughNextTurn { .. }
+                    | crate::characteristics::ResolvedDuration::UntilPlayerNextTurn { .. } => {
+                        if self.window.active_player() == grantee {
+                            CardPlayDuration::ThroughNextOwnTurnSkipCurrent(grantee)
+                        } else {
+                            CardPlayDuration::ThroughNextOwnTurn(grantee)
+                        }
+                    }
+                    _ => CardPlayDuration::WhileInZone,
+                };
+                for obj in locked_objects.unwrap_or_default() {
+                    let Some(card) = self.window.cards().get(obj) else {
+                        continue;
+                    };
+                    if card.card_id().is_none() {
+                        continue;
+                    }
+                    let zone = match card.zone() {
+                        ObjectZone::Exile => CardPlayZone::Exile,
+                        ObjectZone::Graveyard(_) => CardPlayZone::Graveyard,
+                        ObjectZone::Hand(_) => CardPlayZone::Hand,
+                        _ => continue,
+                    };
+                    self.card_play_permissions.insert(CardPlayPermission {
+                        zone,
+                        object: obj,
+                        player: grantee,
+                        duration: play_duration,
+                        any_color: *any_color,
+                        free: *free,
+                        cast_only: *cast_only,
+                    });
+                }
+            }
+            ContinuousPayload::PreventDamage(prev_spec) => {
+                return self.apply_turn_prevention_spec(ctx, entry, index, prev_spec);
+            }
+            ContinuousPayload::SkipTurns { player, count } => {
+                let seats = self.eval_player_selector_at(
+                    controller,
+                    Some(entry),
+                    player,
+                    self.resolution_cursor(),
+                )?;
+                let n = self
+                    .resolve_value_expr_with_source(
+                        controller,
+                        count,
+                        self.resolution_cursor(),
+                        source_object,
+                    )?
+                    .to_usize()
+                    .unwrap_or(0);
+                let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+                if n_u16 > 0 {
+                    for seat in seats {
+                        if self.window.participants().contains(&seat) {
+                            let rem = self.skip_turns_remaining.entry(seat).or_insert(0);
+                            *rem = rem.saturating_add(n_u16);
+                        }
+                    }
+                }
+            }
+            ContinuousPayload::SkipStep { player, step } => {
+                let seats = self.eval_player_selector_at(
+                    controller,
+                    Some(entry),
+                    player,
+                    self.resolution_cursor(),
+                )?;
+                for seat in seats {
+                    if self.window.participants().contains(&seat) {
+                        let rem = self.skip_steps_remaining.entry((seat, *step)).or_insert(0);
+                        *rem = rem.saturating_add(1);
+                    }
+                }
+            }
         }
 
         self.advance_instruction()?;
@@ -418,7 +659,11 @@ impl EffectWindow {
                 Ok(StepOutcome::Pending(EffectDecision::PromptChoice(frame)))
             }
             Instruction::ZoneOp(spec) => self.execute_zone_op(ctx, entry, index, &spec),
-            Instruction::ApplyContinuous(spec) => self.execute_apply_continuous(entry, &spec),
+            Instruction::ApplyContinuous(spec) => {
+                self.execute_apply_continuous(ctx, entry, index, &spec)
+            }
+            Instruction::DrawCards(spec) => self.execute_draw_cards(ctx, entry, index, &spec),
+            Instruction::MutateObject(spec) => self.execute_mutate_object(ctx, entry, index, &spec),
             other => Ok(StepOutcome::Next(other)),
         }
     }

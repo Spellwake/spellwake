@@ -93,7 +93,7 @@ fn splice_orders_revealed_cards_preserves_host_and_reuses_hand_cards() {
         ));
         assert!(matches!(
             ops[if ray_first { 2 } else { 1 }],
-            Instruction::DrawController { .. }
+            Instruction::DrawCards(_)
         ));
         let resolved = round(state).into_state();
         assert_eq!(resolved.execution().life_total(A), Some(&18.into()));
@@ -171,7 +171,7 @@ fn splice_rechecks_all_targets_and_preserves_untargeted_text_only_if_spell_resol
                     5,
                     A,
                     ObjectDestination::Hand,
-                    free_instant(BodyTarget::SingleCreature, Instruction::ReturnToOwnersHand),
+                    free_instant(BodyTarget::SingleCreature, crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()),
                 ),
             ],
             &[(Blue, 5), (Red, 2)],

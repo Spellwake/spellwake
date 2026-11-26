@@ -189,13 +189,16 @@ pub(super) fn compile_rules(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
-                        power: 1.into(),
-                        toughness: 1.into(),
-                    })]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+                            power: 1.into(),
+                            toughness: 1.into(),
+                        })]),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
             ),
         });
         return Some(program);
@@ -366,7 +369,12 @@ pub(super) fn compile_rules(
                     .controlled(),
                 ),
                 BodyTarget::None,
-                vec![Instruction::PutChargeCounterOnSource],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        spellwake_engine::effects::CounterKind::Charge,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ],
             ),
             "Whenever equipped creature deals combat damage to a player, that player loses half their life, rounded up." => {
                 (

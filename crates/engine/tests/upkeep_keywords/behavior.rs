@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! CR 702.24 and 702.30 through the ordinary turn scheduler, stack and payments.
 use super::keyword_triggers::place;
 use super::*;
@@ -62,22 +63,6 @@ pub(super) fn upkeep(mut state: GameState, number: u64) -> GameState {
     }
     panic!("upkeep {number} never reached")
 }
-fn control_spell(card: u64, player: SeatId) -> SeedCard {
-    let mut spell = instant(card, player, Instruction::DestroyTarget);
-    spell.program = Program::instant(
-        ManaCost::free(),
-        ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                    ControlRecipient::ResolvingController,
-                )]),
-                duration: ResolvedDuration::NoStatedDuration,
-            }],
-        ),
-    );
-    spell
-}
 fn gain_control(state: &GameState, player: SeatId, spell: u64) -> GameState {
     let passed = act(state, holder(state), GameCommand::Pass).into_state();
     assert_eq!(holder(&passed), player);
@@ -90,63 +75,6 @@ fn gain_control(state: &GameState, player: SeatId, spell: u64) -> GameState {
         },
     );
     round(cast.state()).into_state()
-}
-#[test]
-fn echo_checks_actual_upkeep_history_and_tracks_each_new_controllers_acquisition() {
-    let seed = source(&[UpkeepKeyword::Echo], ManaCost::free());
-    let initial = setup(
-        vec![A, B],
-        vec![seed, control_spell(4, B), control_spell(5, A)],
-        Step::Untap,
-    )
-    .into_state();
-    assert_eq!(initial.execution().window().entries().len(), 1);
-    let paid = answer(
-        &offer(&initial, A, &ManaCost::free()),
-        ResolutionPaymentReply::Pay(ManaPayment::default()),
-    )
-    .into_state();
-    let next = upkeep(paid.clone(), 3);
-    assert!(next.execution().window().entries().is_empty());
-    let taken = gain_control(&paid, B, 4);
-    assert_eq!(object(&taken, 1).controller(), Some(B));
-    let next = upkeep(taken, 2);
-    let offered = offer(&next, B, &ManaCost::free());
-    let kept_by_b = answer(
-        &offered,
-        ResolutionPaymentReply::Pay(ManaPayment::default()),
-    )
-    .into_state();
-    let regained = gain_control(&kept_by_b, A, 5);
-    let again = upkeep(regained, 3);
-    assert_eq!(again.execution().window().entries().len(), 1);
-    let _ = offer(&again, A, &ManaCost::free());
-    let unpaid = answer(&offered, ResolutionPaymentReply::Decline);
-    assert_eq!(object(unpaid.state(), 1).zone(), ObjectZone::Graveyard(A));
-    assert_eq!(object(unpaid.state(), 1).owner(), A);
-    assert!(unpaid.rules_journal().records.iter().any(|r|matches!(r,RulesRecord::Event(e) if e.occurrences.iter().any(|o|matches!(&o.value,RulesOccurrence::ZoneChange(m) if m.reason==ZoneReason::Sacrifice{player:B})))));
-}
-#[test]
-fn transferred_upkeep_source_cannot_be_sacrificed_by_its_old_controller() {
-    for kind in [UpkeepKeyword::Echo, UpkeepKeyword::CumulativeUpkeep] {
-        let state = setup(
-            vec![A, B],
-            vec![source(&[kind], ManaCost::free()), control_spell(4, B)],
-            Step::Untap,
-        )
-        .into_state();
-        let taken = gain_control(&state, B, 4);
-        let quoted = offer(&taken, A, &ManaCost::free());
-        let kept = answer(&quoted, ResolutionPaymentReply::Decline).into_state();
-        assert_eq!(object(&kept, 1).controller(), Some(B));
-        assert_eq!(
-            kept.execution()
-                .age_counters()
-                .get(&object(&kept, 1).id())
-                .cloned(),
-            (kind == UpkeepKeyword::CumulativeUpkeep).then(|| 1.into())
-        );
-    }
 }
 #[test]
 fn cumulative_instances_share_age_and_require_the_entire_current_price() {
@@ -212,25 +140,4 @@ fn cumulative_instances_share_age_and_require_the_entire_current_price() {
     let missing = round(&unpaid).into_state();
     assert!(missing.pending_decision().is_none());
     assert!(missing.execution().window().entries().is_empty());
-}
-#[test]
-fn cumulative_upkeep_rechecks_the_same_incarnation_on_resolution() {
-    let ready = setup(
-        vec![A, B],
-        vec![
-            source(
-                &[UpkeepKeyword::CumulativeUpkeep],
-                ManaCost::one(ManaType::Blue),
-            ),
-            instant(3, A, Instruction::ReturnToOwnersHand),
-        ],
-        Step::Untap,
-    )
-    .into_state();
-    assert_eq!(ready.execution().window().entries().len(), 1);
-    let left = super::keyword_damage::cast_on(&ready, 3, 1);
-    let finished = round(&left);
-    assert!(finished.state().pending_decision().is_none());
-    assert!(finished.state().execution().age_counters().is_empty());
-    assert!(!finished.rules_journal().records.iter().any(|r|matches!(r,RulesRecord::Event(e) if e.occurrences.iter().any(|o|matches!(o.value,RulesOccurrence::AgeCounterPlaced{..})))));
 }

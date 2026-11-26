@@ -27,7 +27,10 @@ fn board(name: &str, price: &[(ManaType, i64)], mut extra: Vec<SeedCard>) -> Gam
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::PutIndestructibleCounter,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    spellwake_engine::effects::CounterKind::Indestructible,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
             ),
         ),
         seed(

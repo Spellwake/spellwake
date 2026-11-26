@@ -272,8 +272,8 @@ pub(super) fn regal_sliver(
     profile: Profile,
 ) -> Option<Program> {
     use spellwake_engine::characteristics::{
-        ControllerSelector, PermanentSelector, PowerToughness, StaticAbilityId,
-        StaticContinuousAbility, StaticPart, StaticParts,
+        ControllerSelector, PermanentSelector, StaticAbilityId, StaticContinuousAbility,
+        StaticPart, StaticParts,
     };
     use spellwake_engine::program::{Comparison, EffectSubject, ObjectFilter, ResolutionCondition};
     let [face] = card.faces.as_slice() else {
@@ -304,16 +304,13 @@ pub(super) fn regal_sliver(
                 },
                 destination: 3,
             },
-            Instruction::ModifyGroupUntilEndOfTurn {
-                group: Box::new(EffectSubject::Matching(
-                    ObjectFilter::any().controlled().with_subtype(subtype),
-                )),
-                power_toughness: Some(PowerToughness {
-                    power: 1.into(),
-                    toughness: 1.into(),
-                }),
-                keywords: BTreeSet::new(),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                EffectSubject::Matching(ObjectFilter::any().controlled().with_subtype(subtype)),
+                spellwake_engine::program::ValueExpr::literal(1),
+                spellwake_engine::program::ValueExpr::literal(1),
+                BTreeSet::new(),
+                BTreeSet::new(),
+            ),
             Instruction::Jump { destination: 4 },
             Instruction::BecomeMonarch(None),
         ],

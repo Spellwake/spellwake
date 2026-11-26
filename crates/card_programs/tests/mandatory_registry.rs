@@ -379,7 +379,12 @@ fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Executable
             .unwrap()
             .iter()
             .map(|v| match v["variant"].as_str().unwrap() {
-                "ReturnToOwnersHand" => Instruction::ReturnToOwnersHand,
+                "ReturnToOwnersHand" => spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                )),
                 "CounterSpell" => Instruction::CounterSpell,
                 "DrawController" => Instruction::DrawController {
                     amount: amount(&v["amount"]),

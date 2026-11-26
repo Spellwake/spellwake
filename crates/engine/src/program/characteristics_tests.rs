@@ -91,9 +91,28 @@ fn color_parts_and_indicators_have_strict_context_and_five_color_admission() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Color(operation)]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
+                vec![{
+                    struct _Tmp {
+                        parts: crate::characteristics::ResolvedPartsSpec,
+                        duration: crate::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Color(operation)]),
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    };
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: Some(crate::toolbox::ObjectQuery::Targets),
+                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                                _t.parts,
+                            )),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 }],
             ),
         );
@@ -195,9 +214,28 @@ fn text_parts_validate_singular_words_local_scope_and_strict_wire_context() {
                     into: slot,
                     excluding: BTreeSet::from([vampire]),
                 },
-                Instruction::CreateContinuousEffect {
-                    parts: parts.clone(),
-                    duration: ResolvedDuration::UntilEndOfTurn,
+                {
+                    struct _Tmp {
+                        parts: crate::characteristics::ResolvedPartsSpec,
+                        duration: crate::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts: parts.clone(),
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    };
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: Some(crate::toolbox::ObjectQuery::Targets),
+                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                                _t.parts,
+                            )),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 },
             ],
         ),
@@ -260,9 +298,28 @@ fn control_parts_bind_resolution_context_and_reject_foreign_operand_families() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts,
-                    duration: ResolvedDuration::UntilEndOfTurn,
+                vec![{
+                    struct _Tmp {
+                        parts: crate::characteristics::ResolvedPartsSpec,
+                        duration: crate::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts,
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    };
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: Some(crate::toolbox::ObjectQuery::Targets),
+                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                                _t.parts,
+                            )),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 }],
             ),
         );
@@ -285,11 +342,28 @@ fn control_parts_bind_resolution_context_and_reject_foreign_operand_families() {
     assert!(codec::decode(wrong_live, &v).is_err());
     let targeted_spell = ExecutableBody::new(
         BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-        vec![Instruction::CreateContinuousEffect {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                ControlRecipient::ResolvingController,
-            )]),
-            duration: ResolvedDuration::NoStatedDuration,
+        vec![{
+            struct _Tmp {
+                parts: crate::characteristics::ResolvedPartsSpec,
+                duration: crate::characteristics::ResolvedDuration,
+            }
+            let _t = _Tmp {
+                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                    ControlRecipient::ResolvingController,
+                )]),
+                duration: ResolvedDuration::NoStatedDuration,
+            };
+            crate::program::Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec {
+                    selector: Some(crate::toolbox::ObjectQuery::Targets),
+                    payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
+                    duration: _t.duration,
+                    condition: None,
+                    one_shot: false,
+                    as_emblem: None,
+                    emblem_label: None,
+                },
+            ))
         }],
     );
     assert_eq!(
@@ -438,11 +512,30 @@ fn ability_removal_definitions_round_trip_and_reject_malformed_or_duplicate_part
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                        AbilityChange::remove(removal),
-                    )]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
+                vec![{
+                    struct _Tmp {
+                        parts: crate::characteristics::ResolvedPartsSpec,
+                        duration: crate::characteristics::ResolvedDuration,
+                    }
+                    let _t = _Tmp {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                            AbilityChange::remove(removal),
+                        )]),
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    };
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: Some(crate::toolbox::ObjectQuery::Targets),
+                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                                _t.parts,
+                            )),
+                            duration: _t.duration,
+                            condition: None,
+                            one_shot: false,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    ))
                 }],
             ),
         );
@@ -657,16 +750,35 @@ fn cl_adm_undefined_slot() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
-                    land_subtypes: SubtypeOperation::Keep,
-                    supertypes: TypeOperation::Keep,
-                    types: TypeOperation::Keep,
-                    subtypes: SubtypeOperation::Set(InstructionSubtypeOperand::Chosen(
-                        CreatureTypeSlot::new(9),
-                    )),
-                })]),
-                duration: ResolvedDuration::NoStatedDuration,
+            vec![{
+                struct _Tmp {
+                    parts: crate::characteristics::ResolvedPartsSpec,
+                    duration: crate::characteristics::ResolvedDuration,
+                }
+                let _t = _Tmp {
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
+                        land_subtypes: SubtypeOperation::Keep,
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Keep,
+                        subtypes: SubtypeOperation::Set(InstructionSubtypeOperand::Chosen(
+                            CreatureTypeSlot::new(9),
+                        )),
+                    })]),
+                    duration: ResolvedDuration::NoStatedDuration,
+                };
+                crate::program::Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: Some(crate::toolbox::ObjectQuery::Targets),
+                        payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                            _t.parts,
+                        )),
+                        duration: _t.duration,
+                        condition: None,
+                        one_shot: false,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))
             }],
         ),
     );

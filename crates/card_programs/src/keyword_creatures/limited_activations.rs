@@ -75,9 +75,12 @@ pub(crate) fn compile(
         source_cost: physical,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::PutCountersOnSource {
-                amount: amount.into(),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::Literal(amount.into()),
+                ),
+            ],
         ),
     });
     program.activation_restrictions.insert(id, restriction);

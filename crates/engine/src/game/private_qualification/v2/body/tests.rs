@@ -165,7 +165,12 @@ fn actual_mixed_body_draws_and_bounces_without_a_followon_check_or_fake_ready() 
                 Instruction::DrawController {
                     amount: crate::program::ValueExpr::Literal(1.into()),
                 },
-                Instruction::ReturnToOwnersHand,
+                crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                )),
                 Instruction::Damage { amount: 1.into() },
             ],
         ),
@@ -382,7 +387,12 @@ fn disclosed_combat_preparation_uses_live_epoch_and_prunes_departed_membership()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
+                vec![crate::program::Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::move_all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         ),
         actions,
@@ -526,7 +536,7 @@ fn independent_raw_branch_does_not_transplant_its_exile_into_consumed_executor()
     );
     input.fixture["seed"]["cards"][1]["alias"] = json!("O");
     input.fixture["bindings"][1]["name"] = json!("O_seed_object");
-    input.definitions.insert("R".into(),json!({"native_program":program::view(&Program::instant(ManaCost::free(),ExecutableBody::new(BodyTarget::SingleCreature,vec![Instruction::ReturnToOwnersHand])))}));
+    input.definitions.insert("R".into(),json!({"native_program":program::view(&Program::instant(ManaCost::free(),ExecutableBody::new(BodyTarget::SingleCreature,vec![crate::program::Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(crate::toolbox::ObjectQuery::Targets, crate::toolbox::ZoneDest::Hand)))])))}));
     input.fixture["seed"]["cards"].as_array_mut().unwrap().push(json!({"alias":"R","card_id":5,"owner":"B","controller":null,"zone":"Hand","definition":"R"}));
     input.fixture["bindings"]
         .as_array_mut()

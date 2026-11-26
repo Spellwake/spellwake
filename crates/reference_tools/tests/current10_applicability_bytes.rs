@@ -10,7 +10,7 @@ use spellwake_engine::{
     mana::ManaCost,
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
-    program::{BodyTarget, ExecutableBody, Instruction, Program},
+    program::{BodyTarget, ExecutableBody, Program},
     targets::TargetRef,
     turn::{Step, TurnStart},
 };
@@ -64,7 +64,12 @@ fn fixture(cleanup: bool) -> GameState {
                         source_cost: SourceCost::Sacrifice,
                         body: ExecutableBody::new(
                             BodyTarget::SingleCreature,
-                            vec![Instruction::ReturnToOwnersHand],
+                            vec![spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Hand,
+                                ),
+                            ))],
                         ),
                     }],
                 ),

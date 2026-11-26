@@ -191,7 +191,7 @@ pub(super) fn compile(
                             .controlled()
                             .other_than_trigger_source(),
                     ),
-                    vec![Instruction::PutLoyaltyCounter],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(spellwake_engine::effects::CounterKind::Loyalty, spellwake_engine::program::ValueExpr::literal(1))],
                 ),
             });
             continue;
@@ -317,12 +317,14 @@ pub(super) fn compile(
             }
             "Draw a card for each tapped creature target player controls." => Some((
                 BodyTarget::SinglePlayer,
-                vec![Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::count_player_battlefield(
-                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
-                        spellwake_engine::program::ObjectFilter::creature().tapped(),
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::count_player_battlefield(
+                            spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                            spellwake_engine::program::ObjectFilter::creature().tapped(),
+                        ),
                     ),
-                }],
+                ],
             )),
             "You get an emblem with \"You have no maximum hand size\" and \"Whenever a card is put into your graveyard from anywhere, you may return it to your hand.\"" => {
                 Some((
@@ -336,9 +338,9 @@ pub(super) fn compile(
             "Draw a card, then discard a card at random." => Some((
                 BodyTarget::None,
                 vec![
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
@@ -416,9 +418,9 @@ pub(super) fn compile(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
                         Instruction::OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
@@ -489,11 +491,11 @@ pub(super) fn compile(
                     BodyTarget::None,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_up_to(2),
-                        Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::event(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::event(
                                 spellwake_engine::program::EventValueKind::LargestDiscard,
                             ),
-                        },
+                        ),
                     ],
                 )
             } else {
@@ -561,11 +563,11 @@ pub(super) fn compile(
                             ),
                             amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                         },
-                        Instruction::DrawController {
-                            amount: spellwake_engine::program::ValueExpr::event(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::event(
                                 spellwake_engine::program::EventValueKind::LargestDiscard,
                             ),
-                        },
+                        ),
                     ],
                 ),
             });
@@ -701,7 +703,7 @@ pub(super) fn compile(
                     subtypes:SubtypeOperation::Add(InstructionSubtypeOperand::Literal([vocabulary.resolve_label("Construct")?].into())),land_subtypes:SubtypeOperation::Keep}),
                     ResolvedPartSpec::SetPT(PowerToughness {power:9.into(),toughness:9.into()}),
                     ResolvedPartSpec::Abilities(AbilityChange { grants_unblockable:true, ..AbilityChange::grant_keywords([KeywordAbility::Vigilance,KeywordAbility::Indestructible]) })]);
-                (BodyTarget::FilteredPermanent(ObjectFilter::artifact().controlled()),Instruction::CreateContinuousEffect {parts,duration:ResolvedDuration::NoStatedDuration})
+                (BodyTarget::FilteredPermanent(ObjectFilter::artifact().controlled()),crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets,parts,ResolvedDuration::NoStatedDuration))
             }
             "Scry 2." => (BodyTarget::None,Instruction::Scry {player:ResolvingPlayer::Controller,amount:spellwake_engine::program::ValueExpr::Literal(2.into())}),
             text if text == format!("Draw a card and reveal it. Remove a number of loyalty counters equal to that card's mana value from {short}.") => (BodyTarget::None,Instruction::DrawRevealRemoveLoyalty),
@@ -729,7 +731,7 @@ pub(super) fn compile(
                 (BodyTarget::None,Instruction::ChangeControlledPlaneswalkers {parts,duration:ResolvedDuration::UntilEndOfTurn})
             }
             "Create a 4/4 red Dragon creature token with flying." => (BodyTarget::None,super::ordinary_text::create_tokens("a 4/4 red Dragon creature token with flying",vocabulary)?),
-            "Destroy target tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().tapped()),Instruction::DestroyTarget),
+            "Destroy target tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().tapped()),crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
             "Each opponent loses 1 life. You gain life equal to the life lost this way." => (BodyTarget::None, Instruction::DrainOpponents(spellwake_engine::program::ValueExpr::Literal(1.into()))),
             "Remove a loyalty counter from each of any number of permanents you control. Exile that many cards from the top of your library. You may play them this turn." => (BodyTarget::None, Instruction::RemoveLoyaltyExileTopForPlay),
             "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) })),
@@ -784,9 +786,9 @@ pub(super) fn compile(
             "Return all enchantment cards from your graveyard to the battlefield." => (BodyTarget::None, Instruction::ReturnGraveyardCohort(spellwake_engine::program::GraveyardCohortReturn::own(
                 spellwake_engine::program::GraveyardReturnFilter::CardType(CardType::Enchantment),
             ))),
-            "Destroy target permanent that's one or more colors." => (BodyTarget::FilteredPermanent(ObjectFilter::permanent().with_color(ObjectColorFilter::Colored)), Instruction::DestroyTarget),
-            "Destroy target artifact or enchantment." => (BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()), Instruction::DestroyTarget),
-            "Draw a card for each green creature you control." => (BodyTarget::None, Instruction::DrawController { amount: spellwake_engine::program::ValueExpr::count_battlefield(spellwake_engine::program::ObjectFilter::creature().controlled().with_color(spellwake_engine::program::ObjectColorFilter::has(spellwake_engine::characteristics::Color::Green))) }),
+            "Destroy target permanent that's one or more colors." => (BodyTarget::FilteredPermanent(ObjectFilter::permanent().with_color(ObjectColorFilter::Colored)), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
+            "Destroy target artifact or enchantment." => (BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
+            "Draw a card for each green creature you control." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::count_battlefield(spellwake_engine::program::ObjectFilter::creature().controlled().with_color(spellwake_engine::program::ObjectColorFilter::has(spellwake_engine::characteristics::Color::Green))))),
             "Look at the top four cards of your library. You may reveal a noncreature, nonland card from among them and put it into your hand. Put the rest on the bottom of your library in a random order." =>
                 (BodyTarget::None, Instruction::LookTopReveal { count: 4, filter: spellwake_engine::program::LookTopFilter::NoncreatureNonland }),
             "Look at the top four cards of your library. You may reveal an enchantment card from among them and put it into your hand. Put the rest on the bottom of your library in a random order."
@@ -813,8 +815,8 @@ pub(super) fn compile(
                 power_toughness: PowerToughness { power: 2.into(), toughness: 2.into() }, keywords: BTreeSet::from([KeywordAbility::Flying]),
             })),
             "Exile target creature with power 4 or greater." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
-            "Each player draws a card." => (BodyTarget::None, Instruction::DrawEachPlayer { amount: one() }),
-            "Target player draws a card." => (BodyTarget::SinglePlayer, Instruction::DrawTargetPlayer { amount: one() }),
+            "Each player draws a card." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(one())),
+            "Target player draws a card." => (BodyTarget::SinglePlayer, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(one())),
             "Target player mills twenty cards." => (BodyTarget::SinglePlayer, Instruction::Mill {
                 player: ResolvingPlayer::TargetPlayer, amount: spellwake_engine::program::ValueExpr::Literal(20.into()),
             }),
@@ -1041,7 +1043,10 @@ pub(super) fn compile_transforming(
             },
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::TransformSource]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+        ),
     });
     let add = |program: &mut Program, id, cost, target, instructions| {
         let id = ActivatedAbilityId(id);
@@ -1107,20 +1112,21 @@ pub(super) fn compile_transforming(
         2,
         -3,
         BodyTarget::None,
-        vec![Instruction::ModifyGroupByAmount {
-            group: Box::new(EffectSubject::Matching(
-                ObjectFilter::creature().controlled(),
-            )),
-            scale: PowerToughness {
-                power: 1.into(),
-                toughness: 1.into(),
-            },
-            amount: spellwake_engine::program::ValueExpr::count_graveyard(
-                spellwake_engine::program::ResolvingPlayer::Controller,
-                spellwake_engine::program::ObjectFilter::creature(),
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                EffectSubject::Matching(ObjectFilter::creature().controlled()),
+                spellwake_engine::program::ValueExpr::count_graveyard(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                    spellwake_engine::program::ObjectFilter::creature(),
+                ),
+                spellwake_engine::program::ValueExpr::count_graveyard(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                    spellwake_engine::program::ObjectFilter::creature(),
+                ),
+                [KeywordAbility::Trample].into(),
+                BTreeSet::new(),
             ),
-            keywords: [KeywordAbility::Trample].into(),
-        }],
+        ],
     );
     initial.transform_back = Some(Box::new(transformed));
     Some(initial)

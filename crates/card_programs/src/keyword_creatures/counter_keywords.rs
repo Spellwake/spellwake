@@ -39,10 +39,15 @@ pub(super) fn adapt(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::BoostSource {
-                        power_toughness: None,
-                        keywords: BTreeSet::from([KeywordAbility::DoubleStrike]),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                            spellwake_engine::program::EffectSubject::AbilitySource,
+                            spellwake_engine::program::ValueExpr::literal(0),
+                            spellwake_engine::program::ValueExpr::literal(0),
+                            BTreeSet::from([KeywordAbility::DoubleStrike]),
+                            BTreeSet::new(),
+                        ),
+                    ],
                 ),
             });
         }
@@ -94,7 +99,7 @@ mod tests {
         mana::{FloatingMana, ManaCost, ManaPayment, ManaSpend, ManaType},
         object_identity::{CardId, ObjectDestination, ObjectZone},
         priority::{PriorityPhase, SeatId},
-        program::{BodyTarget, ExecutableBody, Instruction, Program},
+        program::{BodyTarget, ExecutableBody, Program},
         setup::GameSeed,
         stack_window::WindowPhase,
         targets::TargetRef,
@@ -225,7 +230,19 @@ mod tests {
                     ManaCost::free(),
                     ExecutableBody::new(
                         BodyTarget::SingleCreature,
-                        vec![Instruction::DestroyTarget],
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                        semantics:
+                                            spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                                allow_regenerate: true,
+                                            },
+                                    },
+                                ),
+                            ),
+                        ],
                     ),
                 ),
             });

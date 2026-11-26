@@ -5,6 +5,7 @@
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::{
     activated::CostExileZone,
+    effects::CounterKind,
     program::{
         AffectedPlayers, BodyTarget, CardType, CardTypeMask, DelayedReturnTiming, EffectSubject,
         ExecutableBody, Instruction, LibraryPlacement, LinkedExileGroup, MoveSubjectRef,
@@ -224,18 +225,6 @@ pub(crate) fn sacrifice_subject(subject: EffectSubject) -> Instruction {
 pub(crate) fn destroy_subject(subject: EffectSubject, no_regeneration: bool) -> Instruction {
     zone_op(ZoneOpSpec::move_all(
         ObjectQuery::EffectSubject(Box::new(subject)),
-        ZoneDest::Graveyard {
-            semantics: GraveyardSemantics::Destroy {
-                allow_regenerate: !no_regeneration,
-            },
-        },
-    ))
-}
-
-#[must_use]
-pub(crate) fn destroy_target(no_regeneration: bool) -> Instruction {
-    zone_op(ZoneOpSpec::move_all(
-        ObjectQuery::Targets,
         ZoneDest::Graveyard {
             semantics: GraveyardSemantics::Destroy {
                 allow_regenerate: !no_regeneration,
@@ -1217,5 +1206,515 @@ pub(crate) fn zone_op_any_value_expr(
             position: LibraryOrderPos::NthFromTop(v),
         } => pred(v),
         _ => false,
+    }
+}
+
+// ============================================================================
+// Phase 2B + Phase 3 Composable Builders: DrawCards, MutateObject,
+// ApplyContinuous, and remaining ZoneOp helpers
+// ============================================================================
+
+#[must_use]
+pub(crate) fn draw_cards(players: PlayerSelector, amount: ValueExpr) -> Instruction {
+    Instruction::DrawCards(Box::new(spellwake_engine::toolbox::DrawCardsSpec::simple(
+        players, amount,
+    )))
+}
+
+#[must_use]
+pub(crate) fn draw_controller(amount: ValueExpr) -> Instruction {
+    draw_cards(
+        PlayerSelector::Resolving(ResolvingPlayer::Controller),
+        amount,
+    )
+}
+
+#[must_use]
+pub(crate) fn draw_target_player(amount: ValueExpr) -> Instruction {
+    draw_cards(
+        PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
+        amount,
+    )
+}
+
+#[must_use]
+pub(crate) fn draw_each_player(amount: ValueExpr) -> Instruction {
+    draw_cards(PlayerSelector::Group(AffectedPlayers::EachPlayer), amount)
+}
+
+#[must_use]
+pub(crate) fn draw_player(players: AffectedPlayers, amount: ValueExpr) -> Instruction {
+    draw_cards(PlayerSelector::Group(players), amount)
+}
+
+#[must_use]
+pub(crate) fn draw_resolving_player(player: ResolvingPlayer, amount: ValueExpr) -> Instruction {
+    draw_cards(PlayerSelector::Resolving(player), amount)
+}
+
+#[must_use]
+pub(crate) fn mutate_all(
+    source: ObjectQuery,
+    op: spellwake_engine::toolbox::ObjectMutation,
+) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source, op,
+    )))
+}
+
+#[must_use]
+pub(crate) fn mutate_subject(
+    subject: EffectSubject,
+    op: spellwake_engine::toolbox::ObjectMutation,
+) -> Instruction {
+    mutate_all(ObjectQuery::EffectSubject(Box::new(subject)), op)
+}
+
+#[must_use]
+pub(crate) fn set_subject_tapped(subject: EffectSubject, tapped: bool) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::SetTapped(tapped),
+    )
+}
+
+#[must_use]
+pub(crate) fn set_group_tapped(filter: ObjectFilter, tapped: bool) -> Instruction {
+    mutate_all(
+        ObjectQuery::zone(QueryZone::Battlefield, filter),
+        spellwake_engine::toolbox::ObjectMutation::SetTapped(tapped),
+    )
+}
+
+#[must_use]
+pub(crate) fn tap_ability_source() -> Instruction {
+    mutate_all(
+        ObjectQuery::Source,
+        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+    )
+}
+
+#[must_use]
+pub(crate) fn untap_ability_source() -> Instruction {
+    mutate_all(
+        ObjectQuery::Source,
+        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+    )
+}
+
+#[must_use]
+pub(crate) fn phase_out_query(source: ObjectQuery) -> Instruction {
+    mutate_all(source, spellwake_engine::toolbox::ObjectMutation::PhaseOut)
+}
+
+#[must_use]
+pub(crate) fn transform_source() -> Instruction {
+    mutate_all(
+        ObjectQuery::Source,
+        spellwake_engine::toolbox::ObjectMutation::Transform,
+    )
+}
+
+#[must_use]
+pub(crate) fn transform_subject(subject: EffectSubject) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::Transform,
+    )
+}
+
+#[must_use]
+pub(crate) fn turn_face_up_subject(subject: EffectSubject) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::TurnFaceUp,
+    )
+}
+
+#[must_use]
+pub(crate) fn turn_face_down_subject(subject: EffectSubject) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::TurnFaceDown,
+    )
+}
+
+#[must_use]
+pub(crate) fn regenerate_subject(subject: EffectSubject) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::Regenerate,
+    )
+}
+
+#[must_use]
+pub(crate) fn regenerate_source() -> Instruction {
+    mutate_all(
+        ObjectQuery::Source,
+        spellwake_engine::toolbox::ObjectMutation::Regenerate,
+    )
+}
+
+#[must_use]
+pub(crate) fn regenerate_target() -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::Regenerate,
+    )
+}
+
+#[must_use]
+pub(crate) fn goad_target() -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::Goad {
+            by: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+        },
+    )
+}
+
+#[must_use]
+pub(crate) fn goad_other_players_creatures() -> Instruction {
+    mutate_all(
+        ObjectQuery::zone(
+            QueryZone::Battlefield,
+            ObjectFilter::creature().not_controlled(),
+        ),
+        spellwake_engine::toolbox::ObjectMutation::Goad {
+            by: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+        },
+    )
+}
+
+#[must_use]
+pub(crate) fn exert_source() -> Instruction {
+    mutate_all(
+        ObjectQuery::Source,
+        spellwake_engine::toolbox::ObjectMutation::Exert,
+    )
+}
+
+#[must_use]
+pub(crate) fn skip_next_untap(subject: EffectSubject) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::SkipNextUntap,
+    )
+}
+
+#[must_use]
+pub(crate) fn attach_query(attachment: ObjectQuery, host: ObjectQuery) -> Instruction {
+    mutate_all(
+        attachment,
+        spellwake_engine::toolbox::ObjectMutation::Attach { host },
+    )
+}
+
+#[must_use]
+pub(crate) fn attach_to_player(attachment: ObjectQuery, player: PlayerSelector) -> Instruction {
+    mutate_all(
+        attachment,
+        spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player },
+    )
+}
+
+#[must_use]
+pub(crate) fn unattach_query(attachment: ObjectQuery) -> Instruction {
+    mutate_all(
+        attachment,
+        spellwake_engine::toolbox::ObjectMutation::Unattach,
+    )
+}
+
+#[must_use]
+pub(crate) fn put_counters_on_query(
+    source: ObjectQuery,
+    kind: CounterKind,
+    amount: ValueExpr,
+) -> Instruction {
+    mutate_all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, amount },
+    )
+}
+
+#[must_use]
+pub(crate) fn put_counters_on_subject(
+    subject: EffectSubject,
+    kind: CounterKind,
+    amount: ValueExpr,
+) -> Instruction {
+    put_counters_on_query(ObjectQuery::EffectSubject(Box::new(subject)), kind, amount)
+}
+
+#[must_use]
+pub(crate) fn put_counters_on_source(kind: CounterKind, amount: ValueExpr) -> Instruction {
+    put_counters_on_query(ObjectQuery::Source, kind, amount)
+}
+
+#[must_use]
+pub(crate) fn put_counters_on_target(kind: CounterKind, amount: ValueExpr) -> Instruction {
+    put_counters_on_query(ObjectQuery::Targets, kind, amount)
+}
+
+#[must_use]
+pub(crate) fn remove_counters_from_subject(
+    subject: EffectSubject,
+    kind: Option<CounterKind>,
+    amount: ValueExpr,
+) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::RemoveCounters { kind, amount },
+    )
+}
+
+#[must_use]
+pub(crate) fn clear_source_counters(kind: Option<CounterKind>) -> Instruction {
+    mutate_all(
+        ObjectQuery::Source,
+        spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind },
+    )
+}
+
+#[must_use]
+pub(crate) fn double_counters_on_query(
+    source: ObjectQuery,
+    kind: Option<CounterKind>,
+) -> Instruction {
+    mutate_all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::DoubleCounters { kind },
+    )
+}
+
+#[must_use]
+pub(crate) fn add_one_of_each_counter(subject: EffectSubject) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::AddOneOfEachCounterKind,
+    )
+}
+
+#[must_use]
+pub(crate) fn gain_control_of_subject(
+    subject: EffectSubject,
+    controller: PlayerSelector,
+    duration: spellwake_engine::characteristics::ResolvedDuration,
+) -> Instruction {
+    mutate_subject(
+        subject,
+        spellwake_engine::toolbox::ObjectMutation::GainControl {
+            controller,
+            duration,
+        },
+    )
+}
+
+#[must_use]
+pub(crate) fn apply_temporary_rule(
+    rule: spellwake_engine::program::TemporaryRuleKind,
+    duration: spellwake_engine::characteristics::ResolvedDuration,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::temporary_rule(rule, duration),
+    ))
+}
+
+#[must_use]
+pub(crate) fn apply_continuous_parts(
+    selector: ObjectQuery,
+    parts: spellwake_engine::characteristics::ResolvedPartsSpec,
+    duration: spellwake_engine::characteristics::ResolvedDuration,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(selector, parts, duration),
+    ))
+}
+
+#[must_use]
+pub(crate) fn modify_group_eot(
+    group: EffectSubject,
+    power: ValueExpr,
+    toughness: ValueExpr,
+    keywords: std::collections::BTreeSet<spellwake_engine::characteristics::KeywordAbility>,
+    suppress_keywords: std::collections::BTreeSet<
+        spellwake_engine::characteristics::KeywordAbility,
+    >,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::dynamic_boost(
+            ObjectQuery::EffectSubject(Box::new(group)),
+            power,
+            toughness,
+            keywords,
+            suppress_keywords,
+            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn double_pt_subject(
+    subject: EffectSubject,
+    power: bool,
+    toughness: bool,
+    duration: spellwake_engine::characteristics::ResolvedDuration,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::double_pt(
+            ObjectQuery::EffectSubject(Box::new(subject)),
+            power,
+            toughness,
+            duration,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn require_combat_action(
+    subject: EffectSubject,
+    kind: spellwake_engine::program::CombatActionKind,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::combat_action(
+            ObjectQuery::EffectSubject(Box::new(subject)),
+            kind,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn grant_play_permission(
+    selector: ObjectQuery,
+    player: PlayerSelector,
+    duration: spellwake_engine::characteristics::ResolvedDuration,
+    cast_only: bool,
+    free: bool,
+    any_color: bool,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::play_permission(
+            selector, player, duration, cast_only, free, any_color,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn prevent_damage_spec(
+    spec: spellwake_engine::damage::TurnPreventionSpec,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(spec),
+    ))
+}
+
+#[must_use]
+pub(crate) fn skip_next_turns(player: ResolvingPlayer, count: u8) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::skip_turns(
+            PlayerSelector::Resolving(player),
+            ValueExpr::literal(i64::from(count)),
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn skip_next_step(
+    player: ResolvingPlayer,
+    step: spellwake_engine::turn::Step,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::skip_step(
+            PlayerSelector::Resolving(player),
+            step,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn return_to_owners_hand() -> Instruction {
+    zone_op(ZoneOpSpec::move_all(ObjectQuery::Targets, ZoneDest::Hand))
+}
+
+#[must_use]
+pub(crate) fn return_source_to_hand() -> Instruction {
+    zone_op(ZoneOpSpec::move_all(ObjectQuery::Source, ZoneDest::Hand))
+}
+
+#[must_use]
+pub(crate) fn return_source_graveyard_to_battlefield(tapped: bool) -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::Source,
+        ZoneDest::Battlefield {
+            controller: ZoneController::Owner,
+            tapped,
+            attacking: false,
+            transformed: false,
+            face_down: false,
+            entering_counters: Vec::new(),
+            attach_to: None,
+        },
+    ))
+}
+
+#[must_use]
+pub(crate) fn return_source_graveyard_to_hand() -> Instruction {
+    zone_op(ZoneOpSpec::move_all(ObjectQuery::Source, ZoneDest::Hand))
+}
+
+#[must_use]
+pub(crate) fn exile_target_until_source_leaves() -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::Targets,
+        ZoneDest::Exile {
+            face_down: false,
+            viewer: None,
+            link_to_source: true,
+            delayed_return: Some(DelayedReturnTiming::UntilSourceLeaves),
+            link_group: None,
+        },
+    ))
+}
+
+#[must_use]
+pub(crate) fn exile_library_top(
+    player: ResolvingPlayer,
+    count: ValueExpr,
+    face_down: bool,
+) -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::ZoneScan {
+            zone: QueryZone::Library(Box::new(PlayerSelector::Resolving(player))),
+            filter: Box::new(ObjectFilter::any()),
+            slice: QuerySlice::Top(Box::new(count)),
+        },
+        ZoneDest::Exile {
+            face_down,
+            viewer: None,
+            link_to_source: false,
+            delayed_return: None,
+            link_group: None,
+        },
+    ))
+}
+
+#[must_use]
+pub(crate) fn mill_players(players: AffectedPlayers, amount: ValueExpr) -> Instruction {
+    const SEAT_BIND: BindingId = BindingId(905);
+    let inner = zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::ZoneScan {
+            zone: QueryZone::Library(Box::new(PlayerSelector::Bound(SEAT_BIND))),
+            filter: Box::new(ObjectFilter::any()),
+            slice: QuerySlice::Top(Box::new(amount)),
+        },
+        ZoneDest::Graveyard {
+            semantics: GraveyardSemantics::Mill,
+        },
+    ));
+    Instruction::ForEachPlayerQuery {
+        selector: Box::new(PlayerSelector::Group(players)),
+        bind_player: SEAT_BIND,
+        body: Box::new(ExecutableBody::new(BodyTarget::None, vec![inner])),
     }
 }

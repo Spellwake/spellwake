@@ -338,11 +338,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::Scry { amount, .. }
             | Instruction::Surveil { amount, .. }
             | Instruction::Mill { amount, .. }
-            | Instruction::DrawTargetPlayer { amount }
             | Instruction::DrawController { amount }
             | Instruction::DrawAndDamageOpponents { amount }
             | Instruction::DrawControllerAndTarget { amount }
-            | Instruction::DrawEachPlayer { amount }
             | Instruction::OfferDynamicManaPayment {
                 extra_generic: amount,
                 ..
@@ -362,8 +360,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileFromHandOrBattlefield(amount)
             | Instruction::Discard { amount, .. }
             | Instruction::AddPlayerCounter { amount, .. }
-            | Instruction::PutNamedCounterOnTarget { amount, .. }
-            | Instruction::PutCountersOnSubject { amount, .. }
             | Instruction::AdjustPlayersLife { amount, .. }
             | Instruction::SetPlayersLife { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
@@ -382,7 +378,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::Sacrifice { amount, .. }
-            | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
             | Instruction::DrainOpponents(amount)
             | Instruction::DamageAmount(amount)
@@ -447,115 +442,42 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     expr.rewrite_creature_type(change.from, change.to);
                 }
             }
-            Instruction::SkipNextUntap { subject }
-            | Instruction::RequireCombatAction { subject, .. }
-            | Instruction::TurnFaceUpSubject { subject }
-            | Instruction::TurnFaceDownSubject { subject }
-            | Instruction::TransformSubject { subject }
-            | Instruction::AddOneOfEachCounterKindOnSubject { subject }
-            | Instruction::RegenerateSubject { subject } => {
-                subject.rewrite_creature_type(change.from, change.to);
+            Instruction::DrawCards(spec) => {
+                rewrite_amount(&mut spec.amount);
+            }
+            Instruction::MutateObject(spec) => {
+                if let crate::toolbox::ObjectQuery::EffectSubject(subject) = &mut spec.source {
+                    subject.rewrite_creature_type(change.from, change.to);
+                }
+                match &mut spec.op {
+                    crate::toolbox::ObjectMutation::AddCounters { amount, .. }
+                    | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
+                    | crate::toolbox::ObjectMutation::MoveCounters {
+                        amount: Some(amount),
+                        ..
+                    } => rewrite_amount(amount),
+                    _ => {}
+                }
+            }
+            Instruction::ApplyContinuous(spec) => {
+                if let Some(crate::toolbox::ObjectQuery::EffectSubject(group)) = &mut spec.selector
+                {
+                    group.rewrite_creature_type(change.from, change.to);
+                }
+                match &mut spec.payload {
+                    crate::toolbox::ContinuousPayload::ResolvedParts(value) => parts(change, value),
+                    crate::toolbox::ContinuousPayload::DynamicBoost {
+                        power, toughness, ..
+                    } => {
+                        rewrite_amount(power);
+                        rewrite_amount(toughness);
+                    }
+                    _ => {}
+                }
             }
             Instruction::EmpowerJace { count } => {
                 count.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::CreateTemporaryRule { rule, .. } => match rule.as_mut() {
-                crate::program::TemporaryRuleKind::CantBeCountered {
-                    filter: Some(f), ..
-                }
-                | crate::program::TemporaryRuleKind::CantBeCounteredByColors {
-                    filter: Some(f),
-                    ..
-                }
-                | crate::program::TemporaryRuleKind::CantCastSpells {
-                    filter: Some(f), ..
-                }
-                | crate::program::TemporaryRuleKind::CantCastFromZone {
-                    filter: Some(f), ..
-                }
-                | crate::program::TemporaryRuleKind::ExileSpellOnResolve {
-                    filter: Some(f), ..
-                }
-                | crate::program::TemporaryRuleKind::NextSpellFree { filter: Some(f) }
-                | crate::program::TemporaryRuleKind::SpellCostReduction { filter: f, .. }
-                | crate::program::TemporaryRuleKind::SpellCostIncrease { filter: f, .. }
-                | crate::program::TemporaryRuleKind::FilteredFlash { filter: f, .. }
-                | crate::program::TemporaryRuleKind::NextSpellKeyword { filter: f, .. }
-                | crate::program::TemporaryRuleKind::ZoneCastPermission {
-                    filter: Some(f), ..
-                } => {
-                    f.rewrite_creature_type(change.from, change.to);
-                }
-                crate::program::TemporaryRuleKind::SpellCostReductionExpr {
-                    filter,
-                    amount,
-                    ..
-                } => {
-                    filter.rewrite_creature_type(change.from, change.to);
-                    amount.rewrite_creature_type(change.from, change.to);
-                }
-                crate::program::TemporaryRuleKind::ExileIfDies { subject }
-                | crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
-                    subject.rewrite_creature_type(change.from, change.to);
-                }
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability)
-                | crate::program::TemporaryRuleKind::OneShotEventReplacement(ability) => {
-                    rewrite_static_ability(change, ability);
-                }
-                crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
-                    condition,
-                    ability,
-                } => {
-                    static_source_condition(change, condition);
-                    rewrite_static_ability(change, ability);
-                }
-                crate::program::TemporaryRuleKind::PreventNextTimeDamage {
-                    source,
-                    recipient,
-                    ..
-                }
-                | crate::program::TemporaryRuleKind::PreventNextDamage {
-                    source, recipient, ..
-                }
-                | crate::program::TemporaryRuleKind::RedirectNextDamage {
-                    source,
-                    from: recipient,
-                    ..
-                } => {
-                    if let Some(f) = source {
-                        f.rewrite_creature_type(change.from, change.to);
-                    }
-                    if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
-                        recipient
-                    {
-                        f.rewrite_creature_type(change.from, change.to);
-                    }
-                }
-                crate::program::TemporaryRuleKind::PreventNextDamageExpr {
-                    amount,
-                    source,
-                    recipient,
-                    ..
-                }
-                | crate::program::TemporaryRuleKind::RedirectNextDamageExpr {
-                    amount,
-                    source,
-                    from: recipient,
-                    ..
-                } => {
-                    amount.rewrite_creature_type(change.from, change.to);
-                    if let Some(f) = source {
-                        f.rewrite_creature_type(change.from, change.to);
-                    }
-                    if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
-                        recipient
-                    {
-                        f.rewrite_creature_type(change.from, change.to);
-                    }
-                }
-                _ => {}
-            },
-            Instruction::GrantCardPlayPermission { .. } => {}
             Instruction::CreateTokenCopy {
                 count,
                 add_subtypes,
@@ -585,17 +507,13 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::WinGame(_)
             | Instruction::LoseGame(_)
             | Instruction::DrawGame
-            | Instruction::AttachPermanent { .. }
-            | Instruction::UnattachSubject { .. }
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
-            | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
@@ -660,11 +578,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::Behold { filter, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::GainControlOfPermanent { subject, .. }
-            | Instruction::DoublePowerToughnessSubject { subject, .. }
-            | Instruction::DoubleCountersOnSubject { subject, .. } => {
-                subject.rewrite_creature_type(change.from, change.to);
-            }
             Instruction::BecomeCopy {
                 receiver,
                 exceptions,
@@ -692,15 +605,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     body(change, &mut act.body);
                 }
             }
-            Instruction::SetGroupTapped { filter: group, .. } => {
-                group.rewrite_creature_type(change.from, change.to);
-            }
-            Instruction::SetSubjectTapped { subject, .. } => {
-                subject.rewrite_creature_type(change.from, change.to);
-            }
-            Instruction::PutCountersOnSubject { subject, .. } => {
-                subject.rewrite_creature_type(change.from, change.to);
-            }
             Instruction::BranchIfFalse { condition, .. } => {
                 condition.left.rewrite_creature_type(change.from, change.to);
                 condition
@@ -715,7 +619,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::GiveControlOfAbilitySource
             | Instruction::OfferOpponentsDamage
             | Instruction::WeakenTargetByChosenX => {}
-            Instruction::BoostTargetPower { amount, .. } => rewrite_amount(amount),
             Instruction::AnimateTargetAsCountedCreature { subtype, .. }
             | Instruction::LoseLifeAndScryForSubtype(subtype)
             | Instruction::ExileForBlackToken { subtype, .. }
@@ -792,11 +695,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             } => {
                 filter.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::ModifyGroupByAmount { group, .. }
-            | Instruction::ModifyGroupUntilEndOfTurn { group, .. }
-            | Instruction::SuppressGroupKeywords { group, .. } => {
-                group.rewrite_creature_type(change.from, change.to);
-            }
             Instruction::PreventDamageThisTurn(
                 crate::damage::TurnPreventionFilter::CombatFromCreaturesWithoutEitherSubtype(
                     first,
@@ -807,7 +705,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 word(change, second);
             }
             Instruction::TransformSubtype(kind)
-            | Instruction::RegenerateControlledSubtype(kind)
             | Instruction::PreventDamageThisTurn(
                 crate::damage::TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(kind),
             )
@@ -823,7 +720,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 parts(change, value);
             }
             Instruction::ChangeControlledPlaneswalkers { parts: value, .. }
-            | Instruction::CreateContinuousEffect { parts: value, .. }
             | Instruction::ChangeAbilitySource { parts: value, .. } => parts(change, value),
             Instruction::AffectPermanentTargets { action, .. } => match action {
                 crate::program::PermanentTargetAction::PutCounters { amount, .. }
@@ -861,14 +757,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::GrantChosenProtection { recipients, .. } => {
                 if let crate::program::ProtectionRecipients::Matching(filter) = recipients {
                     filter.rewrite_creature_type(change.from, change.to);
-                }
-            }
-            Instruction::RemoveCountersFromSubject {
-                subject, amount, ..
-            } => {
-                subject.rewrite_creature_type(change.from, change.to);
-                if let Some(expr) = amount {
-                    rewrite_amount(expr);
                 }
             }
             Instruction::MoveCounters { amount, .. } => {
@@ -953,12 +841,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
-            | Instruction::GoadOtherPlayersCreatures
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
             | Instruction::DisallowDamagePreventionThisTurn
-            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(
                 crate::damage::TurnPreventionFilter::ToAbilitySource
                 | crate::damage::TurnPreventionFilter::FromAbilitySource
@@ -979,39 +865,21 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::PreventDamageSpec(_)
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
-            | Instruction::ReturnSourceToHand
             | Instruction::PutCounterOnRelatedPermanent
-            | Instruction::PutCountersOnControlledCreatures
-            | Instruction::PutCountersOnControlledSubtype(_)
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-            | Instruction::PutCountersOnOtherCreatures
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::PutChargeCounterOnSource
-            | Instruction::PutBlessingCounterOnSource
-            | Instruction::PutNamedCounterOnSource { .. }
-            | Instruction::PutQuestCounterOnSource
-            | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
             | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::FightSourceWithTarget
-            | Instruction::ClearSourceCounters(_)
-            | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::UntapAbilitySource
-            | Instruction::TapAbilitySource
-            | Instruction::RegenerateSource
-            | Instruction::RegenerateTarget
-            | Instruction::DoubleCountersOnTargets
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::UntapControlledLands
-            | Instruction::UntapControlledCreatures
             | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::UntapAndControlCreatures
             | Instruction::Proliferate
@@ -1043,7 +911,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
             | Instruction::ExileOrderedPermanent(_)
-            | Instruction::ExileLibraryTop { .. }
             | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
             | Instruction::LookOpponentExileForCast { .. }
             | Instruction::ExileFromTargetLibrary
@@ -1051,7 +918,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::PayLife { .. }
             | Instruction::PayEnergy { .. }
-            | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
             | Instruction::DrawEachPlayerForPayments
@@ -1131,7 +997,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ExileRelatedPermanents(_)
-            | Instruction::ExileTargetWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
@@ -1145,11 +1010,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::SkipNextTurns { .. }
-            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::AttachPermanentToPlayer { .. }
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
@@ -1159,7 +1021,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOut(_)
             | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
             | Instruction::WeakenDelayedAttacker(_)
@@ -1172,7 +1033,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
             | Instruction::DamageGroupAmount { .. }
-            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -1225,14 +1085,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Instruction::ReturnSourceGraveyardToBattlefield { .. }
-            | Instruction::ReturnSourceGraveyardToHand
             | Instruction::ReturnOwnedCommandersToHand
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::EndControllerTurn
-            | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -1246,21 +1103,15 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilSourceLeaves
             | Instruction::ExileTargetUntilOpponentMonarch
-            | Instruction::BoostSource { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
-            | Instruction::PutCountersOnSource { .. }
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::Unattach
             | Instruction::Attach(_)
-            | Instruction::GoadTarget
-            | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
-            | Instruction::ReturnToOwnersHand
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
@@ -1272,28 +1123,18 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::CopySpell
             | Instruction::CopyTargetToSource { .. }
             | Instruction::GrantProtectionChosenColor(_)
-            | Instruction::PutIndestructibleCounter
-            | Instruction::PutLoyaltyCounter
-            | Instruction::PutNamedCounterOnTarget { .. }
-            | Instruction::PutPowerToughnessCounters { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::DrawTargetPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
-            | Instruction::DrawEachPlayer { .. }
             | Instruction::DrawPlayersControllingName(_)
-            | Instruction::DrawPlayer { .. }
             | Instruction::AddExperienceCounter
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ControlManaSourceThroughNextTurn
-            | Instruction::GrantControllerFlashUntilCleanup
-            | Instruction::RequireOpponentsCreaturesBlockThisTurn
-            | Instruction::RequireBlocksAgainstTargetThisTurn
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DrawController { .. } => {}
         }

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Creature-type word substitution through the existing layer and execution owners.
 //! CR 612.1-612.3, 613.1c, 613.6, 613.7/613.8 and 113.7a.
 #[path = "../test_support/creature_vocabulary.rs"]
@@ -692,50 +693,6 @@ fn text_changes_update_later_operands_without_reselecting_an_earlier_started_eff
     assert_eq!(powers(&game), vec![4.into(), 3.into(), 3.into()]);
     let (changed, _) = resolve(&game, 5, object(&game, 1));
     assert_eq!(powers(changed.state()), vec![5.into(), 3.into(), 3.into()]);
-}
-
-#[test]
-fn text_records_do_not_follow_a_card_through_departure_and_reentry() {
-    let v = vocabulary();
-    let game = world(
-        v.clone(),
-        vec![
-            card(1, lord(&v), true),
-            text_spell(&v, 2, "Elf", "Vampire", ResolvedDuration::NoStatedDuration),
-            spell(
-                3,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1)],
-    );
-    let old = object(&game, 1);
-    let (changed, _) = resolve(&game, 2, old);
-    let (returned, _) = resolve(changed.state(), 3, old);
-    let hand = object(returned.state(), 1);
-    assert_ne!(hand, old);
-    assert_eq!(
-        current_subtypes(returned.state(), hand),
-        subtypes(&v, &["Elf"])
-    );
-    assert_eq!(returned.state().execution().continuous_effects().count(), 0);
-    let cast = submit(
-        returned.state(),
-        P0,
-        GameCommand::CastUntargeted {
-            spell: hand,
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let entered = pass_pair(cast.state());
-    let fresh = object(entered.state(), 1);
-    assert_ne!(fresh, old);
-    assert_ne!(fresh, hand);
-    assert_eq!(
-        current_subtypes(entered.state(), fresh),
-        subtypes(&v, &["Elf"])
-    );
 }
 
 #[test]

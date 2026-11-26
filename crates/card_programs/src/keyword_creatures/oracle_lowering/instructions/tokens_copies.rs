@@ -658,11 +658,23 @@ pub(super) fn lower_tokens_copies_instruction(
                 && *subject == spellwake_engine::program::CounterSubjectRef::TargetObject
             {
                 let matches_source_counter = match builder.instructions.last() {
-                    Some(Instruction::PutNamedCounterOnSource { kind: src_kind, .. }) => {
-                        kind.is_none() || kind.as_ref() == Some(src_kind)
-                    }
-                    Some(Instruction::PutCountersOnSource { .. }) => {
-                        kind.is_none() || *kind == Some(CounterKind::PlusOne)
+                    Some(Instruction::MutateObject(spec))
+                        if matches!(
+                            spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::Source
+                        ) || matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                                if matches!(s.as_ref(), EffectSubject::AbilitySource)
+                        ) =>
+                    {
+                        match &spec.op {
+                            spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                                kind: src_kind,
+                                ..
+                            } => kind.is_none() || kind.as_ref() == Some(src_kind),
+                            _ => false,
+                        }
                     }
                     _ => false,
                 };
@@ -1640,7 +1652,10 @@ fn try_lower_extra_predefined_token_def(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::PutCountersOnSource { amount: 1.into() }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        CounterKind::PlusOne,
+                        ValueExpr::literal(1),
+                    )],
                 ),
             });
             TokenDefinition::new(
@@ -3502,7 +3517,19 @@ mod wave12_token_ability_tests {
                 spell(
                     2,
                     BodyTarget::SingleCreature,
-                    vec![Instruction::DestroyTarget],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        ),
+                    ],
                 ),
             ],
             vec![],

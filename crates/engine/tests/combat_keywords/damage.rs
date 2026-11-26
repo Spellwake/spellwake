@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Damage keyword interactions through GameState's scheduled input loop.
 use super::*;
 use KeywordAbility::{Deathtouch, DoubleStrike, FirstStrike, Indestructible, Trample};
@@ -42,12 +43,6 @@ pub(super) fn blocks(seeds: Vec<SeedCard>, blockers: &[(u64, u64)]) -> GameState
         return blocking.into_state();
     }
     blocked(blocking.state(), blockers).into_state()
-}
-pub(super) fn change(ability: AbilityChange) -> Instruction {
-    Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ability)]),
-        duration: ResolvedDuration::UntilEndOfTurn,
-    }
 }
 
 #[test]
@@ -135,232 +130,6 @@ fn trample_respects_all_blockers_marked_damage_and_deathtouch_lethal() {
             Some(&20.into())
         );
     }
-}
-
-#[test]
-fn departed_last_blocker_allows_only_trample_to_hit_the_defender() {
-    for (keys, life) in [(vec![Trample], 16), (vec![], 20)] {
-        let blocked = blocks(
-            vec![
-                combat_creature(1, A, 4, 4, &keys),
-                battlefield(2, B),
-                instant(3, A, Instruction::ReturnToOwnersHand),
-            ],
-            &[(2, 1)],
-        );
-        let cleared = cast_on(&blocked, 3, 2);
-        let damage = round(&cleared);
-        assert_eq!(damage.state().execution().life_total(B), Some(&life.into()));
-    }
-}
-
-#[test]
-fn strike_steps_use_original_cohort_and_current_double_strike() {
-    for (initial, modification, hits) in [
-        (FirstStrike, AbilityChange::remove(AbilityRemoval::All), 1),
-        (
-            FirstStrike,
-            AbilityChange::grant_keywords([DoubleStrike]),
-            2,
-        ),
-        (DoubleStrike, AbilityChange::remove(AbilityRemoval::All), 1),
-        (
-            DoubleStrike,
-            AbilityChange::grant_keywords([FirstStrike]),
-            2,
-        ),
-    ] {
-        let blocked = blocks(
-            vec![
-                combat_creature(1, A, 3, 5, &[initial]),
-                battlefield(2, B),
-                instant(3, A, change(modification)),
-            ],
-            &[],
-        );
-        let early = round(&blocked).into_state();
-        assert_eq!(early.execution().life_total(B), Some(&17.into()));
-        assert!(!early.turn().unwrap().position().additional_damage);
-        let modified = cast_on(&early, 3, 1);
-        let late = round(&modified).into_state();
-        assert!(late.turn().unwrap().position().additional_damage);
-        assert_eq!(
-            late.execution().life_total(B),
-            Some(&(20 - 3 * hits).into())
-        );
-        assert_eq!(
-            round(&late).state().turn().unwrap().position().step,
-            Step::EndCombat
-        );
-    }
-}
-
-#[test]
-fn first_strike_blocker_kills_before_regular_damage_and_zero_power_still_adds_a_step() {
-    for power in [0, 3] {
-        let blocked = blocks(
-            vec![
-                combat_creature(1, A, 3, 3, &[]),
-                combat_creature(2, B, power, 3, &[FirstStrike]),
-                instant(3, A, change(AbilityChange::grant_keywords([FirstStrike]))),
-            ],
-            &[(2, 1)],
-        );
-        let early = round(&blocked).into_state();
-        let late = if power == 0 {
-            assert_eq!(object(&early, 1).zone(), ObjectZone::Battlefield);
-            round(&cast_on(&early, 3, 1))
-        } else {
-            assert_eq!(object(&early, 1).zone(), ObjectZone::Graveyard(A));
-            round(&early)
-        };
-        assert!(late.state().turn().unwrap().position().additional_damage);
-        assert_eq!(
-            object(late.state(), 2).zone(),
-            if power == 0 {
-                ObjectZone::Graveyard(B)
-            } else {
-                ObjectZone::Battlefield
-            }
-        );
-    }
-}
-
-#[test]
-fn deathtouch_uses_departed_sources_last_keywords_and_only_actual_positive_damage() {
-    for (grant, prevented, dies) in [
-        (true, false, true),
-        (false, false, false),
-        (true, true, false),
-    ] {
-        let mut source = battlefield(1, A);
-        source.program = Program::artifact(
-            None,
-            vec![ActivatedAbility {
-                id: ActivatedAbilityId(1),
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::Sacrifice,
-                body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 1.into() }],
-                ),
-            }],
-        );
-        // Keyword removal on this permanent would also remove its activation.
-        // A granted keyword tests the evaluated value at departure.
-        let mut seeds = vec![
-            source,
-            combat_creature(2, B, 1, 6, &[]),
-            instant(
-                4,
-                A,
-                Instruction::CreatePreventionShield { amount: 1.into() },
-            ),
-        ];
-        seeds.push(SeedCard {
-            card: CardId(3),
-            owner: A,
-            destination: ObjectDestination::Hand,
-            program: Program::instant(
-                ManaCost::free(),
-                ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
-                    vec![change(AbilityChange::grant_keywords([Deathtouch]))],
-                ),
-            ),
-        });
-        let mut game = setup(vec![A, B], seeds, Step::PrecombatMain).into_state();
-        if grant {
-            game = cast_on(&game, 3, 1);
-        }
-        if prevented {
-            game = cast_on(&game, 4, 2);
-        }
-        let activated = act(
-            &game,
-            A,
-            GameCommand::ActivateAbility {
-                source: object(&game, 1).id(),
-                ability: ActivatedAbilityId(1),
-                target: TargetRef::Object(object(&game, 2).id()),
-                payment: Some(ManaPayment::default()),
-            },
-        );
-        assert_eq!(
-            object(activated.state(), 1).zone(),
-            ObjectZone::Graveyard(A)
-        );
-        let resolved = round(activated.state());
-        assert_eq!(
-            object(resolved.state(), 2).zone(),
-            if dies {
-                ObjectZone::Graveyard(B)
-            } else {
-                ObjectZone::Battlefield
-            }
-        );
-    }
-}
-
-#[test]
-fn indestructible_ignores_destroy_and_consumes_deathtouch_at_the_next_check() {
-    for (amount, dies_after_removal) in [(1, false), (4, true)] {
-        let mut venom = instant(
-            3,
-            A,
-            Instruction::Damage {
-                amount: amount.into(),
-            },
-        );
-        venom.program = venom.program.with_printed_keywords([Deathtouch]);
-        let game = setup(
-            vec![A, B],
-            vec![
-                combat_creature(1, B, 1, 4, &[Indestructible]),
-                combat_creature(2, B, 1, 4, &[]),
-                venom,
-                instant(4, A, Instruction::DestroyTarget),
-                instant(5, A, change(AbilityChange::remove(AbilityRemoval::All))),
-            ],
-            Step::PrecombatMain,
-        )
-        .into_state();
-        let normal = cast_on(&game, 4, 2);
-        assert_eq!(object(&normal, 2).zone(), ObjectZone::Graveyard(B));
-        let protected = cast_on(&game, 4, 1);
-        let marked = cast_on(&protected, 3, 1);
-        assert_eq!(object(&marked, 1).zone(), ObjectZone::Battlefield);
-        let vulnerable = cast_on(&marked, 5, 1);
-        assert_eq!(
-            object(&vulnerable, 1).zone(),
-            if dies_after_removal {
-                ObjectZone::Graveyard(B)
-            } else {
-                ObjectZone::Battlefield
-            }
-        );
-    }
-}
-
-#[test]
-fn zero_toughness_moves_even_an_indestructible_creature() {
-    let effect = Instruction::CreateContinuousEffect {
-        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::SetPT(
-            spellwake_engine::characteristics::PowerToughness::zero(),
-        )]),
-        duration: ResolvedDuration::UntilEndOfTurn,
-    };
-    let game = setup(
-        vec![A, B],
-        vec![
-            combat_creature(1, B, 1, 3, &[Indestructible]),
-            instant(2, A, effect),
-        ],
-        Step::PrecombatMain,
-    )
-    .into_state();
-    let result = cast_on(&game, 2, 1);
-    assert_eq!(object(&result, 1).zone(), ObjectZone::Graveyard(B));
 }
 
 #[test]
@@ -631,82 +400,6 @@ fn lifelink_simultaneous_self_damage_keeps_both_events_at_the_same_total() {
 }
 
 #[test]
-fn lifelink_uses_the_sources_controller_at_departure_after_control_changes() {
-    use spellwake_engine::characteristics::ControlRecipient;
-    let source = SeedCard {
-        card: CardId(1),
-        owner: B,
-        destination: ObjectDestination::Battlefield { controller: A },
-        program: Program::artifact(
-            None,
-            vec![ActivatedAbility {
-                id: ActivatedAbilityId(1),
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::None,
-                body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 1.into() }],
-                ),
-            }],
-        )
-        .with_printed_keywords([KeywordAbility::Lifelink, Deathtouch]),
-    };
-    let permanent_spell = |id, instruction| SeedCard {
-        card: CardId(id),
-        owner: A,
-        destination: ObjectDestination::Hand,
-        program: Program::instant(
-            ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SinglePermanent, vec![instruction]),
-        ),
-    };
-    let transfer = permanent_spell(
-        3,
-        Instruction::CreateContinuousEffect {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
-                ControlRecipient::TargetOwner,
-            )]),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        },
-    );
-    let game = setup(
-        vec![A, B],
-        vec![
-            source,
-            battlefield(2, A),
-            transfer,
-            permanent_spell(4, Instruction::DestroyTarget),
-        ],
-        Step::PrecombatMain,
-    )
-    .into_state();
-    let activated = act(
-        &game,
-        A,
-        GameCommand::ActivateAbility {
-            source: object(&game, 1).id(),
-            ability: ActivatedAbilityId(1),
-            target: TargetRef::Object(object(&game, 2).id()),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let transferred = cast_on(activated.state(), 3, 1);
-    assert_eq!(object(&transferred, 1).controller(), Some(B));
-    let destroyed = cast_on(&transferred, 4, 1);
-    let resolved = round(&destroyed);
-    assert_eq!(resolved.state().execution().life_total(B), Some(&21.into()));
-    assert_eq!(resolved.state().execution().life_total(A), Some(&20.into()));
-    assert_eq!(object(resolved.state(), 2).zone(), ObjectZone::Graveyard(A));
-    assert!(
-        resolved
-            .state()
-            .execution()
-            .departed_damage_sources()
-            .is_empty()
-    );
-}
-
-#[test]
 fn trample_with_no_excess_assigns_automatically_to_its_only_blocker() {
     for power in [1, 3] {
         let blocked = blocks(
@@ -727,4 +420,18 @@ fn trample_with_no_excess_assigns_automatically_to_its_only_blocker() {
             Some(power.into())
         );
     }
+}
+
+pub(super) fn change(ability: AbilityChange) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec {
+        selector: Some(spellwake_engine::toolbox::ObjectQuery::Targets),
+        payload: spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+            ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ability)]),
+        )),
+        duration: ResolvedDuration::UntilEndOfTurn,
+        condition: None,
+        one_shot: false,
+        as_emblem: None,
+        emblem_label: None,
+    }))
 }

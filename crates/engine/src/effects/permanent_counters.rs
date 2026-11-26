@@ -479,10 +479,7 @@ impl EffectWindow {
             StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
                 if matches!(
                     operation,
-                    Instruction::PutCountersOnControlledCreatures
-                        | Instruction::PutCountersOnControlledSubtype(_)
-                        | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-                        | Instruction::PutCountersOnSubject { .. }
+                    Instruction::PutCountersOnControlledCreaturesAndGrant(_)
                 ) =>
             {
                 None
@@ -493,197 +490,6 @@ impl EffectWindow {
             entry: entry.id(),
             instruction,
         };
-        if let Instruction::ClearSourceCounters(kind) = operation {
-            let source = source.ok_or(EffectError::InconsistentProgram)?;
-            let before = self.rules_snapshot(None)?;
-            let Some(removed) = self
-                .characteristics
-                .named_permanent_counters_mut(*kind)
-                .ok_or(EffectError::InconsistentProgram)?
-                .remove(&source)
-            else {
-                return Ok(());
-            };
-            return self.emit_from(cause, &before, None, append, |_, _, _| {
-                Ok(vec![RulesOccurrence::PermanentCounterChanged {
-                    object: source,
-                    kind: *kind,
-                    before: removed,
-                    after: 0.into(),
-                }])
-            });
-        }
-        if let Instruction::PutCountersOnSubject {
-            subject,
-            kind,
-            amount,
-        } = operation
-        {
-            let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-            if !resolved.is_positive() {
-                return Ok(());
-            }
-            let targets = self.effect_group(entry, *subject.as_ref())?;
-            if targets.is_empty() {
-                return Ok(());
-            }
-            let before = self.rules_snapshot(None)?;
-            if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
-                let raw = if *kind == CounterKind::PlusOne {
-                    PowerToughnessCounters {
-                        plus_one: resolved,
-                        minus_one: 0.into(),
-                    }
-                } else {
-                    PowerToughnessCounters {
-                        plus_one: 0.into(),
-                        minus_one: resolved,
-                    }
-                };
-                let mut records = Vec::with_capacity(targets.len());
-                for object in targets {
-                    let added = self.adjusted_pt_counters(
-                        &before.view().evaluated,
-                        object,
-                        raw.clone(),
-                        None,
-                    )?;
-                    if !added.valid_placement() {
-                        continue;
-                    }
-                    let previous = self.characteristics.counters(object);
-                    self.characteristics.place_counters(object, &added)?;
-                    let after = self.characteristics.counters(object);
-                    records.push((object, previous, added, after));
-                }
-                if records.is_empty() {
-                    return Ok(());
-                }
-                return self.emit_from(cause, &before, None, append, |old, new, _| {
-                    records
-                        .into_iter()
-                        .map(|(object, prev, added, after)| {
-                            Ok(RulesOccurrence::CountersPlaced {
-                                object,
-                                before_appearance: Box::new(
-                                    old.appearance(object)
-                                        .ok_or(EffectError::InconsistentProgram)?,
-                                ),
-                                after_appearance: Box::new(
-                                    new.appearance(object)
-                                        .ok_or(EffectError::InconsistentProgram)?,
-                                ),
-                                before: prev,
-                                added,
-                                after,
-                            })
-                        })
-                        .collect()
-                });
-            }
-            let mut occurrences = Vec::with_capacity(targets.len());
-            for object in targets {
-                let old = self.counters_of_kind(object, *kind);
-                let multiplied =
-                    effect_counter_multiplier(&before.view().evaluated, object).times(&resolved);
-                let added = self.apply_static_counter_modifiers(
-                    &before.view().evaluated,
-                    object,
-                    *kind,
-                    multiplied,
-                );
-                if !added.is_positive() {
-                    continue;
-                }
-                let after = old.plus(&added);
-                self.characteristics
-                    .named_permanent_counters_mut(*kind)
-                    .ok_or(EffectError::InconsistentProgram)?
-                    .insert(object, after.clone());
-                if kind.keyword_counter_ability().is_some()
-                    && let EventCause::Instruction { entry: eid, .. } = cause
-                {
-                    self.characteristics
-                        .refresh_keyword_counter_grant(eid, object, *kind)?;
-                }
-                occurrences.push(if *kind == CounterKind::Loyalty {
-                    RulesOccurrence::LoyaltyCountersChanged {
-                        object,
-                        before: old,
-                        after,
-                    }
-                } else {
-                    RulesOccurrence::PermanentCounterChanged {
-                        object,
-                        kind: *kind,
-                        before: old,
-                        after,
-                    }
-                });
-            }
-            return self.emit_from(cause, &before, None, append, |_, _, _| Ok(occurrences));
-        }
-        if let Instruction::PutNamedCounterOnSource { kind, amount } = operation {
-            let source = source.ok_or(EffectError::InconsistentProgram)?;
-            let before = self.rules_snapshot(None)?;
-            if !before
-                .view()
-                .evaluated
-                .get(source)
-                .is_some_and(|p| p.zone == ObjectZone::Battlefield)
-            {
-                return Ok(());
-            }
-            let old = self.counters_of_kind(source, *kind);
-            let after = old.plus(
-                &effect_counter_multiplier(&before.view().evaluated, source)
-                    .times(&i64::from(*amount).into()),
-            );
-            self.characteristics
-                .named_permanent_counters_mut(*kind)
-                .ok_or(EffectError::InconsistentProgram)?
-                .insert(source, after.clone());
-            if kind.keyword_counter_ability().is_some()
-                && let EventCause::Instruction { entry, .. } = cause
-            {
-                self.characteristics
-                    .refresh_keyword_counter_grant(entry, source, *kind)?;
-            }
-            return self.emit_from(cause, &before, None, append, |_, _, _| {
-                Ok(vec![RulesOccurrence::PermanentCounterChanged {
-                    object: source,
-                    kind: *kind,
-                    before: old,
-                    after,
-                }])
-            });
-        }
-        if *operation == Instruction::PutBlessingCounterOnSource {
-            let source = source.ok_or(EffectError::InconsistentProgram)?;
-            if !self
-                .window
-                .cards()
-                .get(source)
-                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-            {
-                return Ok(());
-            }
-            let before = self.rules_snapshot(None)?;
-            let kind = CounterKind::Blessing;
-            let previous = self.characteristics.permanent_counter_count(source, kind);
-            let next = previous.plus(&effect_counter_multiplier(&before.view().evaluated, source));
-            self.characteristics
-                .blessing_counters
-                .insert(source, next.clone());
-            return self.emit_from(cause, &before, None, append, |_, _, _| {
-                Ok(vec![RulesOccurrence::PermanentCounterChanged {
-                    object: source,
-                    kind,
-                    before: previous,
-                    after: next,
-                }])
-            });
-        }
         if *operation == Instruction::PutCreatureAndOtherPlaneswalkerCounters {
             let source = source.ok_or(EffectError::InconsistentProgram)?;
             let evaluated = self.evaluated_characteristics()?;
@@ -712,51 +518,7 @@ impl EffectWindow {
                 append,
             );
         }
-        if matches!(
-            operation,
-            Instruction::PutQuestCounterOnSource | Instruction::PutStorageCounterOnSource
-        ) {
-            let source = source.ok_or(EffectError::InconsistentProgram)?;
-            if !self
-                .window
-                .cards()
-                .get(source)
-                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-            {
-                return Ok(());
-            }
-            let before = self.rules_snapshot(None)?;
-            let quest = *operation == Instruction::PutQuestCounterOnSource;
-            let counters = if quest {
-                &mut self.characteristics.quest_counters
-            } else {
-                &mut self.characteristics.storage
-            };
-            let previous = counters.get(&source).cloned().unwrap_or_else(|| 0.into());
-            let next = previous.plus(&effect_counter_multiplier(&before.view().evaluated, source));
-            counters.insert(source, next.clone());
-            self.emit_from(cause, &before, None, append, |_, _, _| {
-                Ok(vec![if quest {
-                    RulesOccurrence::PermanentCounterChanged {
-                        object: source,
-                        kind: CounterKind::Quest,
-                        before: previous,
-                        after: next,
-                    }
-                } else {
-                    RulesOccurrence::StorageCountersChanged {
-                        object: source,
-                        before: previous,
-                        after: next,
-                    }
-                }])
-            })?;
-            return Ok(());
-        }
-        if matches!(
-            operation,
-            Instruction::PutChargeCounterOnSource | Instruction::PutChosenXChargeCounters
-        ) {
+        if matches!(operation, Instruction::PutChosenXChargeCounters) {
             let source = source.ok_or(EffectError::InconsistentProgram)?;
             if !self
                 .window
@@ -802,19 +564,11 @@ impl EffectWindow {
             .filter(|o| {
                 (matches!(
                     operation,
-                    Instruction::PutCountersOnControlledCreatures
-                        | Instruction::PutCountersOnControlledSubtype(_)
-                        | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
+                    Instruction::PutCountersOnControlledCreaturesAndGrant(_)
                 ) || Some(o.object) != source)
                     && o.zone == ObjectZone::Battlefield
                     && o.controller == Some(entry.controller())
                     && o.is_creature()
-                    && match operation {
-                        Instruction::PutCountersOnControlledSubtype(kind) => {
-                            o.current_creature_subtypes.contains(kind)
-                        }
-                        _ => true,
-                    }
             })
             .map(|o| o.object)
             .collect();

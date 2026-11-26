@@ -502,8 +502,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_rule(rule: &mut TemporaryRuleKind) {
 pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
     for op in ops {
         match op {
-            Instruction::DrawPlayer { players, amount }
-            | Instruction::AdjustPlayersLife {
+            Instruction::AdjustPlayersLife {
                 players, amount, ..
             }
             | Instruction::Discard { players, amount }
@@ -632,15 +631,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
             }
             Instruction::WinGame(rp)
-            | Instruction::SkipNextTurns { player: rp, .. }
-            | Instruction::SkipNextStep { player: rp, .. }
-            | Instruction::AttachPermanentToPlayer { player: rp, .. }
-            | Instruction::ExileLibraryTop { player: rp, .. }
             | Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
-            | Instruction::GrantCardPlayPermission { player: rp, .. }
             | Instruction::VentureIntoDungeon { player: rp, .. }
-            | Instruction::TakeInitiative { player: rp }
-            | Instruction::GainControlOfPermanent { controller: rp, .. } => {
+            | Instruction::TakeInitiative { player: rp } => {
                 rewrite_offer_chosen_to_loop_rp(rp);
             }
             Instruction::CreateTokens { creations }
@@ -683,8 +676,173 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
             }
 
-            Instruction::CreateTemporaryRule { rule, .. } => {
-                rewrite_offer_chosen_to_loop_rule(rule);
+            Instruction::DrawCards(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                rewrite_offer_chosen_to_loop_ve(&mut spec.amount);
+            }
+            Instruction::MutateObject(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    &mut spec.source,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                match &mut spec.selection {
+                    spellwake_engine::toolbox::ZoneSelection::Random { count, chooser } => {
+                        rewrite_offer_chosen_to_loop_ve(count);
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            chooser,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser, min, max, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            chooser,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                        rewrite_offer_chosen_to_loop_ve(min);
+                        rewrite_offer_chosen_to_loop_ve(max);
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::All => {}
+                }
+                match &mut spec.op {
+                    spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            by,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            host,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
+                        amount, ..
+                    } => {
+                        rewrite_offer_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::MoveCounters {
+                        to, amount, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            to,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                        if let Some(amt) = amount {
+                            rewrite_offer_chosen_to_loop_ve(amt);
+                        }
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::GainControl {
+                        controller, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            controller,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::ApplyContinuous(spec) => {
+                if let Some(q) = &mut spec.selector {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                        q,
+                        &rewrite_offer_chosen_to_loop_rp,
+                        &rewrite_offer_chosen_to_loop_ap,
+                        &rewrite_offer_chosen_to_loop_ve,
+                    );
+                }
+                if let Some(p) = &mut spec.as_emblem {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                        p,
+                        &rewrite_offer_chosen_to_loop_rp,
+                        &rewrite_offer_chosen_to_loop_ap,
+                        &rewrite_offer_chosen_to_loop_ve,
+                    );
+                }
+                match &mut spec.payload {
+                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) => {
+                        rewrite_offer_chosen_to_loop_rule(rule);
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
+                        power,
+                        toughness,
+                        ..
+                    } => {
+                        rewrite_offer_chosen_to_loop_ve(power);
+                        rewrite_offer_chosen_to_loop_ve(toughness);
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::PlayPermission {
+                        player, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::SkipTurns { player, count } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                        rewrite_offer_chosen_to_loop_ve(count);
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::SkipStep { player, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            player,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                        for part in &mut parts.0 {
+                            match part {
+                                ResolvedPartSpec::ModifyPTExpr { power, toughness }
+                                | ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                                    rewrite_offer_chosen_to_loop_ve(power);
+                                    rewrite_offer_chosen_to_loop_ve(toughness);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             Instruction::BranchIfFalse { condition, .. } => {
                 rewrite_offer_chosen_to_loop_ve(&mut condition.left);
@@ -740,10 +898,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut lb.instructions);
                 }
             }
-            Instruction::DrawController { amount }
-            | Instruction::DrawTargetPlayer { amount }
-            | Instruction::DrawEachPlayer { amount }
-            | Instruction::DrawControllerAndTarget { amount }
+            Instruction::DrawControllerAndTarget { amount }
             | Instruction::GainControllerLife { amount }
             | Instruction::DamageAmount(amount)
             | Instruction::DamageOpponentsAmount(amount)
@@ -751,8 +906,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::DrainOpponents(amount)
             | Instruction::DrainTargetAndGain(amount)
             | Instruction::OpponentsLoseAndControllerGains(amount)
-            | Instruction::PutCountersOnSubject { amount, .. }
-            | Instruction::PutNamedCounterOnTarget { amount, .. }
             | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::DealDamageToAnnouncedTargets { amount, .. }
             | Instruction::Earthbend { amount }
@@ -760,14 +913,8 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_ve(amount);
             }
             Instruction::ReturnEarthbentCard
-            | Instruction::RegenerateSubject { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets => {}
-            Instruction::RemoveCountersFromSubject {
-                amount: Some(amt), ..
-            } => {
-                rewrite_offer_chosen_to_loop_ve(amt);
-            }
             Instruction::SearchLibrary { filter } => {
                 rewrite_offer_chosen_to_loop_rp(&mut filter.searcher);
             }
@@ -881,10 +1028,10 @@ pub(in super::super) fn lower_animate_or_set_pt(
         };
         let watch_land = ObjectFilter::land().controlled();
         builder.bind_target(BodyTarget::FilteredPermanent(watch_land))?;
-        builder
-            .instructions
-            .push(Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(vec![
+        builder.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                ResolvedPartsSpec(vec![
                     ResolvedPartSpec::Type(TypeChangeSpec {
                         land_subtypes: SubtypeOperation::Keep,
                         supertypes: TypeOperation::Keep,
@@ -899,27 +1046,22 @@ pub(in super::super) fn lower_animate_or_set_pt(
                         toughness: 0.into(),
                     }),
                 ]),
-                duration: ResolvedDuration::NoStatedDuration,
-            });
-        if let Some(n) = const_n
+                ResolvedDuration::NoStatedDuration,
+            ),
+        );
+        let counter_amt = if let Some(n) = const_n
             && n > 0
         {
-            builder
-                .instructions
-                .push(Instruction::PutPowerToughnessCounters {
-                    counters: PowerToughnessCounters {
-                        plus_one: n.into(),
-                        minus_one: 0.into(),
-                    },
-                });
+            ValueExpr::literal(n)
         } else {
-            builder
-                .instructions
-                .push(Instruction::PutNamedCounterOnTarget {
-                    kind: CounterKind::PlusOne,
-                    amount: n_expr,
-                });
-        }
+            n_expr
+        };
+        builder.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                CounterKind::PlusOne,
+                counter_amt,
+            ),
+        );
         let return_body = ExecutableBody::new(
             BodyTarget::None,
             vec![
@@ -1369,24 +1511,80 @@ pub(in super::super) fn lower_animate_or_set_pt(
         for phrase in [
             "until end of turn",
             "until your next turn",
+            "that are still lands.",
+            "that are still lands",
+            "that is still a land.",
+            "that is still a land",
+            "that's still a land.",
+            "that's still a land",
             "it's still a land.",
             "it's still a land",
             "they're still lands.",
             "they're still lands",
+            "that are still artifacts.",
+            "that are still artifacts",
+            "that is still an artifact.",
+            "that is still an artifact",
+            "that's still an artifact.",
+            "that's still an artifact",
             "it's still an artifact.",
             "it's still an artifact",
             "they're still artifacts.",
             "they're still artifacts",
+            "that are still enchantments.",
+            "that are still enchantments",
+            "that is still an enchantment.",
+            "that is still an enchantment",
+            "that's still an enchantment.",
+            "that's still an enchantment",
             "it's still an enchantment.",
             "it's still an enchantment",
             "they're still enchantments.",
             "they're still enchantments",
+            "that are still creatures.",
+            "that are still creatures",
+            "that is still a creature.",
+            "that is still a creature",
+            "that's still a creature.",
+            "that's still a creature",
             "it's still a creature.",
             "it's still a creature",
             "they're still creatures.",
             "they're still creatures",
         ] {
             strip_phrase_ci(&mut clean, phrase);
+        }
+        {
+            let c_low = clean.to_ascii_lowercase();
+            for pat in [" and gains ", " and gain ", " and has ", " and have "] {
+                if let Some(idx) = c_low.find(pat) {
+                    let tail = clean[idx + pat.len()..].trim().trim_end_matches('.').trim();
+                    let mut parsed_tail_kws = Vec::new();
+                    let mut all_valid = !tail.is_empty();
+                    for seg in tail.split(',') {
+                        for piece in seg.split(" and ") {
+                            let kw_cand = piece.trim();
+                            if kw_cand.is_empty() {
+                                continue;
+                            }
+                            if lower_keyword_ability_name(kw_cand).is_some() {
+                                parsed_tail_kws.push(kw_cand.to_ascii_lowercase());
+                            } else {
+                                all_valid = false;
+                                break;
+                            }
+                        }
+                        if !all_valid {
+                            break;
+                        }
+                    }
+                    if all_valid && !parsed_tail_kws.is_empty() {
+                        extra_kws.extend(parsed_tail_kws);
+                        clean.truncate(idx);
+                        break;
+                    }
+                }
+            }
         }
         clean = clean.replace(" and ", " ");
         for (phrase, kw_label) in [
@@ -1732,7 +1930,6 @@ pub(in super::super) fn lower_animate_or_set_pt(
             Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
                 | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
                 | Instruction::ReturnChosenXGraveyardCreatures
-                | Instruction::ReturnSourceGraveyardToBattlefield { .. }
                 | Instruction::ReturnExiledTargetCohort { .. }
                 | Instruction::ReturnCardsDestroyedThisWay
                 | Instruction::ReturnCapturedDyingCreature
@@ -1792,12 +1989,13 @@ pub(in super::super) fn lower_animate_or_set_pt(
             inner.zone = None;
             let bt = lower_battlefield_body_target(&inner, vocabulary)?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
-                    parts: spec,
-                    duration: dur,
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1878,12 +2076,13 @@ pub(in super::super) fn lower_animate_or_set_pt(
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if has_perm_target => {
-            builder
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
-                    parts: spec,
-                    duration: dur,
-                });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TriggerSubject if in_trigger => {

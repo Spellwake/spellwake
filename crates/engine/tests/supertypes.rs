@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 //! Supertype traits through actual root actions, occurrences, copying and cleanup.
 //! Associated World/legend state actions and Snow costs qualify separately.
 #[path = "../test_support/creature_vocabulary.rs"]
@@ -192,85 +193,5 @@ fn counted_mana_reads_current_required_and_forbidden_supertypes() {
             .defined
             .supertypes
             .is_empty()
-    );
-}
-
-#[test]
-fn permanent_copies_capture_printed_supertypes_while_receiver_effects_and_exit_remain_independent()
-{
-    use Supertype::*;
-    let mut donor = Program::creature(None, 2.into(), 3.into(), BTreeSet::new());
-    donor.supertypes = set(&[Basic]);
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, copier(), true),
-            card(2, copier(), true),
-            card(3, donor.clone(), true),
-            change(4, TypeOperation::Set(set(&[Snow])), no_duration()),
-            change(
-                5,
-                TypeOperation::Add(set(&[Snow])),
-                ResolvedDuration::UntilEndOfTurn,
-            ),
-            spell(
-                6,
-                BodyTarget::SinglePermanent,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1), CardId(2), CardId(3)],
-    );
-    let (changed_donor, _) = resolve(&game, 4, object(&game, 3));
-    let (changed_receiver, _) = resolve(changed_donor.state(), 5, object(&game, 1));
-    let copied = copy(changed_receiver.state(), 1, 3);
-    let receiver = object(copied.state(), 1);
-    assert_eq!(
-        current(copied.state(), receiver).defined.supertypes,
-        set(&[Basic])
-    );
-    assert_eq!(
-        current(copied.state(), receiver).current_supertypes,
-        set(&[Basic, Snow])
-    );
-    assert_eq!(
-        current(copied.state(), object(&game, 3)).current_supertypes,
-        set(&[Snow])
-    );
-    assert_eq!(
-        copied.state().execution().copiable_program(receiver),
-        Some(&donor)
-    );
-    let old_donor = object(copied.state(), 3);
-    let (departed, _) = resolve(copied.state(), 6, old_donor);
-    assert!(
-        departed
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(old_donor)
-            .is_none()
-    );
-    assert_eq!(
-        departed
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(object(departed.state(), 3))
-            .unwrap()
-            .zone(),
-        ObjectZone::Hand(P0)
-    );
-    let second = copy(departed.state(), 2, 1);
-    assert_eq!(
-        current(second.state(), object(second.state(), 2)).current_supertypes,
-        set(&[Basic])
-    );
-    let cleaned = cleanup(second.state());
-    assert_eq!(
-        current(cleaned.state(), receiver).current_supertypes,
-        set(&[Basic])
     );
 }

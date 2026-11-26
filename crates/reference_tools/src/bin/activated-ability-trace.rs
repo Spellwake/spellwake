@@ -535,7 +535,12 @@ fn run_probe(
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::ReturnToOwnersHand],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Hand,
+                        ),
+                    ))],
                 ),
             ),
         });
@@ -760,7 +765,12 @@ fn fixtures() -> Vec<Probe> {
             ability: 59,
             cost: ManaCost::one(ManaType::Blue),
             source_cost: SourceCost::Sacrifice,
-            instructions: vec![Instruction::ReturnToOwnersHand],
+            instructions: vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Hand,
+                ),
+            ))],
             spend: vec![ManaType::Blue],
             effect: "bounce",
         });

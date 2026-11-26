@@ -925,12 +925,15 @@ impl ActivatedAbility {
             source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Reinforce),
             body: ExecutableBody::new(
                 crate::program::BodyTarget::SingleCreature,
-                vec![crate::program::Instruction::PutPowerToughnessCounters {
-                    counters: crate::characteristics::PowerToughnessCounters {
-                        plus_one: amount,
-                        minus_one: 0.into(),
-                    },
-                }],
+                vec![crate::program::Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::all(
+                        crate::toolbox::ObjectQuery::Targets,
+                        crate::toolbox::ObjectMutation::AddCounters {
+                            kind: crate::effects::CounterKind::PlusOne,
+                            amount: crate::program::ValueExpr::literal(amount),
+                        },
+                    ),
+                ))],
             ),
         }
     }
@@ -961,6 +964,7 @@ impl ActivatedAbility {
                     amount: crate::program::ValueExpr::Literal(amount),
                 },
             ] => amount == &1.into(),
+            [Instruction::DrawCards(spec)] => spec.amount == crate::program::ValueExpr::literal(1),
             _ => false,
         }
     }

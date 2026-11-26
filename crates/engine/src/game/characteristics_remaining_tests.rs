@@ -309,9 +309,28 @@ fn effect_spell(parts: Vec<ResolvedPartSpec>, duration: ResolvedDuration) -> Pro
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CreateContinuousEffect {
-                parts: ResolvedPartsSpec(parts),
-                duration,
+            vec![{
+                struct _Tmp {
+                    parts: crate::characteristics::ResolvedPartsSpec,
+                    duration: crate::characteristics::ResolvedDuration,
+                }
+                let _t = _Tmp {
+                    parts: ResolvedPartsSpec(parts),
+                    duration,
+                };
+                crate::program::Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: Some(crate::toolbox::ObjectQuery::Targets),
+                        payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
+                            _t.parts,
+                        )),
+                        duration: _t.duration,
+                        condition: None,
+                        one_shot: false,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))
             }],
         ),
     )

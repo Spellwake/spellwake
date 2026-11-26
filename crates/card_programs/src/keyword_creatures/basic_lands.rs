@@ -155,7 +155,9 @@ fn land_instruction(text: &str) -> Option<Instruction> {
         },
         "surveil 1." | "Surveil 1." => Instruction::Surveil { player, amount },
         "scry 1." | "Scry 1." => Instruction::Scry { player, amount },
-        "Draw a card." => Instruction::DrawController { amount },
+        "Draw a card." => {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(amount)
+        }
         _ => return None,
     })
 }
@@ -226,7 +228,7 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
             let (filter, op) = if line.starts_with("{T}: Choose") {
                 (ObjectFilter::any().commander().entered_this_turn(), Instruction::AffectPermanentTargets { minimum: 1, maximum: 1, action: PermanentTargetAction::PutCountersByCurrentType })
             } else {
-                (ObjectFilter::creature().with_color(ObjectColorFilter::Colorless).entered_this_turn(), Instruction::PutPowerToughnessCounters { counters: spellwake_engine::characteristics::PowerToughnessCounters { plus_one: 1.into(), minus_one: 0.into() } })
+                (ObjectFilter::creature().with_color(ObjectColorFilter::Colorless).entered_this_turn(), crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(1)))
             };
             land.activated.push(ActivatedAbility {id:ActivatedAbilityId(land.activated.len().try_into().ok()?),mana_cost:ManaCost::free(),
                 source_cost:spellwake_engine::activated::SourceCost::Tap,body:ExecutableBody::new(BodyTarget::FilteredPermanent(filter),vec![op])});
@@ -239,7 +241,7 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
                     tap_source: true,
                     sacrifice: None,
                 },
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::DrawController { amount: spellwake_engine::program::ValueExpr::Literal(1.into()) }]),
+                body: ExecutableBody::new(BodyTarget::None, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(1.into()))]),
             });
         } else if let Some(cost) = line.strip_prefix("Basic landcycling ") {
             land.activated.push(ActivatedAbility::typecycling(ActivatedAbilityId(land.activated.len().try_into().ok()?),
@@ -258,7 +260,7 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
             if prohibited!=keywords {return None;}
             land.activated.push(ActivatedAbility {id:ActivatedAbilityId(land.activated.len().try_into().ok()?),mana_cost:fixed_cost(cost)?,
                 source_cost:spellwake_engine::activated::SourceCost::Tap,
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::SuppressGroupKeywords { group: Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().opposing())), keywords }])});
+                body: ExecutableBody::new(BodyTarget::None, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().opposing()), spellwake_engine::program::ValueExpr::literal(0), spellwake_engine::program::ValueExpr::literal(0), std::collections::BTreeSet::new(), keywords)])});
         } else if let Some((cost, effect)) = line.split_once(", {T}: ") {
             land.activated.push(ActivatedAbility {
                 id: ActivatedAbilityId(land.activated.len().try_into().ok()?),

@@ -113,11 +113,11 @@ fn compile_face(
         let (condition, instructions) = match clause {
             "When equipped creature deals combat damage to a player, unattach Elbrus, then transform it." if !reverse => {
                 transforms = true;
-                (spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().attached_to_self(), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true), vec![Unattach, TransformSource])
+                (spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().attached_to_self(), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true), vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::unattach_query(spellwake_engine::toolbox::ObjectQuery::Source), crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()])
             }
             "Whenever a player loses the game, put thirteen +1/+1 counters on Withengar Unbound." if reverse => {
                 (spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::PlayerLosesGame(PlayerRelation::AnyParticipant)),
-                    vec![PutCountersOnSource { amount: 13.into() }])
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(13))])
             }
             "At the beginning of each upkeep, if no spells were cast last turn, transform this creature."
                 if !reverse =>
@@ -125,7 +125,7 @@ fn compile_face(
                 transforms = true;
                 (
                     spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::Upkeep, spellwake_engine::program::PlayerRelation::AnyParticipant).only_if(spellwake_engine::program::TriggerCondition::PreviousTurnCasts(PreviousTurnCastCondition::NoSpells)),
-                    vec![TransformSource],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
                 )
             }
             "At the beginning of each upkeep, if a player cast two or more spells last turn, transform this creature."
@@ -134,7 +134,7 @@ fn compile_face(
                 transforms = true;
                 (
                     spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::Upkeep, spellwake_engine::program::PlayerRelation::AnyParticipant).only_if(spellwake_engine::program::TriggerCondition::PreviousTurnCasts(PreviousTurnCastCondition::OnePlayerCastAtLeastTwo,)),
-                    vec![TransformSource],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
                 )
             }
             "At the beginning of your upkeep, look at the top card of your library. You may reveal that card. If an instant or sorcery card is revealed this way, transform this creature."
@@ -153,7 +153,7 @@ fn compile_face(
                             },
                             destination: 3,
                         },
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -177,7 +177,7 @@ fn compile_face(
                             },
                             destination: 3,
                         },
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 ));
                 continue;
@@ -230,7 +230,7 @@ fn compile_face(
                         from_graveyard: false,
                     },
                     NoTarget,
-                    vec![TransformSource],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
                 );
                 program.activation_restrictions.insert(
                     ability.id,
@@ -256,7 +256,7 @@ fn compile_face(
                             },
                             destination: 4,
                         },
-                        TapAbilitySource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
                         DamageGroup {
                             group: DamageCohort::Controller,
                             amount: 9.into(),
@@ -272,7 +272,7 @@ fn compile_face(
                         OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -288,7 +288,7 @@ fn compile_face(
                             paid_destination: 1,
                             declined_destination: 2,
                         },
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -300,7 +300,7 @@ fn compile_face(
                         OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -319,7 +319,7 @@ fn compile_face(
                         exclude_source: true,
                     },
                     NoTarget,
-                    vec![TransformSource],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
                 );
                 ability.id = ActivatedAbilityId(program.activated.len().try_into().ok()?);
                 program.activated.push(ability);
@@ -361,7 +361,7 @@ fn compile_face(
                     fixed_cost("{B}")?,
                     SourceCost::None,
                     NoTarget,
-                    vec![TransformSource],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
                 );
                 ability.id = ActivatedAbilityId(program.activated.len() as u64);
                 program.activation_restrictions.insert(
@@ -397,7 +397,7 @@ fn compile_face(
                     SourceCost::None,
                     NoTarget,
                     vec![
-                        PutNamedCounterOnSource { kind, amount: 1 },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(kind, spellwake_engine::program::ValueExpr::literal(1)),
                         BranchIfFalse {
                             condition: ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::counters(spellwake_engine::program::CounterSubjectRef::AbilitySource, Some(kind)),
@@ -406,8 +406,8 @@ fn compile_face(
                             },
                             destination: 4,
                         },
-                        ClearSourceCounters(kind),
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::clear_source_counters(Some(kind)),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 ));
                 continue;
@@ -451,7 +451,7 @@ fn compile_face(
                     SourceCost::Tap,
                     NoTarget,
                     vec![
-                        DrawController { amount: spellwake_engine::program::ValueExpr::Literal(1.into()) },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(1.into())),
                         Discard {
                             players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::Controller),
                             amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
@@ -464,8 +464,8 @@ fn compile_face(
                             },
                             destination: 5,
                         },
-                        UntapAbilitySource,
-                        TransformSource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::untap_ability_source(),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 ));
                 continue;
@@ -481,8 +481,8 @@ fn compile_face(
                         },
                         destination: 3,
                     },
-                    TapAbilitySource,
-                    TransformSource,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                 ],
             ),
             "When this creature deals combat damage to a player, you may transform it. If you do, attach it to target creature that player controls." if !reverse => {
@@ -514,9 +514,9 @@ fn compile_face(
             }
             "Whenever this creature deals combat damage to a player, draw a card." => (
                 spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
-                vec![DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                )],
             ),
             "Whenever an opponent casts a spell, this creature deals 2 damage to that player." => (
                 spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Opponent, spellwake_engine::program::SpellFilter::any()),

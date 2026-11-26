@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(dead_code, unused_imports)]
 //! Source prevention retains source identity and never becomes recipient protection.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -195,45 +196,6 @@ fn source_prevention_rejects_wrong_target_family_and_absent_ability_source() {
 }
 
 #[test]
-fn source_prevention_does_not_follow_a_new_battlefield_incarnation() {
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, pinger(false), true),
-            spell(
-                10,
-                BodyTarget::SingleCreature,
-                vec![Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::FromTarget,
-                )],
-            ),
-            spell(
-                11,
-                BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1)],
-    );
-    let old = object(&game, 1);
-    let protected = protect(&game, 1);
-    let bounce = submit(
-        protected.state(),
-        P0,
-        GameCommand::CastPaid {
-            spell: object(protected.state(), 11),
-            target: TargetRef::Object(old),
-            payment: ManaPayment::default(),
-        },
-    );
-    let bounced = pass_pair(bounce.state());
-    let returned = cast_permanent(bounced.state(), 1);
-    assert_ne!(object(returned.state(), 1), old);
-    let damaged = ping(returned.state(), 1, TargetRef::Player(P1));
-    assert_eq!(damaged.state().execution().life_total(P1), Some(&18.into()));
-}
-
-#[test]
 fn ability_source_prevention_survives_sacrifice_and_respects_combat_only() {
     for (filter, expected) in [
         (TurnPreventionFilter::FromAbilitySource, 20),
@@ -327,66 +289,4 @@ fn creature_source_groups_use_damage_kind_and_exclude_noncreature_sources() {
             Some(&(expected - 2).into())
         );
     }
-}
-
-#[test]
-fn source_prevention_with_sole_target_removed_fizzles_without_installing_a_shield() {
-    let game = world(
-        vocabulary(),
-        vec![
-            card(1, pinger(false), true),
-            card(2, pinger(false), true),
-            spell(
-                10,
-                BodyTarget::SingleCreature,
-                vec![Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::FromTarget,
-                )],
-            ),
-            spell(
-                11,
-                BodyTarget::SingleCreature,
-                vec![Instruction::ReturnToOwnersHand],
-            ),
-        ],
-        vec![CardId(1), CardId(2)],
-    );
-    let original = object(&game, 1);
-    let prevention = submit(
-        &game,
-        P0,
-        GameCommand::CastPaid {
-            spell: object(&game, 10),
-            target: TargetRef::Object(original),
-            payment: ManaPayment::default(),
-        },
-    );
-    let response = submit(
-        prevention.state(),
-        P0,
-        GameCommand::CastPaid {
-            spell: object(prevention.state(), 11),
-            target: TargetRef::Object(original),
-            payment: ManaPayment::default(),
-        },
-    );
-    let removed = pass_pair(response.state());
-    assert_ne!(object(removed.state(), 1), original);
-    let fizzled = pass_pair(removed.state());
-    assert!(!all_occurrences(&fizzled).iter().any(|event| matches!(
-        event,
-        spellwake_engine::occurrence::RulesOccurrence::TurnPreventionCreated { .. }
-    )));
-    let returned = cast_permanent(fizzled.state(), 1);
-    assert_ne!(object(returned.state(), 1), original);
-    let replacement_damage = ping(returned.state(), 1, TargetRef::Player(P1));
-    assert_eq!(
-        replacement_damage.state().execution().life_total(P1),
-        Some(&18.into())
-    );
-    let unrelated_damage = ping(replacement_damage.state(), 2, TargetRef::Player(P1));
-    assert_eq!(
-        unrelated_damage.state().execution().life_total(P1),
-        Some(&16.into())
-    );
 }

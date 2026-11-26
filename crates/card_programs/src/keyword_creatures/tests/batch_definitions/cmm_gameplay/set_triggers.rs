@@ -401,9 +401,9 @@ fn cmm_guttersnipe_observes_only_its_controllers_instant_or_sorcery_casts() {
     let draw = || {
         free_instant(
             BodyTarget::None,
-            Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
         )
     };
     let initial = game(

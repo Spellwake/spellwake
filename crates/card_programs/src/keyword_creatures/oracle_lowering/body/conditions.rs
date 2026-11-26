@@ -191,8 +191,19 @@ pub(super) fn resolve_prev_anaphora_ref(
                 | Instruction::RevealUntilMatch { .. }
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::LookTopChooseExt { .. }
-                | Instruction::ExileLibraryTop { .. }
-        )
+        ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+            matches!(
+                &spec.source,
+                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                    ..
+                }
+            ) && matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    | spellwake_engine::toolbox::ZoneDest::RevealOnly
+            )
+        })
     });
     instructions.iter().rev().find_map(|op| match op {
         Instruction::LookTopChoose {
@@ -201,19 +212,13 @@ pub(super) fn resolve_prev_anaphora_ref(
         | Instruction::MayRevealLibraryTop
         | Instruction::RevealUntilMatch { .. }
         | Instruction::RevealUntilMatchExt { .. }
-        | Instruction::LookTopChooseExt { .. }
-        | Instruction::ExileLibraryTop { .. } => Some(MatchObjectRef::RevealedTop),
+        | Instruction::LookTopChooseExt { .. } => Some(MatchObjectRef::RevealedTop),
         Instruction::Discard { .. } => Some(MatchObjectRef::DiscardedCard),
-        Instruction::Mill { .. } | Instruction::PutLibraryCohortIntoGraveyard(_) => {
-            Some(MatchObjectRef::MovedLibraryCard)
-        }
-        Instruction::DestroyTarget => Some(MatchObjectRef::DestructionTarget),
+        Instruction::Mill { .. } => Some(MatchObjectRef::MovedLibraryCard),
         Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
-            if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .is_some() =>
+            if super::super::toolbox_emit::unwrap_zone_op(op).is_some() =>
         {
-            let spec = crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .unwrap();
+            let spec = super::super::toolbox_emit::unwrap_zone_op(op).unwrap();
             match &spec.destination {
                 spellwake_engine::toolbox::ZoneDest::Graveyard {
                     semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. },
@@ -226,6 +231,20 @@ pub(super) fn resolve_prev_anaphora_ref(
                 spellwake_engine::toolbox::ZoneDest::Graveyard {
                     semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
                 } => Some(MatchObjectRef::LastMovedToGraveyard),
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Mill,
+                } => Some(MatchObjectRef::MovedLibraryCard),
+                spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    if matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                            ..
+                        }
+                    ) =>
+                {
+                    Some(MatchObjectRef::LastMovedToExile)
+                }
                 spellwake_engine::toolbox::ZoneDest::None
                 | spellwake_engine::toolbox::ZoneDest::RevealOnly
                 | spellwake_engine::toolbox::ZoneDest::LookOnly { .. } => None,

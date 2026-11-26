@@ -85,9 +85,10 @@ pub(crate) fn compile(
 
 fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
     let (target, instruction) = match text {
-        "return target creature to its owner's hand." => {
-            (BodyTarget::SingleCreature, Instruction::ReturnToOwnersHand)
-        }
+        "return target creature to its owner's hand." => (
+            BodyTarget::SingleCreature,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+        ),
         "target creature gains haste until end of turn."
         | "target creature gains trample until end of turn."
         | "target creature gains first strike until end of turn." => {
@@ -98,12 +99,13 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
             };
             (
                 BodyTarget::SingleCreature,
-                Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
                         AbilityChange::grant_keywords([keyword]),
                     )]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
             )
         }
         "counter target spell." => (
@@ -115,13 +117,14 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
             let delta = if text.contains("+3/+3") { 3 } else { -3 };
             (
                 BodyTarget::SingleCreature,
-                Instruction::CreateContinuousEffect {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
                         power: delta.into(),
                         toughness: delta.into(),
                     })]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                },
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
             )
         }
         _ => return None,

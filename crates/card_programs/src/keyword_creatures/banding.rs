@@ -123,10 +123,13 @@ pub(super) fn compile(
             source_cost: SourceCost::Tap,
             body: ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreateContinuousEffect {
-                    parts,
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        parts,
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
             ),
         });
         return Some(program);

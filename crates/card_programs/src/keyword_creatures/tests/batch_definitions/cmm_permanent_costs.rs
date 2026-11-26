@@ -1103,7 +1103,10 @@ fn cmm_geode_golem_casts_the_chosen_commander_during_the_combat_damage_trigger()
             3,
             A,
             ObjectDestination::LibraryBottom,
-            free_instant(BodyTarget::SingleCreature, Instruction::ReturnToOwnersHand),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            ),
         ),
         named("Experiment Kraj", 100, A, ObjectDestination::Command),
         named("Verdeloth the Ancient", 200, B, ObjectDestination::Command),
