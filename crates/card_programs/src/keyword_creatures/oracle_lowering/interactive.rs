@@ -1111,7 +1111,7 @@ fn parse_two_pile_rest_dest(rest_to: &str) -> Option<spellwake_engine::program::
 }
 
 /// Lower `InstructionAst::ChooseFromGroup` / `PlayerChooseFromGroup` for announcement target
-/// bindings and player selection domains.
+/// bindings, player selection domains, and resolution-time non-target object selection.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_choose_from_group(
     chooser: PlayerRefAst,
@@ -1124,15 +1124,34 @@ pub(super) fn lower_choose_from_group(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
     if random {
+        if chooser == PlayerRefAst::You && matches!(count, ValueExprAst::Const(1)) {
+            match group {
+                SubjectRefAst::Player(PlayerRefAst::AnyOpponent) => {
+                    builder.instructions.push(Instruction::ChooseValue {
+                        chooser: ResolvingPlayer::Controller,
+                        domain: spellwake_engine::program::ResolutionChoiceDomain::RandomPlayer {
+                            opponents_only: true,
+                        },
+                    });
+                    return Ok(());
+                }
+                SubjectRefAst::Player(PlayerRefAst::AnyPlayer) => {
+                    builder.instructions.push(Instruction::ChooseValue {
+                        chooser: ResolvingPlayer::Controller,
+                        domain: spellwake_engine::program::ResolutionChoiceDomain::RandomPlayer {
+                            opponents_only: false,
+                        },
+                    });
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         return Err("oracle:unsupported-instruction");
     }
-    let _ = (in_trigger, bound_x);
     if chooser == PlayerRefAst::You {
         match group {
-            SubjectRefAst::TargetObject {
-                count: TargetCountAst::Exact(1) | TargetCountAst::UpTo(1),
-                ..
-            } if matches!(count, ValueExprAst::Const(1)) => {
+            SubjectRefAst::TargetObject { .. } => {
                 let bt = lower_target_subject(group, vocabulary)?;
                 builder.bind_target(bt)?;
                 return Ok(());
@@ -1162,7 +1181,378 @@ pub(super) fn lower_choose_from_group(
             _ => {}
         }
     }
+    if let SubjectRefAst::Group(filter_ast) = group {
+        let (players, source_zone, filter, min, max) = lower_group_choose_spec(
+            chooser, count, filter_ast, builder, vocabulary, in_trigger, bound_x,
+        )?;
+        builder.instructions.push(Instruction::ChooseObjects {
+            players,
+            source_zone,
+            filter: Box::new(filter),
+            min,
+            max,
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        return Ok(());
+    }
     Err("oracle:unsupported-instruction")
+}
+
+/// Fuse `ChooseFromGroup` / `PlayerChooseFromGroup` / `InteractiveChoice(ChooseFromGroup)` followed
+/// by a keep-vs-rest destruction, exile, bounce, sacrifice, discard, or tap into
+/// [`Instruction::ChooseObjects`] with `unchosen_action`.
+pub(super) fn try_fuse_choose_objects_and_rest(
+    ins: &[InstructionAst],
+    i: usize,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Option<usize> {
+    let next = ins.get(i + 1)?;
+    let unchosen_action = extract_rest_action(next)?;
+    let mut probe = builder.clone();
+    let spec = match &ins[i] {
+        InstructionAst::ChooseFromGroup {
+            count,
+            random: false,
+            group,
+        } => match group.as_ref() {
+            SubjectRefAst::Group(filter_ast) => {
+                let (players, source_zone, filter, min, max) = lower_group_choose_spec(
+                    PlayerRefAst::You,
+                    count,
+                    filter_ast,
+                    &mut probe,
+                    vocabulary,
+                    in_trigger,
+                    bound_x,
+                )
+                .ok()?;
+                ChooseObjectsSpec {
+                    players,
+                    source_zone,
+                    filter,
+                    min,
+                    max,
+                    distinct_powers: false,
+                    max_total_power: None,
+                }
+            }
+            _ => return None,
+        },
+        InstructionAst::PlayerChooseFromGroup {
+            chooser,
+            count,
+            random: false,
+            group,
+        } => match group.as_ref() {
+            SubjectRefAst::Group(filter_ast) => {
+                let (players, source_zone, filter, min, max) = lower_group_choose_spec(
+                    *chooser, count, filter_ast, &mut probe, vocabulary, in_trigger, bound_x,
+                )
+                .ok()?;
+                ChooseObjectsSpec {
+                    players,
+                    source_zone,
+                    filter,
+                    min,
+                    max,
+                    distinct_powers: false,
+                    max_total_power: None,
+                }
+            }
+            _ => return None,
+        },
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::ChooseFromGroup {
+            chooser,
+            description,
+        }) => parse_interactive_choose_objects(
+            *chooser,
+            description,
+            &mut probe,
+            vocabulary,
+            in_trigger,
+        )?,
+        _ => return None,
+    };
+    *builder = probe;
+    builder.instructions.push(Instruction::ChooseObjects {
+        players: spec.players,
+        source_zone: spec.source_zone,
+        filter: Box::new(spec.filter),
+        min: spec.min,
+        max: spec.max,
+        distinct_powers: spec.distinct_powers,
+        max_total_power: spec.max_total_power,
+        unchosen_action: Some(unchosen_action),
+    });
+    Some(2)
+}
+
+struct ChooseObjectsSpec {
+    players: spellwake_engine::program::AffectedPlayers,
+    source_zone: spellwake_engine::program::SourceZoneFilter,
+    filter: ObjectFilter,
+    min: ValueExpr,
+    max: ValueExpr,
+    distinct_powers: bool,
+    max_total_power: Option<ValueExpr>,
+}
+
+fn extract_rest_action(
+    op: &InstructionAst,
+) -> Option<spellwake_engine::program::UnchosenObjectsAction> {
+    use spellwake_engine::program::UnchosenObjectsAction;
+    let is_rest_subject = |subj: &SubjectRefAst| -> bool {
+        match subj {
+            SubjectRefAst::Anaphora(raw) => {
+                let low = raw.trim().to_ascii_lowercase();
+                low.contains("the rest")
+                    || low.contains("rest of them")
+                    || low.contains("other")
+                    || low.contains("not chosen")
+                    || low.contains("unchosen")
+            }
+            SubjectRefAst::Group(flt) => {
+                (flt.flags.0 & spellwake_oracle_compiler::ast::ObjectFilterFlags::EXCLUDE_SELF.0)
+                    != 0
+            }
+            _ => false,
+        }
+    };
+    match op {
+        InstructionAst::Destroy { subject, .. } if is_rest_subject(subject) => {
+            Some(UnchosenObjectsAction::Destroy)
+        }
+        InstructionAst::Exile { subject, .. } if is_rest_subject(subject) => {
+            Some(UnchosenObjectsAction::Exile)
+        }
+        InstructionAst::ReturnZone {
+            subject,
+            to,
+            except,
+            ..
+        } if (is_rest_subject(subject) || except.is_some())
+            && to.to_ascii_lowercase().contains("hand") =>
+        {
+            Some(UnchosenObjectsAction::ReturnToHand)
+        }
+        InstructionAst::Sacrifice {
+            subject, except, ..
+        } if is_rest_subject(subject) || except.is_some() => Some(UnchosenObjectsAction::Sacrifice),
+        InstructionAst::Discard { anaphora, .. }
+            if anaphora.as_deref().is_some_and(|a| {
+                let low = a.to_ascii_lowercase();
+                low.contains("rest") || low.contains("other")
+            }) =>
+        {
+            Some(UnchosenObjectsAction::Discard)
+        }
+        InstructionAst::TapPermanent { subject, .. } if is_rest_subject(subject) => {
+            Some(UnchosenObjectsAction::Tap)
+        }
+        _ => None,
+    }
+}
+
+fn lower_group_choose_spec(
+    chooser: PlayerRefAst,
+    count: &ValueExprAst,
+    filter_ast: &spellwake_oracle_compiler::ast::ObjectFilterAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<
+    (
+        spellwake_engine::program::AffectedPlayers,
+        spellwake_engine::program::SourceZoneFilter,
+        ObjectFilter,
+        ValueExpr,
+        ValueExpr,
+    ),
+    &'static str,
+> {
+    use spellwake_engine::program::SourceZoneFilter;
+    use spellwake_oracle_compiler::ast::{ControllerRelation, ZoneFilter};
+    let players = lower_affected_players_in_context(chooser, builder, in_trigger)?;
+    let (source_zone, stripped_ctrl) = match filter_ast.zone {
+        Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand | ZoneFilter::AnyHand) => {
+            (SourceZoneFilter::Hand, false)
+        }
+        Some(ZoneFilter::YourGraveyard | ZoneFilter::ThatPlayerGraveyard) => {
+            (SourceZoneFilter::Graveyard, false)
+        }
+        Some(ZoneFilter::OpponentGraveyard | ZoneFilter::TargetOpponentGraveyard) => {
+            (SourceZoneFilter::OpponentGraveyard, false)
+        }
+        Some(ZoneFilter::AnyGraveyard) => (SourceZoneFilter::AnyGraveyard, false),
+        Some(ZoneFilter::Exile) => (SourceZoneFilter::Exile, false),
+        None | Some(ZoneFilter::Battlefield) => {
+            if matches!(
+                filter_ast.controller,
+                Some(ControllerRelation::You | ControllerRelation::ThatPlayer)
+            ) {
+                (SourceZoneFilter::Battlefield, true)
+            } else {
+                (SourceZoneFilter::AnyBattlefield, false)
+            }
+        }
+        _ => return Err("oracle:unsupported-instruction"),
+    };
+    let mut normalized = filter_ast.clone();
+    normalized.zone = None;
+    if stripped_ctrl {
+        normalized.controller = None;
+    }
+    let filter = super::filters::lower_object_filter(&normalized, vocabulary)?;
+    let amt =
+        lower_value_expr_in_context(resolve_x(count, bound_x), builder, in_trigger, vocabulary)?;
+    Ok((players, source_zone, filter, amt.clone(), amt))
+}
+
+fn creature_object_filter() -> ObjectFilter {
+    let mut c = spellwake_engine::program::ObjectClause::any();
+    c.any_types = spellwake_engine::program::CardTypeMask::CREATURE;
+    ObjectFilter::Clause(c)
+}
+
+fn parse_interactive_choose_objects(
+    chooser: PlayerRefAst,
+    description: &str,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+) -> Option<ChooseObjectsSpec> {
+    use spellwake_engine::program::SourceZoneFilter;
+    let raw = description
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if raw.contains("target") || raw.contains("from it") || raw.contains("from them") {
+        return None;
+    }
+    let players = lower_affected_players_in_context(chooser, builder, in_trigger).ok()?;
+
+    // Special constrained forms with exact rules semantics:
+    // 1. "any number of creatures with different powers" (Sigarda's Vanguard, Sigardian Zealot)
+    if raw == "any number of creatures with different powers" {
+        return Some(ChooseObjectsSpec {
+            players,
+            source_zone: SourceZoneFilter::AnyBattlefield,
+            filter: creature_object_filter(),
+            min: ValueExpr::literal(0),
+            max: ValueExpr::literal(99),
+            distinct_powers: true,
+            max_total_power: None,
+        });
+    }
+    // 2. "any number of creatures they control with total power N or less" (Slaughter the Strong, Destined Confrontation)
+    if let Some(rest) = raw
+        .strip_prefix("any number of creatures they control with total power ")
+        .or_else(|| raw.strip_prefix("any number of creatures you control with total power "))
+        && let Some(num_str) = rest.strip_suffix(" or less")
+        && let Ok(limit) = num_str.trim().parse::<i64>()
+    {
+        return Some(ChooseObjectsSpec {
+            players,
+            source_zone: SourceZoneFilter::Battlefield,
+            filter: creature_object_filter(),
+            min: ValueExpr::literal(0),
+            max: ValueExpr::literal(99),
+            distinct_powers: false,
+            max_total_power: Some(ValueExpr::literal(limit)),
+        });
+    }
+
+    // 3. Hand / Graveyard single-card choices
+    if matches!(raw.as_str(), "a card in your hand" | "a card in their hand") {
+        return Some(ChooseObjectsSpec {
+            players,
+            source_zone: SourceZoneFilter::Hand,
+            filter: ObjectFilter::any(),
+            min: ValueExpr::literal(1),
+            max: ValueExpr::literal(1),
+            distinct_powers: false,
+            max_total_power: None,
+        });
+    }
+    if matches!(
+        raw.as_str(),
+        "a card in your graveyard" | "a card in their graveyard"
+    ) {
+        return Some(ChooseObjectsSpec {
+            players,
+            source_zone: SourceZoneFilter::Graveyard,
+            filter: ObjectFilter::any(),
+            min: ValueExpr::literal(1),
+            max: ValueExpr::literal(1),
+            distinct_powers: false,
+            max_total_power: None,
+        });
+    }
+
+    // 4. Generic battlefield non-target object filter choices
+    let (min_val, max_val, body_phrase) = if let Some(rest) = raw.strip_prefix("any number of ") {
+        (0i64, 99i64, rest)
+    } else if let Some(rest) = raw.strip_prefix("up to one ") {
+        (0, 1, rest)
+    } else if let Some(rest) = raw.strip_prefix("up to two ") {
+        (0, 2, rest)
+    } else if let Some(rest) = raw.strip_prefix("two ") {
+        (2, 2, rest)
+    } else if let Some(rest) = raw.strip_prefix("one ") {
+        (1, 1, rest)
+    } else if let Some(rest) = raw.strip_prefix("an ") {
+        (1, 1, rest)
+    } else if let Some(rest) = raw.strip_prefix("a ") {
+        (1, 1, rest)
+    } else {
+        return None;
+    };
+
+    let (source_zone, filter_phrase) = if let Some(p) = body_phrase
+        .strip_suffix(" they control")
+        .or_else(|| body_phrase.strip_suffix(" you control"))
+    {
+        (SourceZoneFilter::Battlefield, p.trim())
+    } else if body_phrase.ends_with(" that player controls") {
+        // When controller chooses a creature "that player controls" inside ForEachPlayer,
+        // `ThatPlayer` maps to LoopPlayer/ChosenPlayer in `lower_object_filter`.
+        (SourceZoneFilter::AnyBattlefield, body_phrase.trim())
+    } else if body_phrase.contains(" in ") {
+        return None;
+    } else {
+        (SourceZoneFilter::AnyBattlefield, body_phrase.trim())
+    };
+    if filter_phrase.is_empty() {
+        return None;
+    }
+    let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+        filter_phrase,
+        &cached_compiler_vocab(vocabulary),
+    )
+    .ok()?;
+    let mut normalized = parsed;
+    if source_zone == SourceZoneFilter::Battlefield {
+        normalized.controller = None;
+    }
+    if normalized.zone.is_some() {
+        return None;
+    }
+    let filter = super::filters::lower_object_filter(&normalized, vocabulary).ok()?;
+    Some(ChooseObjectsSpec {
+        players,
+        source_zone,
+        filter,
+        min: ValueExpr::literal(min_val),
+        max: ValueExpr::literal(max_val),
+        distinct_powers: false,
+        max_total_power: None,
+    })
 }
 
 /// Lower `InstructionAst::PlayerChooseOption { chooser, options }` into `ChooseValue` /
@@ -1205,6 +1595,18 @@ pub(super) fn try_lower_choose_option_ext(
         return emit_choice_for_player_ref(chooser, kind, builder, ids, in_trigger);
     }
     let domain = match cleaned {
+        "an opponent at random" | "opponent at random" => ResolutionChoiceDomain::RandomPlayer {
+            opponents_only: true,
+        },
+        "a player at random" | "player at random" => ResolutionChoiceDomain::RandomPlayer {
+            opponents_only: false,
+        },
+        "an opponent" | "opponent" => ResolutionChoiceDomain::Player {
+            opponents_only: true,
+        },
+        "a player" | "player" => ResolutionChoiceDomain::Player {
+            opponents_only: false,
+        },
         "a number" | "number" => ResolutionChoiceDomain::Number { min: 0, max: 20 },
         "secretly choose 1, 2, or 3" | "1, 2, or 3" => {
             ResolutionChoiceDomain::Number { min: 1, max: 3 }
@@ -1215,6 +1617,12 @@ pub(super) fn try_lower_choose_option_ext(
         "a land type" => ResolutionChoiceDomain::BasicLandType,
         "land or nonland" => {
             ResolutionChoiceDomain::LabeledOption(vec!["land".to_owned(), "nonland".to_owned()])
+        }
+        "friend or foe" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["friend".to_owned(), "foe".to_owned()])
+        }
+        "choose left or right" | "left or right" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["left".to_owned(), "right".to_owned()])
         }
         "a creature type"
             if matches!(
@@ -1263,7 +1671,12 @@ pub(super) fn try_lower_interactive_choose_from_group(
     in_trigger: bool,
 ) -> Result<(), &'static str> {
     if chooser == PlayerRefAst::You
-        && (cleaned.starts_with("target ") || cleaned.starts_with("another target "))
+        && (cleaned.starts_with("target ")
+            || cleaned.starts_with("another target ")
+            || cleaned.starts_with("any number of target ")
+            || cleaned.starts_with("two target ")
+            || cleaned.starts_with("up to two target ")
+            || cleaned.starts_with("up to three target "))
     {
         let (is_another, target_raw) = match cleaned.strip_prefix("another ") {
             Some(rest) => (true, rest),
@@ -1283,6 +1696,21 @@ pub(super) fn try_lower_interactive_choose_from_group(
                 return Ok(());
             }
         }
+    }
+    if let Some(spec) =
+        parse_interactive_choose_objects(chooser, cleaned, builder, vocabulary, in_trigger)
+    {
+        builder.instructions.push(Instruction::ChooseObjects {
+            players: spec.players,
+            source_zone: spec.source_zone,
+            filter: Box::new(spec.filter),
+            min: spec.min,
+            max: spec.max,
+            distinct_powers: spec.distinct_powers,
+            max_total_power: spec.max_total_power,
+            unchosen_action: None,
+        });
+        return Ok(());
     }
     try_lower_choose_option_ext(chooser, cleaned, builder, vocabulary, ids, in_trigger)
         .map_err(|_| "oracle:unsupported-instruction")

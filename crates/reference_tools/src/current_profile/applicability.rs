@@ -305,6 +305,7 @@ native!(ExecutableBody, self, {
         | Instruction::Populate
         | Instruction::MoveSubject { .. }
         | Instruction::SelectZoneCardsToZone { .. }
+        | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
         | Instruction::DealDamageFrom { .. }
         | Instruction::DivideDamageAmongTargets { .. }

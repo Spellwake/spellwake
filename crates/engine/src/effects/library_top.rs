@@ -489,6 +489,7 @@ impl EffectWindow {
             | Instruction::LookTopChoose { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }

@@ -11482,6 +11482,9 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::SelectZoneCardsToZone { player, source_zone, filter, min, max, destination, reveal } => {
                 json!({"op":"SelectZoneCardsToZone","player":format!("{player:?}"),"source_zone":format!("{source_zone:?}"),"filter":format!("{filter:?}"),"min":instruction_amount(min),"max":instruction_amount(max),"destination":format!("{destination:?}"),"reveal":reveal})
             }
+            Instruction::ChooseObjects { players, source_zone, filter, min, max, distinct_powers, max_total_power, unchosen_action } => {
+                json!({"op":"ChooseObjects","players":format!("{players:?}"),"source_zone":format!("{source_zone:?}"),"filter":format!("{filter:?}"),"min":instruction_amount(min),"max":instruction_amount(max),"distinct_powers":distinct_powers,"max_total_power":max_total_power.as_ref().map(instruction_amount),"unchosen_action":format!("{unchosen_action:?}")})
+            }
             Instruction::ChooseOption { chooser, options } => {
                 json!({"op":"ChooseOption","chooser":format!("{chooser:?}"),"options":options.len()})
             }

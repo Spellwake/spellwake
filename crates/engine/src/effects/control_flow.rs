@@ -160,6 +160,7 @@ impl EffectWindow {
             | Instruction::ExileFromZone { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }

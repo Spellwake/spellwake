@@ -25436,6 +25436,18 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         Instruction::SelectZoneCardsToZone { min, max, .. } => {
             value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
         }
+        Instruction::ChooseObjects {
+            min,
+            max,
+            max_total_power,
+            ..
+        } => {
+            value_expr_uses_chosen_x(min)
+                || value_expr_uses_chosen_x(max)
+                || max_total_power
+                    .as_ref()
+                    .is_some_and(value_expr_uses_chosen_x)
+        }
         Instruction::RemoveCountersFromSubject { amount, .. }
         | Instruction::MoveCounters { amount, .. } => {
             amount.as_ref().is_some_and(value_expr_uses_chosen_x)
@@ -25596,6 +25608,7 @@ fn last_instruction_moved_object(ops: &[Instruction]) -> bool {
         Some(
             Instruction::MoveSubject { .. }
                 | Instruction::SelectZoneCardsToZone { .. }
+                | Instruction::ChooseObjects { .. }
                 | Instruction::MoveGroup { .. }
                 | Instruction::MoveGroupToLibrary { .. }
                 | Instruction::MoveGraveyardGroup { .. }
@@ -29690,6 +29703,7 @@ fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             | Instruction::Mill { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::DestroyGroup(_)
             | Instruction::MoveGroup { .. }
             | Instruction::Blight { .. }
@@ -33391,6 +33405,22 @@ fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_ve(min);
                 rewrite_chosen_to_loop_ve(max);
                 rewrite_chosen_to_loop_dest(destination);
+            }
+            Instruction::ChooseObjects {
+                players,
+                min,
+                max,
+                max_total_power,
+                ..
+            } => {
+                if let AffectedPlayers::One(rp) = players {
+                    rewrite_chosen_to_loop_rp(rp);
+                }
+                rewrite_chosen_to_loop_ve(min);
+                rewrite_chosen_to_loop_ve(max);
+                if let Some(limit) = max_total_power {
+                    rewrite_chosen_to_loop_ve(limit);
+                }
             }
             Instruction::LookTopChoose {
                 count,

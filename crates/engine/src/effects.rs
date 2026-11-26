@@ -2035,6 +2035,7 @@ struct ResolutionResults {
     last_coin_flips_won: Option<RulesInteger>,
     last_coin_flip_won: Option<bool>,
     coin_flip_ready: bool,
+    random_player_ready: bool,
     chosen_card_type: Option<CardType>,
     chosen_basic_land_type: Option<crate::land::LandType>,
     chosen_card_name: Option<String>,
@@ -2091,6 +2092,7 @@ impl Default for ResolutionResults {
             last_coin_flips_won: None,
             last_coin_flip_won: None,
             coin_flip_ready: false,
+            random_player_ready: false,
             chosen_card_type: None,
             chosen_basic_land_type: None,
             chosen_card_name: None,
@@ -3892,7 +3894,8 @@ impl EffectWindow {
                         matches!(card.zone(), ObjectZone::Graveyard(_))
                     }
                     crate::program::SourceZoneFilter::Exile => card.zone() == ObjectZone::Exile,
-                    crate::program::SourceZoneFilter::Battlefield => {
+                    crate::program::SourceZoneFilter::Battlefield
+                    | crate::program::SourceZoneFilter::AnyBattlefield => {
                         card.zone() == ObjectZone::Battlefield
                     }
                     crate::program::SourceZoneFilter::YourLibrary => {
@@ -10196,6 +10199,7 @@ impl EffectWindow {
             | Instruction::LookTopChoose { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }

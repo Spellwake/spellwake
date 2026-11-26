@@ -359,6 +359,18 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 rewrite_amount(min);
                 rewrite_amount(max);
             }
+            Instruction::ChooseObjects {
+                min,
+                max,
+                max_total_power,
+                ..
+            } => {
+                rewrite_amount(min);
+                rewrite_amount(max);
+                if let Some(limit) = max_total_power {
+                    rewrite_amount(limit);
+                }
+            }
             Instruction::Sacrifice { amount, .. }
             | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
@@ -400,6 +412,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::SelectZoneCardsToZone { filter, .. }
+            | Instruction::ChooseObjects { filter, .. }
             | Instruction::RevealUntilMatch { filter, .. }
             | Instruction::MoveGraveyardGroup { filter, .. }
             | Instruction::PutHandPermanentFiltered { filter, .. } => {

@@ -19963,6 +19963,13 @@ pub(super) fn lower_instruction_seq(
             i += consumed;
             continue;
         }
+        // Fuse ChooseFromGroup / InteractiveChoice(ChooseFromGroup) + Destroy/Exile/Return/Sacrifice/Discard/Tap of unchosen rest -> ChooseObjects
+        if let Some(consumed) = interactive::try_fuse_choose_objects_and_rest(
+            ins, i, builder, vocabulary, in_trigger, bound_x,
+        ) {
+            i += consumed;
+            continue;
+        }
         // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + ChooseAndKeep (e.g. Anticipate, Impulse, Worldly Counsel, Thassa's Oracle, Memory Deluge)
         if i + 1 < ins.len()
             && let Some((reveal_val, library, count, eff_bound_x)) =

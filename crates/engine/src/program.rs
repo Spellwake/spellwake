@@ -1482,6 +1482,8 @@ pub enum SourceZoneFilter {
     /// Either the player's hand or their graveyard (e.g. Swift Warkite).
     HandOrGraveyard,
     Battlefield,
+    /// Any battlefield permanent regardless of controller (filter may narrow controller).
+    AnyBattlefield,
     Exile,
     OpponentGraveyard,
     AnyGraveyard,
@@ -1490,6 +1492,17 @@ pub enum SourceZoneFilter {
     LinkedExile,
     /// Objects moved by the immediately preceding instruction in this resolution (for example milled cards).
     LastMoved,
+}
+
+/// Optional keep-vs-rest action applied to every eligible unchosen object in `Instruction::ChooseObjects`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnchosenObjectsAction {
+    Destroy,
+    Exile,
+    ReturnToHand,
+    Sacrifice,
+    Discard,
+    Tap,
 }
 
 /// Optional secondary pick bucket for `Instruction::LookTopChoose`.
@@ -1545,6 +1558,8 @@ pub enum ResolutionChoiceDomain {
     Color,
     /// Choose a player or opponent.
     Player { opponents_only: bool },
+    /// Choose a player or opponent at random using the resolution entropy tape.
+    RandomPlayer { opponents_only: bool },
     /// Choose a card type from the provided list (or the 7 standard types when empty).
     CardType(Vec<CardType>),
     /// Choose a basic land type (Plains, Island, Swamp, Mountain, Forest).
@@ -2396,6 +2411,19 @@ pub enum Instruction {
         max: ValueExpr,
         destination: SubjectDestination,
         reveal: bool,
+    },
+    /// Resolution-time non-target object selection with optional constraints (`distinct_powers`,
+    /// `max_total_power`) and optional keep-vs-rest `unchosen_action`. Chosen object IDs are
+    /// recorded in `last_moved_objects` and `vowed_creatures` for downstream instructions.
+    ChooseObjects {
+        players: AffectedPlayers,
+        source_zone: SourceZoneFilter,
+        filter: Box<ObjectFilter>,
+        min: ValueExpr,
+        max: ValueExpr,
+        distinct_powers: bool,
+        max_total_power: Option<ValueExpr>,
+        unchosen_action: Option<UnchosenObjectsAction>,
     },
     /// Prompt `chooser` during resolution via `OptionIndexFrame` and splice the chosen branch.
     ChooseOption {
@@ -4084,6 +4112,7 @@ impl Instruction {
             | Self::LookTopChoose { .. }
             | Self::MoveSubject { .. }
             | Self::SelectZoneCardsToZone { .. }
+            | Self::ChooseObjects { .. }
             | Self::ChooseOption { .. }
             | Self::DealDamageFrom { .. }
             | Self::DivideDamageAmongTargets { .. }
@@ -4873,6 +4902,14 @@ impl Instruction {
                             chooser
                         }) if is_target_player(*chooser)
                     )
+            }
+            Self::ChooseObjects {
+                players, filter, ..
+            } => {
+                matches!(
+                    players,
+                    AffectedPlayers::One(p) if is_target_player(*p)
+                ) || filter_uses_target(filter)
             }
             Self::DealDamageFrom {
                 source,
@@ -5871,6 +5908,7 @@ impl Instruction {
             | Self::LookTopChoose { .. }
             | Self::MoveSubject { .. }
             | Self::SelectZoneCardsToZone { .. }
+            | Self::ChooseObjects { .. }
             | Self::ChooseOption { .. }
             | Self::DealDamageFrom { .. }
             | Self::DivideDamageAmongTargets { .. }
@@ -6380,6 +6418,7 @@ impl Instruction {
                 | Self::LookTopChoose { .. }
                 | Self::MoveSubject { .. }
                 | Self::SelectZoneCardsToZone { .. }
+                | Self::ChooseObjects { .. }
                 | Self::ChooseOption { .. }
                 | Self::MoveGraveyardGroup { .. }
                 | Self::PutHandPermanentFiltered { .. }
@@ -10657,6 +10696,24 @@ impl ExecutableBody {
                     max.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     player.validate(context, self.target, facts.definitely_exiled_target)?
                 }
+                Instruction::ChooseObjects {
+                    players,
+                    filter,
+                    min,
+                    max,
+                    max_total_power,
+                    ..
+                } => {
+                    filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                    min.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    max.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    if let Some(limit) = max_total_power {
+                        limit.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    }
+                    players.validate(context, self.target, facts.definitely_exiled_target)?
+                }
                 Instruction::ChooseOption { chooser, options } => {
                     if options.len() < 2 || options.len() > usize::from(u8::MAX) {
                         return Err(DefinitionError::InvalidInstruction);
@@ -11315,7 +11372,11 @@ impl ExecutableBody {
                         }
                         _ => {}
                     }
-                    if matches!(domain, ResolutionChoiceDomain::Player { .. }) {
+                    if matches!(
+                        domain,
+                        ResolutionChoiceDomain::Player { .. }
+                            | ResolutionChoiceDomain::RandomPlayer { .. }
+                    ) {
                         facts.chose_player = true;
                     }
                     chooser.validate(context, self.target, facts.definitely_exiled_target)?
@@ -16286,6 +16347,7 @@ impl ExecutableBody {
                     | Instruction::LookTopChoose { .. }
                     | Instruction::MoveSubject { .. }
                     | Instruction::SelectZoneCardsToZone { .. }
+                    | Instruction::ChooseObjects { .. }
                     | Instruction::ChooseOption { .. }
                     | Instruction::DealDamageFrom { .. }
                     | Instruction::DivideDamageAmongTargets { .. }
@@ -20223,6 +20285,7 @@ impl Program {
                             | Instruction::OfferAnyPlayer { .. }
                             | Instruction::UntapOrTapSelect { .. }
                             | Instruction::SelectZoneCardsToZone { .. }
+                            | Instruction::ChooseObjects { .. }
                             | Instruction::ExileTopPlay { .. }
                             | Instruction::ExileFromZone { .. }
                             | Instruction::TapOrUntapControlled { .. }

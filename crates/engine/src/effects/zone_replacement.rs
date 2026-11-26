@@ -1676,7 +1676,8 @@ impl EffectWindow {
             | ResolutionSelectionOperation::TapOrUntapControlled { .. }
             | ResolutionSelectionOperation::Blight { .. }
             | ResolutionSelectionOperation::CollectEvidence { .. }
-            | ResolutionSelectionOperation::SelectZoneCards { .. } => {
+            | ResolutionSelectionOperation::SelectZoneCards { .. }
+            | ResolutionSelectionOperation::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }

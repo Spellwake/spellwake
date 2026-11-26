@@ -3365,6 +3365,7 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
             json!({"tag":"MillEachPlayer","amount":amount,"segments":segments.iter().map(|(seat,cards)|json!({"player":seat.0,"cards":cards.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
         }
         ResolutionSelectionOperation::Populate => json!({"tag":"Populate"}),
+        ResolutionSelectionOperation::ChooseObjects { .. } => json!({"tag":"ChooseObjects"}),
         ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
             json!({"tag":"DestroyAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
         }

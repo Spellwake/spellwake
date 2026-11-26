@@ -1963,3 +1963,157 @@ fn reveal_top_two_piles_fact_or_fiction_and_steam_augury_round_trip_and_reject_i
     assert_eq!(hand_count, 1);
     assert!(gy_count >= 2);
 }
+
+#[test]
+#[ignore = "requires explicitly supplied genuine vocabulary"]
+fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_atomically() {
+    use crate::player_wire::DecisionKind;
+    use spellwake_engine::{
+        effects::ResolutionSelectionKind,
+        object_identity::ObjectZone,
+        program::{
+            CardTypeMask, ObjectClause, ObjectFilter, ResolutionChoiceDomain, SourceZoneFilter,
+            UnchosenObjectsAction, ValueExpr,
+        },
+    };
+
+    let creature_filter = || {
+        let mut clause = ObjectClause::any();
+        clause.any_types = CardTypeMask::CREATURE;
+        ObjectFilter::Clause(clause)
+    };
+
+    // 1. ChooseObjects with distinct_powers = true + unchosen_action = Some(Destroy):
+    // 3 creatures on battlefield with powers 2, 2, and 3.
+    // Choosing both power-2 creatures must be atomically rejected; choosing one power-2 and one
+    // power-3 creature must succeed and destroy the remaining power-2 creature.
+    let spell = instant(
+        BodyTarget::None,
+        vec![Instruction::ChooseObjects {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            source_zone: SourceZoneFilter::AnyBattlefield,
+            filter: Box::new(creature_filter()),
+            min: ValueExpr::Literal(0.into()),
+            max: ValueExpr::Literal(99.into()),
+            distinct_powers: true,
+            max_total_power: None,
+            unchosen_action: Some(UnchosenObjectsAction::Destroy),
+        }],
+    );
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, spell),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        ),
+        card(
+            3,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        ),
+        card(
+            4,
+            B,
+            ObjectDestination::Battlefield { controller: B },
+            Program::creature(None, 3.into(), 3.into(), BTreeSet::new()),
+        ),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let pending = resolve(&cast);
+    let dec = pending.pending_decision().expect("choose objects decision");
+    let RuleFrame::ResolutionSelect(frame) = dec.frame() else {
+        panic!("expected ResolutionSelect frame");
+    };
+    assert_eq!(frame.operation(), ResolutionSelectionKind::ChooseObjects);
+    assert_eq!(frame.domain().len(), 3);
+
+    let c2 = object(&pending, 2);
+    let c3 = object(&pending, 3);
+    let c4 = object(&pending, 4);
+
+    // Atomic invalid reply: picking two creatures with the same power (2 and 2) must fail without mutating state.
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::SelectResolution);
+    let dec_handle = view.issue(NativeReference::Decision(dec.id())).unwrap();
+    let h2 = view.issue(NativeReference::Object(c2)).unwrap();
+    let h3 = view.issue(NativeReference::Object(c3)).unwrap();
+    let bad_dup_power = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle,
+            response: PlayerChoice::Objects {
+                objects: vec![h2, h3],
+            },
+        },
+    );
+    let _ = rejected_proposal(&view, &bad_dup_power);
+
+    // Legal reply: pick c2 (power 2) and c4 (power 3) -> c3 (unchosen power 2) is destroyed!
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::Objects {
+            objects: vec![
+                v.issue(NativeReference::Object(c2)).unwrap(),
+                v.issue(NativeReference::Object(c4)).unwrap(),
+            ],
+        },
+        DecisionReply::SelectResolution(vec![c2, c4]),
+    );
+    assert!(done.pending_decision().is_none());
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .iter()
+            .filter(|c| c.zone() == ObjectZone::Battlefield)
+            .count(),
+        2
+    );
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(A)
+    );
+
+    // 2. RandomPlayer { opponents_only: true } in 2-player game deterministically binds singleton opponent B.
+    let rand_spell = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::ChooseValue {
+                chooser: ResolvingPlayer::Controller,
+                domain: ResolutionChoiceDomain::RandomPlayer {
+                    opponents_only: true,
+                },
+            },
+            Instruction::AdjustPlayersLife {
+                players: AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
+                amount: ValueExpr::Literal(2.into()),
+                gain: false,
+            },
+        ],
+    );
+    let rand_src = main_state(vec![card(1, A, ObjectDestination::Hand, rand_spell)]);
+    let rand_cast = bridged(&rand_src, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&rand_src, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let rand_done = resolve(&rand_cast);
+    assert!(rand_done.pending_decision().is_none());
+    assert_eq!(rand_done.execution().life_total(B), Some(&18.into()));
+}
