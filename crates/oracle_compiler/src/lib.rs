@@ -185,6 +185,97 @@ fn normalize_nested_single_quotes(text: &str) -> String {
     }
 }
 
+/// Compile a spacecraft station band (`min_charge+ | payload`) into `CompiledStationBand` when possible.
+#[must_use]
+pub(crate) fn build_station_band(
+    min_charge: u8,
+    payload: String,
+    vocab: &Vocabulary,
+) -> StaticAbilityAst {
+    let trimmed = payload.trim();
+    if let Some((p, t)) = trimmed.split_once('/')
+        && is_bare_pt(trimmed)
+    {
+        let p = p.to_string();
+        let t = t.to_string();
+        return StaticAbilityAst::CompiledStationBand {
+            min_charge,
+            payload,
+            power: Some(p),
+            toughness: Some(t),
+            compiled: None,
+        };
+    }
+    if let Some(compiled) = compile_granted_ability(trimmed, vocab) {
+        return StaticAbilityAst::CompiledStationBand {
+            min_charge,
+            payload,
+            power: None,
+            toughness: None,
+            compiled: Some(compiled),
+        };
+    }
+    StaticAbilityAst::StationBand {
+        min_charge,
+        payload,
+    }
+}
+
+/// Compile a die-roll band (`roll | payload`) into `CompiledDieRollBand` when possible.
+#[must_use]
+pub(crate) fn build_die_roll_band(
+    roll: String,
+    payload: String,
+    vocab: &Vocabulary,
+) -> StaticAbilityAst {
+    let trimmed = payload.trim();
+    let (body, fails) = parse_effect_body(trimmed, vocab);
+    if fails.is_empty() && !body.is_empty() {
+        return StaticAbilityAst::CompiledDieRollBand {
+            roll,
+            payload,
+            body,
+        };
+    }
+    StaticAbilityAst::DieRollBand { roll, payload }
+}
+
+/// Compile an Unfinity sticker option (`{TK}... — payload`) into `CompiledStickerOption` when possible.
+#[must_use]
+pub(crate) fn build_sticker_option(
+    ticket_cost: u8,
+    payload: String,
+    vocab: &Vocabulary,
+) -> StaticAbilityAst {
+    let trimmed = payload.trim();
+    if let Some((p, t)) = trimmed.split_once('/')
+        && is_bare_pt(trimmed)
+    {
+        let p = p.to_string();
+        let t = t.to_string();
+        return StaticAbilityAst::CompiledStickerOption {
+            ticket_cost,
+            payload,
+            power: Some(p),
+            toughness: Some(t),
+            compiled: None,
+        };
+    }
+    if let Some(compiled) = compile_granted_ability(trimmed, vocab) {
+        return StaticAbilityAst::CompiledStickerOption {
+            ticket_cost,
+            payload,
+            power: None,
+            toughness: None,
+            compiled: Some(compiled),
+        };
+    }
+    StaticAbilityAst::StickerOption {
+        ticket_cost,
+        payload,
+    }
+}
+
 /// Recursively compile a quoted granted ability string into a typed `FaceAst` fragment.
 /// Returns `Some` only when the quoted ability compiles cleanly with zero failures.
 #[must_use]
@@ -193,7 +284,19 @@ pub fn compile_granted_ability(ability_text: &str, vocab: &Vocabulary) -> Option
     if trimmed.is_empty() {
         return None;
     }
-    let normalized = normalize_nested_single_quotes(trimmed);
+    // Token descriptions are normalized to lowercase before their quoted abilities
+    // reach this boundary. Restore the paragraph initial expected by face dispatch.
+    let normalized = normalize_nested_single_quotes(trimmed)
+        .lines()
+        .map(|line| {
+            let mut line = line.to_string();
+            if let Some(initial) = line.get_mut(..1) {
+                initial.make_ascii_uppercase();
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let first_ch = normalized.chars().next();
     let looks_loyalty = normalized.starts_with('[')
         || matches!(first_ch, Some('+' | '-' | '0' | '\u{2212}')) && normalized.contains(':');
@@ -435,10 +538,8 @@ pub fn compile_face_with_options(
             continue;
         }
         if let Some((ticket_cost, payload)) = parse_sticker_option(&norm) {
-            out.statics.push(StaticAbilityAst::StickerOption {
-                ticket_cost,
-                payload,
-            });
+            out.statics
+                .push(build_sticker_option(ticket_cost, payload, vocab));
             modal_target = ModalTarget::None;
             continue;
         }
@@ -523,7 +624,7 @@ pub fn compile_face_with_options(
             if modal_target == ModalTarget::None
                 && let Some((roll, payload)) = parse_die_roll_band(bullet_body.trim())
             {
-                let band = StaticAbilityAst::DieRollBand { roll, payload };
+                let band = build_die_roll_band(roll, payload, vocab);
                 match section {
                     ActiveSection::Base => out.statics.push(band),
                     ActiveSection::LevelBand => {
@@ -703,10 +804,11 @@ pub fn compile_face_with_options(
                 && let Some(num_str) = lt.strip_suffix('+')
                 && let Ok(min_charge) = num_str.trim().parse::<u8>()
             {
-                out.statics.push(StaticAbilityAst::StationBand {
+                out.statics.push(build_station_band(
                     min_charge,
-                    payload: right.trim().to_string(),
-                });
+                    right.trim().to_string(),
+                    vocab,
+                ));
                 continue;
             }
             let is_die_band = (!lt.is_empty()
@@ -719,10 +821,11 @@ pub fn compile_face_with_options(
                         .strip_suffix(" or less")
                         .is_some_and(|n| n.trim().parse::<u8>().is_ok()));
             if is_die_band && lt.chars().any(|c| c.is_ascii_digit()) && !right.trim().is_empty() {
-                out.statics.push(StaticAbilityAst::DieRollBand {
-                    roll: lt.to_string(),
-                    payload: right.trim().to_string(),
-                });
+                out.statics.push(build_die_roll_band(
+                    lt.to_string(),
+                    right.trim().to_string(),
+                    vocab,
+                ));
                 continue;
             }
         }
@@ -733,10 +836,11 @@ pub fn compile_face_with_options(
             && b.trim().parse::<u8>().is_ok()
             && !right.trim().is_empty()
         {
-            out.statics.push(StaticAbilityAst::DieRollBand {
-                roll: left.trim().to_string(),
-                payload: right.trim().to_string(),
-            });
+            out.statics.push(build_die_roll_band(
+                left.trim().to_string(),
+                right.trim().to_string(),
+                vocab,
+            ));
             continue;
         }
 
@@ -1843,7 +1947,7 @@ mod tests {
         );
         assert!(matches!(
             portent.faces[0].statics.first(),
-            Some(StaticAbilityAst::DieRollBand { .. })
+            Some(StaticAbilityAst::CompiledDieRollBand { body, .. }) if matches!(body.as_slice(), [InstructionAst::Draw { count, .. }] if **count == ValueExprAst::Const(2))
         ));
 
         // 4. "when ~ leaves the battlefield" emits DelayedEventTrigger, NOT DelayedTrigger(EndStep)
@@ -2178,12 +2282,10 @@ mod tests {
             die_card.faces[0].failures
         );
         assert_eq!(die_card.faces[0].statics.len(), 3);
-        assert!(
-            die_card.faces[0]
-                .statics
-                .iter()
-                .all(|s| matches!(s, StaticAbilityAst::DieRollBand { .. }))
-        );
+        assert!(die_card.faces[0].statics.iter().all(|s| matches!(
+            s,
+            StaticAbilityAst::DieRollBand { .. } | StaticAbilityAst::CompiledDieRollBand { .. }
+        )));
 
         // 2. Attraction Visit modal bullets attach onto Visit triggered ability
         let attr = compile_card(

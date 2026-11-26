@@ -1607,6 +1607,7 @@ impl EffectWindow {
             | Instruction::LookTopChoose { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
@@ -1783,6 +1784,7 @@ impl EffectWindow {
             | Instruction::EnterHandOrGraveyardAurasAttachedToSource
             | Instruction::CopyCreatureAsToken
             | Instruction::CopyDifferentlyNamedTokens
+            | Instruction::Populate
             | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::CreateArmyIfAbsent { .. }
             | Instruction::ChooseVowedCreatures
@@ -1907,6 +1909,7 @@ impl EffectWindow {
             | Instruction::UntapOrTapSelect { .. }
             | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
@@ -2616,6 +2619,7 @@ impl EffectWindow {
             | Instruction::CopyEntrantOnceEachTurn
             | Instruction::CopyCreatureAsToken
             | Instruction::CopyDifferentlyNamedTokens
+            | Instruction::Populate
             | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::Bolster(_)
             | Instruction::CreateArmyIfAbsent { .. }
@@ -2649,6 +2653,7 @@ impl EffectWindow {
             | Instruction::LookTopChoose { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
@@ -3087,6 +3092,7 @@ impl EffectWindow {
             | Instruction::UntapOrTapSelect { .. }
             | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }

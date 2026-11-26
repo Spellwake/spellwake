@@ -195,6 +195,15 @@ pub(crate) fn world(
     cards: Vec<SeedCard>,
     order: Vec<CardId>,
 ) -> GameState {
+    world_with_starting_life(vocabulary, cards, order, 20)
+}
+
+pub(crate) fn world_with_starting_life(
+    vocabulary: Arc<CreatureTypeVocabulary>,
+    cards: Vec<SeedCard>,
+    order: Vec<CardId>,
+    starting_life: i64,
+) -> GameState {
     let context = GameContext::new(
         "characteristics-frozen-I-v1".into(),
         vocabulary.rules_revision().into(),
@@ -212,7 +221,7 @@ pub(crate) fn world(
         cards,
         order,
         vec![],
-        20.into(),
+        starting_life.into(),
         CombatRules::UnrestrictedFreeForAll,
         vocabulary,
         std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
@@ -254,8 +263,8 @@ pub(crate) fn world(
     assert_eq!(main.turn().unwrap().position().number, 1);
     assert_eq!(main.turn().unwrap().position().step, Step::PrecombatMain);
     assert_priority(&main, P0);
-    assert_eq!(main.execution().life_total(P0), Some(&20.into()));
-    assert_eq!(main.execution().life_total(P1), Some(&20.into()));
+    assert_eq!(main.execution().life_total(P0), Some(&starting_life.into()));
+    assert_eq!(main.execution().life_total(P1), Some(&starting_life.into()));
     for player in [P0, P1] {
         for kind in ManaType::ALL {
             assert_eq!(main.execution().mana(player, kind), 0.into());

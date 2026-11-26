@@ -210,6 +210,20 @@ impl DamageSourceFilter {
 /// The damage a resolving effect prevents through the cleanup step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnPreventionFilter {
+    /// Prevent damage from the captured ability-source incarnation, not damage to it.
+    FromAbilitySource,
+    /// Prevent combat damage from the captured ability-source incarnation.
+    CombatFromAbilitySource,
+    /// Prevent damage from the targeted permanent incarnation.
+    FromTarget,
+    /// Prevent combat damage from the targeted permanent incarnation.
+    CombatFromTarget,
+    /// Prevent combat damage to or from the targeted permanent incarnation.
+    CombatToOrFromTarget,
+    /// Prevent all damage from creatures, including departed creature sources.
+    Creatures,
+    /// Prevent only combat damage from creatures, including departed creature sources.
+    CombatFromCreatures,
     ToAbilitySource,
     CombatToOrFromAbilitySource,
     ToTarget,

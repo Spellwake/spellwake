@@ -5377,6 +5377,7 @@ impl EffectWindow {
                 | Instruction::LookTopOneRestBottom { .. }
                 | Instruction::LookTopChoose { .. }
                 | Instruction::LookTopChooseExt { .. }
+                | Instruction::RevealTopTwoPiles { .. }
                 | Instruction::RevealUntilMatch { .. }
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
@@ -7814,6 +7815,9 @@ impl EffectWindow {
             let before = self.rules_snapshot(None)?;
             let source = match filter {
                 crate::damage::TurnPreventionFilter::ToTarget
+                | crate::damage::TurnPreventionFilter::FromTarget
+                | crate::damage::TurnPreventionFilter::CombatFromTarget
+                | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                 | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget => {
                     let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target
                     else {
@@ -10813,7 +10817,7 @@ impl EffectWindow {
                 let prior = self.mana(player, color);
                 let after = prior.plus(&qty);
                 self.mana.insert((player, color), after.clone());
-                let key = (player, color, *restriction);
+                let key = (player, color, restriction.clone());
                 let previous = self
                     .restricted_mana
                     .get(&key)
@@ -10864,7 +10868,7 @@ impl EffectWindow {
                     let prior = self.mana(player, color);
                     let after = prior.plus(amount);
                     self.mana.insert((player, color), after.clone());
-                    let key = (player, color, *restriction);
+                    let key = (player, color, restriction.clone());
                     let previous = self
                         .restricted_mana
                         .get(&key)
@@ -10898,6 +10902,60 @@ impl EffectWindow {
                                 produced: bundle.clone(),
                                 before: before_map,
                                 after: after_map,
+                            },
+                        ])
+                    },
+                )?;
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            EffectManaYield::RestrictedCounted {
+                kind,
+                amount,
+                restriction,
+            } => {
+                let qty = self.resolve_value_expr(entry.controller(), amount)?;
+                if !qty.is_positive() {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let before_snapshot = self.rules_snapshot(None)?;
+                let player = recipient;
+                let prior = self.mana(player, *kind);
+                let after = prior.plus(&qty);
+                self.mana.insert((player, *kind), after.clone());
+                let key = (player, *kind, restriction.clone());
+                let previous = self
+                    .restricted_mana
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| 0.into());
+                self.restricted_mana.insert(key, previous.plus(&qty));
+                if let Some(source) = mana_lot_source {
+                    let retained: BTreeMap<_, _> = [(*kind, qty.clone())].into();
+                    self.record_mana_lots(
+                        source,
+                        player,
+                        &retained,
+                        crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                    )?;
+                }
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before_snapshot,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::ManaAddedByEffect {
+                                entry: entry.id(),
+                                player,
+                                produced: [(*kind, qty.clone())].into(),
+                                before: [(*kind, prior)].into(),
+                                after: [(*kind, after)].into(),
                             },
                         ])
                     },

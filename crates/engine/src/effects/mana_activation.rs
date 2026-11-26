@@ -445,7 +445,7 @@ impl EffectWindow {
         };
         let pay = |cost: &ManaCost| {
             self.prepare_restricted_mana_payment(cost, payment, actor, restricted, |rule| {
-                self.restriction_allows_ability(rule, current)
+                self.restriction_allows_ability(rule, current, cost, false, None)
             })
         };
         let spend =
@@ -724,6 +724,40 @@ impl EffectWindow {
                         crate::mana::ManaRestriction::CreatureSpellOfType(kind)
                     }
                 }
+            }
+            ManaOutputRestriction::ChosenCreatureTypeOr(mut pred) => {
+                if let Some(kind) = next.entry_creature_type_choices.get(&source).copied() {
+                    pred.spell_clauses.push(crate::mana::SpellManaClause {
+                        card_type: Some(CardType::Creature),
+                        creature_type: Some(kind),
+                        ..Default::default()
+                    });
+                    pred.canonicalize();
+                }
+                crate::mana::ManaRestriction::Predicate(pred)
+            }
+            ManaOutputRestriction::MonocoloredOfChosenColor => {
+                let mut pred = crate::mana::ManaSpendPredicate::default();
+                if let Some(color) = next
+                    .entry_color_choices
+                    .get(&source)
+                    .copied()
+                    .and_then(|mt| match mt {
+                        ManaType::White => Some(crate::characteristics::Color::White),
+                        ManaType::Blue => Some(crate::characteristics::Color::Blue),
+                        ManaType::Black => Some(crate::characteristics::Color::Black),
+                        ManaType::Red => Some(crate::characteristics::Color::Red),
+                        ManaType::Green => Some(crate::characteristics::Color::Green),
+                        ManaType::Colourless => None,
+                    })
+                {
+                    pred.spell_clauses.push(crate::mana::SpellManaClause {
+                        color_rule: Some(crate::mana::SpellColorRule::MonocoloredOf(color)),
+                        ..Default::default()
+                    });
+                    pred.canonicalize();
+                }
+                crate::mana::ManaRestriction::Predicate(pred)
             }
         });
         let (life_gain, controller_damage) = match side_effect {

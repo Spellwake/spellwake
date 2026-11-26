@@ -1450,3 +1450,670 @@ fn energy_counter_myriad_keyword_and_extended_counter_kinds_project_cleanly() {
         "Myriad must not project as Annihilator"
     );
 }
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn predicate_restricted_mana_projects_enforces_atomically_and_round_trips_wire() {
+    use crate::player_wire::{
+        ManaColor, ManaSpend, PlayerManaRestriction, PlayerPayment, PlayerRestrictedManaSpend,
+        RulesCount,
+    };
+    use spellwake_engine::{
+        mana::{ManaRestriction, ManaSpendPredicate, SpellManaClause},
+        object_identity::ObjectZone,
+        program::{EffectManaYield, Supertype},
+    };
+
+    let rc = |n: &str| RulesCount::try_from(n.to_owned()).unwrap();
+
+    // 1. Jegantha-style disallow_generic predicate + Legendary-only predicate.
+    let mut no_generic_pred = ManaSpendPredicate {
+        allow_any_spell: true,
+        disallow_generic: true,
+        ..Default::default()
+    };
+    no_generic_pred.canonicalize();
+    let no_generic_rule = ManaRestriction::Predicate(no_generic_pred);
+
+    let mut legendary_pred = ManaSpendPredicate {
+        spell_clauses: vec![SpellManaClause {
+            supertype: Some(Supertype::Legendary),
+            ..Default::default()
+        }],
+        makes_spell_uncounterable: true,
+        ..Default::default()
+    };
+    legendary_pred.canonicalize();
+    let legendary_rule = ManaRestriction::Predicate(legendary_pred);
+
+    let producer = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::AddMana(EffectManaYield::RestrictedFixed {
+                bundle: [(ManaType::Red, 2.into())].into(),
+                restriction: no_generic_rule,
+            }),
+            Instruction::AddMana(EffectManaYield::RestrictedFixed {
+                bundle: [(ManaType::Green, 1.into())].into(),
+                restriction: legendary_rule,
+            }),
+        ],
+    );
+    // Costs {1}{R}: cannot be paid with 2 no-generic {R} because generic {1} cannot use disallow_generic mana.
+    let mut generic_red_cost = ManaCost::free();
+    generic_red_cost.generic = 1.into();
+    generic_red_cost.required.insert(ManaType::Red, 1.into());
+    let mut nonlegendary_creature =
+        Program::creature(Some(generic_red_cost), 2.into(), 2.into(), BTreeSet::new());
+    nonlegendary_creature.card_types.insert(CardType::Creature);
+
+    // Legendary creature costing {G}: payable by legendary_rule {G}.
+    let mut green_cost = ManaCost::free();
+    green_cost.required.insert(ManaType::Green, 1.into());
+    let mut legendary_creature =
+        Program::creature(Some(green_cost), 2.into(), 2.into(), BTreeSet::new());
+    legendary_creature.supertypes.insert(Supertype::Legendary);
+
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, producer),
+        card(2, A, ObjectDestination::Hand, nonlegendary_creature),
+        card(3, A, ObjectDestination::Hand, legendary_creature),
+    ]);
+    let cast_prod = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let funded = resolve(&cast_prod);
+
+    // Verify wire projection includes both predicate restricted mana entries.
+    let mut view = scope(&funded, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    let seat_a = snap
+        .players
+        .iter()
+        .find(|s| s.seat_id == viewer_a())
+        .unwrap();
+    assert_eq!(seat_a.restricted_mana.len(), 2);
+    let red_wire = seat_a
+        .restricted_mana
+        .iter()
+        .find(|r| r.color == ManaColor::Red)
+        .expect("red predicate mana");
+    assert!(red_wire.restriction == PlayerManaRestriction::Predicate);
+    assert!(red_wire.predicate.as_ref().unwrap().disallow_generic);
+    let green_wire = seat_a
+        .restricted_mana
+        .iter()
+        .find(|r| r.color == ManaColor::Green)
+        .expect("green predicate mana");
+    assert!(green_wire.restriction == PlayerManaRestriction::Predicate);
+    assert!(
+        green_wire
+            .predicate
+            .as_ref()
+            .unwrap()
+            .makes_spell_uncounterable
+    );
+
+    // Atomic rejection: trying to spend 2 no-generic {R} on {1}{R} must fail without mutating state.
+    let bad_payment = PlayerPayment {
+        from_lots: BTreeMap::new(),
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        spend: vec![ManaSpend {
+            color: ManaColor::Red,
+            amount: rc("2"),
+        }],
+        restricted_mana: vec![PlayerRestrictedManaSpend {
+            color: ManaColor::Red,
+            restriction: PlayerManaRestriction::Predicate,
+            creature_type: None,
+            min_mana_value: None,
+            predicate: red_wire.predicate.clone(),
+            amount: rc("2"),
+        }],
+    };
+    let mut bad_view = scope(&funded, viewer_a());
+    let bad_handle = bad_view
+        .issue(NativeReference::Object(object(&funded, 2)))
+        .unwrap();
+    let bad_intent = command(
+        &bad_view,
+        PlayerAction::CastUntargeted {
+            source: bad_handle.clone(),
+            payment: Some(bad_payment),
+        },
+    );
+    let _ = rejected_proposal(&bad_view, &bad_intent);
+
+    // Atomic rejection on malformed empty wire predicate.
+    let malformed = command(
+        &bad_view,
+        PlayerAction::CastUntargeted {
+            source: bad_handle,
+            payment: Some(PlayerPayment {
+                from_lots: BTreeMap::new(),
+                graveyard_permission: None,
+                use_granted_flashback: false,
+                exile_cast_type: None,
+                alternative_cost_source: None,
+                spend: vec![ManaSpend {
+                    color: ManaColor::Green,
+                    amount: rc("1"),
+                }],
+                restricted_mana: vec![PlayerRestrictedManaSpend {
+                    color: ManaColor::Green,
+                    restriction: PlayerManaRestriction::Predicate,
+                    creature_type: None,
+                    min_mana_value: None,
+                    predicate: Some(crate::player_wire::PlayerManaPredicate::default()),
+                    amount: rc("1"),
+                }],
+            }),
+        },
+    );
+    let _ = rejected_proposal(&bad_view, &malformed);
+
+    // Legal spend: casting legendary creature with legendary-predicate {G} succeeds.
+    let good_payment = PlayerPayment {
+        from_lots: BTreeMap::new(),
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        spend: vec![ManaSpend {
+            color: ManaColor::Green,
+            amount: rc("1"),
+        }],
+        restricted_mana: vec![PlayerRestrictedManaSpend {
+            color: ManaColor::Green,
+            restriction: PlayerManaRestriction::Predicate,
+            creature_type: None,
+            min_mana_value: None,
+            predicate: green_wire.predicate.clone(),
+            amount: rc("1"),
+        }],
+    };
+    let cast_leg = bridged(&funded, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&funded, 3)))
+            .unwrap(),
+        payment: Some(good_payment),
+    });
+    let resolved = resolve(&cast_leg);
+    assert_eq!(
+        resolved
+            .execution()
+            .window()
+            .cards()
+            .get(object(&resolved, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+}
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn populate_auto_resolves_singleton_prompts_on_multiple_and_rejects_invalid_atomically() {
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::{
+        effects::ResolutionSelectionKind,
+        object_identity::ObjectZone,
+        token::{TokenCreation, TokenDefinition, TokenName},
+    };
+
+    let vocab = vocabulary();
+    let make_token = |p: i64, t: i64| {
+        TokenDefinition::new(
+            Program::creature(None, p.into(), t.into(), BTreeSet::new()),
+            TokenName::Default {
+                ordered_subtypes: vec![],
+            },
+            &vocab,
+        )
+        .unwrap()
+    };
+    // First verify deterministic singleton auto-resolution (1 creature token -> auto-copies without prompting).
+    let singleton_spell = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::CreateTokens {
+                creations: vec![TokenCreation::one(make_token(1, 1))],
+            },
+            Instruction::Populate,
+        ],
+    );
+    let singleton_source = main_state(vec![card(1, A, ObjectDestination::Hand, singleton_spell)]);
+    let singleton_cast = bridged(&singleton_source, viewer_a(), |v| {
+        PlayerAction::CastUntargeted {
+            source: v
+                .issue(NativeReference::Object(object(&singleton_source, 1)))
+                .unwrap(),
+            payment: None,
+        }
+    });
+    let singleton_done = resolve(&singleton_cast);
+    assert!(singleton_done.pending_decision().is_none());
+    assert_eq!(
+        singleton_done
+            .execution()
+            .window()
+            .cards()
+            .iter()
+            .filter(|c| c.zone() == ObjectZone::Battlefield && c.is_token())
+            .count(),
+        2
+    );
+
+    // Multi-token Populate: 2 creature tokens + 1 nontoken creature -> prompts over the 2 tokens only.
+    let setup_spell = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::CreateTokens {
+                creations: vec![TokenCreation::one(make_token(1, 1))],
+            },
+            Instruction::CreateTokens {
+                creations: vec![TokenCreation::one(make_token(3, 3))],
+            },
+            Instruction::Populate,
+        ],
+    );
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, setup_spell),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        ),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let pending = resolve(&cast);
+
+    // Must prompt with ResolutionSelectionKind::Populate over the 2 creature tokens (excluding the nontoken creature).
+    let Some(RuleFrame::ResolutionSelect(frame)) = pending.pending_decision().map(|p| p.frame())
+    else {
+        panic!("expected ResolutionSelect decision for Populate");
+    };
+    assert_eq!(frame.operation(), ResolutionSelectionKind::Populate);
+    assert_eq!(frame.domain().len(), 2);
+    assert_eq!(frame.minimum(), 1);
+    assert_eq!(frame.required(), 1);
+    let nontoken = object(&pending, 2);
+    assert!(!frame.domain().contains(&nontoken));
+
+    // Verify wire projection emits SelectResolution with minimum=1, maximum=1.
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::SelectResolution);
+    let PlayerDomain::Objects {
+        objects,
+        minimum,
+        maximum,
+        ..
+    } = &snap.decisions[0].domain
+    else {
+        panic!("expected Objects domain for Populate");
+    };
+    assert_eq!(objects.len(), 2);
+    assert_eq!(*minimum.as_rules_integer(), 1.into());
+    assert_eq!(*maximum.as_rules_integer(), 1.into());
+
+    // Atomic invalid reply: empty selection and nontoken creature must both fail without mutating state.
+    let dec_handle = view
+        .issue(NativeReference::Decision(
+            pending.pending_decision().unwrap().id(),
+        ))
+        .unwrap();
+    let empty_cmd = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle.clone(),
+            response: PlayerChoice::Objects { objects: vec![] },
+        },
+    );
+    let _ = rejected_proposal(&view, &empty_cmd);
+
+    let nontoken_handle = view.issue(NativeReference::Object(nontoken)).unwrap();
+    let bad_obj_cmd = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle,
+            response: PlayerChoice::Objects {
+                objects: vec![nontoken_handle],
+            },
+        },
+    );
+    let _ = rejected_proposal(&view, &bad_obj_cmd);
+
+    // Legal reply: choose the second creature token and verify a 3rd creature token enters the battlefield.
+    let chosen = frame.domain()[1];
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::Objects {
+            objects: vec![v.issue(NativeReference::Object(chosen)).unwrap()],
+        },
+        DecisionReply::SelectResolution(vec![chosen]),
+    );
+    let token_count = done
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Battlefield && c.is_token())
+        .count();
+    assert_eq!(token_count, 3);
+}
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn reveal_top_two_piles_fact_or_fiction_and_steam_augury_round_trip_and_reject_invalid_atomically()
+{
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::{
+        object_identity::ObjectZone,
+        program::{LookTopKeepDest, LookTopRestDest, ValueExpr},
+    };
+
+    // Steam Augury mode: controller (A) divides top 3 cards into two piles, opponent (B) chooses a pile
+    // -> chosen pile goes to A's hand, other pile goes to A's graveyard.
+    let steam_augury = instant(
+        BodyTarget::None,
+        vec![Instruction::RevealTopTwoPiles {
+            count: ValueExpr::Literal(3.into()),
+            controller_divides: true,
+            target_opponent: false,
+            chosen_dest: LookTopKeepDest::Hand,
+            other_dest: LookTopRestDest::Graveyard,
+        }],
+    );
+    let vanilla = || Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, steam_augury),
+        card(2, A, ObjectDestination::LibraryTop, vanilla()),
+        card(3, A, ObjectDestination::LibraryTop, vanilla()),
+        card(4, A, ObjectDestination::LibraryTop, vanilla()),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let divide_pending = resolve(&cast);
+
+    // Controller A divides the 3 revealed cards.
+    let dec = divide_pending.pending_decision().expect("divide decision");
+    assert_eq!(dec.chooser(), A);
+    let RuleFrame::RevealedPiles(frame) = dec.frame() else {
+        panic!("expected RevealedPiles divide frame");
+    };
+    let spellwake_engine::effects::PileChoice::Divide(cards) = frame.choice() else {
+        panic!("expected PileChoice::Divide");
+    };
+    assert_eq!(cards.len(), 3);
+    let first_pile = vec![cards[0]];
+
+    // Atomic rejection of out-of-domain card in Divide.
+    let mut view_a = scope(&divide_pending, viewer_a());
+    let snap_a = super::projection::project_test(&mut view_a).unwrap();
+    assert_eq!(snap_a.decisions.len(), 1);
+    assert_eq!(snap_a.decisions[0].kind, DecisionKind::LibrarySearch);
+    assert!(matches!(
+        snap_a.decisions[0].domain,
+        PlayerDomain::LibrarySearch {
+            mode: crate::player_wire::PlayerSearchMode::DividePile,
+            ..
+        }
+    ));
+    let dec_handle_a = view_a.issue(NativeReference::Decision(dec.id())).unwrap();
+    // Atomic rejection of out-of-domain object (e.g., an object not among the 3 revealed cards).
+    let bad_obj = view_a
+        .issue(NativeReference::Object(object(&divide_pending, 1)))
+        .unwrap();
+    let bad_divide = command(
+        &view_a,
+        PlayerAction::Choose {
+            decision: dec_handle_a,
+            response: PlayerChoice::Objects {
+                objects: vec![bad_obj],
+            },
+        },
+    );
+    let _ = rejected_proposal(&view_a, &bad_divide);
+
+    let take_pending = reply(
+        &divide_pending,
+        |v| PlayerChoice::Objects {
+            objects: vec![v.issue(NativeReference::Object(first_pile[0])).unwrap()],
+        },
+        DecisionReply::SelectResolution(first_pile.clone()),
+    );
+
+    // Opponent B chooses pile 1 or pile 2.
+    let take_dec = take_pending.pending_decision().expect("take decision");
+    assert_eq!(take_dec.chooser(), B);
+    let mut view_b = scope(&take_pending, viewer_b());
+    let dec_handle_b = view_b
+        .issue(NativeReference::Decision(take_dec.id()))
+        .unwrap();
+    // Atomic rejection of invalid pile index 3.
+    let bad_pile = command(
+        &view_b,
+        PlayerAction::Choose {
+            decision: dec_handle_b,
+            response: PlayerChoice::Number { value: 3.into() },
+        },
+    );
+    let _ = rejected_proposal(&view_b, &bad_pile);
+
+    // Legal reply: B chooses pile 1 (1 card -> A's hand; 2 cards -> A's graveyard).
+    let after_take = bridged(&take_pending, viewer_b(), |v| PlayerAction::Choose {
+        decision: v.issue(NativeReference::Decision(take_dec.id())).unwrap(),
+        response: PlayerChoice::Number { value: 1.into() },
+    });
+    // Complete graveyard ordering if 2 cards enter graveyard simultaneously.
+    let done = if let Some(order_dec) = after_take.pending_decision() {
+        let RuleFrame::RevealedPiles(ord_frame) = order_dec.frame() else {
+            panic!("expected graveyard order frame");
+        };
+        let spellwake_engine::effects::PileChoice::GraveyardOrder(gy_cards) = ord_frame.choice()
+        else {
+            panic!("expected PileChoice::GraveyardOrder");
+        };
+        let gy_vec = gy_cards.clone();
+        reply(
+            &after_take,
+            |v| PlayerChoice::Ordering {
+                ordered: gy_vec
+                    .iter()
+                    .map(|id| v.issue(NativeReference::Object(*id)).unwrap())
+                    .collect(),
+            },
+            DecisionReply::OrderResolutionGraveyard(gy_vec.clone()),
+        )
+    } else {
+        after_take
+    };
+    let hand_count = done
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(A))
+        .count();
+    let gy_count = done
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Graveyard(A))
+        .count();
+    assert_eq!(hand_count, 1);
+    assert!(gy_count >= 2);
+}
+
+#[test]
+#[ignore = "requires explicitly supplied genuine vocabulary"]
+fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_atomically() {
+    use crate::player_wire::DecisionKind;
+    use spellwake_engine::{
+        effects::ResolutionSelectionKind,
+        object_identity::ObjectZone,
+        program::{
+            CardTypeMask, ObjectClause, ObjectFilter, ResolutionChoiceDomain, SourceZoneFilter,
+            UnchosenObjectsAction, ValueExpr,
+        },
+    };
+
+    let creature_filter = || {
+        let mut clause = ObjectClause::any();
+        clause.any_types = CardTypeMask::CREATURE;
+        ObjectFilter::Clause(clause)
+    };
+
+    // 1. ChooseObjects with distinct_powers = true + unchosen_action = Some(Destroy):
+    // 3 creatures on battlefield with powers 2, 2, and 3.
+    // Choosing both power-2 creatures must be atomically rejected; choosing one power-2 and one
+    // power-3 creature must succeed and destroy the remaining power-2 creature.
+    let spell = instant(
+        BodyTarget::None,
+        vec![Instruction::ChooseObjects {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            source_zone: SourceZoneFilter::AnyBattlefield,
+            filter: Box::new(creature_filter()),
+            min: ValueExpr::Literal(0.into()),
+            max: ValueExpr::Literal(99.into()),
+            distinct_powers: true,
+            max_total_power: None,
+            unchosen_action: Some(UnchosenObjectsAction::Destroy),
+        }],
+    );
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, spell),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        ),
+        card(
+            3,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        ),
+        card(
+            4,
+            B,
+            ObjectDestination::Battlefield { controller: B },
+            Program::creature(None, 3.into(), 3.into(), BTreeSet::new()),
+        ),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let pending = resolve(&cast);
+    let dec = pending.pending_decision().expect("choose objects decision");
+    let RuleFrame::ResolutionSelect(frame) = dec.frame() else {
+        panic!("expected ResolutionSelect frame");
+    };
+    assert_eq!(frame.operation(), ResolutionSelectionKind::ChooseObjects);
+    assert_eq!(frame.domain().len(), 3);
+
+    let c2 = object(&pending, 2);
+    let c3 = object(&pending, 3);
+    let c4 = object(&pending, 4);
+
+    // Atomic invalid reply: picking two creatures with the same power (2 and 2) must fail without mutating state.
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::SelectResolution);
+    let dec_handle = view.issue(NativeReference::Decision(dec.id())).unwrap();
+    let h2 = view.issue(NativeReference::Object(c2)).unwrap();
+    let h3 = view.issue(NativeReference::Object(c3)).unwrap();
+    let bad_dup_power = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle,
+            response: PlayerChoice::Objects {
+                objects: vec![h2, h3],
+            },
+        },
+    );
+    let _ = rejected_proposal(&view, &bad_dup_power);
+
+    // Legal reply: pick c2 (power 2) and c4 (power 3) -> c3 (unchosen power 2) is destroyed!
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::Objects {
+            objects: vec![
+                v.issue(NativeReference::Object(c2)).unwrap(),
+                v.issue(NativeReference::Object(c4)).unwrap(),
+            ],
+        },
+        DecisionReply::SelectResolution(vec![c2, c4]),
+    );
+    assert!(done.pending_decision().is_none());
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .iter()
+            .filter(|c| c.zone() == ObjectZone::Battlefield)
+            .count(),
+        2
+    );
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(A)
+    );
+
+    // 2. RandomPlayer { opponents_only: true } in 2-player game deterministically binds singleton opponent B.
+    let rand_spell = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::ChooseValue {
+                chooser: ResolvingPlayer::Controller,
+                domain: ResolutionChoiceDomain::RandomPlayer {
+                    opponents_only: true,
+                },
+            },
+            Instruction::AdjustPlayersLife {
+                players: AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
+                amount: ValueExpr::Literal(2.into()),
+                gain: false,
+            },
+        ],
+    );
+    let rand_src = main_state(vec![card(1, A, ObjectDestination::Hand, rand_spell)]);
+    let rand_cast = bridged(&rand_src, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&rand_src, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let rand_done = resolve(&rand_cast);
+    assert!(rand_done.pending_decision().is_none());
+    assert_eq!(rand_done.execution().life_total(B), Some(&18.into()));
+}

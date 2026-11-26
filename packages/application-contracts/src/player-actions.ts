@@ -35,15 +35,101 @@ export const playerManaSpendSchema = z.strictObject({
   color: playerManaColorSchema,
   amount: rulesCountSchema,
 });
+const playerSpellColorRuleSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("colorless") }),
+  z.strictObject({ kind: z.literal("colored") }),
+  z.strictObject({ kind: z.literal("exact-color"), color: playerManaColorSchema.exclude(["colourless"]) }),
+  z.strictObject({ kind: z.literal("monocolored-of"), color: playerManaColorSchema.exclude(["colourless"]) }),
+  z.strictObject({ kind: z.literal("multicolored") }),
+  z.strictObject({ kind: z.literal("exact-color-count"), count: z.number().int().min(0).max(5) }),
+]);
+const playerSpellManaClauseSchema = z.strictObject({
+  cardType: playerCardTypeSchema.optional(),
+  excludeCardType: playerCardTypeSchema.optional(),
+  supertype: z.string().min(1).max(32).optional(),
+  creatureType: playerEnglishLabelSchema.optional(),
+  artifactSubtype: z.string().min(1).max(32).optional(),
+  enchantmentSubtype: z.string().min(1).max(32).optional(),
+  isAura: z.boolean().optional(),
+  spellSubtype: z.string().min(1).max(32).optional(),
+  planeswalkerSubtype: z.string().min(1).max(32).optional(),
+  colorRule: playerSpellColorRuleSchema.optional(),
+  keyword: z.enum(["devoid", "freerunning", "foretell", "flashback", "disturb"]).optional(),
+  castMode: z.enum(["face-down", "kicked", "disturb", "from-graveyard", "from-exile", "not-from-hand", "not-owned", "second-spell-this-turn"]).optional(),
+  noAbilities: z.boolean().optional(),
+  minManaValue: z.number().int().min(0).max(255).optional(),
+});
+const playerAbilityManaClauseSchema = z.strictObject({
+  sourceCardType: playerCardTypeSchema.optional(),
+  sourceCreatureType: playerEnglishLabelSchema.optional(),
+  sourceColorless: z.boolean().optional(),
+  kind: z.enum(["equip", "power-up", "gain-class-level"]).optional(),
+});
+const playerManaPredicateSchema = z.strictObject({
+  allowAnySpell: z.boolean().optional(),
+  spellClauses: z.array(playerSpellManaClauseSchema).max(32).optional(),
+  allowAnyAbility: z.boolean().optional(),
+  abilityClauses: z.array(playerAbilityManaClauseSchema).max(32).optional(),
+  specialActions: z.array(z.enum(["foretell", "turn-face-up", "turn-creature-face-up", "unlock-door", "cumulative-upkeep"])).max(8).optional(),
+  makesSpellUncounterable: z.boolean().optional(),
+  disallowGeneric: z.boolean().optional(),
+  allowCostContainingColorless: z.boolean().optional(),
+  allowCostContainingX: z.boolean().optional(),
+});
 export const playerRestrictedManaSpendSchema = z.strictObject({
   color: playerManaColorSchema,
-  restriction: z.enum(["planeswalker-spell", "colorless-spell", "commander-spell", "colorless-eldrazi-spell-or-ability", "noncreature-spell", "artifact-spell-or-ability", "not-nonartifact-spell", "creature-spell-of-type", "creature-spell-or-ability-of-type"]),
+  restriction: z.enum([
+    "planeswalker-spell",
+    "colorless-spell",
+    "commander-spell",
+    "colorless-eldrazi-spell-or-ability",
+    "noncreature-spell",
+    "spell-with-flashback-from-graveyard",
+    "artifact-spell-or-ability",
+    "not-nonartifact-spell",
+    "creature-spell",
+    "creature-spell-of-type",
+    "creature-spell-of-type-uncounterable",
+    "creature-spell-or-ability-of-type",
+    "instant-or-sorcery-spell",
+    "artifact-spell",
+    "artifact-ability",
+    "artifact-spell-or-any-ability",
+    "activated-ability",
+    "cast-spell",
+    "not-spell-from-hand",
+    "cost-containing-x",
+    "legendary-spell",
+    "multicolored-spell",
+    "enchantment-spell",
+    "creature-spell-or-ability",
+    "colored-spell-without-x",
+    "instant-or-sorcery-or-foretell",
+    "spell-with-min-mana-value",
+    "creature-spell-with-min-mana-value",
+    "historic-spell",
+    "creature-or-planeswalker-spell",
+    "creature-ability",
+    "permanent-spell",
+    "spell-from-graveyard-or-exile",
+    "equipment-or-equip-ability",
+    "spell-with-min-mana-value-or-x",
+    "creature-spell-with-min-mana-value-or-x",
+    "creature-or-enchantment-spell",
+    "predicate",
+  ]),
   creatureType: playerEnglishLabelSchema.optional(),
+  minManaValue: z.number().int().min(0).max(255).optional(),
+  predicate: playerManaPredicateSchema.optional(),
   amount: rulesCountSchema.refine((v) => v !== "0"),
-}).refine((entry) => entry.creatureType === undefined || entry.restriction === "creature-spell-of-type" || entry.restriction === "creature-spell-or-ability-of-type");
+}).refine((entry) =>
+  (entry.creatureType === undefined || entry.restriction === "creature-spell-of-type" || entry.restriction === "creature-spell-of-type-uncounterable" || entry.restriction === "creature-spell-or-ability-of-type")
+  && (entry.minManaValue === undefined || entry.restriction === "spell-with-min-mana-value" || entry.restriction === "creature-spell-with-min-mana-value" || entry.restriction === "spell-with-min-mana-value-or-x" || entry.restriction === "creature-spell-with-min-mana-value-or-x")
+  && ((entry.predicate !== undefined) === (entry.restriction === "predicate")),
+);
 export const playerPaymentSchema = z
   .strictObject({ spend: z.array(playerManaSpendSchema).max(6), graveyardPermission: playerHandleSchema.optional(), exileCastType: playerCardTypeSchema.exclude(["land"]).optional(), alternativeCostSource: playerHandleSchema.optional(), restrictedMana: z.array(playerRestrictedManaSpendSchema).max(PLAYER_ITEMS).optional() })
-  .refine((p) => uniquePlayerValues(p.spend, (x) => x.color) && uniquePlayerValues(p.restrictedMana ?? [], (x) => `${x.color}:${x.restriction}:${x.creatureType ?? ""}`)
+  .refine((p) => uniquePlayerValues(p.spend, (x) => x.color) && uniquePlayerValues(p.restrictedMana ?? [], (x) => `${x.color}:${x.restriction}:${x.creatureType ?? ""}:${x.minManaValue ?? ""}:${x.predicate ? JSON.stringify(x.predicate) : ""}`)
     && (p.restrictedMana ?? []).every((item) => BigInt(item.amount) <= BigInt(p.spend.find((entry) => entry.color === item.color)?.amount ?? "0"))
     && p.spend.every((entry) => (p.restrictedMana ?? []).filter((item) => item.color === entry.color).reduce((sum, item) => sum + BigInt(item.amount), 0n) <= BigInt(entry.amount)));
 export const playerObjectTargetSchema = z.strictObject({

@@ -609,6 +609,7 @@ fn oracle_lowering_corpus_coverage_audit() {
     let mut oracle_ok = 0usize;
     let mut reasons: HashMap<&'static str, usize> = HashMap::new();
     let mut oracle_ok_ids: BTreeSet<String> = BTreeSet::new();
+    let mut oracle_errors = BTreeMap::new();
 
     for card in inventory
         .cards
@@ -633,6 +634,9 @@ fn oracle_lowering_corpus_coverage_audit() {
             }
             Err(r) => {
                 *reasons.entry(r).or_insert(0) += 1;
+                if let Some(id) = &card.oracle_id {
+                    oracle_errors.insert(id.clone(), r);
+                }
             }
         }
     }
@@ -1401,12 +1405,13 @@ fn oracle_lowering_corpus_coverage_audit() {
 
     // === GATE 4: MULTI-BLOCKER WHOLE-CARD DEPENDENCY QUEUE ===
     // Walk EVERY face and EVERY keyword/static/replacement/ability/instruction on every
-    // unbound Base Constructed card so we rank capabilities by exact whole cards immediately
-    // unlocked (solo blockers) AND by shared prerequisite reach across multi-blocker cards.
+    // unbound Base Constructed card to rank candidate capabilities and shared prerequisites.
+    // Leaf failures can be handled by sequence lowering; only a full reaudit measures gains.
     let mut strict_ast_cards = 0usize;
     let mut solo_blocker_cards: HashMap<String, Vec<String>> = HashMap::new();
     let mut shared_blocker_cards: HashMap<String, usize> = HashMap::new();
     let mut blocker_hist: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut candidate_blockers = BTreeMap::new();
     let mut ast_incomplete_unbound = 0usize;
 
     for card in inventory
@@ -1968,6 +1973,9 @@ fn oracle_lowering_corpus_coverage_audit() {
                 blockers.insert("profile:not-wired-in-current".to_string());
             }
         }
+        if let Some(id) = &card.oracle_id {
+            candidate_blockers.insert(id.clone(), blockers.clone());
+        }
         *blocker_hist.entry(blockers.len()).or_insert(0) += 1;
         for b in &blockers {
             *shared_blocker_cards.entry(b.clone()).or_insert(0) += 1;
@@ -1980,6 +1988,38 @@ fn oracle_lowering_corpus_coverage_audit() {
                 .or_default()
                 .push(card.name.clone());
         }
+    }
+
+    // Optional deterministic evidence for before/after whole-card set comparisons.
+    if let Some(path) = std::env::var_os("SPELLWAKE_COVERAGE_SNAPSHOT") {
+        let cards: BTreeMap<_, _> = inventory
+            .cards
+            .iter()
+            .filter(|card| card.required_by_base_formats)
+            .map(|card| {
+                let id = card.oracle_id.as_ref().expect("required card Oracle ID");
+                (
+                    id.clone(),
+                    serde_json::json!({
+                        "name": card.name,
+                        "bound": bound_ids.contains(id),
+                        "standalone_valid": oracle_ok_ids.contains(id),
+                        "standalone_error": oracle_errors.get(id),
+                        "candidate_blockers": candidate_blockers.get(id),
+                    }),
+                )
+            })
+            .collect();
+        assert_eq!(
+            cards.len(),
+            total_required,
+            "one row per required Oracle ID"
+        );
+        serde_json::to_writer_pretty(
+            File::create(path).expect("create coverage snapshot"),
+            &cards,
+        )
+        .expect("write coverage snapshot");
     }
 
     eprintln!("=== GATE 4: HONEST TIERS & MULTI-BLOCKER WHOLE-CARD QUEUE ===");
@@ -2005,7 +2045,7 @@ fn oracle_lowering_corpus_coverage_audit() {
     let mut solo_sorted: Vec<(String, Vec<String>)> = solo_blocker_cards.into_iter().collect();
     solo_sorted.sort_by_key(|e| std::cmp::Reverse(e.1.len()));
     eprintln!(
-        "--- TOP 45 SINGLE-BLOCKER CAPABILITIES (EXACT WHOLE CARDS IMMEDIATELY UNLOCKED) ---"
+        "--- TOP 45 SINGLE-BLOCKER CAPABILITIES (CANDIDATE WHOLE CARDS; GAINS REQUIRE REAUDIT) ---"
     );
     for (cap, names) in solo_sorted.iter().take(45) {
         let total_hits = shared_blocker_cards.get(cap).copied().unwrap_or(0);
@@ -2132,4 +2172,25 @@ fn pass_e12_filter_and_chooser_fidelity() {
         Some(spellwake_engine::land::EntryTap::Always)
     );
     assert!(!twc_prog.entry_counter_abilities.is_empty());
+}
+
+#[test]
+#[ignore = "uses saved dated Scryfall corpus and vocabulary"]
+fn wave10_source_action_catalogue_regression() {
+    let (inventory, vocabulary, _) = current_catalogue();
+    for name in [
+        "Nezumi Graverobber // Nighteyes the Desecrator",
+        "Dormant Grove // Gnarled Grovestrider",
+        "Hadana's Climb // Winged Temple of Orazca",
+        "Mysterious Tome // Chilling Chronicle",
+        "Nezumi Shortfang // Stabwhisker the Odious",
+    ] {
+        let card = inventory
+            .cards
+            .iter()
+            .find(|card| card.name == name)
+            .expect("pinned card exists");
+        let result = compile_with_inventory_reason(card, inventory, &vocabulary);
+        assert!(result.is_ok(), "{name}: {:?}", result.err());
+    }
 }

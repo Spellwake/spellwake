@@ -344,8 +344,7 @@ impl EffectWindow {
     ) -> Result<RulesInteger, EffectError> {
         use crate::program::{
             AttachedCountKind, CounterSubjectRef, EventValueKind, MatchObjectRef, ObjectStatKind,
-            PlayerStatExpr, SourceStateExpr, StatAggregate, SubtypeFilter, ValueExpr,
-            ValueObjectRef, ValueZone,
+            PlayerStatExpr, SourceStateExpr, SubtypeFilter, ValueExpr, ValueObjectRef, ValueZone,
         };
         let resolve_ability_source = || -> Option<ObjectId> {
             if let Some(id) = explicit_source {
@@ -1271,13 +1270,7 @@ impl EffectWindow {
                         }
                     }
                 });
-                match op {
-                    StatAggregate::Max => Ok(values.max().unwrap_or_else(|| 0.into())),
-                    StatAggregate::Min => Ok(values.min().unwrap_or_else(|| 0.into())),
-                    StatAggregate::Sum => {
-                        Ok(values.fold(0.into(), |total: RulesInteger, v| total.plus(&v)))
-                    }
-                }
+                Ok(op.evaluate(values))
             }
             ValueExpr::ObjectStat { subject, stat } => match (subject, stat) {
                 (ValueObjectRef::AbilitySource, stat) => {
@@ -2086,6 +2079,14 @@ impl EffectWindow {
                                 .map(|pt| (&pt.derived.power, p.controller == Some(controller)))
                         });
                     Ok(i64::from(creatures.max().is_some_and(|(_, c)| c)).into())
+                }
+                PlayerStatExpr::PlayerIsActivePlayer(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(i64::from(self.window.active_player() == seat).into())
                 }
                 PlayerStatExpr::ControllerIsActivePlayer => {
                     Ok(i64::from(self.window.active_player() == controller).into())

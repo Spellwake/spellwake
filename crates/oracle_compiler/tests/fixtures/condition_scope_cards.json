@@ -1,0 +1,26 @@
+[
+  {
+    "oracle_id": "bfd614d5-4c7f-416b-9cb2-bb167c0893a0",
+    "name": "Elenda, Saint of Dusk",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Elenda, Saint of Dusk",
+        "type_line": "Legendary Creature \u2014 Vampire Knight",
+        "oracle_text": "Lifelink, hexproof from instants\nAs long as your life total is greater than your starting life total, Elenda gets +1/+1 and has menace. Elenda gets an additional +5/+5 as long as your life total is at least 10 greater than your starting life total."
+      }
+    ]
+  },
+  {
+    "oracle_id": "f85aef9b-b6ad-4716-b48b-5e26b474a59d",
+    "name": "Tek",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Tek",
+        "type_line": "Artifact Creature \u2014 Dragon",
+        "oracle_text": "This creature gets +0/+2 as long as you control a Plains, has flying as long as you control an Island, gets +2/+0 as long as you control a Swamp, has first strike as long as you control a Mountain, and has trample as long as you control a Forest."
+      }
+    ]
+  }
+]

@@ -76,7 +76,19 @@ impl EffectWindow {
                 price
             }
         };
-        let spend = self.prepare_mana_payment(price, payment, actor)?;
+        let (spend, restricted_spend) = if matches!(action, ExileHandAction::Foretell) {
+            self.prepare_special_action_mana_payment(
+                price,
+                payment,
+                actor,
+                crate::mana::ManaSpecialAction::Foretell,
+            )?
+        } else {
+            (
+                self.prepare_mana_payment(price, payment, actor)?,
+                Vec::new(),
+            )
+        };
         let previous = self.rules_snapshot(Some(turn))?;
         let (window, moved) = self.window.exile_hand_special_action(actor, source)?;
         let mut next = Self {
@@ -88,7 +100,13 @@ impl EffectWindow {
             from_lots: payment.map_or_else(Default::default, |p| p.from_lots.clone()),
             spend,
         };
-        next.spend_mana_lots(actor, &payment.spend, &[], Some(&payment.from_lots))?;
+        next.spend_mana_lots(
+            actor,
+            &payment.spend,
+            &restricted_spend,
+            Some(&payment.from_lots),
+        )?;
+        next.debit_restricted_mana(actor, &restricted_spend)?;
         next.debit_mana(actor, &payment.spend);
         use crate::occurrence::{EventCause, ZoneReason};
         let (cause, reason) = match action {

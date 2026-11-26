@@ -675,13 +675,15 @@ fn resolve_choices(
                     | ResolutionSelectionKind::AttachChosenAurasAndEquipment
                     | ResolutionSelectionKind::AttachAllEquipment
                     | ResolutionSelectionKind::CopyDifferentlyNamedTokens
+                    | ResolutionSelectionKind::Populate
                     | ResolutionSelectionKind::Bolster
                     | ResolutionSelectionKind::Amass
                     | ResolutionSelectionKind::Untap
                     | ResolutionSelectionKind::EnterBattlefield
                     | ResolutionSelectionKind::BlightCreature
                     | ResolutionSelectionKind::CollectEvidence
-                    | ResolutionSelectionKind::SelectZoneCards =>
+                    | ResolutionSelectionKind::SelectZoneCards
+                    | ResolutionSelectionKind::ChooseObjects =>
                         panic!("unexpected selection cohort"),
                 }
             );
@@ -719,13 +721,15 @@ fn resolve_choices(
                     | ResolutionSelectionKind::AttachChosenAurasAndEquipment
                     | ResolutionSelectionKind::AttachAllEquipment
                     | ResolutionSelectionKind::CopyDifferentlyNamedTokens
+                    | ResolutionSelectionKind::Populate
                     | ResolutionSelectionKind::Bolster
                     | ResolutionSelectionKind::Amass
                     | ResolutionSelectionKind::Untap
                     | ResolutionSelectionKind::EnterBattlefield
                     | ResolutionSelectionKind::BlightCreature
                     | ResolutionSelectionKind::CollectEvidence
-                    | ResolutionSelectionKind::SelectZoneCards =>
+                    | ResolutionSelectionKind::SelectZoneCards
+                    | ResolutionSelectionKind::ChooseObjects =>
                         panic!("unexpected selection cohort"),
                 }
             );
