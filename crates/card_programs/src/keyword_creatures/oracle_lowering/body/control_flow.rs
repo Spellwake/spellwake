@@ -4305,6 +4305,24 @@ pub(in super::super) fn lower_instruction_seq(
         bound_x
     };
 
+    // Turn-long prevention installs a shield; it does not produce an immediate
+    // damage amount. An adjacent dependent life change needs a prevention-event followup.
+    // Do not scan across independent actions: they can establish a new PriorResult.
+    if ins.windows(2).any(|pair| {
+        matches!(
+            &pair[0],
+            InstructionAst::PreventAllDamageFrom {
+                duration: DurationAst::UntilEndOfTurn,
+                ..
+            } | InstructionAst::PreventAllDamage {
+                duration: DurationAst::UntilEndOfTurn,
+                ..
+            }
+        ) && matches!(&pair[1], InstructionAst::ChangeLife { delta, .. }
+                if value_expr_contains_prior_result(resolve_x(delta, bound_x)))
+    }) {
+        return Err("oracle:unsupported-prevention-life-followup");
+    }
     let mut i = 0usize;
     while i < ins.len() {
         if empty_bind_count == 1
@@ -9764,3 +9782,7 @@ pub(in super::super) fn lower_instruction_seq(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "wave12_prevention_followup_tests.rs"]
+mod wave12_prevention_followup_tests;
