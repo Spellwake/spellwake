@@ -1,0 +1,134 @@
+[
+  {
+    "oracle_id": "c86bac69-96d6-4b9f-87e4-2d7faecaa112",
+    "name": "Cloudspire Captain",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Cloudspire Captain",
+        "type_line": "Creature \u2014 Human Pilot",
+        "oracle_text": "Mounts and Vehicles you control get +1/+1.\nThis creature saddles Mounts and crews Vehicles as though its power were 2 greater."
+      }
+    ]
+  },
+  {
+    "oracle_id": "af231505-bd2e-4499-9fd5-f761dde2ecef",
+    "name": "Death-Priest of Myrkul",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Death-Priest of Myrkul",
+        "type_line": "Creature \u2014 Tiefling Cleric",
+        "oracle_text": "Skeletons, Vampires, and Zombies you control get +1/+1.\nAt the beginning of your end step, if a creature died this turn, you may pay {1}. If you do, create a 1/1 black Skeleton creature token."
+      }
+    ]
+  },
+  {
+    "oracle_id": "4d67357c-5939-45c8-a656-aaf76728a5a6",
+    "name": "Nightpack Ambusher",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Nightpack Ambusher",
+        "type_line": "Creature \u2014 Wolf",
+        "oracle_text": "Flash\nOther Wolves and Werewolves you control get +1/+1.\nAt the beginning of your end step, if you didn't cast a spell this turn, create a 2/2 green Wolf creature token."
+      }
+    ]
+  },
+  {
+    "oracle_id": "696363c9-e8a7-4c65-b65c-4a94891ec43d",
+    "name": "Gisa, the Hellraiser",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Gisa, the Hellraiser",
+        "type_line": "Legendary Creature \u2014 Human Warlock",
+        "oracle_text": "Ward\u2014{2}, Pay 2 life.\nSkeletons and Zombies you control get +1/+1 and have menace.\nWhenever you commit a crime, create two tapped 2/2 blue and black Zombie Rogue creature tokens. This ability triggers only once each turn. (Targeting opponents, anything they control, and/or cards in their graveyards is a crime.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "b84dedfd-4020-444f-ac5a-54c65c0d0378",
+    "name": "Bosk Banneret",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Bosk Banneret",
+        "type_line": "Creature \u2014 Treefolk Shaman",
+        "oracle_text": "Treefolk spells and Shaman spells you cast cost {1} less to cast."
+      }
+    ]
+  },
+  {
+    "oracle_id": "4b6377da-83e7-4519-9582-16a9c16b8faa",
+    "name": "Danitha Capashen, Paragon",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Danitha Capashen, Paragon",
+        "type_line": "Legendary Creature \u2014 Human Knight",
+        "oracle_text": "First strike, vigilance, lifelink\nAura and Equipment spells you cast cost {1} less to cast."
+      }
+    ]
+  },
+  {
+    "oracle_id": "14537413-3628-4152-b23f-78b0e9c416ac",
+    "name": "Broodwarden",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Broodwarden",
+        "type_line": "Creature \u2014 Eldrazi Drone",
+        "oracle_text": "Eldrazi Spawn creatures you control get +2/+1."
+      }
+    ]
+  },
+  {
+    "oracle_id": "e7d1c762-69d0-401d-8035-6e9744baf9d8",
+    "name": "Brood Birthing",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Brood Birthing",
+        "type_line": "Sorcery",
+        "oracle_text": "If you control an Eldrazi Spawn, create three 0/1 colorless Eldrazi Spawn creature tokens. They have \"Sacrifice this token: Add {C}.\" Otherwise, create one of those tokens."
+      }
+    ]
+  },
+  {
+    "oracle_id": "f15bd5c0-99ff-42c6-8eed-48de6df81b61",
+    "name": "Radioactive Spider",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Radioactive Spider",
+        "type_line": "Creature \u2014 Spider",
+        "oracle_text": "Reach, deathtouch\nFateful Bite \u2014 {2}, Sacrifice this creature: Search your library for a Spider Hero card, reveal it, put it into your hand, then shuffle. Activate only as a sorcery."
+      }
+    ]
+  },
+  {
+    "oracle_id": "87e65e36-9483-49fe-b644-2caca092107f",
+    "name": "Jarad, Golgari Lich Lord",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Jarad, Golgari Lich Lord",
+        "type_line": "Legendary Creature \u2014 Zombie Elf",
+        "oracle_text": "Jarad gets +1/+1 for each creature card in your graveyard.\n{1}{B}{G}, Sacrifice another creature: Each opponent loses life equal to the sacrificed creature's power.\nSacrifice a Swamp and a Forest: Return this card from your graveyard to your hand."
+      }
+    ]
+  },
+  {
+    "oracle_id": "5fd4be4c-70a3-4c91-a4c6-788a2051ff13",
+    "name": "Viscerid Drone",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Viscerid Drone",
+        "type_line": "Creature \u2014 Homarid Drone",
+        "oracle_text": "{T}, Sacrifice a creature and a Swamp: Destroy target nonartifact creature. It can't be regenerated.\n{T}, Sacrifice a creature and a snow Swamp: Destroy target creature. It can't be regenerated."
+      }
+    ]
+  }
+]

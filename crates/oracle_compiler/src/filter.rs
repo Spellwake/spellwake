@@ -4514,7 +4514,20 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                     pending_or_after_subtype = true;
                 }
             }
-            "and" | "of" | "the" | "a" | "an" => {}
+            "and" => {
+                // Disjunctive plural/collective subtype lists such as "Mounts and Vehicles",
+                // "Skeletons, Vampires, and Zombies", "Other Wolves and Werewolves", and
+                // "Treefolk spells and Shaman spells" use "and" without a following indefinite
+                // article. Guard against two-object phrases ("a Swamp and a Forest") where
+                // "and" precedes "a", "an", or "another".
+                let next_is_indef = tokens
+                    .get(i + 1)
+                    .is_some_and(|next| matches!(*next, "a" | "an" | "another"));
+                if saw_subtype && !next_is_indef {
+                    pending_or_after_subtype = true;
+                }
+            }
+            "of" | "the" | "a" | "an" => {}
             "other" | "another" => flt.flags = flt.flags.union(ObjectFilterFlags::EXCLUDE_SELF),
             "permanent" | "permanents" | "source" | "sources" => flt.any_permanent = true,
             "card" | "cards" => flt.any_card = true,

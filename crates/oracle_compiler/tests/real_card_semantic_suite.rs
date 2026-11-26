@@ -2066,3 +2066,182 @@ fn search_library_preserves_multi_zone_and_multi_named_targets() {
         "single named card with 'and' must not split: {single_named:?}"
     );
 }
+// --- Wave 15 subtype disjunction & compound sacrifice suite ---
+
+fn load_w15_cards() -> Vec<FixtureCard> {
+    let raw = include_str!("fixtures/subtype_disjunction_w15_cards.json");
+    serde_json::from_str(raw).expect("valid w15 subtype fixture")
+}
+
+fn compile_and_audit_w15_card(name: &str, vocab: &Vocabulary) -> CardAst {
+    let cards = load_w15_cards();
+    let card = cards
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("missing fixture card: {name}"));
+    let faces: Vec<FaceInput<'_>> = card
+        .faces
+        .iter()
+        .map(|f| FaceInput {
+            name: &f.name,
+            type_line: &f.type_line,
+            oracle_text: &f.oracle_text,
+        })
+        .collect();
+    let input = CardInput {
+        oracle_id: &card.oracle_id,
+        name: &card.name,
+        layout: &card.layout,
+        faces,
+    };
+    let ast = compile_card_with_options(&input, vocab, CompileOptions::default());
+    assert!(
+        ast.strictly_compiled,
+        "{name} failed strict compile: {:?}",
+        ast.faces[0].failures
+    );
+    let report = audit_card(&input, &ast, CompileOptions::default());
+    assert!(
+        report.critical_defects.is_empty(),
+        "{name} has critical defects: {:?}",
+        report.critical_defects
+    );
+    ast
+}
+
+#[test]
+fn disjunctive_subtype_and_lists_emit_subtypes_match_any_while_compound_subtypes_stay_conjunctive() {
+    use spellwake_oracle_compiler::filter::parse_object_filter;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: plural/collective "and" subtype lists MUST emit SubtypesMatchAny.
+    for (name, expected_subtypes) in [
+        ("Cloudspire Captain", vec!["Mount", "Vehicle"]),
+        ("Death-Priest of Myrkul", vec!["Skeleton", "Vampire", "Zombie"]),
+        ("Nightpack Ambusher", vec!["Wolf", "Werewolf"]),
+        ("Gisa, the Hellraiser", vec!["Skeleton", "Zombie"]),
+        ("Bosk Banneret", vec!["Treefolk", "Shaman"]),
+        ("Danitha Capashen, Paragon", vec!["Aura", "Equipment"]),
+    ] {
+        let ast = compile_and_audit_w15_card(name, &vocab);
+        let expected: Vec<String> = expected_subtypes.into_iter().map(str::to_string).collect();
+        let has_match_any = ast.faces[0].statics.iter().any(|st| {
+            let subj = match st {
+                StaticAbilityAst::ContinuousModifyPT { subject, .. }
+                | StaticAbilityAst::GrantKeywords { subject, .. }
+                | StaticAbilityAst::CostModifier { subject, .. } => subject.as_ref(),
+                _ => return false,
+            };
+            let SubjectRefAst::Group(flt) = subj else {
+                return false;
+            };
+            flt.subtypes == expected && flt.predicates.contains(&FilterPredicateAst::SubtypesMatchAny)
+        });
+        assert!(
+            has_match_any,
+            "{name} should emit SubtypesMatchAny for {expected:?}: {:?}",
+            ast.faces[0].statics
+        );
+    }
+
+    // Negative: adjacent compound subtypes MUST stay conjunctive (NO SubtypesMatchAny).
+    for (name, expected_subtypes) in [
+        ("Broodwarden", vec!["Eldrazi", "Spawn"]),
+        ("Brood Birthing", vec!["Eldrazi", "Spawn"]),
+        ("Radioactive Spider", vec!["Spider", "Hero"]),
+    ] {
+        let ast = compile_and_audit_w15_card(name, &vocab);
+        let json = serde_json::to_string(&ast).expect("serialize compound subtype card");
+        for sub in expected_subtypes {
+            assert!(json.contains(sub), "{name} missing subtype {sub}: {json}");
+        }
+        assert!(
+            !json.contains("SubtypesMatchAny"),
+            "{name} compound subtype must stay conjunctive without SubtypesMatchAny: {json}"
+        );
+    }
+
+    // Negative: "a Swamp and a Forest" has an indefinite article after "and", so parse_object_filter
+    // must NOT treat it as SubtypesMatchAny.
+    let two_obj = parse_object_filter("a Swamp and a Forest", &vocab).expect("parse filter");
+    assert!(
+        !two_obj
+            .predicates
+            .contains(&FilterPredicateAst::SubtypesMatchAny),
+        "indefinite 'a Swamp and a Forest' must not set SubtypesMatchAny: {two_obj:?}"
+    );
+
+    // Negative: single subtype followed by color conjunction must not set SubtypesMatchAny.
+    let color_conj =
+        parse_object_filter("Elf creatures that are white and green", &vocab).expect("color conj");
+    assert!(
+        !color_conj
+            .predicates
+            .contains(&FilterPredicateAst::SubtypesMatchAny),
+        "single subtype with color conjunction must not set SubtypesMatchAny: {color_conj:?}"
+    );
+}
+
+#[test]
+fn conjoined_two_object_sacrifice_costs_split_into_independent_cost_atoms() {
+    use spellwake_oracle_compiler::ast::{CardTypeMask, SupertypeMask};
+    use spellwake_oracle_compiler::clauses::parse_cost_list;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: Jarad's "Sacrifice a Swamp and a Forest" splits into two Sacrifice cost atoms.
+    let jarad = compile_and_audit_w15_card("Jarad, Golgari Lich Lord", &vocab);
+    let jarad_has_split_cost = jarad.faces[0].abilities.iter().any(|ab| {
+        let AbilityAst::Activated { cost, .. } = ab else {
+            return false;
+        };
+        matches!(
+            cost.as_slice(),
+            [
+                CostAtomAst::Sacrifice { count: c1, filter: f1, .. },
+                CostAtomAst::Sacrifice { count: c2, filter: f2, .. },
+            ] if matches!(c1.as_ref(), ValueExprAst::Const(1))
+                && matches!(c2.as_ref(), ValueExprAst::Const(1))
+                && f1.subtypes == vec!["Swamp".to_string()]
+                && f2.subtypes == vec!["Forest".to_string()]
+        )
+    });
+    assert!(
+        jarad_has_split_cost,
+        "Jarad must split 'Sacrifice a Swamp and a Forest' into two Sacrifice atoms: {:?}",
+        jarad.faces[0].abilities
+    );
+
+    // Positive: Viscerid Drone splits both "Sacrifice a creature and a Swamp" and
+    // "Sacrifice a creature and a snow Swamp".
+    let drone = compile_and_audit_w15_card("Viscerid Drone", &vocab);
+    let mut saw_plain_swamp = false;
+    let mut saw_snow_swamp = false;
+    for ab in &drone.faces[0].abilities {
+        if let AbilityAst::Activated { cost, .. } = ab
+            && let [
+                CostAtomAst::TapSelf,
+                CostAtomAst::Sacrifice { filter: f1, .. },
+                CostAtomAst::Sacrifice { filter: f2, .. },
+            ] = cost.as_slice()
+            && f1.any_types == CardTypeMask::CREATURE
+            && f1.subtypes.is_empty()
+            && f2.subtypes == vec!["Swamp".to_string()]
+        {
+            if f2.required_supertypes == SupertypeMask::SNOW {
+                saw_snow_swamp = true;
+            } else {
+                saw_plain_swamp = true;
+            }
+        }
+    }
+    assert!(
+        saw_plain_swamp && saw_snow_swamp,
+        "Viscerid Drone must split creature + Swamp and creature + snow Swamp: {:?}",
+        drone.faces[0].abilities
+    );
+
+    // Negative: single-object sacrifice with a "with ... and a ..." counter clause stays one atom.
+    let single_sac = parse_cost_list("Sacrifice a creature with a +1/+1 counter", &vocab)
+        .expect("single creature sacrifice");
+    assert_eq!(single_sac.len(), 1, "single sacrifice must stay 1 atom: {single_sac:?}");
+}

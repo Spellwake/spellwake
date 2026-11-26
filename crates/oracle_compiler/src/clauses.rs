@@ -665,8 +665,14 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         {
             return Ok(CostAtomAst::SacrificeAll(Box::new(flt)));
         }
+        let has_conjoined_two_object_sacrifice = (rest.contains(" and a ")
+            || rest.contains(" and an ")
+            || rest.contains(" and another "))
+            && !rest.contains(" with ")
+            && !rest.contains(" without ");
         if rest.ends_with(" and ~")
             || rest.starts_with("~ and ")
+            || has_conjoined_two_object_sacrifice
             || (rest.contains(", ") && !rest.contains(", or "))
         {
             return Err(format!("unparsed_cost:{a}"));
