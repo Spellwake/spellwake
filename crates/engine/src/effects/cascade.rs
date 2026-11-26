@@ -561,6 +561,49 @@ impl EffectWindow {
                 entropy,
             ));
         }
+        if let Some(Instruction::ChooseValue {
+            chooser,
+            domain: crate::program::ResolutionChoiceDomain::RandomPlayer { opponents_only },
+        }) = self
+            .payloads
+            .get(&work.cursor.entry)
+            .and_then(StackPayload::instructions)
+            .and_then(|ops| ops.get(work.cursor.instruction))
+            .cloned()
+        {
+            let cursor = work.cursor;
+            let actor = self.resolving_player_identity_at(chooser, Some(&cursor))?;
+            let seats: Vec<SeatId> = if opponents_only {
+                self.combat_rules
+                    .opponents(self.window.participants(), actor)
+                    .map_err(EffectError::from)?
+            } else {
+                self.window.participants().to_vec()
+            };
+            self.pending_work = Some(PendingWork::Resolution(cursor));
+            let (chosen_seat, entropy) = if seats.is_empty() {
+                (None, tape.clone())
+            } else {
+                let (idx, entropy) = tape.uniform_index(seats.len())?;
+                (seats.get(idx).copied(), entropy)
+            };
+            if let Some(cur) = self.resolution_cursor_mut() {
+                if let Some(seat) = chosen_seat {
+                    cur.chosen_opponent = Some(seat);
+                }
+                cur.results.random_player_ready = true;
+            }
+            return Ok((
+                self.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    RulesJournal::default(),
+                )?,
+                entropy,
+            ));
+        }
         if self
             .payloads
             .get(&work.cursor.entry)

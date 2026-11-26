@@ -37,7 +37,7 @@ struct Activation {
     outputs: Vec<crate::mana::ManaProductionRecord>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Units {
     Ordinary,
     Restricted(ManaRestriction),
@@ -91,8 +91,11 @@ fn balances(window: &EffectWindow) -> Amounts {
             }
         }
     }
-    for (&(seat, kind, restriction), count) in window.restricted_mana() {
-        amounts.insert((seat, kind, Units::Restricted(restriction)), count.clone());
+    for ((seat, kind, restriction), count) in window.restricted_mana() {
+        amounts.insert(
+            (*seat, *kind, Units::Restricted(restriction.clone())),
+            count.clone(),
+        );
     }
     for (id, lot) in window.floating_mana_lots() {
         let ordinary = amounts
@@ -186,10 +189,16 @@ impl AttackManaHistory {
                 activation.outputs.push(output.clone());
                 let unit = output
                     .restriction
+                    .as_ref()
+                    .cloned()
                     .map_or(Units::Ordinary, Units::Restricted);
                 for (&kind, amount) in &output.produced {
                     let sum = production
-                        .entry((output.recipient.unwrap_or(output.controller), kind, unit))
+                        .entry((
+                            output.recipient.unwrap_or(output.controller),
+                            kind,
+                            unit.clone(),
+                        ))
                         .or_insert_with(|| 0.into());
                     *sum = sum.plus(amount);
                 }
@@ -203,21 +212,23 @@ impl AttackManaHistory {
         }
         // Production with a spending effect is also reported in the color total.
         // Identify its issued lot so the original explicit payment stays binding.
-        for (&(seat, kind, unit), count) in &new {
-            if !matches!(unit, Units::SpendingEffect(_)) || old.contains_key(&(seat, kind, unit)) {
+        for ((seat, kind, unit), count) in &new {
+            if !matches!(unit, Units::SpendingEffect(_))
+                || old.contains_key(&(*seat, *kind, unit.clone()))
+            {
                 continue;
             }
             let ordinary = production
-                .entry((seat, kind, Units::Ordinary))
+                .entry((*seat, *kind, Units::Ordinary))
                 .or_insert_with(|| 0.into());
             *ordinary = ordinary.minus(count);
-            production.insert((seat, kind, unit), count.clone());
+            production.insert((*seat, *kind, unit.clone()), count.clone());
         }
         let channels: BTreeSet<_> = old
             .keys()
             .chain(new.keys())
             .chain(production.keys())
-            .copied()
+            .cloned()
             .collect();
         for channel in channels {
             let produced = production

@@ -807,6 +807,7 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
         | Instruction::SearchLibrary { .. }
         | Instruction::LookTopChoose { .. }
         | Instruction::LookTopChooseExt { .. }
+        | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatch { .. }
         | Instruction::RevealUntilMatchExt { .. } => true,
         _ => false,
@@ -822,7 +823,7 @@ fn try_group_affected_players(p: PlayerRefAst) -> Option<AffectedPlayers> {
     }
 }
 
-fn push_for_each_player(
+pub(super) fn push_for_each_player(
     players: AffectedPlayers,
     ops: Vec<Instruction>,
     builder: &mut BodyBuilder,
@@ -833,7 +834,7 @@ fn push_for_each_player(
     });
 }
 
-fn lower_affected_players_in_context(
+pub(super) fn lower_affected_players_in_context(
     p: PlayerRefAst,
     builder: &mut BodyBuilder,
     in_trigger: bool,
@@ -16681,7 +16682,36 @@ pub(super) fn lower_instruction(
             if let Ok(kind) = parse_choice_kind(cleaned, false, vocabulary) {
                 return emit_choice_for_player_ref(*chooser, kind, builder, ids, in_trigger);
             }
-            Err("oracle:unsupported-instruction")
+            interactive::try_lower_interactive_choose_from_group(
+                *chooser, cleaned, builder, vocabulary, ids, in_trigger,
+            )
+        }
+        InstructionAst::ChooseFromGroup {
+            count,
+            random,
+            group,
+        } => interactive::lower_choose_from_group(
+            PlayerRefAst::You,
+            count,
+            *random,
+            group,
+            builder,
+            vocabulary,
+            in_trigger,
+            bound_x,
+        ),
+        InstructionAst::PlayerChooseFromGroup {
+            chooser,
+            count,
+            random,
+            group,
+        } => interactive::lower_choose_from_group(
+            *chooser, count, *random, group, builder, vocabulary, in_trigger, bound_x,
+        ),
+        InstructionAst::PlayerChooseOption { chooser, options } => {
+            interactive::lower_player_choose_option(
+                *chooser, options, builder, vocabulary, ids, in_trigger,
+            )
         }
         InstructionAst::InteractiveChoice(InteractiveChoiceKind::SecretNumberChoice {
             min_value,
@@ -16836,8 +16866,17 @@ pub(super) fn lower_instruction(
                     return Ok(());
                 }
             }
-            let kind = parse_choice_kind(cleaned_choice, true, vocabulary)?;
-            emit_choice_for_player_ref(chooser_ref, kind, builder, ids, in_trigger)
+            if let Ok(kind) = parse_choice_kind(cleaned_choice, true, vocabulary) {
+                return emit_choice_for_player_ref(chooser_ref, kind, builder, ids, in_trigger);
+            }
+            interactive::try_lower_choose_option_ext(
+                chooser_ref,
+                cleaned_choice,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+            )
         }
         InstructionAst::Incubate { count } => {
             let amt = lower_value_expr_in_context(
@@ -16892,6 +16931,9 @@ pub(super) fn lower_instruction(
         InstructionAst::RingTemptsYou => {
             builder.instructions.push(Instruction::RingTemptsYou);
             Ok(())
+        }
+        InstructionAst::Populate { count } => {
+            interactive::lower_populate(count, builder, vocabulary, in_trigger, bound_x)
         }
         InstructionAst::VentureIntoDungeon { player } => {
             if let Some(players) = try_group_affected_players(*player) {
@@ -25324,6 +25366,7 @@ fn effect_mana_yield_uses_chosen_x(yield_spec: &EffectManaYield) -> bool {
         EffectManaYield::RetainedUntilCleanup(inner) => effect_mana_yield_uses_chosen_x(inner),
         EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
         | EffectManaYield::Counted { amount, .. }
+        | EffectManaYield::RestrictedCounted { amount, .. }
         | EffectManaYield::Split { amount, .. }
         | EffectManaYield::RestrictedChoice { amount, .. }
         | EffectManaYield::Choice { amount, .. }
@@ -25387,10 +25430,23 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
+        | Instruction::RevealTopTwoPiles { count: amount, .. }
         | Instruction::ModifyGroupByAmount { amount, .. }
         | Instruction::BoostTargetPower { amount, .. } => value_expr_uses_chosen_x(amount),
         Instruction::SelectZoneCardsToZone { min, max, .. } => {
             value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
+        }
+        Instruction::ChooseObjects {
+            min,
+            max,
+            max_total_power,
+            ..
+        } => {
+            value_expr_uses_chosen_x(min)
+                || value_expr_uses_chosen_x(max)
+                || max_total_power
+                    .as_ref()
+                    .is_some_and(value_expr_uses_chosen_x)
         }
         Instruction::RemoveCountersFromSubject { amount, .. }
         | Instruction::MoveCounters { amount, .. } => {
@@ -25552,6 +25608,7 @@ fn last_instruction_moved_object(ops: &[Instruction]) -> bool {
         Some(
             Instruction::MoveSubject { .. }
                 | Instruction::SelectZoneCardsToZone { .. }
+                | Instruction::ChooseObjects { .. }
                 | Instruction::MoveGroup { .. }
                 | Instruction::MoveGroupToLibrary { .. }
                 | Instruction::MoveGraveyardGroup { .. }
@@ -25576,6 +25633,7 @@ fn last_instruction_moved_object(ops: &[Instruction]) -> bool {
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::LookTopChoose { .. }
                 | Instruction::LookTopChooseExt { .. }
+                | Instruction::RevealTopTwoPiles { .. }
                 | Instruction::ExileGroupFromZone { .. }
                 | Instruction::ExileFromZone { .. }
                 | Instruction::ExileChosenPermanents { .. }
@@ -29645,6 +29703,7 @@ fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             | Instruction::Mill { .. }
             | Instruction::MoveSubject { .. }
             | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseObjects { .. }
             | Instruction::DestroyGroup(_)
             | Instruction::MoveGroup { .. }
             | Instruction::Blight { .. }
@@ -29690,12 +29749,12 @@ fn parse_card_type_choice_list(cleaned: &str) -> Option<Vec<CardType>> {
     (types.len() >= 2).then_some(types)
 }
 
-enum ParsedChoiceKind {
+pub(super) enum ParsedChoiceKind {
     Domain(spellwake_engine::program::ResolutionChoiceDomain),
     CreatureType { excluding: BTreeSet<CreatureTypeId> },
 }
 
-fn parse_choice_kind(
+pub(super) fn parse_choice_kind(
     cleaned_choice: &str,
     allow_arbitrary_or_labels: bool,
     vocabulary: &CreatureTypeVocabulary,
@@ -29870,7 +29929,7 @@ fn choice_domain_to_player_option_branches(
     )
 }
 
-fn emit_choice_for_player_ref(
+pub(super) fn emit_choice_for_player_ref(
     chooser: PlayerRefAst,
     kind: ParsedChoiceKind,
     builder: &mut BodyBuilder,
@@ -33102,6 +33161,7 @@ fn rewrite_chosen_to_loop_mana_yield(yield_kind: &mut EffectManaYield) {
         EffectManaYield::RetainedUntilCleanup(inner) => rewrite_chosen_to_loop_mana_yield(inner),
         EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
         | EffectManaYield::Counted { amount, .. }
+        | EffectManaYield::RestrictedCounted { amount, .. }
         | EffectManaYield::Split { amount, .. }
         | EffectManaYield::RestrictedChoice { amount, .. }
         | EffectManaYield::Choice { amount, .. }
@@ -33346,6 +33406,22 @@ fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_ve(max);
                 rewrite_chosen_to_loop_dest(destination);
             }
+            Instruction::ChooseObjects {
+                players,
+                min,
+                max,
+                max_total_power,
+                ..
+            } => {
+                if let AffectedPlayers::One(rp) = players {
+                    rewrite_chosen_to_loop_rp(rp);
+                }
+                rewrite_chosen_to_loop_ve(min);
+                rewrite_chosen_to_loop_ve(max);
+                if let Some(limit) = max_total_power {
+                    rewrite_chosen_to_loop_ve(limit);
+                }
+            }
             Instruction::LookTopChoose {
                 count,
                 library_owner,
@@ -33368,6 +33444,9 @@ fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             } => {
                 rewrite_chosen_to_loop_rp(library_owner);
                 rewrite_chosen_to_loop_rp(chooser);
+                rewrite_chosen_to_loop_ve(count);
+            }
+            Instruction::RevealTopTwoPiles { count, .. } => {
                 rewrite_chosen_to_loop_ve(count);
             }
             Instruction::OfferManaPayment { payer, .. } => {

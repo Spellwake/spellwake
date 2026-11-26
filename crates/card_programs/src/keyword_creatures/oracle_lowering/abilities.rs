@@ -2438,6 +2438,10 @@ fn try_lower_mana_abilities(
                                 scope,
                             ),
                         );
+                    } else if let Some(dynamic_r) =
+                        interactive::parse_dynamic_mana_output_restriction(r, vocabulary)
+                    {
+                        restriction = Some(dynamic_r);
                     } else {
                         restriction = Some(spellwake_engine::mana::ManaOutputRestriction::Fixed(
                             parse_mana_restriction(r, vocabulary)?,
@@ -2614,6 +2618,15 @@ fn try_lower_mana_abilities(
             {
                 vec![ManaOutput::TwoColors { distinct: true }]
             }
+            ManaSpecAst::CombinationOf { amount, symbols }
+                if matches!(amount.as_ref(), ValueExprAst::Const(2))
+                    && symbols.len() == 5
+                    && symbols.iter().all(|s| {
+                        parse_single_mana_type(s).is_some_and(|m| m != ManaType::Colourless)
+                    }) =>
+            {
+                vec![ManaOutput::TwoColors { distinct: false }]
+            }
             ManaSpecAst::ScaledSymbol { symbol, amount } => {
                 let mt = parse_single_mana_type(symbol)?;
                 let ValueExprAst::Count(filter) = amount.as_ref() else {
@@ -2760,7 +2773,7 @@ fn try_lower_mana_abilities(
             return None;
         }
 
-        if let Some(res) = restriction {
+        if let Some(res) = restriction.clone() {
             output = output.with_modifier(ManaOutputModifier::Restrict(res));
         }
         if let Some(se) = spend_effect {
@@ -3197,7 +3210,7 @@ pub(super) fn parse_mana_restriction(
             {
                 return Some(ManaRestriction::CreatureSpellOrAbilityOfType(Some(ct)));
             }
-            None
+            interactive::parse_predicate_mana_restriction(raw, vocabulary)
         }
     }
 }

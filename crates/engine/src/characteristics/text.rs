@@ -302,6 +302,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     other => other,
                 };
                 if let crate::program::EffectManaYield::Counted { amount, .. }
+                | crate::program::EffectManaYield::RestrictedCounted { amount, .. }
+                | crate::program::EffectManaYield::RestrictedChoice { amount, .. }
                 | crate::program::EffectManaYield::RetainedUntilEndOfCombat {
                     amount, ..
                 }
@@ -357,6 +359,18 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 rewrite_amount(min);
                 rewrite_amount(max);
             }
+            Instruction::ChooseObjects {
+                min,
+                max,
+                max_total_power,
+                ..
+            } => {
+                rewrite_amount(min);
+                rewrite_amount(max);
+                if let Some(limit) = max_total_power {
+                    rewrite_amount(limit);
+                }
+            }
             Instruction::Sacrifice { amount, .. }
             | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
@@ -398,6 +412,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::SelectZoneCardsToZone { filter, .. }
+            | Instruction::ChooseObjects { filter, .. }
             | Instruction::RevealUntilMatch { filter, .. }
             | Instruction::MoveGraveyardGroup { filter, .. }
             | Instruction::PutHandPermanentFiltered { filter, .. } => {
@@ -877,6 +892,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
             }
+            Instruction::RevealTopTwoPiles { count, .. } => {
+                rewrite_amount(count);
+            }
             Instruction::CreateTokenCopyExt {
                 count,
                 extra_subtypes,
@@ -909,6 +927,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::CopyEntrantOnceEachTurn
             | Instruction::CopyCreatureAsToken
             | Instruction::CopyDifferentlyNamedTokens
+            | Instruction::Populate
             | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::Bolster(_)
             | Instruction::UntapUpTo { .. }

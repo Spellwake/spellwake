@@ -427,7 +427,7 @@ export const playerSeatViewSchema = z.strictObject({
   handCount: rulesCountSchema,
   libraryCount: rulesCountSchema,
   eliminated: z.boolean(),
-}).refine((seat) => uniquePlayerValues(seat.restrictedMana ?? [], (item) => `${item.color}:${item.restriction}:${item.creatureType ?? ""}`)
+}).refine((seat) => uniquePlayerValues(seat.restrictedMana ?? [], (item) => `${item.color}:${item.restriction}:${item.creatureType ?? ""}:${item.minManaValue ?? ""}:${item.predicate ? JSON.stringify(item.predicate) : ""}`)
   && (seat.restrictedMana ?? []).every((item) => BigInt(item.amount) <= BigInt(seat.manaPool.find((pool) => pool.color === item.color)?.amount ?? "0"))
   && seat.manaPool.every((pool) => (seat.restrictedMana ?? []).filter((item) => item.color === pool.color).reduce((sum, item) => sum + BigInt(item.amount), 0n) <= BigInt(pool.amount)));
 export const playerTurnSchema = z.strictObject({

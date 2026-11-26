@@ -980,6 +980,7 @@ enum Op {
     ReplaceSourceCreatedTokens {},
     CopyEntrantOnceEachTurn {},
     CopyDifferentlyNamedTokens {},
+    Populate {},
     CopyOtherControlledNontokensAsEntryHost {},
     Bolster {
         amount: u16,
@@ -4667,6 +4668,7 @@ impl Body {
                     Op::CopyCreatureAsToken {} => Instruction::CopyCreatureAsToken,
                     Op::CopyOtherControlledNontokensAsEntryHost {} => Instruction::CopyOtherControlledNontokensAsEntryHost,
                     Op::CopyDifferentlyNamedTokens {} => Instruction::CopyDifferentlyNamedTokens,
+                    Op::Populate {} => Instruction::Populate,
                     Op::Bolster {amount} => Instruction::Bolster(amount),
                     Op::CreateArmyIfAbsent { army, subtype } => Instruction::CreateArmyIfAbsent {
                         army: creature_types::id(army, vocabulary)?, subtype: creature_types::id(subtype, vocabulary)?,
@@ -10735,6 +10737,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                 spellwake_engine::program::EffectManaYield::Fixed(produced) => json!({"op":"AddFixedMana","produced":mana_values(produced)}),
                 spellwake_engine::program::EffectManaYield::RestrictedChoice { colors, .. } => json!({"op":"AddRestrictedManaChoice","colors":colors.iter().map(|color|format!("{color:?}")).collect::<Vec<_>>()}),
                 spellwake_engine::program::EffectManaYield::RestrictedFixed { bundle, restriction } => json!({"op":"AddRestrictedFixedMana","produced":mana_values(bundle),"restriction":format!("{restriction:?}")}),
+                spellwake_engine::program::EffectManaYield::RestrictedCounted { kind, amount, restriction } => json!({"op":"AddRestrictedCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount),"restriction":format!("{restriction:?}")}),
                 spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(kind) => json!({"op":"AddCombatDamageManaUntilCleanup","kind":format!("{kind:?}")}),
                 spellwake_engine::program::EffectManaYield::RetainedUntilEndOfCombat { kind, amount } => json!({"op":"AddRetainedUntilEndOfCombatMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),
                 spellwake_engine::program::EffectManaYield::Counted { kind, amount } => json!({"op":"AddCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),
@@ -10815,6 +10818,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::CopyCreatureAsToken => json!({"op":"CopyCreatureAsToken"}),
             Instruction::CopyOtherControlledNontokensAsEntryHost => json!({"op":"CopyOtherControlledNontokensAsEntryHost"}),
             Instruction::CopyDifferentlyNamedTokens => json!({"op":"CopyDifferentlyNamedTokens"}),
+            Instruction::Populate => json!({"op":"Populate"}),
             Instruction::Bolster(amount) => json!({"op":"Bolster","amount":amount}),
             Instruction::CreateArmyIfAbsent { army, subtype } => json!({"op":"CreateArmyIfAbsent","army":projection::creature_type_id(*army),"subtype":projection::creature_type_id(*subtype)}),
             Instruction::Amass { army, subtype, amount } => json!({"op":"Amass","army":projection::creature_type_id(*army),"subtype":projection::creature_type_id(*subtype),"amount":amount}),
@@ -11478,6 +11482,9 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::SelectZoneCardsToZone { player, source_zone, filter, min, max, destination, reveal } => {
                 json!({"op":"SelectZoneCardsToZone","player":format!("{player:?}"),"source_zone":format!("{source_zone:?}"),"filter":format!("{filter:?}"),"min":instruction_amount(min),"max":instruction_amount(max),"destination":format!("{destination:?}"),"reveal":reveal})
             }
+            Instruction::ChooseObjects { players, source_zone, filter, min, max, distinct_powers, max_total_power, unchosen_action } => {
+                json!({"op":"ChooseObjects","players":format!("{players:?}"),"source_zone":format!("{source_zone:?}"),"filter":format!("{filter:?}"),"min":instruction_amount(min),"max":instruction_amount(max),"distinct_powers":distinct_powers,"max_total_power":max_total_power.as_ref().map(instruction_amount),"unchosen_action":format!("{unchosen_action:?}")})
+            }
             Instruction::ChooseOption { chooser, options } => {
                 json!({"op":"ChooseOption","chooser":format!("{chooser:?}"),"options":options.len()})
             }
@@ -11623,6 +11630,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::UntapOrTapSelect { chooser, filter, count, up_to, tap } => json!({"op":"UntapOrTapSelect","chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"up_to":up_to,"tap":tap}),
             Instruction::MoveGraveyardGroupOwned { players, filter, destination } => json!({"op":"MoveGraveyardGroupOwned","players":format!("{players:?}"),"filter":format!("{filter:?}"),"destination":format!("{destination:?}")}),
             Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
+            Instruction::RevealTopTwoPiles { count, controller_divides, target_opponent, chosen_dest, other_dest } => json!({"op":"RevealTopTwoPiles","count":instruction_amount(count),"controller_divides":controller_divides,"target_opponent":target_opponent,"chosen_dest":format!("{chosen_dest:?}"),"other_dest":format!("{other_dest:?}")}),
             Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}")}),
             Instruction::CreateTokenCopyExt { source, count, recipients, enters_tapped, enters_attacking, haste, sacrifice_at_end_step, exile_at_end_step, nonlegendary, extra_types, extra_subtypes, extra_keywords, override_pt, extra_colors, defender_scope } => json!({"op":"CreateTokenCopyExt","source":format!("{source:?}"),"count":instruction_amount(count),"recipients":format!("{recipients:?}"),"enters_tapped":enters_tapped,"enters_attacking":enters_attacking,"haste":haste,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"nonlegendary":nonlegendary,"extra_types":format!("{extra_types:?}"),"extra_subtypes":format!("{extra_subtypes:?}"),"extra_keywords":format!("{extra_keywords:?}"),"override_pt":format!("{override_pt:?}"),"extra_colors":format!("{extra_colors:?}"),"defender_scope":format!("{defender_scope:?}")}),
             Instruction::MoveCounters { from, to, kind, all, any_number, amount } => json!({"op":"MoveCounters","from":format!("{from:?}"),"to":format!("{to:?}"),"kind":format!("{kind:?}"),"all":all,"any_number":any_number,"amount":amount.as_ref().map(instruction_amount)}),

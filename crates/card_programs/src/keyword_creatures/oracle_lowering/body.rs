@@ -19956,13 +19956,24 @@ pub(super) fn lower_instruction_seq(
                 }
             }
         }
-        // Fuse LookTopLibrary + ChooseAndKeep (e.g. Anticipate, Impulse, Sleight of Hand, Forbidden Alchemy, Commune, Mulch, Collected Company, Dig Through Time, Dimir Charm)
+        // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + SeparateIntoPiles (+ optional ChoosePile) + ChooseAndKeep("one pile"/"that pile") -> RevealTopTwoPiles
+        if let Some(consumed) =
+            interactive::try_fuse_two_pile_split(ins, i, builder, vocabulary, in_trigger, bound_x)
+        {
+            i += consumed;
+            continue;
+        }
+        // Fuse ChooseFromGroup / InteractiveChoice(ChooseFromGroup) + Destroy/Exile/Return/Sacrifice/Discard/Tap of unchosen rest -> ChooseObjects
+        if let Some(consumed) = interactive::try_fuse_choose_objects_and_rest(
+            ins, i, builder, vocabulary, in_trigger, bound_x,
+        ) {
+            i += consumed;
+            continue;
+        }
+        // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + ChooseAndKeep (e.g. Anticipate, Impulse, Worldly Counsel, Thassa's Oracle, Memory Deluge)
         if i + 1 < ins.len()
-            && let InstructionAst::LookTopLibrary {
-                reveal,
-                library,
-                count,
-            } = &ins[i]
+            && let Some((reveal_val, library, count, eff_bound_x)) =
+                interactive::unwrap_look_top_with_bind_x(&ins[i], bound_x)
             && let Some((req_bt, library_owner)) =
                 parse_look_top_library_owner(library, builder, in_trigger)
             && let InstructionAst::ChooseAndKeep {
@@ -19971,6 +19982,7 @@ pub(super) fn lower_instruction_seq(
                 rest_to,
             } = &ins[i + 1]
         {
+            let reveal = &reveal_val;
             let keep_low = keep_to.to_ascii_lowercase();
             let rest_low = rest_to.to_ascii_lowercase();
             let keep_dest_opt = parse_look_top_keep_dest_ext(keep_to, false);
@@ -20034,11 +20046,21 @@ pub(super) fn lower_instruction_seq(
                     | "up to two"
                     | "up to two of them"
                     | "two of those cards"
+                    | "up to two of those cards"
                     | "up to two cards from among them" => Some(2),
-                    "three" | "3" | "three of them" | "up to three" | "up to three of them" => {
-                        Some(3)
-                    }
-                    "four" | "4" | "four of them" | "up to four" | "up to four of them" => Some(4),
+                    "three"
+                    | "3"
+                    | "three of them"
+                    | "three of those cards"
+                    | "up to three"
+                    | "up to three of them"
+                    | "up to three of those cards" => Some(3),
+                    "four"
+                    | "4"
+                    | "four of them"
+                    | "four of those cards"
+                    | "up to four"
+                    | "up to four of them" => Some(4),
                     _ => None,
                 };
                 let (take_all_matching, max_picks, filter_opt): (
@@ -20052,9 +20074,11 @@ pub(super) fn lower_instruction_seq(
                 } else if let Some(rest) = pick_low
                     .strip_prefix("all ")
                     .or_else(|| pick_low.strip_prefix("each "))
+                    .or_else(|| pick_low.strip_prefix("those "))
                 {
                     let cleaned = rest
                         .trim_end_matches(" revealed this way")
+                        .trim_end_matches(" from among them")
                         .trim_end_matches(" cards")
                         .trim_end_matches(" card")
                         .trim();
@@ -20104,7 +20128,7 @@ pub(super) fn lower_instruction_seq(
                     )
                 };
                 if let Some(maybe_filter) = filter_opt {
-                    let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
+                    let cnt = lower_value_expr(resolve_x(count, eff_bound_x), vocabulary)?;
                     let mut probe = builder.clone();
                     if req_bt.is_none_or(|bt| probe.bind_target(bt).is_ok()) {
                         *builder = probe;
@@ -20408,13 +20432,9 @@ pub(super) fn lower_instruction_seq(
         if let Some(reveal_player) = hand_reveal_player {
             let mut fused_step = 0usize;
             let mut chosen_spec: Option<(u8, Option<ObjectFilterAst>, ChosenHandAction)> = None;
-            // 3-step pattern: RevealHand/LookAtHand + ChooseOption("<count?> <filter> from it/them") + Discard/Exile(anaphora)
+            // 3-step pattern: RevealHand/LookAtHand + ChooseOption/InteractiveChoice("<count?> <filter> from it/them") + Discard/Exile(anaphora)
             if i + 2 < ins.len()
-                && let InstructionAst::ChooseOption(opt_desc) = &ins[i + 1]
-                && let Some(core_desc) = opt_desc
-                    .trim()
-                    .strip_suffix(" from it")
-                    .or_else(|| opt_desc.trim().strip_suffix(" from them"))
+                && let Some(core_desc) = interactive::extract_revealed_hand_choice_desc(&ins[i + 1])
             {
                 let action_opt = match &ins[i + 2] {
                     InstructionAst::Discard {
@@ -20760,6 +20780,46 @@ pub(super) fn lower_instruction_seq(
                 }
                 i += step_len;
                 continue;
+            }
+        }
+        // Fold ManaSpendRestriction onto a preceding AddMana / AddManaForPlayer or impulse play permission.
+        if let InstructionAst::ManaSpendRestriction(r) = &ins[i] {
+            if let Some(restriction) = parse_mana_restriction(r, vocabulary) {
+                let mut patched = false;
+                for op in builder.instructions.iter_mut().rev() {
+                    if interactive::restrict_mana_in_instruction(op, &restriction) {
+                        patched = true;
+                        break;
+                    }
+                    if matches!(
+                        op,
+                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                    ) {
+                        break;
+                    }
+                }
+                if patched {
+                    i += 1;
+                    continue;
+                }
+            } else if is_any_color_spend_restriction(&ins[i]) {
+                let mut patched = false;
+                for op in builder.instructions.iter_mut().rev() {
+                    if interactive::patch_any_color_cast_permission(op) {
+                        patched = true;
+                        break;
+                    }
+                    if matches!(
+                        op,
+                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                    ) {
+                        break;
+                    }
+                }
+                if patched {
+                    i += 1;
+                    continue;
+                }
             }
         }
         // Fold RetainManaUntilEndOfTurn (or retention ManaSpendRestriction) onto prior straight-line AddMana
