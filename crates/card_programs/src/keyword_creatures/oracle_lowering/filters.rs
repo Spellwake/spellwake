@@ -3650,6 +3650,12 @@ pub(super) fn lower_object_filter(
     let mut subtypes_match_any = false;
     for pred in &f.predicates {
         match pred {
+            FilterPredicateAst::HasAbilityKind {
+                kind,
+                negated: false,
+            } if kind == "adventure" => {
+                clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ADVENTURE);
+            }
             FilterPredicateAst::SubtypesMatchAny => {
                 subtypes_match_any = true;
             }
@@ -6528,6 +6534,20 @@ fn lower_value_expr_inner(
         }
         ValueExprAst::DistinctCountAmong { category, filter } => {
             match category.trim().to_ascii_lowercase().as_str() {
+                "different_powers" | "different powers" => {
+                    if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                        || filter.any_types != AstCardTypeMask::CREATURE
+                        || filter.any_spell
+                    {
+                        return Err("oracle:unsupported-value-expr");
+                    }
+                    let obj = lower_object_filter(filter, vocabulary)?;
+                    Ok(ValueExpr::aggregate(
+                        obj,
+                        ObjectStatKind::Power,
+                        StatAggregate::CountDistinct,
+                    ))
+                }
                 "colors" => {
                     if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                         || filter.any_spell
@@ -7171,4 +7191,36 @@ pub(super) fn strip_matching_chooser(f: &ObjectFilterAst, actor: PlayerRefAst) -
         )
     });
     out
+}
+
+#[cfg(test)]
+mod wave12_adventure_filter_tests {
+    use super::*;
+
+    #[test]
+    fn wave12_typed_adventure_predicate_preserves_qualification() {
+        let vocabulary =
+            CreatureTypeVocabulary::new("wave12-adventure".into(), [0; 32], vec!["Human".into()])
+                .expect("test vocabulary");
+        let mut filter = ObjectFilterAst::default();
+        filter.predicates.push(FilterPredicateAst::HasAbilityKind {
+            kind: "adventure".into(),
+            negated: false,
+        });
+        assert!(
+            lower_object_filter(&filter, &vocabulary)
+                .expect("adventure filter")
+                .has_flag(ObjectFilterFlags::HAS_ADVENTURE)
+        );
+        filter.predicates = vec![FilterPredicateAst::HasAbilityKind {
+            kind: "adventure".into(),
+            negated: true,
+        }];
+        assert!(lower_object_filter(&filter, &vocabulary).is_err());
+        filter.predicates = vec![FilterPredicateAst::HasAbilityKind {
+            kind: "unrepresented".into(),
+            negated: false,
+        }];
+        assert!(lower_object_filter(&filter, &vocabulary).is_err());
+    }
 }

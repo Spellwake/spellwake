@@ -1675,6 +1675,12 @@ pub enum TemporaryRuleKind {
     NextSpellFree {
         filter: Option<ObjectFilter>,
     },
+    /// Grant convoke or improvise to the controller's next matching spell.
+    /// A successful matching cast consumes every such grant even if the keyword is not used.
+    NextSpellKeyword {
+        filter: ObjectFilter,
+        keyword: KeywordAbility,
+    },
     /// Duration-scoped zone replacement effect (e.g. Yawgmoth's Will, Hallowed Moonlight, Cosmic Intervention).
     TemporaryZoneReplacement(Box<ZoneReplacementAbility>),
     DamageCantBePrevented,
@@ -4762,6 +4768,9 @@ impl Instruction {
             Self::PreventDamageThisTurn(filter) => matches!(
                 filter,
                 crate::damage::TurnPreventionFilter::ToTarget
+                    | crate::damage::TurnPreventionFilter::FromTarget
+                    | crate::damage::TurnPreventionFilter::CombatFromTarget
+                    | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                     | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget
             ),
             Self::OfferManaPayment { payer, .. } | Self::OfferDynamicManaPayment { payer, .. } => {
@@ -5240,7 +5249,8 @@ impl Instruction {
                 TemporaryRuleKind::SpellCostIncrease {
                     players, filter, ..
                 } => is_target_affected(*players) || filter_uses_target(filter),
-                TemporaryRuleKind::SpellCostReduction { filter, .. } => filter_uses_target(filter),
+                TemporaryRuleKind::SpellCostReduction { filter, .. }
+                | TemporaryRuleKind::NextSpellKeyword { filter, .. } => filter_uses_target(filter),
                 TemporaryRuleKind::SpellCostReductionExpr { filter, amount, .. } => {
                     filter_uses_target(filter) || amount.uses_target()
                 }
@@ -6524,6 +6534,10 @@ impl Instruction {
                     crate::damage::TurnPreventionFilter::Combat
                         | crate::damage::TurnPreventionFilter::All
                         | crate::damage::TurnPreventionFilter::ToAbilitySource
+                        | crate::damage::TurnPreventionFilter::FromAbilitySource
+                        | crate::damage::TurnPreventionFilter::CombatFromAbilitySource
+                        | crate::damage::TurnPreventionFilter::Creatures
+                        | crate::damage::TurnPreventionFilter::CombatFromCreatures
                         | crate::damage::TurnPreventionFilter::CombatToOrFromAbilitySource
                         | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
                         | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
@@ -7842,8 +7856,20 @@ impl ExecutableBody {
                 }
                 Instruction::PreventDamageThisTurn(
                     crate::damage::TurnPreventionFilter::ToTarget
+                    | crate::damage::TurnPreventionFilter::FromTarget
+                    | crate::damage::TurnPreventionFilter::CombatFromTarget
+                    | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                     | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget,
                 ) => Some(OperandFamily::Permanent),
+                Instruction::PreventDamageThisTurn(
+                    crate::damage::TurnPreventionFilter::FromAbilitySource
+                    | crate::damage::TurnPreventionFilter::CombatFromAbilitySource,
+                ) => {
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    None
+                }
                 Instruction::TakeExtraTurn
                 | Instruction::DisallowDamagePreventionThisTurn
                 | Instruction::GrantNoMaxHandSizeRestOfGame
@@ -12705,6 +12731,15 @@ impl ExecutableBody {
                             _ => None,
                         }
                     }
+                    TemporaryRuleKind::NextSpellKeyword { filter, keyword } => {
+                        if !matches!(keyword, KeywordAbility::Convoke | KeywordAbility::Improvise) {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        None
+                    }
                     TemporaryRuleKind::FilteredFlash { player, filter, .. } => {
                         filter
                             .validate_vocabulary(vocabulary)
@@ -14091,8 +14126,9 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::TransformSource => {
-                    if self.target != BodyTarget::None {
-                        return Err(DefinitionError::OperandFamily);
+                    // This operand reads the captured ability source, independently of targets.
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
                     }
                     None
                 }
@@ -14112,7 +14148,7 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::BecomePreparedSource => {
-                    if self.target != BodyTarget::None || !context.has_source() {
+                    if !context.has_source() {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     None

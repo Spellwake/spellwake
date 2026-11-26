@@ -7815,6 +7815,9 @@ impl EffectWindow {
             let before = self.rules_snapshot(None)?;
             let source = match filter {
                 crate::damage::TurnPreventionFilter::ToTarget
+                | crate::damage::TurnPreventionFilter::FromTarget
+                | crate::damage::TurnPreventionFilter::CombatFromTarget
+                | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                 | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget => {
                     let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target
                     else {

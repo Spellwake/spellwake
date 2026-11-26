@@ -1653,36 +1653,136 @@ struct ResolutionConditionWire {
     right: ConditionValueWire,
 }
 #[derive(Deserialize)]
+enum ObjectStatWire {
+    Power,
+    Toughness,
+    ManaValue,
+    Loyalty,
+}
+
+impl From<ObjectStatWire> for ObjectStatKind {
+    fn from(value: ObjectStatWire) -> Self {
+        match value {
+            ObjectStatWire::Power => Self::Power,
+            ObjectStatWire::Toughness => Self::Toughness,
+            ObjectStatWire::ManaValue => Self::ManaValue,
+            ObjectStatWire::Loyalty => Self::Loyalty,
+        }
+    }
+}
+
+// This codec's group vocabulary is deliberately bounded. Do not use the broader
+// legacy projection when a subtype match would discard additional filter fields.
+fn distinct_stat_filter_wire(filter: ObjectFilter) -> Value {
+    let mut exact = [
+        ObjectFilter::creature(),
+        ObjectFilter::creature().controlled(),
+        ObjectFilter::creature().opposing(),
+        ObjectFilter::creature()
+            .controlled()
+            .other_than_ability_source(),
+        ObjectFilter::creature().controlled().attacking(),
+        ObjectFilter::creature()
+            .controlled()
+            .with_power(PowerFilter::AtLeast(4)),
+    ]
+    .contains(&filter);
+    if let ObjectFilter::Clause(clause) = filter
+        && let SubtypeFilter::Has(kind) = clause.subtypes
+    {
+        exact |= [
+            ObjectFilter::creature().with_subtype(kind),
+            ObjectFilter::creature().controlled().with_subtype(kind),
+            ObjectFilter::creature()
+                .controlled()
+                .other_than_ability_source()
+                .with_subtype(kind),
+        ]
+        .contains(&filter);
+    }
+    if exact {
+        effect_group_wire(spellwake_engine::program::EffectSubject::Matching(filter))
+    } else {
+        json!(format!("unsupported distinct-stat filter: {filter:?}"))
+    }
+}
+
+fn distinct_stat_value(
+    group: &GroupWire,
+    stat: ObjectStatWire,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<ValueExpr, String> {
+    let spellwake_engine::program::EffectSubject::Matching(filter) =
+        effect_group(group, vocabulary)?
+    else {
+        return Err("distinct statistics require a matching object filter".into());
+    };
+    Ok(ValueExpr::aggregate(
+        filter,
+        stat.into(),
+        StatAggregate::CountDistinct,
+    ))
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "tag", deny_unknown_fields)]
 enum ConditionValueWire {
+    DistinctStatValues {
+        group: GroupWire,
+        stat: ObjectStatWire,
+    },
     PaidAlternative,
     ChosenX,
     CastDuringOwnMain,
     CastFromGraveyard,
     DeclaredAttackersAtController,
     Bargained,
-    KickerCount { index: usize },
-    Literal { value: RulesInteger },
+    KickerCount {
+        index: usize,
+    },
+    Literal {
+        value: RulesInteger,
+    },
     ControllerLife {},
+    PlayerIsActivePlayer {
+        player: ResolvingPlayerWire,
+    },
     ControllerLifeAboveStarting {},
-    RevealedTopHasType { first: String, second: String },
+    RevealedTopHasType {
+        first: String,
+        second: String,
+    },
     ControllerExperienceCounters {},
     TargetGraveyardCardManaValue {},
     CreaturesDiedThisTurn {},
     LastSacrificeSucceeded {},
-    DiscardedCardOfType { kind: String },
-    DestructionTargetHadSubtype { subtype: Value },
+    DiscardedCardOfType {
+        kind: String,
+    },
+    DestructionTargetHadSubtype {
+        subtype: Value,
+    },
     SourceAttackedThisTurn {},
     SelectedGraveyardExileCreatures {},
     ControllerGraveyardSize {},
-    DyingCreatureHasSubtype { subtype: Value },
-    SacrificedCreatureHadSubtype { subtype: Value },
-    TargetCreatureHasSubtype { subtype: Value },
+    DyingCreatureHasSubtype {
+        subtype: Value,
+    },
+    SacrificedCreatureHadSubtype {
+        subtype: Value,
+    },
+    TargetCreatureHasSubtype {
+        subtype: Value,
+    },
     TriggerSourceOnBattlefield {},
     GreatestControlledCreaturePower {},
     ControlsGreatestCreature {},
-    ControlledPermanentsOfSubtype { subtype: Value },
-    ControlledPermanentsOfType { kind: String },
+    ControlledPermanentsOfSubtype {
+        subtype: Value,
+    },
+    ControlledPermanentsOfType {
+        kind: String,
+    },
     TotalControlledCreaturePower {},
     ControllerIsMonarch {},
     MatchedOccurrences {},
@@ -1690,6 +1790,9 @@ enum ConditionValueWire {
 impl ConditionValueWire {
     fn native(self, vocabulary: &CreatureTypeVocabulary) -> Result<ValueExpr, String> {
         Ok(match self {
+            Self::DistinctStatValues { group, stat } => {
+                distinct_stat_value(&group, stat, vocabulary)?
+            }
             Self::Literal { value } => ValueExpr::Literal(value),
             Self::PaidAlternative => ValueExpr::event(EventValueKind::PaidAlternative),
             Self::ChosenX => ValueExpr::chosen_x(),
@@ -1700,6 +1803,9 @@ impl ConditionValueWire {
             }
             Self::Bargained => ValueExpr::event(EventValueKind::Bargained),
             Self::KickerCount { index } => ValueExpr::event(EventValueKind::KickerCount(index)),
+            Self::PlayerIsActivePlayer { player } => {
+                ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player.into()))
+            }
             Self::ControllerLife {} => ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
             Self::ControllerLifeAboveStarting {} => {
                 ValueExpr::PlayerStat(PlayerStatExpr::ControllerLifeAboveStarting)
@@ -1836,18 +1942,33 @@ impl LifeAdjustmentWire {
 #[derive(Deserialize)]
 #[serde(tag = "tag", deny_unknown_fields)]
 enum Amount {
-    AbilitySourceCounters { kind: String },
+    DistinctStatValues {
+        group: GroupWire,
+        stat: ObjectStatWire,
+    },
+    PlayerIsActivePlayer {
+        player: ResolvingPlayerWire,
+    },
+    AbilitySourceCounters {
+        kind: String,
+    },
     AbilitySourcePower {},
     GreatestControlledCreaturePower {},
     TargetCreaturePower {},
     TargetCreatureToughness {},
     TriggeringLifeChange {},
-    OtherControlledCreaturesTimes { multiplier: u16 },
+    OtherControlledCreaturesTimes {
+        multiplier: u16,
+    },
     OpponentsLifeLostThisTurn {},
-    CardsShortOfHandSize { cards: u8 },
+    CardsShortOfHandSize {
+        cards: u8,
+    },
     LargestHandSize {},
     TargetPlayerHandSize {},
-    PaidCreatureTapsTimes { factor: u16 },
+    PaidCreatureTapsTimes {
+        factor: u16,
+    },
     PaidNamedCounters {},
     TargetPlayerTappedCreatures {},
     TriggeringSpellManaValue {},
@@ -1866,7 +1987,9 @@ enum Amount {
     ExiledCostCreaturePower {},
     GreatestOtherControlledCreaturePower {},
     OtherControlledCreaturesSharingSourceType {},
-    OneOrTwoByDyingPower { minimum: u16 },
+    OneOrTwoByDyingPower {
+        minimum: u16,
+    },
     LargestDiscard {},
     DestroyedPermanents {},
     ExiledMilledCreaturePower {},
@@ -1884,17 +2007,31 @@ enum Amount {
     AttackingCreatures {},
     CreaturesAttackingController {},
     ChosenX {},
-    ChosenXTimes { multiplier: std::num::NonZeroU16 },
-    ControlledPermanentsOfSubtype { kind: Value },
-    HalfControlledPermanentsOfSubtype { kind: Value },
-    ControlledPermanentsOfType { card_type: String },
+    ChosenXTimes {
+        multiplier: std::num::NonZeroU16,
+    },
+    ControlledPermanentsOfSubtype {
+        kind: Value,
+    },
+    HalfControlledPermanentsOfSubtype {
+        kind: Value,
+    },
+    ControlledPermanentsOfType {
+        card_type: String,
+    },
     ControlledColorlessCreatures {},
     OwnGraveyardCreatures {},
     OwnGraveyardInstantsOrSorceries {},
-    ControlledCreaturesOfColor { color: String },
+    ControlledCreaturesOfColor {
+        color: String,
+    },
     ControlledCreaturesWithPlusOneCounters {},
-    Literal { value: RulesInteger },
-    ControlledPermanentsOfChosenType { chosen: Value },
+    Literal {
+        value: RulesInteger,
+    },
+    ControlledPermanentsOfChosenType {
+        chosen: Value,
+    },
     MatchedOccurrences {},
 }
 
@@ -1907,6 +2044,12 @@ enum LookCount {
 impl Amount {
     fn native(self, vocabulary: &CreatureTypeVocabulary) -> Result<ValueExpr, String> {
         Ok(match self {
+            Self::DistinctStatValues { group, stat } => {
+                distinct_stat_value(&group, stat, vocabulary)?
+            }
+            Self::PlayerIsActivePlayer { player } => {
+                ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player.into()))
+            }
             Self::AbilitySourceCounters { kind } => ValueExpr::counters(
                 CounterSubjectRef::AbilitySource,
                 Some(
@@ -4501,6 +4644,13 @@ impl Body {
                         use spellwake_engine::damage::TurnPreventionFilter;
                         Instruction::PreventDamageThisTurn(match filter.as_str() {
                             "ToTarget" => TurnPreventionFilter::ToTarget,
+                        "FromAbilitySource" => TurnPreventionFilter::FromAbilitySource,
+                        "CombatFromAbilitySource" => TurnPreventionFilter::CombatFromAbilitySource,
+                        "FromTarget" => TurnPreventionFilter::FromTarget,
+                        "CombatFromTarget" => TurnPreventionFilter::CombatFromTarget,
+                        "CombatToOrFromTarget" => TurnPreventionFilter::CombatToOrFromTarget,
+                        "Creatures" => TurnPreventionFilter::Creatures,
+                        "CombatFromCreatures" => TurnPreventionFilter::CombatFromCreatures,
                             "CombatToOrFromAbilitySource" => TurnPreventionFilter::CombatToOrFromAbilitySource,
                             "CombatFromCreaturesOtherThanTarget" => TurnPreventionFilter::CombatFromCreaturesOtherThanTarget,
                             "ToAbilitySource" => TurnPreventionFilter::ToAbilitySource,
@@ -9942,6 +10092,16 @@ fn single_color_in_filter(filter: ObjectColorFilter) -> Option<Color> {
 
 pub fn instruction_amount(value: &ValueExpr) -> Value {
     match value {
+        ValueExpr::Aggregate {
+            filter,
+            stat,
+            op: StatAggregate::CountDistinct,
+        } => {
+            json!({"tag":"DistinctStatValues","group":distinct_stat_filter_wire(**filter),"stat":format!("{stat:?}")})
+        }
+        ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player)) => {
+            json!({"tag":"PlayerIsActivePlayer","player":format!("{player:?}")})
+        }
         ValueExpr::CounterCount {
             subject: CounterSubjectRef::AbilitySource,
             kind: Some(kind),
@@ -10333,6 +10493,13 @@ pub fn token_definition(value: &TokenDefinition) -> Value {
 pub fn resolution_condition(value: &ResolutionCondition) -> Value {
     fn operand(value: &ValueExpr) -> Value {
         match value {
+            ValueExpr::Aggregate {
+                filter,
+                stat,
+                op: StatAggregate::CountDistinct,
+            } => {
+                json!({"tag":"DistinctStatValues","group":distinct_stat_filter_wire(**filter),"stat":format!("{stat:?}")})
+            }
             ValueExpr::Literal(value) => json!({"tag":"Literal","value":value}),
             ValueExpr::EventValue(EventValueKind::PaidAlternative) => {
                 json!({"tag":"PaidAlternative"})
@@ -10380,6 +10547,9 @@ pub fn resolution_condition(value: &ResolutionCondition) -> Value {
             }
             ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsMonarch) => {
                 json!({"tag":"ControllerIsMonarch"})
+            }
+            ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player)) => {
+                json!({"tag":"PlayerIsActivePlayer","player":format!("{player:?}")})
             }
             ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer) => {
                 json!({"tag":"ControllerIsActivePlayer"})
@@ -14151,6 +14321,132 @@ pub fn token_member(value: &Value) -> Result<spellwake_engine::token::TokenBatch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wave10_player_turn_condition_and_amount_codec_preserve_roles() {
+        let vocabulary = super::super::creature_types::synthetic_vocabulary();
+        for role in [
+            ResolvingPlayer::Controller,
+            ResolvingPlayer::UniqueRelatedPlayer,
+            ResolvingPlayer::TargetPlayer,
+        ] {
+            let expr = ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(role));
+            let encoded = instruction_amount(&expr);
+            let decoded: Amount = serde_json::from_value(encoded.clone()).unwrap();
+            assert_eq!(decoded.native(&vocabulary).unwrap(), expr);
+            let condition = ResolutionCondition {
+                left: expr,
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            };
+            let decoded: ResolutionConditionWire =
+                serde_json::from_value(resolution_condition(&condition)).unwrap();
+            assert_eq!(decoded.native(&vocabulary).unwrap(), condition);
+            let mut invalid = encoded;
+            invalid["unexpected"] = json!(true);
+            assert!(serde_json::from_value::<Amount>(invalid.clone()).is_err());
+            assert!(serde_json::from_value::<ConditionValueWire>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn wave12_source_prevention_codec_preserves_binding_and_direction() {
+        use spellwake_engine::damage::TurnPreventionFilter as F;
+        let vocabulary = super::super::creature_types::synthetic_vocabulary();
+        for filter in [
+            F::FromTarget,
+            F::CombatFromTarget,
+            F::CombatToOrFromTarget,
+            F::Creatures,
+            F::CombatFromCreatures,
+        ] {
+            let target = if matches!(filter, F::Creatures | F::CombatFromCreatures) {
+                BodyTarget::None
+            } else {
+                BodyTarget::SingleCreature
+            };
+            let program = Program::instant(
+                ManaCost::free(),
+                ExecutableBody::new(target, vec![Instruction::PreventDamageThisTurn(filter)]),
+            );
+            program.validate(&vocabulary).unwrap();
+            assert_eq!(decode(view(&program), &vocabulary).unwrap(), program);
+        }
+        for filter in [
+            F::FromAbilitySource,
+            F::CombatFromAbilitySource,
+            F::CombatToOrFromAbilitySource,
+        ] {
+            let mut program = Program::artifact(None, vec![]);
+            program
+                .activated
+                .push(spellwake_engine::activated::ActivatedAbility {
+                    id: spellwake_engine::activated::ActivatedAbilityId(1),
+                    mana_cost: ManaCost::free(),
+                    source_cost: spellwake_engine::activated::SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::PreventDamageThisTurn(filter)],
+                    ),
+                });
+            program.validate(&vocabulary).unwrap();
+            assert_eq!(decode(view(&program), &vocabulary).unwrap(), program);
+        }
+    }
+
+    #[test]
+    fn wave11_distinct_stat_codec_preserves_statistic_and_filter() {
+        let vocabulary = super::super::creature_types::synthetic_vocabulary();
+        for filter in [
+            ObjectFilter::creature(),
+            ObjectFilter::creature().controlled(),
+            ObjectFilter::creature().opposing(),
+        ] {
+            for stat in [
+                ObjectStatKind::Power,
+                ObjectStatKind::Toughness,
+                ObjectStatKind::ManaValue,
+                ObjectStatKind::Loyalty,
+            ] {
+                let expr = ValueExpr::aggregate(filter, stat, StatAggregate::CountDistinct);
+                let encoded = instruction_amount(&expr);
+                let decoded: Amount = serde_json::from_value(encoded.clone()).unwrap();
+                assert_eq!(decoded.native(&vocabulary).unwrap(), expr);
+                let condition = ResolutionCondition {
+                    left: expr,
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(3),
+                };
+                let decoded: ResolutionConditionWire =
+                    serde_json::from_value(resolution_condition(&condition)).unwrap();
+                assert_eq!(decoded.native(&vocabulary).unwrap(), condition);
+                let mut invalid = encoded;
+                invalid["unexpected"] = json!(true);
+                assert!(serde_json::from_value::<Amount>(invalid.clone()).is_err());
+                assert!(serde_json::from_value::<ConditionValueWire>(invalid).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn wave11_distinct_stat_codec_refuses_lossy_subtype_projection() {
+        let vocabulary = super::super::creature_types::synthetic_vocabulary();
+        let elf = vocabulary.resolve_label("Elf").unwrap();
+        let exact = ObjectFilter::creature().controlled().with_subtype(elf);
+        let expr = ValueExpr::aggregate(exact, ObjectStatKind::Power, StatAggregate::CountDistinct);
+        let decoded: Amount = serde_json::from_value(instruction_amount(&expr)).unwrap();
+        assert_eq!(decoded.native(&vocabulary).unwrap(), expr);
+        let narrowed = ValueExpr::aggregate(
+            exact.tapped(),
+            ObjectStatKind::Power,
+            StatAggregate::CountDistinct,
+        );
+        let decoded: Amount = serde_json::from_value(instruction_amount(&narrowed)).unwrap();
+        assert!(
+            decoded.native(&vocabulary).is_err(),
+            "unsupported tapped subtype must never broaden to all matching creatures"
+        );
+    }
 
     fn definition() -> Value {
         json!({"names":[],"supertypes":[],"land_subtypes":[],"card_types":["Instant"],"creature_subtypes":[],"kind":{"tag":"Spell","casting_cost":{"generic":"0","required":{}},"body":{"target":{"tag":"None"},"instructions":[{"op":"ChooseCreatureType","into":"0","excluding":[]},{"op":"DrawController","amount":{"tag":"ControlledPermanentsOfChosenType","chosen":"0"}}]}},"color_indicator":null,"effect_defined_colors":null,"mana":[],"activated":[],"triggered":[],"continuous":null})

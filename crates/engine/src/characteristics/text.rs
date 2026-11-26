@@ -471,6 +471,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::program::TemporaryRuleKind::SpellCostReduction { filter: f, .. }
                 | crate::program::TemporaryRuleKind::SpellCostIncrease { filter: f, .. }
                 | crate::program::TemporaryRuleKind::FilteredFlash { filter: f, .. }
+                | crate::program::TemporaryRuleKind::NextSpellKeyword { filter: f, .. }
                 | crate::program::TemporaryRuleKind::ZoneCastPermission {
                     filter: Some(f), ..
                 } => {
@@ -968,6 +969,13 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(
                 crate::damage::TurnPreventionFilter::ToAbilitySource
+                | crate::damage::TurnPreventionFilter::FromAbilitySource
+                | crate::damage::TurnPreventionFilter::CombatFromAbilitySource
+                | crate::damage::TurnPreventionFilter::FromTarget
+                | crate::damage::TurnPreventionFilter::CombatFromTarget
+                | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
+                | crate::damage::TurnPreventionFilter::Creatures
+                | crate::damage::TurnPreventionFilter::CombatFromCreatures
                 | crate::damage::TurnPreventionFilter::ToTarget
                 | crate::damage::TurnPreventionFilter::CombatToOrFromAbilitySource
                 | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget
