@@ -250,6 +250,7 @@ impl EffectWindow {
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
@@ -288,6 +289,8 @@ impl EffectWindow {
             | Instruction::Demonstrate
             | Instruction::Enlist
             | Instruction::AttachPermanent { .. }
+            | Instruction::UnattachSubject { .. }
+            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
@@ -330,6 +333,11 @@ impl EffectWindow {
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::EmpowerJace { .. }
+            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup

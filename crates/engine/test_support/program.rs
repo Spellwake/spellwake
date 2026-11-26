@@ -9455,6 +9455,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                         SpellDiscount::ControlledCreaturesWithPlusOneCounters => {
                             json!({"tag":"ControlledCreaturesWithPlusOneCounters"})
                         }
+                        SpellDiscount::Dynamic(expr) => {
+                            json!({"tag":"Dynamic","expr":instruction_amount(expr)})
+                        }
                     };
                     json!({"tag":"ControllerSpellsCostLess","id":id.0,"matching":matching,"amount":amount})
                 }
@@ -9756,6 +9759,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticRestriction::ControllerCantLoseOpponentsCantWin => {
                     json!({"tag":"ControllerCantLoseOpponentsCantWin","id":id.0})
+                }
+                StaticRestriction::ControllerCantLoseGame => {
+                    json!({"tag":"ControllerCantLoseGame","id":id.0})
                 }
                 StaticRestriction::ControllerCantLoseForZeroLife => {
                     json!({"tag":"ControllerCantLoseForZeroLife","id":id.0})
@@ -11677,6 +11683,9 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::DivideDamageAmongTargets { total } => {
                 json!({"op":"DivideDamageAmongTargets","total":total})
             }
+            Instruction::DivideDamageExprAmongTargets { total, max_targets } => {
+                json!({"op":"DivideDamageExprAmongTargets","total":instruction_amount(total),"maxTargets":max_targets})
+            }
             Instruction::AttachPermanent { attachment, host } => {
                 json!({"op":"AttachPermanent","attachment":format!("{attachment:?}"),"host":format!("{host:?}")})
             }
@@ -11821,6 +11830,11 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ReturnCardsExiledWithLinkExt { group, under_controller_control, tapped } => json!({"op":"ReturnCardsExiledWithLinkExt","group":format!("{group:?}"),"under_controller_control":under_controller_control,"tapped":tapped}),
             Instruction::DrawGame => json!({"op":"DrawGame"}),
             Instruction::TurnFaceUpSubject { subject } => json!({"op":"TurnFaceUpSubject","subject":effect_group_wire(**subject)}),
+            Instruction::TurnFaceDownSubject { subject } => json!({"op":"TurnFaceDownSubject","subject":effect_group_wire(**subject)}),
+            Instruction::EmpowerJace { count } => json!({"op":"EmpowerJace","count":instruction_amount(count)}),
+            Instruction::AddOneOfEachCounterKindOnSubject { subject } => json!({"op":"AddOneOfEachCounterKindOnSubject","subject":effect_group_wire(**subject)}),
+            Instruction::GrantLastMovedPlayPermission { player, filter, duration, free, cast_only, any_color } => json!({"op":"GrantLastMovedPlayPermission","player":format!("{player:?}"),"filter":filter.as_ref().map(|f| format!("{f:?}")),"duration":format!("{duration:?}"),"free":free,"cast_only":cast_only,"any_color":any_color}),
+            Instruction::MoveLastMovedFiltered { filter, destination } => json!({"op":"MoveLastMovedFiltered","filter":filter.as_ref().map(|f| format!("{f:?}")),"destination":format!("{destination:?}")}),
             Instruction::DiscardUpToExt { players, max_count, filter, any_number } => json!({"op":"DiscardUpToExt","players":format!("{players:?}"),"max_count":instruction_amount(max_count),"filter":filter.as_deref().map(|f| permanent_group_wire(*f)),"any_number":any_number}),
             Instruction::Earthbend { amount } => json!({"op":"Earthbend","amount":instruction_amount(amount)}),
             Instruction::ReturnEarthbentCard => json!({"op":"ReturnEarthbentCard"}),
@@ -11833,6 +11847,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::AttachFixedTargets => json!({"op":"AttachFixedTargets"}),
             Instruction::AttachPermanentToPlayer { attachment, player } => json!({"op":"AttachPermanentToPlayer","attachment":format!("{attachment:?}"),"player":format!("{player:?}")}),
             Instruction::AttachChoosingPermanent { chooser, attachment, host, optional, all } => json!({"op":"AttachChoosingPermanent","chooser":format!("{chooser:?}"),"attachment":format!("{attachment:?}"),"host":format!("{host:?}"),"optional":optional,"all":all}),
+            Instruction::UnattachSubject { subject } => json!({"op":"UnattachSubject","subject":format!("{subject:?}")}),
+            Instruction::ChooseOneLastMoved { chooser } => json!({"op":"ChooseOneLastMoved","chooser":format!("{chooser:?}")}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});
@@ -13979,6 +13995,12 @@ pub fn view(value: &Program) -> Value {
                     }
                     spellwake_engine::land::EntryTap::UnlessRevealHandLandType(a, b) => {
                         json!({"tag":"UnlessRevealHandLandType","first":a.land_type().wire_label(),"second":b.land_type().wire_label()})
+                    }
+                    spellwake_engine::land::EntryTap::UnlessRevealHandSubtype {
+                        subtype,
+                        or_control,
+                    } => {
+                        json!({"tag":"UnlessRevealHandSubtype","subtype":projection::creature_type_id(subtype),"orControl":or_control})
                     }
                     _ => json!({"tag":format!("{rule:?}")}),
                 };

@@ -996,6 +996,8 @@ pub struct PermanentSelector {
     pub min_toughness: Option<i64>,
     /// Optional maximum current toughness allowed on this recipient.
     pub max_toughness: Option<i64>,
+    /// Require the recipient's current toughness to be strictly greater than its power.
+    pub toughness_greater_than_power: bool,
     /// Optional minimum mana value required on this recipient.
     pub min_mana_value: Option<u32>,
     /// Optional maximum mana value allowed on this recipient.
@@ -1090,6 +1092,7 @@ impl Default for PermanentSelector {
             max_power: None,
             min_toughness: None,
             max_toughness: None,
+            toughness_greater_than_power: false,
             min_mana_value: None,
             max_mana_value: None,
             devotion_below: None,

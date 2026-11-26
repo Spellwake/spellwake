@@ -1847,6 +1847,7 @@ struct InstructionPayload {
     exiled_activation_copy: Option<Box<Program>>,
     granting_damage_source: Option<Box<DamageSource>>,
     sacrificed_creature_subtypes: BTreeSet<CreatureTypeId>,
+    sacrificed_lki: Option<Box<crate::characteristics::ObjectCharacteristics>>,
     paid_creature_taps: usize,
     paid_named_counters: Option<RulesInteger>,
     target_division: BTreeMap<TargetId, u16>,
@@ -1950,6 +1951,7 @@ impl StackPayload {
             exiled_activation_copy: None,
             granting_damage_source: None,
             sacrificed_creature_subtypes: BTreeSet::new(),
+            sacrificed_lki: None,
             paid_creature_taps: 0,
             paid_named_counters: None,
             target_division: BTreeMap::new(),
@@ -3015,7 +3017,8 @@ impl EffectWindow {
             return None;
         }
         match &active.rule {
-            crate::program::TemporaryRuleKind::TemporaryStatic(ab) => Some(ab.as_ref()),
+            crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+            | crate::program::TemporaryRuleKind::OneShotEventReplacement(ab) => Some(ab.as_ref()),
             crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
                 condition,
                 ability,
@@ -3520,6 +3523,7 @@ impl EffectWindow {
                     exiled_activation_copy: None,
                     granting_damage_source: None,
                     sacrificed_creature_subtypes: BTreeSet::new(),
+                    sacrificed_lki: None,
                     paid_creature_taps: 0,
                     paid_named_counters: None,
                     target_division: BTreeMap::new(),
@@ -6234,7 +6238,8 @@ impl EffectWindow {
             .opponents(self.window.participants(), player)?;
         let restriction_prevents = |ctrl: SeatId, rule: &StaticRestriction| -> bool {
             match rule {
-                StaticRestriction::ControllerCantLoseOpponentsCantWin => ctrl == player,
+                StaticRestriction::ControllerCantLoseOpponentsCantWin
+                | StaticRestriction::ControllerCantLoseGame => ctrl == player,
                 StaticRestriction::ControllerCantLoseForZeroLife => {
                     nonpositive_life_only && ctrl == player
                 }
@@ -6680,7 +6685,10 @@ impl EffectWindow {
                     next.copiable_program(record.after.id())
                         .and_then(Program::permanent)
                         .and_then(|permanent| permanent.entry_tap),
-                    Some(crate::land::EntryTap::UnlessRevealHandLandType(_, _))
+                    Some(
+                        crate::land::EntryTap::UnlessRevealHandLandType(_, _)
+                            | crate::land::EntryTap::UnlessRevealHandSubtype { .. },
+                    )
                 ) {
                     return Err(EffectError::InconsistentProgram);
                 }
@@ -6876,6 +6884,34 @@ impl EffectWindow {
                     .map(GameObject::id)
                     .collect()
             }
+            EntryTap::UnlessRevealHandSubtype {
+                subtype,
+                or_control,
+            } => {
+                let evaluated = self.evaluated_characteristics()?;
+                if or_control
+                    && evaluated.objects.values().any(|p| {
+                        p.zone == ObjectZone::Battlefield
+                            && p.controller == Some(chooser)
+                            && p.current_creature_subtypes.contains(&subtype)
+                    })
+                {
+                    return Ok(None);
+                }
+                self.window
+                    .cards()
+                    .iter()
+                    .filter(|card| {
+                        (!exclude_entering_card || card.id() != object)
+                            && card.zone() == ObjectZone::Hand(chooser)
+                            && card.card_id().is_some()
+                            && evaluated.get(card.id()).is_some_and(|current| {
+                                current.current_creature_subtypes.contains(&subtype)
+                            })
+                    })
+                    .map(GameObject::id)
+                    .collect()
+            }
             EntryTap::ReadAhead { .. }
             | EntryTap::AlwaysChooseColorExcept(_)
             | EntryTap::ChooseColor
@@ -6960,11 +6996,13 @@ impl EffectWindow {
                 crate::land::EntryChoice::Players(players),
             ) => self.valid_distinct_players(players),
             (
-                crate::land::EntryTap::UnlessRevealHandLandType(_, _),
+                crate::land::EntryTap::UnlessRevealHandLandType(_, _)
+                | crate::land::EntryTap::UnlessRevealHandSubtype { .. },
                 crate::land::EntryChoice::Reveal(None),
             ) => true,
             (
-                crate::land::EntryTap::UnlessRevealHandLandType(_, _),
+                crate::land::EntryTap::UnlessRevealHandLandType(_, _)
+                | crate::land::EntryTap::UnlessRevealHandSubtype { .. },
                 crate::land::EntryChoice::Reveal(Some(object)),
             ) => frame.eligible_reveals.contains(&object),
             (crate::land::EntryTap::UnlessPayLife(_), crate::land::EntryChoice::PayLife(false)) => {
@@ -9001,6 +9039,35 @@ impl EffectWindow {
                 .combat
                 .as_ref()
                 .is_some_and(|combat| combat.attacker(id).is_some()),
+            CombatFilter::AttackingController => self.combat.as_ref().is_some_and(|combat| {
+                combat.attacker(id).is_some_and(|a| {
+                    a.defender() == controller && a.defending_planeswalker().is_none()
+                })
+            }),
+            CombatFilter::AttackingControllerOrPlaneswalker => {
+                self.combat.as_ref().is_some_and(|combat| {
+                    combat
+                        .attacker(id)
+                        .is_some_and(|a| a.defender() == controller)
+                })
+            }
+            CombatFilter::AttackingOpponent => self.combat.as_ref().is_some_and(|combat| {
+                combat.attacker(id).is_some_and(|a| {
+                    a.defender() != controller && a.defending_planeswalker().is_none()
+                })
+            }),
+            CombatFilter::AttackingOpponentOrPlaneswalker => {
+                self.combat.as_ref().is_some_and(|combat| {
+                    combat
+                        .attacker(id)
+                        .is_some_and(|a| a.defender() != controller)
+                })
+            }
+            CombatFilter::AttackingPlayer => self.combat.as_ref().is_some_and(|combat| {
+                combat
+                    .attacker(id)
+                    .is_some_and(|a| a.defending_planeswalker().is_none())
+            }),
         };
         if !combat_ok {
             return false;
@@ -10296,6 +10363,7 @@ impl EffectWindow {
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
@@ -10334,6 +10402,8 @@ impl EffectWindow {
             | Instruction::Demonstrate
             | Instruction::Enlist
             | Instruction::AttachPermanent { .. }
+            | Instruction::UnattachSubject { .. }
+            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
@@ -10723,7 +10793,12 @@ impl EffectWindow {
             | Instruction::ExileSubjectUntilSourceLeaves { .. }
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. } => false,
+            | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::EmpowerJace { .. }
+            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. } => false,
         })
     }
 

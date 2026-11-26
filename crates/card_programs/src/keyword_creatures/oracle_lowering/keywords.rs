@@ -438,12 +438,16 @@ pub(super) fn lower_keyword(
             Ok(())
         }
         "cumulative upkeep" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:cum-upkeep-cost")?;
-            program
-                .triggered
-                .push(UpkeepKeyword::CumulativeUpkeep.ability(ids.triggered(), cost));
+            let raw = param.ok_or("oracle:cum-upkeep-cost")?.trim();
+            let clean = raw.trim_end_matches('.').trim();
+            if let Some(cost) = parse_fixed_mana_cost(clean) {
+                program
+                    .triggered
+                    .push(UpkeepKeyword::CumulativeUpkeep.ability(ids.triggered(), cost));
+                return Ok(());
+            }
+            let ab = lower_non_mana_cumulative_upkeep(clean, vocabulary, ids)?;
+            program.triggered.push(ab);
             Ok(())
         }
         "afterlife" => {
@@ -3614,4 +3618,302 @@ fn lower_champion_keyword(
         ),
     });
     Ok(())
+}
+
+fn parse_cum_upkeep_positive_count(tok: &str) -> Option<u16> {
+    if let Ok(n) = tok.parse::<u16>()
+        && n > 0
+    {
+        return Some(n);
+    }
+    match tok {
+        "one" => Some(1),
+        "two" => Some(2),
+        "three" => Some(3),
+        "four" => Some(4),
+        "five" => Some(5),
+        "six" => Some(6),
+        "seven" => Some(7),
+        "eight" => Some(8),
+        "nine" => Some(9),
+        "ten" => Some(10),
+        _ => None,
+    }
+}
+
+fn lower_non_mana_cumulative_upkeep(
+    clean_cost: &str,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<TriggeredAbility, &'static str> {
+    let low = clean_cost.trim().to_ascii_lowercase();
+    let age_count = ValueExpr::CounterCount {
+        subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+        kind: Some(CounterKind::Age),
+    };
+    let mut pre_guard: Option<ResolutionCondition> = None;
+    let cost_ops: Vec<Instruction> = if let Some(life_part) = low
+        .strip_prefix("pay ")
+        .and_then(|rest| rest.strip_suffix(" life"))
+    {
+        let n =
+            parse_cum_upkeep_positive_count(life_part.trim()).ok_or("oracle:cum-upkeep-cost")?;
+        let amount = if n == 1 {
+            age_count
+        } else {
+            scale_value_expr(age_count, i64::from(n))
+        };
+        vec![Instruction::PayLife {
+            player: ResolvingPlayer::Controller,
+            amount,
+        }]
+    } else if let Some(after_put) = low
+        .strip_prefix("put a ")
+        .or_else(|| low.strip_prefix("put an "))
+        && let Some((kind_raw, subj_raw)) = after_put.split_once(" counter on ")
+        && matches!(
+            subj_raw.trim(),
+            "~" | "this creature"
+                | "this permanent"
+                | "this artifact"
+                | "this enchantment"
+                | "this land"
+        )
+    {
+        let ck = parse_counter_kind(kind_raw.trim())
+            .filter(|k| k.is_permanent())
+            .ok_or("oracle:cum-upkeep-cost")?;
+        vec![Instruction::PutCountersOnSubject {
+            subject: Box::new(EffectSubject::AbilitySource),
+            kind: ck,
+            amount: age_count,
+        }]
+    } else if let Some(sym) = low.strip_prefix("add ") {
+        let mana_type = match sym.trim() {
+            "{w}" => ManaType::White,
+            "{u}" => ManaType::Blue,
+            "{b}" => ManaType::Black,
+            "{r}" => ManaType::Red,
+            "{g}" => ManaType::Green,
+            "{c}" => ManaType::Colourless,
+            _ => return Err("oracle:cum-upkeep-cost"),
+        };
+        vec![Instruction::AddMana(EffectManaYield::Counted {
+            kind: mana_type,
+            amount: age_count,
+        })]
+    } else if matches!(
+        low.as_str(),
+        "sacrifice a creature"
+            | "sacrifice a land"
+            | "sacrifice an artifact"
+            | "sacrifice an enchantment"
+            | "sacrifice a permanent"
+    ) {
+        let required_types = match low.as_str() {
+            "sacrifice a creature" => BTreeSet::from([CardType::Creature]),
+            "sacrifice a land" => BTreeSet::from([CardType::Land]),
+            "sacrifice an artifact" => BTreeSet::from([CardType::Artifact]),
+            "sacrifice an enchantment" => BTreeSet::from([CardType::Enchantment]),
+            _ => BTreeSet::new(),
+        };
+        vec![Instruction::Sacrifice {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            amount: age_count,
+            filter: PermanentTypeFilter {
+                any_types: BTreeSet::new(),
+                required_types,
+                forbidden_types: BTreeSet::new(),
+                object_filter: None,
+            },
+        }]
+    } else if low == "draw a card" {
+        vec![Instruction::DrawController { amount: age_count }]
+    } else if low == "discard a card" {
+        vec![Instruction::Discard {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            amount: age_count,
+        }]
+    } else if low == "flip a coin" {
+        vec![Instruction::FlipCoins {
+            player: ResolvingPlayer::Controller,
+            mode: spellwake_engine::program::CoinFlipMode::Count(age_count),
+            win_body: None,
+            lose_body: None,
+        }]
+    } else if low == "exile the top card of your library" {
+        pre_guard = Some(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerLibrarySize(
+                ResolvingPlayer::Controller,
+            )),
+            comparison: Comparison::GreaterOrEqual,
+            right: age_count.clone(),
+        });
+        vec![Instruction::ExileLibraryTopLinked {
+            player: ResolvingPlayer::Controller,
+            amount: age_count,
+            group: spellwake_engine::program::LinkedExileGroup::SourceLinked,
+            face_down: false,
+        }]
+    } else if let Some(life_part) = low
+        .strip_prefix("an opponent gains ")
+        .and_then(|rest| rest.strip_suffix(" life"))
+    {
+        let n =
+            parse_cum_upkeep_positive_count(life_part.trim()).ok_or("oracle:cum-upkeep-cost")?;
+        let loop_body = ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::ChooseValue {
+                    chooser: ResolvingPlayer::Controller,
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                        opponents_only: true,
+                    },
+                },
+                Instruction::AdjustPlayersLife {
+                    players: AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
+                    gain: true,
+                    amount: ValueExpr::literal(i64::from(n)),
+                },
+            ],
+        );
+        vec![Instruction::RepeatLoop {
+            count: age_count,
+            body: Box::new(loop_body),
+        }]
+    } else if low == "have an opponent create a 1/1 red survivor creature token" {
+        let survivor = vocabulary
+            .resolve_label("Survivor")
+            .ok_or("oracle:cum-upkeep-cost")?;
+        let mut tok_prog = Program::creature(None, 1.into(), 1.into(), BTreeSet::from([survivor]));
+        tok_prog.effect_defined_colors = Some(BTreeSet::from([Color::Red]));
+        let tok_def = TokenDefinition::new(
+            tok_prog,
+            TokenName::Default {
+                ordered_subtypes: vec![TokenSubtype::Creature(survivor)],
+            },
+            vocabulary,
+        )
+        .map_err(|_| "oracle:cum-upkeep-cost")?;
+        let loop_body = ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::ChooseValue {
+                    chooser: ResolvingPlayer::Controller,
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                        opponents_only: true,
+                    },
+                },
+                Instruction::CreateTokens {
+                    creations: vec![TokenCreation {
+                        enters_tapped: false,
+                        definition: tok_def,
+                        amount: ValueExpr::literal(1),
+                        base_size: None,
+                        recipients: TokenRecipients::Player(ResolvingPlayer::ChosenPlayer),
+                    }],
+                },
+            ],
+        );
+        vec![Instruction::RepeatLoop {
+            count: age_count,
+            body: Box::new(loop_body),
+        }]
+    } else if low == "put a +1/+1 counter on a creature an opponent controls" {
+        let opp_creature = ObjectFilter::Clause(ObjectClause::creature().opposing());
+        pre_guard = Some(ResolutionCondition {
+            left: ValueExpr::count_battlefield(opp_creature),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        });
+        let loop_body = ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::ChooseObjects {
+                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                    source_zone: SourceZoneFilter::AnyBattlefield,
+                    filter: Box::new(opp_creature),
+                    min: ValueExpr::literal(1),
+                    max: ValueExpr::literal(1),
+                    distinct_powers: false,
+                    max_total_power: None,
+                    unchosen_action: None,
+                },
+                Instruction::PutCountersOnSubject {
+                    subject: Box::new(EffectSubject::LastMoved),
+                    kind: CounterKind::PlusOne,
+                    amount: ValueExpr::literal(1),
+                },
+            ],
+        );
+        vec![Instruction::RepeatLoop {
+            count: age_count,
+            body: Box::new(loop_body),
+        }]
+    } else if low == "gain control of a land you don't control" {
+        let other_land = ObjectFilter::Clause(ObjectClause::land().not_controlled());
+        pre_guard = Some(ResolutionCondition {
+            left: ValueExpr::count_battlefield(other_land),
+            comparison: Comparison::GreaterOrEqual,
+            right: age_count.clone(),
+        });
+        let loop_body = ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::ChooseObjects {
+                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                    source_zone: SourceZoneFilter::AnyBattlefield,
+                    filter: Box::new(other_land),
+                    min: ValueExpr::literal(1),
+                    max: ValueExpr::literal(1),
+                    distinct_powers: false,
+                    max_total_power: None,
+                    unchosen_action: None,
+                },
+                Instruction::GainControlOfPermanent {
+                    subject: Box::new(EffectSubject::LastMoved),
+                    controller: ResolvingPlayer::Controller,
+                    duration: ResolvedDuration::NoStatedDuration,
+                },
+            ],
+        );
+        vec![Instruction::RepeatLoop {
+            count: age_count,
+            body: Box::new(loop_body),
+        }]
+    } else {
+        return Err("oracle:cum-upkeep-cost");
+    };
+
+    let mut instructions = Vec::with_capacity(cost_ops.len() + 5);
+    instructions.push(Instruction::PutNamedCounterOnSource {
+        kind: CounterKind::Age,
+        amount: 1,
+    });
+    let sac_idx = 1 + usize::from(pre_guard.is_some()) + 1 + cost_ops.len() + 1;
+    if let Some(cond) = pre_guard {
+        instructions.push(Instruction::BranchIfFalse {
+            condition: cond,
+            destination: sac_idx,
+        });
+    }
+    instructions.push(Instruction::OptionalSequence {
+        chooser: ResolvingPlayer::Controller,
+        instructions: cost_ops.len() + 1,
+    });
+    instructions.extend(cost_ops);
+    instructions.push(Instruction::Jump {
+        destination: sac_idx + 1,
+    });
+    instructions.push(Instruction::SacrificeStateTriggerSource);
+
+    Ok(TriggeredAbility {
+        id: ids.triggered(),
+        condition: TriggerSpec::new(TriggerEvent::StepBegan {
+            step: Step::Upkeep,
+            player: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+        }),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(BodyTarget::None, instructions),
+    })
 }

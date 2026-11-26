@@ -649,7 +649,10 @@ pub(super) fn lower_control_misc_instruction(
             }
             if first_target != BodyTarget::None {
                 if lowered_subs.iter().any(|s| {
-                    s.x_target_count || s.up_to_one_target || s.graveyard_target_bounds.is_some()
+                    s.x_target_count
+                        || s.up_to_x_target_count
+                        || s.up_to_one_target
+                        || s.graveyard_target_bounds.is_some()
                 }) {
                     return Err("oracle:choice-branch-target");
                 }
@@ -2642,6 +2645,7 @@ pub(super) fn splice_probed_body(
         builder.graveyard_target_bounds = probed.graveyard_target_bounds;
     }
     builder.x_target_count |= probed.x_target_count;
+    builder.up_to_x_target_count |= probed.up_to_x_target_count;
     if probed.last_group_filter.is_some() {
         builder.last_group_filter = probed.last_group_filter;
     }
@@ -2690,34 +2694,6 @@ pub(super) fn is_hand_return_dest(dest: &str) -> bool {
             | "to their owner's hand"
             | "to their owners' hands"
     )
-}
-
-pub(super) fn parse_return_with_counter(
-    with_counter: Option<&str>,
-) -> Result<Option<(CounterKind, u8)>, &'static str> {
-    let Some(raw) = with_counter else {
-        return Ok(None);
-    };
-    let low_raw = raw.trim().to_ascii_lowercase();
-    let (qty, kind_str): (u8, &str) = if let Some(rest) = low_raw
-        .strip_prefix("a ")
-        .or_else(|| low_raw.strip_prefix("an "))
-        .or_else(|| low_raw.strip_prefix("one "))
-    {
-        (1, rest.trim())
-    } else if let Some(rest) = low_raw.strip_prefix("two ") {
-        (2, rest.trim())
-    } else if let Some(rest) = low_raw.strip_prefix("three ") {
-        (3, rest.trim())
-    } else if let Some(rest) = low_raw.strip_prefix("four ") {
-        (4, rest.trim())
-    } else if let Some(rest) = low_raw.strip_prefix("five ") {
-        (5, rest.trim())
-    } else {
-        (1, low_raw.as_str())
-    };
-    let ck = parse_counter_kind(kind_str).ok_or("oracle:unsupported-counter-kind")?;
-    Ok(Some((ck, qty)))
 }
 
 pub(super) fn rewrite_loop_player_value_expr(
@@ -4224,5 +4200,6 @@ pub(super) fn lower_loop_player_sub_body(
         outer_builder.graveyard_target_bounds = sub.graveyard_target_bounds;
     }
     outer_builder.x_target_count |= sub.x_target_count;
+    outer_builder.up_to_x_target_count |= sub.up_to_x_target_count;
     Ok(ExecutableBody::new(BodyTarget::None, sub.instructions))
 }

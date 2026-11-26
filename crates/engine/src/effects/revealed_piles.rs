@@ -1513,6 +1513,9 @@ impl EffectWindow {
         }
         if let Some(crate::program::LookTopKeepDest::Exile {
             playable: true,
+            free,
+            cast_only,
+            any_color,
             duration,
         }) = ext_keep_dest
         {
@@ -1550,9 +1553,9 @@ impl EffectWindow {
                         object: movement.after.id(),
                         player: chooser,
                         duration: play_duration,
-                        any_color: false,
-                        free: false,
-                        cast_only: false,
+                        any_color,
+                        free,
+                        cast_only,
                     });
                 }
             }

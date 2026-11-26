@@ -4315,6 +4315,57 @@ pub(super) fn lower_object_filter(
                     CombatFilter::BlockingOrBlockedBySource,
                 )?;
             }
+            FilterPredicateAst::AttackingTarget {
+                target,
+                this_turn: false,
+            } => {
+                let mapped = match target.as_ref() {
+                    SubjectRefAst::Player(PlayerRefAst::You) => {
+                        Some(CombatFilter::AttackingController)
+                    }
+                    SubjectRefAst::Player(
+                        PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
+                    ) => Some(CombatFilter::AttackingOpponent),
+                    SubjectRefAst::Player(PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer) => {
+                        Some(CombatFilter::AttackingPlayer)
+                    }
+                    SubjectRefAst::Compound(parts) if parts.len() == 2 => {
+                        let is_pw = |s: &SubjectRefAst, expected_ctrl: ControllerRelation| match s {
+                            SubjectRefAst::Group(f) | SubjectRefAst::All(f) => {
+                                f.any_types == AstCardTypeMask::PLANESWALKER
+                                    && f.controller == Some(expected_ctrl)
+                                    && f.forbidden_types.is_empty()
+                                    && f.predicates.is_empty()
+                            }
+                            _ => false,
+                        };
+                        match (&parts[0], &parts[1]) {
+                            (SubjectRefAst::Player(PlayerRefAst::You), second)
+                                if is_pw(second, ControllerRelation::You) =>
+                            {
+                                Some(CombatFilter::AttackingControllerOrPlaneswalker)
+                            }
+                            (
+                                SubjectRefAst::Player(
+                                    PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
+                                ),
+                                second,
+                            ) if is_pw(second, ControllerRelation::Opponents)
+                                || is_pw(second, ControllerRelation::Opponent) =>
+                            {
+                                Some(CombatFilter::AttackingOpponentOrPlaneswalker)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(cf) = mapped {
+                    set_clause_combat_filter(&mut clause.combat, cf)?;
+                } else {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+            }
             FilterPredicateAst::ManaValueParity { even } => {
                 if clause.mana_value != ManaValueFilter::Any || mana_value_pair.is_some() {
                     return Err("oracle:unsupported-filter-predicate");
@@ -6705,6 +6756,16 @@ fn lower_value_expr_inner(
                     }),
                     ZoneFilter::YourHand => Ok(ValueExpr::Count {
                         zone: ValueZone::Hand(ResolvingPlayer::Controller),
+                        filter: Box::new(obj),
+                        controller_scope: None,
+                    }),
+                    ZoneFilter::AnyHand | ZoneFilter::EachPlayerHand => Ok(ValueExpr::Count {
+                        zone: ValueZone::AllHands,
+                        filter: Box::new(obj),
+                        controller_scope: None,
+                    }),
+                    ZoneFilter::OpponentsHands => Ok(ValueExpr::Count {
+                        zone: ValueZone::OpponentsHands,
                         filter: Box::new(obj),
                         controller_scope: None,
                     }),

@@ -165,7 +165,12 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             Instruction::SetSubjectTapped { subject, .. }
             | Instruction::PutCountersOnSubject { subject, .. }
             | Instruction::ExileSubjectUntilSourceLeaves { subject }
-            | Instruction::TurnFaceUpSubject { subject } => subject_uses_damage_pairs(subject),
+            | Instruction::TurnFaceUpSubject { subject }
+            | Instruction::TurnFaceDownSubject { subject }
+            | Instruction::AddOneOfEachCounterKindOnSubject { subject } => {
+                subject_uses_damage_pairs(subject)
+            }
+            Instruction::EmpowerJace { .. } => false,
             Instruction::DamageGroupAmount { group, amount } => {
                 value_expr_uses_damage_pairs(amount)
                     || matches!(
@@ -935,6 +940,53 @@ impl EffectWindow {
                         p.current_land_subtypes.contains(&a.land_type())
                             || p.current_land_subtypes.contains(&b.land_type())
                     }),
+                    EntryTap::UnlessRevealHandSubtype {
+                        subtype,
+                        or_control,
+                    } => {
+                        if or_control
+                            && previous.evaluated.objects.values().any(|p| {
+                                p.zone == ObjectZone::Battlefield
+                                    && p.controller == Some(controller)
+                                    && p.current_creature_subtypes.contains(&subtype)
+                            })
+                        {
+                            self.entry_choices.remove(&object);
+                            false
+                        } else {
+                            let Some(crate::land::EntryChoice::Reveal(revealed)) =
+                                self.entry_choices.remove(&object)
+                            else {
+                                return Err(EffectError::SelectionRequired);
+                            };
+                            if let Some(revealed) = revealed {
+                                let card = previous
+                                    .cards
+                                    .get(revealed)
+                                    .ok_or(EffectError::IllegalTarget)?;
+                                let current_card = self
+                                    .window
+                                    .cards()
+                                    .get(revealed)
+                                    .ok_or(EffectError::IllegalTarget)?;
+                                let characteristics = previous
+                                    .evaluated
+                                    .get(revealed)
+                                    .ok_or(EffectError::IllegalTarget)?;
+                                if card.card_id().is_none()
+                                    || card.zone() != ObjectZone::Hand(controller)
+                                    || current_card.zone() != ObjectZone::Hand(controller)
+                                    || !characteristics.current_creature_subtypes.contains(&subtype)
+                                {
+                                    return Err(EffectError::IllegalTarget);
+                                }
+                                self.pending_entry_reveals.push(card.clone());
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                    }
                     EntryTap::UnlessRevealHandLandType(a, b) => {
                         let Some(crate::land::EntryChoice::Reveal(revealed)) =
                             self.entry_choices.remove(&object)

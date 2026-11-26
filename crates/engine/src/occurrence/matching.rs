@@ -3218,6 +3218,24 @@ pub(super) fn match_trigger_event(
                     }
                     _ => {}
                 },
+                DamageTriggerRecipient::Planeswalker => {
+                    if let DamageRecipient::Planeswalker(id) = damage.target {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                }
                 DamageTriggerRecipient::Battle => {
                     if let DamageRecipient::Battle(id) = damage.target {
                         let seat = after
@@ -3236,6 +3254,154 @@ pub(super) fn match_trigger_event(
                         });
                     }
                 }
+                DamageTriggerRecipient::PlayerOrBattle => match damage.target {
+                    DamageRecipient::Player(player) => {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(player),
+                            related: TriggerRelated::CombatDamageToPlayer {
+                                source: dealer,
+                                amount: damage.amount.clone(),
+                                player,
+                                attempt: damage.attempt,
+                            },
+                        });
+                    }
+                    DamageRecipient::Battle(id) => {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                    _ => {}
+                },
+                DamageTriggerRecipient::PlaneswalkerOrBattle => match damage.target {
+                    DamageRecipient::Planeswalker(id) => {
+                        if let Some(seat) = after
+                            .evaluated
+                            .get(id)
+                            .filter(|p| p.has_type(CardType::Planeswalker))
+                            .and_then(|p| p.controller)
+                        {
+                            members.push(TriggerCauseMember {
+                                occurrence: occurrence.id,
+                                related_player: Some(seat),
+                                related: TriggerRelated::CombatDamageToPlaneswalker {
+                                    planeswalker: id,
+                                    attempt: damage.attempt,
+                                    amount: damage.amount.clone(),
+                                },
+                            });
+                        }
+                    }
+                    DamageRecipient::Battle(id) => {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                    _ => {}
+                },
+                DamageTriggerRecipient::OpponentOrBattle => match damage.target {
+                    DamageRecipient::Player(player) if player != controller => {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(player),
+                            related: TriggerRelated::CombatDamageToPlayer {
+                                source: dealer,
+                                amount: damage.amount.clone(),
+                                player,
+                                attempt: damage.attempt,
+                            },
+                        });
+                    }
+                    DamageRecipient::Battle(id) => {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                    _ => {}
+                },
+                DamageTriggerRecipient::PlayerPlaneswalkerOrBattle => match damage.target {
+                    DamageRecipient::Player(player) => {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(player),
+                            related: TriggerRelated::CombatDamageToPlayer {
+                                source: dealer,
+                                amount: damage.amount.clone(),
+                                player,
+                                attempt: damage.attempt,
+                            },
+                        });
+                    }
+                    DamageRecipient::Planeswalker(id) => {
+                        if let Some(seat) = after
+                            .evaluated
+                            .get(id)
+                            .filter(|p| p.has_type(CardType::Planeswalker))
+                            .and_then(|p| p.controller)
+                        {
+                            members.push(TriggerCauseMember {
+                                occurrence: occurrence.id,
+                                related_player: Some(seat),
+                                related: TriggerRelated::CombatDamageToPlaneswalker {
+                                    planeswalker: id,
+                                    attempt: damage.attempt,
+                                    amount: damage.amount.clone(),
+                                },
+                            });
+                        }
+                    }
+                    DamageRecipient::Battle(id) => {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                    _ => {}
+                },
                 DamageTriggerRecipient::SelfObject => {
                     let hit_self = matches!(
                         damage.target,
@@ -3302,12 +3468,34 @@ pub(super) fn match_trigger_event(
                 DamageTriggerRecipient::Creature => {
                     matches!(damage.target, DamageRecipient::Creature(_))
                 }
+                DamageTriggerRecipient::Planeswalker => {
+                    matches!(damage.target, DamageRecipient::Planeswalker(_))
+                }
                 DamageTriggerRecipient::Battle => {
                     matches!(damage.target, DamageRecipient::Battle(_))
                 }
                 DamageTriggerRecipient::PlayerOrPlaneswalker => matches!(
                     damage.target,
                     DamageRecipient::Player(_) | DamageRecipient::Planeswalker(_)
+                ),
+                DamageTriggerRecipient::PlayerOrBattle => matches!(
+                    damage.target,
+                    DamageRecipient::Player(_) | DamageRecipient::Battle(_)
+                ),
+                DamageTriggerRecipient::PlaneswalkerOrBattle => matches!(
+                    damage.target,
+                    DamageRecipient::Planeswalker(_) | DamageRecipient::Battle(_)
+                ),
+                DamageTriggerRecipient::OpponentOrBattle => match damage.target {
+                    DamageRecipient::Player(p) => p != controller,
+                    DamageRecipient::Battle(_) => true,
+                    _ => false,
+                },
+                DamageTriggerRecipient::PlayerPlaneswalkerOrBattle => matches!(
+                    damage.target,
+                    DamageRecipient::Player(_)
+                        | DamageRecipient::Planeswalker(_)
+                        | DamageRecipient::Battle(_)
                 ),
                 DamageTriggerRecipient::OpponentOrPlaneswalker => match damage.target {
                     DamageRecipient::Player(p) => p != controller,
@@ -3956,12 +4144,13 @@ pub(super) fn match_trigger_event(
             }
             PlayerTriggerAction::DrewCard { nth_each_turn } => match (nth_each_turn, value) {
                 (Some(ordinal), RulesOccurrence::CardDrawOrdinal { player, number })
-                    if *player == controller && *number == i64::from(ordinal.get()).into() =>
+                    if player_matches(*relation, controller, *player, after)
+                        && *number == i64::from(ordinal.get()).into() =>
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
-                        related_player: Some(controller),
-                        related: TriggerRelated::CardDrawn { player: controller },
+                        related_player: Some(*player),
+                        related: TriggerRelated::CardDrawn { player: *player },
                     });
                 }
                 (None, RulesOccurrence::ZoneChange(change))
@@ -4062,11 +4251,56 @@ pub(super) fn match_trigger_event(
                     });
                 }
             }
+            PlayerTriggerAction::DrewCardExceptFirstInDrawStep => {
+                if let RulesOccurrence::ZoneChange(change) = value
+                    && let ZoneReason::Draw { player } = change.reason
+                    && player_matches(*relation, controller, player, after)
+                {
+                    let is_first_draw_step_card = after.step == Some(crate::turn::Step::Draw)
+                        && after.window.active_player() == player
+                        && after
+                            .characteristics
+                            .cards_drawn_this_turn_counts
+                            .get(&player)
+                            .copied()
+                            .unwrap_or(0)
+                            <= 1;
+                    if !is_first_draw_step_card {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(player),
+                            related: TriggerRelated::CardDrawn { player },
+                        });
+                    }
+                }
+            }
             PlayerTriggerAction::LandPlayed => {
                 if let RulesOccurrence::ZoneChange(change) = value
                     && matches!(change.reason, ZoneReason::LandPlay)
                     && let Some(actor) = change.after.object.controller()
                     && player_matches(*relation, controller, actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(actor),
+                        related: TriggerRelated::ZoneChange {
+                            before: change.before.clone(),
+                            after: change.after.clone(),
+                        },
+                    });
+                }
+            }
+            PlayerTriggerAction::LandPlayedFiltered(filter) => {
+                if let RulesOccurrence::ZoneChange(change) = value
+                    && matches!(change.reason, ZoneReason::LandPlay)
+                    && let Some(actor) = change.after.object.controller()
+                    && player_matches(*relation, controller, actor, after)
+                    && filter.matches_appearance_with_names(
+                        source,
+                        controller,
+                        &change.after,
+                        after,
+                    )
                 {
                     members.push(TriggerCauseMember {
                         occurrence: occurrence.id,
@@ -4550,12 +4784,34 @@ pub(super) fn match_trigger_event(
                 DamageTriggerRecipient::Creature => {
                     matches!(damage.target, DamageRecipient::Creature(_))
                 }
+                DamageTriggerRecipient::Planeswalker => {
+                    matches!(damage.target, DamageRecipient::Planeswalker(_))
+                }
                 DamageTriggerRecipient::Battle => {
                     matches!(damage.target, DamageRecipient::Battle(_))
                 }
                 DamageTriggerRecipient::PlayerOrPlaneswalker => matches!(
                     damage.target,
                     DamageRecipient::Player(_) | DamageRecipient::Planeswalker(_)
+                ),
+                DamageTriggerRecipient::PlayerOrBattle => matches!(
+                    damage.target,
+                    DamageRecipient::Player(_) | DamageRecipient::Battle(_)
+                ),
+                DamageTriggerRecipient::PlaneswalkerOrBattle => matches!(
+                    damage.target,
+                    DamageRecipient::Planeswalker(_) | DamageRecipient::Battle(_)
+                ),
+                DamageTriggerRecipient::OpponentOrBattle => match damage.target {
+                    DamageRecipient::Player(p) => p != controller,
+                    DamageRecipient::Battle(_) => true,
+                    _ => false,
+                },
+                DamageTriggerRecipient::PlayerPlaneswalkerOrBattle => matches!(
+                    damage.target,
+                    DamageRecipient::Player(_)
+                        | DamageRecipient::Planeswalker(_)
+                        | DamageRecipient::Battle(_)
                 ),
                 DamageTriggerRecipient::OpponentOrPlaneswalker => match damage.target {
                     DamageRecipient::Player(p) => p != controller,

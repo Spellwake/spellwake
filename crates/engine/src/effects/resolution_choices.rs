@@ -1119,14 +1119,14 @@ impl EffectWindow {
         instruction: &Instruction,
         is_sequence: bool,
     ) -> Result<bool, EffectError> {
-        let allowed_sequence_head = is_sequence
+        let allowed_sequence_head = matches!(
+            instruction,
+            Instruction::OfferManaPayment { .. } | Instruction::OfferDynamicManaPayment { .. }
+        ) || (is_sequence
             && matches!(
                 instruction,
-                Instruction::OfferManaPayment { .. }
-                    | Instruction::OfferDynamicManaPayment { .. }
-                    | Instruction::BranchIfFalse { .. }
-                    | Instruction::Jump { .. }
-            );
+                Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+            ));
         if !instruction.is_optional_primitive() && !allowed_sequence_head {
             return Err(EffectError::InconsistentProgram);
         }
@@ -1478,6 +1478,9 @@ impl EffectWindow {
             | Instruction::ChooseNewTargets
             | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
+            | Instruction::ShuffleEachHandAndGraveyard
+            | Instruction::FixedTargetClause(_)
+            | Instruction::Ascend
             | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_) => Ok(true),
             Instruction::DiscardOneAtRandom(role) => {
                 let player = self.resolving_player_identity_at(*role, None)?;
@@ -1611,6 +1614,7 @@ impl EffectWindow {
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
@@ -1649,6 +1653,8 @@ impl EffectWindow {
             | Instruction::Demonstrate
             | Instruction::Enlist
             | Instruction::AttachPermanent { .. }
+            | Instruction::UnattachSubject { .. }
+            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
@@ -1920,6 +1926,11 @@ impl EffectWindow {
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::EmpowerJace { .. }
+            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::ExileResolvingSpell
             | Instruction::ReturnResolvingSpellToHand => Ok(true),
             Instruction::ChooseCreatureType { excluding, .. } => {
@@ -2004,8 +2015,6 @@ impl EffectWindow {
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
-            | Instruction::FixedTargetClause(_)
-            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -2089,7 +2098,6 @@ impl EffectWindow {
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -2178,10 +2186,18 @@ impl EffectWindow {
         if !entry.bought_back()
             || (!entry.exiles_if_put_into_graveyard() && !entry.cast_from_controllers_hand())
             || !matches!(self.payloads.get(&entry.id()),Some(StackPayload::Instructions(payload)) if payload.rebound_over_buyback.is_none() && !payload.exile_on_resolve)
-            || (!entry.exiles_if_put_into_graveyard()
-                && !self
-                    .current_characteristics(*object)?
-                    .is_some_and(|c| c.has_keyword(KeywordAbility::Rebound)))
+            || (!entry.exiles_if_put_into_graveyard() && {
+                let eval = self.evaluated_characteristics()?;
+                !eval.get(*object).is_some_and(|c| {
+                    c.has_keyword(KeywordAbility::Rebound)
+                        || self.spell_has_granted_keyword(
+                            &eval,
+                            c,
+                            entry.controller(),
+                            KeywordAbility::Rebound,
+                        )
+                })
+            })
         {
             return Ok(None);
         }
@@ -2662,6 +2678,7 @@ impl EffectWindow {
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GainControlOfPermanent { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
@@ -2700,6 +2717,8 @@ impl EffectWindow {
             | Instruction::Demonstrate
             | Instruction::Enlist
             | Instruction::AttachPermanent { .. }
+            | Instruction::UnattachSubject { .. }
+            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::SkipNextUntap { .. }
             | Instruction::RequireCombatAction { .. }
             | Instruction::CreateTemporaryRule { .. }
@@ -3107,6 +3126,11 @@ impl EffectWindow {
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::EmpowerJace { .. }
+            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::DiscardUpToExt { .. }
             | Instruction::RegenerateSubject { .. }
             | Instruction::AddManaForPlayer { .. }

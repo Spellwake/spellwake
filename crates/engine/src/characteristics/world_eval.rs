@@ -507,6 +507,28 @@ fn matches_world_clause(
                     .is_some_and(|b| b.attackers().contains(&id))
         }),
         CombatFilter::NotAttacking => !ctx.combat.is_some_and(|c| c.attacker(id).is_some()),
+        CombatFilter::AttackingController => ctx.combat.is_some_and(|c| {
+            c.attacker(id).is_some_and(|a| {
+                a.defender() == ctx.controller && a.defending_planeswalker().is_none()
+            })
+        }),
+        CombatFilter::AttackingControllerOrPlaneswalker => ctx.combat.is_some_and(|c| {
+            c.attacker(id)
+                .is_some_and(|a| a.defender() == ctx.controller)
+        }),
+        CombatFilter::AttackingOpponent => ctx.combat.is_some_and(|c| {
+            c.attacker(id).is_some_and(|a| {
+                a.defender() != ctx.controller && a.defending_planeswalker().is_none()
+            })
+        }),
+        CombatFilter::AttackingOpponentOrPlaneswalker => ctx.combat.is_some_and(|c| {
+            c.attacker(id)
+                .is_some_and(|a| a.defender() != ctx.controller)
+        }),
+        CombatFilter::AttackingPlayer => ctx.combat.is_some_and(|c| {
+            c.attacker(id)
+                .is_some_and(|a| a.defending_planeswalker().is_none())
+        }),
     };
     if !combat_ok {
         return false;
@@ -970,6 +992,21 @@ fn count_zone_for_seat(
                     && matches_world_object_filter(ctx, filter, o)
             })
             .count(),
+        ValueZone::AllHands => ctx
+            .objects
+            .values()
+            .filter(|o| {
+                matches!(o.zone, ObjectZone::Hand(_)) && matches_world_object_filter(ctx, filter, o)
+            })
+            .count(),
+        ValueZone::OpponentsHands => ctx
+            .objects
+            .values()
+            .filter(|o| {
+                matches!(o.zone, ObjectZone::Hand(s) if s != ctx.controller)
+                    && matches_world_object_filter(ctx, filter, o)
+            })
+            .count(),
     }
 }
 
@@ -1127,6 +1164,22 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     .values()
                     .filter(|o| {
                         matches!(o.zone, ObjectZone::Graveyard(_))
+                            && matches_world_object_filter(ctx, bound_filter, o)
+                    })
+                    .count(),
+                ValueZone::AllHands => ctx
+                    .objects
+                    .values()
+                    .filter(|o| {
+                        matches!(o.zone, ObjectZone::Hand(_))
+                            && matches_world_object_filter(ctx, bound_filter, o)
+                    })
+                    .count(),
+                ValueZone::OpponentsHands => ctx
+                    .objects
+                    .values()
+                    .filter(|o| {
+                        matches!(o.zone, ObjectZone::Hand(s) if s != ctx.controller)
                             && matches_world_object_filter(ctx, bound_filter, o)
                     })
                     .count(),
@@ -1356,6 +1409,9 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                 i64::from(ctx.state.solved_cases.contains(&ctx.source)).into()
             }
             SourceStateExpr::Prepared => i64::from(ctx.state.prepared.contains(&ctx.source)).into(),
+            SourceStateExpr::EntryOptionChosen(expected) => {
+                i64::from(ctx.state.entry_option_choices.get(&ctx.source) == Some(expected)).into()
+            }
             SourceStateExpr::Goaded => 0.into(),
             SourceStateExpr::ExertedThisTurn => {
                 i64::from(ctx.state.exerted_objects_this_turn.contains(&ctx.source)).into()

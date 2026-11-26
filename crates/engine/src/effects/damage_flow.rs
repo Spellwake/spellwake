@@ -915,6 +915,7 @@ impl EffectWindow {
                                 | Instruction::DamageGroupAmount { .. }
                                 | Instruction::DealDamageFrom { .. }
                                 | Instruction::DivideDamageAmongTargets { .. }
+                                | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
                                 | Instruction::DamageOrderedTargets { .. }
                                 | Instruction::DamageFromPower(_)

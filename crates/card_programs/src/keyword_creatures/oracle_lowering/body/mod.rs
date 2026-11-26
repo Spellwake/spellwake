@@ -58,6 +58,7 @@ pub(super) struct BodyBuilder {
     pub(super) instructions: Vec<Instruction>,
     pub(super) graveyard_target_bounds: Option<(usize, usize)>,
     pub(super) x_target_count: bool,
+    pub(super) up_to_x_target_count: bool,
     pub(super) up_to_one_target: bool,
     pub(super) last_group_filter: Option<ObjectFilter>,
     pub(super) trigger_hint: TriggerHint,
@@ -71,6 +72,7 @@ impl BodyBuilder {
             instructions: Vec::new(),
             graveyard_target_bounds: None,
             x_target_count: false,
+            up_to_x_target_count: false,
             up_to_one_target: false,
             last_group_filter: None,
             trigger_hint: TriggerHint::None,
@@ -131,6 +133,9 @@ impl BodyBuilder {
         };
         if self.x_target_count {
             body = body.with_x_target_count();
+        }
+        if self.up_to_x_target_count {
+            body = body.with_up_to_x_target_count();
         }
         if self.up_to_one_target {
             body = body.with_up_to_one_target();

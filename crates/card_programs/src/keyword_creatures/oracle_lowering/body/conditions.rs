@@ -225,7 +225,10 @@ pub(super) fn resolve_prev_anaphora_ref(
             MoveSubjectRef::RevealedCard if has_checked_top => Some(MatchObjectRef::RevealedTop),
             _ => None,
         },
-        Instruction::Sacrifice { .. } => Some(MatchObjectRef::SacrificedCreature),
+        Instruction::Sacrifice { .. }
+        | Instruction::SacrificeUpTo { .. }
+        | Instruction::SacrificeMatching(_)
+        | Instruction::SacrificeSubject { .. } => Some(MatchObjectRef::LastMovedToGraveyard),
         Instruction::SearchLibrary { .. }
         | Instruction::MoveGroup { .. }
         | Instruction::ExileGroupFromZone { .. }
@@ -359,9 +362,28 @@ pub(super) fn resolve_match_object_ref(
             }
             if matches!(
                 al.as_str(),
-                "the sacrificed creature" | "the sacrificed permanent" | "that sacrificed creature"
-            ) && prev == Some(MatchObjectRef::SacrificedCreature)
-            {
+                "the sacrificed creature"
+                    | "the sacrificed permanent"
+                    | "the sacrificed artifact"
+                    | "the sacrificed enchantment"
+                    | "the sacrificed land"
+                    | "that sacrificed creature"
+                    | "that sacrificed permanent"
+                    | "that sacrificed artifact"
+                    | "that sacrificed enchantment"
+                    | "that sacrificed land"
+            ) {
+                if matches!(
+                    builder.instructions.last(),
+                    Some(
+                        Instruction::Sacrifice { .. }
+                            | Instruction::SacrificeUpTo { .. }
+                            | Instruction::SacrificeMatching(_)
+                            | Instruction::SacrificeSubject { .. }
+                    )
+                ) {
+                    return Some(MatchObjectRef::LastMovedToGraveyard);
+                }
                 return Some(MatchObjectRef::SacrificedCreature);
             }
             if matches!(
@@ -1250,6 +1272,42 @@ pub(in super::super) fn lower_resolution_condition(
                             right: ValueExpr::literal(1),
                         });
                     }
+                    "in_graveyard" | "in graveyard" | "in a graveyard" | "in your graveyard" => {
+                        return Ok(ResolutionCondition {
+                            left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                                SourceZoneKind::Graveyard,
+                            )),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        });
+                    }
+                    "on_battlefield" | "on battlefield" | "on the battlefield" => {
+                        return Ok(ResolutionCondition {
+                            left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                                SourceZoneKind::Battlefield,
+                            )),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        });
+                    }
+                    "in_hand" | "in hand" | "in your hand" => {
+                        return Ok(ResolutionCondition {
+                            left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                                SourceZoneKind::Hand,
+                            )),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        });
+                    }
+                    "in_library" | "in library" | "in your library" => {
+                        return Ok(ResolutionCondition {
+                            left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                                SourceZoneKind::Library,
+                            )),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        });
+                    }
                     "on_stack" | "on stack" | "on the stack" => {
                         return Ok(ResolutionCondition {
                             left: ValueExpr::SourceState(SourceStateExpr::InZone(
@@ -1282,7 +1340,44 @@ pub(in super::super) fn lower_resolution_condition(
                             right: ValueExpr::literal(1),
                         });
                     }
-                    _ => {}
+                    "attached" => {
+                        return Ok(ResolutionCondition {
+                            left: ValueExpr::object_matches(
+                                MatchObjectRef::AttachedHost,
+                                ObjectFilter::permanent(),
+                            ),
+                            comparison: Comparison::Equal,
+                            right: ValueExpr::literal(1),
+                        });
+                    }
+                    other => {
+                        if let Some(host_raw) = other.strip_prefix("attached:") {
+                            let host_clean = host_raw.trim();
+                            let compiler_vocab = cached_compiler_vocab(vocabulary);
+                            let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+                                host_clean,
+                                &compiler_vocab,
+                            )
+                            .map_err(|_| "oracle:unsupported-if-condition")?;
+                            if !matches!(parsed.zone, None | Some(ZoneFilter::Battlefield))
+                                || !parsed.extra_zones.is_empty()
+                            {
+                                return Err("oracle:unsupported-if-condition");
+                            }
+                            let mut cleaned = parsed;
+                            cleaned.zone = None;
+                            let obj = if is_unrestricted_filter(&cleaned) {
+                                ObjectFilter::permanent()
+                            } else {
+                                lower_object_filter(&cleaned, vocabulary)?
+                            };
+                            return Ok(ResolutionCondition {
+                                left: ValueExpr::object_matches(MatchObjectRef::AttachedHost, obj),
+                                comparison: Comparison::Equal,
+                                right: ValueExpr::literal(1),
+                            });
+                        }
+                    }
                 }
             }
             let mref = if let SubjectRefAst::TargetObject {
@@ -1341,12 +1436,52 @@ pub(in super::super) fn lower_resolution_condition(
                     c.flags = c.flags.union(ObjectFilterFlags::HISTORIC);
                     ObjectFilter::Clause(c)
                 }
+                "nonhistoric" | "non-historic" => {
+                    let mut c = ObjectClause::any();
+                    c.flags = c.flags.union(ObjectFilterFlags::NON_HISTORIC);
+                    ObjectFilter::Clause(c)
+                }
+                "kicked" => ObjectFilter::any().with_flags(ObjectFilterFlags::KICKED),
+                "renowned" => ObjectFilter::any().with_flags(ObjectFilterFlags::RENOWNED),
+                "saddled" => ObjectFilter::any().with_flags(ObjectFilterFlags::SADDLED),
+                "monstrous" => ObjectFilter::any().with_flags(ObjectFilterFlags::MONSTROUS),
+                "suspected" => ObjectFilter::any().with_flags(ObjectFilterFlags::SUSPECTED),
+                "solved" => ObjectFilter::any().with_flags(ObjectFilterFlags::SOLVED),
+                "prepared" => ObjectFilter::any().with_flags(ObjectFilterFlags::PREPARED),
+                "exerted" | "exerted_this_turn" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::EXERTED)
+                }
+                "with_counters" | "has_counter" | "has a counter on it" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::WITH_ANY_COUNTER)
+                }
+                "without_counters" | "has no counters on it" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::WITHOUT_COUNTERS)
+                }
+                "dealt_damage_this_turn" | "was dealt damage this turn" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN)
+                }
+                "attacked_this_turn" | "attacked this turn" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::ATTACKED_THIS_TURN)
+                }
+                "entered_this_turn" | "entered this turn" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::ENTERED_THIS_TURN)
+                }
+                "died_this_turn" | "died this turn" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::DIED_THIS_TURN)
+                }
+                "has_no_abilities" | "no abilities" => {
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::NO_ABILITIES)
+                }
                 "snow" => ObjectFilter::Clause(ObjectClause {
                     required_supertypes: SupertypeMask::SNOW,
                     ..ObjectClause::any()
                 }),
                 "basic" => ObjectFilter::Clause(ObjectClause {
                     required_supertypes: SupertypeMask::BASIC,
+                    ..ObjectClause::any()
+                }),
+                "nonbasic" => ObjectFilter::Clause(ObjectClause {
+                    forbidden_supertypes: SupertypeMask::BASIC,
                     ..ObjectClause::any()
                 }),
                 "colorless" => ObjectFilter::any().with_color(ObjectColorFilter::Colorless),
@@ -1358,8 +1493,15 @@ pub(in super::super) fn lower_resolution_condition(
                 "red" => ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Red)),
                 "green" => ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Green)),
                 "creature" => ObjectFilter::creature(),
+                "noncreature" => ObjectFilter::Clause(ObjectClause::any().noncreature()),
                 "artifact" => ObjectFilter::artifact(),
+                "nonartifact" => {
+                    ObjectFilter::Clause(ObjectClause::any().forbid_types(CardTypeMask::ARTIFACT))
+                }
                 "enchantment" => ObjectFilter::enchantment(),
+                "nonenchantment" => ObjectFilter::Clause(
+                    ObjectClause::any().forbid_types(CardTypeMask::ENCHANTMENT),
+                ),
                 "land" => ObjectFilter::land(),
                 "planeswalker" => ObjectFilter::planeswalker(),
                 "nonland" => ObjectFilter::nonland(),
@@ -1629,6 +1771,46 @@ pub(in super::super) fn lower_resolution_condition(
                     right: ValueExpr::literal(0),
                 });
             }
+            if low == "no snow mana" {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::event(EventValueKind::SnowManaSpentToCast),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                });
+            }
+            if low == "no treasure mana" {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::event(EventValueKind::TreasureManaSpentToCast),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                });
+            }
+            if let Some(rest) = low.strip_prefix("no ")
+                && let Some(mt) = parse_color_word_mana_type(rest)
+            {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::event(EventValueKind::ManaTypeSpentToCast(mt)),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                });
+            }
+            if let Some(rest) = low.strip_prefix("only ")
+                && let Some(mt) = parse_color_word_mana_type(rest)
+            {
+                return combine_resolution_conditions_and(vec![
+                    ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::ManaSpentToCast),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    },
+                    ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::ManaTypeSpentToCast(mt)),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::event(EventValueKind::ManaSpentToCast),
+                    },
+                ])
+                .ok_or("oracle:unsupported-if-condition");
+            }
             if let Some(mt) = parse_color_word_mana_type(&low) {
                 return Ok(ResolutionCondition {
                     left: ValueExpr::event(EventValueKind::ManaTypeSpentToCast(mt)),
@@ -1648,14 +1830,19 @@ pub(in super::super) fn lower_resolution_condition(
                     right: ValueExpr::literal(n),
                 });
             }
-            if low == "{s}" || low == "snow mana" || low == "snow" || low.contains("snow mana") {
+            if !low.starts_with("no ")
+                && (low == "{s}"
+                    || low == "snow mana"
+                    || low == "snow"
+                    || low.contains("snow mana"))
+            {
                 return Ok(ResolutionCondition {
                     left: ValueExpr::event(EventValueKind::SnowManaSpentToCast),
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(1),
                 });
             }
-            if low.contains("treasure") {
+            if !low.starts_with("no ") && low.contains("treasure") {
                 return Ok(ResolutionCondition {
                     left: ValueExpr::event(EventValueKind::TreasureManaSpentToCast),
                     comparison: Comparison::GreaterOrEqual,
@@ -2166,6 +2353,18 @@ pub(in super::super) fn lower_resolution_condition(
                 comparison: Comparison::Equal,
                 right: ValueExpr::literal(1),
             }),
+            PlayerRefAst::DefendingPlayer
+            | PlayerRefAst::EnchantedPlayer
+            | PlayerRefAst::TargetPlayer
+            | PlayerRefAst::TargetOpponent
+            | PlayerRefAst::ChosenPlayer => {
+                let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+                Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(rp)),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                })
+            }
             _ => Err("oracle:unsupported-if-condition"),
         },
         ConditionAst::ZoneChangeThisTurn {
@@ -2195,28 +2394,37 @@ pub(in super::super) fn lower_resolution_condition(
                 && filter.named.is_none()
                 && (filter.flags.0 & !AstFilterFlags::LKI_PAST_TENSE.0) == 0
                 && filter.predicates.is_empty();
-            if *from_zone == Some(ZoneFilter::Battlefield)
+            if matches!(from_zone, None | Some(ZoneFilter::Battlefield))
                 && matches!(
                     to_zone,
                     Some(
                         ZoneFilter::AnyGraveyard
                             | ZoneFilter::AllGraveyards
                             | ZoneFilter::SingleGraveyard
+                            | ZoneFilter::YourGraveyard
+                            | ZoneFilter::OpponentGraveyard
                     )
                 )
             {
-                let ctrl = match controller {
-                    None => None,
-                    Some(PlayerRefAst::You) => Some(ResolvingPlayer::Controller),
+                let from_battlefield_only = *from_zone == Some(ZoneFilter::Battlefield);
+                let (ctrl, forced_ctrl) = match controller {
+                    None => (None, None),
+                    Some(PlayerRefAst::You) => (Some(ResolvingPlayer::Controller), None),
+                    Some(PlayerRefAst::AnyOpponent) if *min_count == 1 => {
+                        (None, Some(ControllerRelation::Opponent))
+                    }
                     Some(
                         PlayerRefAst::AnyOpponent
                         | PlayerRefAst::EachOpponent
                         | PlayerRefAst::AnyPlayer
                         | PlayerRefAst::EachPlayer,
                     ) => return Err("oracle:unsupported-if-condition"),
-                    Some(other) => Some(lower_resolving_player_in_context(
-                        *other, builder, in_trigger,
-                    )?),
+                    Some(other) => (
+                        Some(lower_resolving_player_in_context(
+                            *other, builder, in_trigger,
+                        )?),
+                        None,
+                    ),
                 };
                 if ctrl.is_some()
                     && filter.controller.is_some()
@@ -2230,17 +2438,100 @@ pub(in super::super) fn lower_resolution_condition(
                 {
                     return Err("oracle:unsupported-if-condition");
                 }
+                if forced_ctrl.is_some()
+                    && filter.controller.is_some()
+                    && filter.controller != forced_ctrl
+                {
+                    return Err("oracle:unsupported-if-condition");
+                }
                 let mut clean = filter.as_ref().clone();
-                clean.zone = None;
+                if matches!(clean.zone, Some(ZoneFilter::Battlefield)) {
+                    clean.zone = None;
+                }
+                if clean.zone.is_some() || !clean.extra_zones.is_empty() {
+                    return Err("oracle:unsupported-if-condition");
+                }
+                if let Some(fc) = forced_ctrl {
+                    clean.controller = Some(fc);
+                }
+                match to_zone {
+                    Some(ZoneFilter::YourGraveyard) => {
+                        if clean.owner.is_some() && clean.owner != Some(ControllerRelation::You) {
+                            return Err("oracle:unsupported-if-condition");
+                        }
+                        clean.owner = Some(ControllerRelation::You);
+                    }
+                    Some(ZoneFilter::OpponentGraveyard) => {
+                        if clean.owner.is_some()
+                            && !matches!(
+                                clean.owner,
+                                Some(ControllerRelation::Opponent | ControllerRelation::Opponents)
+                            )
+                        {
+                            return Err("oracle:unsupported-if-condition");
+                        }
+                        clean.owner = Some(ControllerRelation::Opponent);
+                    }
+                    _ => {}
+                }
                 let obj = lower_object_filter(&clean, vocabulary)?;
+                let clause_ok = |c: ObjectClause| {
+                    matches!(
+                        c.subtypes,
+                        SubtypeFilter::Any
+                            | SubtypeFilter::Has(_)
+                            | SubtypeFilter::Lacks(_)
+                            | SubtypeFilter::AnyOf(_)
+                            | SubtypeFilter::NoneOf(_)
+                            | SubtypeFilter::Artifact(_)
+                    ) && c.flags == ObjectFilterFlags::EMPTY
+                        && c.source_relation == SourceRelation::Any
+                        && c.combat == CombatFilter::Any
+                        && c.power == PowerFilter::Any
+                        && c.toughness == ToughnessFilter::Any
+                        && c.mana_value == ManaValueFilter::Any
+                        && c.keyword.is_none()
+                        && c.forbidden_keyword.is_none()
+                        && c.tapped.is_none()
+                        && c.token.is_none()
+                        && c.exact_name.is_none()
+                        && c.required_counter_kind.is_none()
+                        && c.forbidden_counter_kind.is_none()
+                };
+                let (c1, c2) = obj.clauses();
+                if !clause_ok(c1) || c2.is_some_and(|c| !clause_ok(c)) {
+                    return Err("oracle:unsupported-if-condition");
+                }
                 return Ok(ResolutionCondition {
                     left: ValueExpr::PlayerStat(
                         PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
                             filter: Box::new(obj),
-                            from_battlefield_only: true,
+                            from_battlefield_only,
                             controller: ctrl,
                         },
                     ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(i64::from(*min_count)),
+                });
+            }
+            if *from_zone == Some(ZoneFilter::YourGraveyard)
+                && to_zone.is_none()
+                && controller.is_none()
+                && is_unrestricted_filter(filter)
+            {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CardsLeftGraveyardThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(i64::from(*min_count)),
+                });
+            }
+            if from_zone.is_none()
+                && *to_zone == Some(ZoneFilter::Exile)
+                && controller.is_none()
+                && is_unrestricted_filter(filter)
+            {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CardsExiledThisTurn),
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(i64::from(*min_count)),
                 });
@@ -2259,6 +2550,7 @@ pub(in super::super) fn lower_resolution_condition(
                 let opp_ctrl = matches!(controller, Some(PlayerRefAst::AnyOpponent))
                     || (controller.is_none()
                         && filter.controller == Some(ControllerRelation::Opponent));
+                let any_ctrl = controller.is_none() && filter.controller.is_none();
                 if your_ctrl && filter.any_types.is_empty() && filter.forbidden_types.is_empty() {
                     return Ok(ResolutionCondition {
                         left: ValueExpr::PlayerStat(
@@ -2280,6 +2572,18 @@ pub(in super::super) fn lower_resolution_condition(
                         right: ValueExpr::literal(i64::from(*min_count)),
                     });
                 }
+                if any_ctrl
+                    && filter.any_types.is_empty()
+                    && filter.forbidden_types == AstCardTypeMask::LAND
+                {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(
+                            PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn,
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(i64::from(*min_count)),
+                    });
+                }
                 if opp_ctrl
                     && *min_count == 1
                     && filter.any_types.is_empty()
@@ -2292,6 +2596,29 @@ pub(in super::super) fn lower_resolution_condition(
                         comparison: Comparison::GreaterOrEqual,
                         right: ValueExpr::literal(1),
                     });
+                }
+                if any_ctrl
+                    && *min_count == 1
+                    && filter.any_types.is_empty()
+                    && filter.forbidden_types.is_empty()
+                {
+                    return combine_resolution_conditions_or(vec![
+                        ResolutionCondition {
+                            left: ValueExpr::PlayerStat(
+                                PlayerStatExpr::PermanentLeftBattlefieldThisTurn,
+                            ),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        },
+                        ResolutionCondition {
+                            left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                                OpponentTurnStat::PermanentLeft,
+                            )),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        },
+                    ])
+                    .ok_or("oracle:unsupported-if-condition");
                 }
             }
             if from_zone.is_none()
@@ -2345,6 +2672,26 @@ pub(in super::super) fn lower_resolution_condition(
                             right: ValueExpr::literal(i64::from(*min_count)),
                         });
                     }
+                }
+                if filter.any_types == AstCardTypeMask::LAND
+                    && filter.controller.is_none()
+                    && let Some(p) = controller
+                    && !matches!(
+                        p,
+                        PlayerRefAst::You
+                            | PlayerRefAst::AnyOpponent
+                            | PlayerRefAst::EachOpponent
+                            | PlayerRefAst::AnyPlayer
+                            | PlayerRefAst::EachPlayer
+                            | PlayerRefAst::EachOtherPlayer
+                    )
+                {
+                    let rp = lower_resolving_player_in_context(*p, builder, in_trigger)?;
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::LandsEnteredThisTurn(rp)),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(i64::from(*min_count)),
+                    });
                 }
             }
             Err("oracle:unsupported-if-condition")
@@ -3118,6 +3465,55 @@ pub(in super::super) fn lower_resolution_condition(
                     right: ValueExpr::literal(i64::from(*min_count)),
                 }),
                 Some(f) => {
+                    let has_lki = matches!(
+                        builder.instructions.last(),
+                        Some(
+                            Instruction::Discard { .. }
+                                | Instruction::DiscardFiltered { .. }
+                                | Instruction::DiscardUpTo { .. }
+                                | Instruction::DiscardUpToExt { .. }
+                                | Instruction::Sacrifice { .. }
+                                | Instruction::SacrificeUpTo { .. }
+                                | Instruction::ExileChosenPermanents { .. }
+                                | Instruction::SelectZoneCardsToZone { .. }
+                                | Instruction::ChooseObjects { .. }
+                                | Instruction::UntapOrTapSelect { .. }
+                        )
+                    );
+                    let lki_action = matches!(
+                        act_low.as_str(),
+                        "discarded"
+                            | "discarded_this_way"
+                            | "sacrificed"
+                            | "sacrificed_this_way"
+                            | "exiled"
+                            | "exiled_this_way"
+                            | "tapped"
+                            | "tapped_this_way"
+                            | "untapped"
+                            | "untapped_this_way"
+                            | "chosen"
+                            | "chosen_this_way"
+                    );
+                    if has_lki
+                        && lki_action
+                        && f.zone.is_none()
+                        && f.extra_zones.is_empty()
+                        && f.controller.is_none()
+                        && f.owner.is_none()
+                        && f.named.is_none()
+                        && f.predicates.is_empty()
+                        && f.flags.is_empty()
+                    {
+                        let obj = lower_object_filter(f, vocabulary)?;
+                        if !obj.has_target_player() {
+                            return Ok(ResolutionCondition {
+                                left: ValueExpr::LastActionMatchingCount(Box::new(obj)),
+                                comparison: Comparison::GreaterOrEqual,
+                                right: ValueExpr::literal(i64::from(*min_count)),
+                            });
+                        }
+                    }
                     if *min_count != 1 {
                         return Err("oracle:unsupported-if-condition");
                     }

@@ -3743,6 +3743,8 @@ fn parse_spell_cast_timing_restriction(
 }
 
 pub(super) fn is_sorcery_timing_restriction(restriction: &str) -> bool {
+    // Only match trailing cast-permission sorcery qualifiers, never ability/spell-level
+    // "Activate only as a sorcery" (emitted as "Sorcery") or "Cast this spell only as a sorcery".
     let low = restriction
         .trim()
         .trim_end_matches('.')
@@ -3750,14 +3752,14 @@ pub(super) fn is_sorcery_timing_restriction(restriction: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         low.as_str(),
-        "sorcery"
-            | "as a sorcery"
+        "as a sorcery"
             | "only as a sorcery"
-            | "activate only as a sorcery"
+            | "cast only as a sorcery"
+            | "play only as a sorcery"
+            | "cast it only as a sorcery"
+            | "play it only as a sorcery"
             | "any time you could cast a sorcery"
             | "only any time you could cast a sorcery"
-            | "cast this spell only as a sorcery"
-            | "cast ~ only as a sorcery"
     )
 }
 

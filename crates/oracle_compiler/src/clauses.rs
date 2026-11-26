@@ -17272,9 +17272,11 @@ pub fn parse_static_or_replacement(
         && let Some((flt_raw, _)) = after.split_once(". if you don't, ~ enters tapped")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
+        let or_control = low.contains(" this way or you control ");
         return Ok(StaticOrReplacement::Replacement(
             ReplacementEffectAst::EntersTappedUnlessReveal {
                 filter: Box::new(flt),
+                or_control,
             },
         ));
     }
@@ -17296,9 +17298,11 @@ pub fn parse_static_or_replacement(
         && let Some((flt_raw, _)) = after_rev.split_once(" from your hand")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
+        let or_control = low.contains(" this way or you control ");
         return Ok(StaticOrReplacement::Replacement(
             ReplacementEffectAst::EntersTappedUnlessReveal {
                 filter: Box::new(flt),
+                or_control,
             },
         ));
     }

@@ -1442,7 +1442,9 @@ pub(super) fn lower_instruction(
         | InstructionAst::Suspect { .. }
         | InstructionAst::SwitchPowerToughness { .. }
         | InstructionAst::Transform { .. }
-        | InstructionAst::TurnFaceUp { .. } => lower_counters_pt_instruction(
+        | InstructionAst::TurnFaceUp { .. }
+        | InstructionAst::TurnFaceDown { .. }
+        | InstructionAst::Empower { .. } => lower_counters_pt_instruction(
             ins,
             builder,
             vocabulary,

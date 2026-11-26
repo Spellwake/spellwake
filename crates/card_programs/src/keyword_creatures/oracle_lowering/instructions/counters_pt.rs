@@ -1,5 +1,46 @@
 use super::*;
 
+fn strip_battlefield_zone_from_subject(subject: &SubjectRefAst) -> SubjectRefAst {
+    match subject {
+        SubjectRefAst::InZone {
+            subject: inner,
+            zone: ZoneFilter::Battlefield,
+        } => strip_battlefield_zone_from_subject(inner),
+        SubjectRefAst::All(f) if f.zone == Some(ZoneFilter::Battlefield) => {
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            SubjectRefAst::All(Box::new(clean))
+        }
+        SubjectRefAst::Each(f) if f.zone == Some(ZoneFilter::Battlefield) => {
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            SubjectRefAst::Each(Box::new(clean))
+        }
+        SubjectRefAst::Group(f) if f.zone == Some(ZoneFilter::Battlefield) => {
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            SubjectRefAst::Group(Box::new(clean))
+        }
+        SubjectRefAst::TargetObject { filter, count }
+            if filter.zone == Some(ZoneFilter::Battlefield) =>
+        {
+            let mut clean = filter.as_ref().clone();
+            clean.zone = None;
+            SubjectRefAst::TargetObject {
+                filter: Box::new(clean),
+                count: *count,
+            }
+        }
+        SubjectRefAst::Compound(items) => SubjectRefAst::Compound(
+            items
+                .iter()
+                .map(strip_battlefield_zone_from_subject)
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 pub(super) fn lower_counters_pt_instruction(
     ins: &InstructionAst,
     builder: &mut BodyBuilder,
@@ -29,7 +70,9 @@ pub(super) fn lower_counters_pt_instruction(
             duration,
             scale: Some(scale_expr),
         } => {
-            if let SubjectRefAst::Compound(items) = subject.as_ref()
+            let clean_subject = strip_battlefield_zone_from_subject(subject);
+            let subject = &clean_subject;
+            if let SubjectRefAst::Compound(items) = subject
                 && !items.is_empty()
             {
                 let mut trial = builder.clone();
@@ -61,9 +104,16 @@ pub(super) fn lower_counters_pt_instruction(
                 in_trigger,
                 vocabulary,
             )?;
+            let anaphora_created = last_instruction_created_tokens(&builder.instructions)
+                || (has_prior_token_creation(&builder.instructions)
+                    && !is_permanent_body_target(builder.target)
+                    && !has_prior_moved_object(&builder.instructions));
+            let anaphora_moved = last_instruction_moved_object(&builder.instructions)
+                || (!is_permanent_body_target(builder.target)
+                    && has_prior_moved_object(&builder.instructions));
             if let (Some(dp), Some(dt)) = (parse_signed_pt_delta(dx), parse_signed_pt_delta(dy)) {
                 if dur == ResolvedDuration::UntilEndOfTurn {
-                    let group = match subject.as_ref() {
+                    let group = match subject {
                         s if is_self_pronoun(s, builder, self_pronoun_valid) => {
                             Some(EffectSubject::AbilitySource)
                         }
@@ -76,14 +126,12 @@ pub(super) fn lower_counters_pt_instruction(
                             Some(EffectSubject::TriggerSubject)
                         }
                         SubjectRefAst::Anaphora(_)
-                            if !is_permanent_body_target(builder.target)
-                                && last_instruction_created_tokens(&builder.instructions) =>
+                            if !is_permanent_body_target(builder.target) && anaphora_created =>
                         {
                             Some(EffectSubject::CreatedTokens)
                         }
                         SubjectRefAst::Anaphora(_)
-                            if !is_permanent_body_target(builder.target)
-                                && last_instruction_moved_object(&builder.instructions) =>
+                            if !is_permanent_body_target(builder.target) && anaphora_moved =>
                         {
                             Some(EffectSubject::LastMoved)
                         }
@@ -123,9 +171,9 @@ pub(super) fn lower_counters_pt_instruction(
                     power: Box::new(pe),
                     toughness: Box::new(te),
                 };
-                if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                if matches!(subject, SubjectRefAst::Anaphora(_))
                     && !is_permanent_body_target(builder.target)
-                    && last_instruction_created_tokens(&builder.instructions)
+                    && anaphora_created
                 {
                     builder.instructions.push(Instruction::ChangeGroup {
                         group: Box::new(EffectSubject::CreatedTokens),
@@ -134,9 +182,9 @@ pub(super) fn lower_counters_pt_instruction(
                     });
                     return Ok(());
                 }
-                if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                if matches!(subject, SubjectRefAst::Anaphora(_))
                     && !is_permanent_body_target(builder.target)
-                    && last_instruction_moved_object(&builder.instructions)
+                    && anaphora_moved
                 {
                     builder.instructions.push(Instruction::ChangeGroup {
                         group: Box::new(EffectSubject::LastMoved),
@@ -181,9 +229,20 @@ pub(super) fn lower_counters_pt_instruction(
                 power: Box::new(pe),
                 toughness: Box::new(te),
             };
-            if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+            if matches!(subject, SubjectRefAst::Anaphora(_))
                 && !is_permanent_body_target(builder.target)
-                && last_instruction_moved_object(&builder.instructions)
+                && anaphora_created
+            {
+                builder.instructions.push(Instruction::ChangeGroup {
+                    group: Box::new(EffectSubject::CreatedTokens),
+                    parts: ResolvedPartsSpec(vec![part]),
+                    duration: dur,
+                });
+                return Ok(());
+            }
+            if matches!(subject, SubjectRefAst::Anaphora(_))
+                && !is_permanent_body_target(builder.target)
+                && anaphora_moved
             {
                 builder.instructions.push(Instruction::ChangeGroup {
                     group: Box::new(EffectSubject::LastMoved),
@@ -209,18 +268,48 @@ pub(super) fn lower_counters_pt_instruction(
             duration,
             scale: None,
         } => {
+            let clean_subject = strip_battlefield_zone_from_subject(subject);
+            let subject = &clean_subject;
             let dur = lower_duration(duration)?;
             let dp = parse_signed_pt_delta(dx);
             let dt = parse_signed_pt_delta(dy);
+            let anaphora_created = last_instruction_created_tokens(&builder.instructions)
+                || (has_prior_token_creation(&builder.instructions)
+                    && !is_permanent_body_target(builder.target)
+                    && !has_prior_moved_object(&builder.instructions));
+            let anaphora_moved = last_instruction_moved_object(&builder.instructions)
+                || (!is_permanent_body_target(builder.target)
+                    && has_prior_moved_object(&builder.instructions));
             match (dp, dt) {
                 (Some(p), Some(t)) => {
                     let pt = PowerToughness {
                         power: p.into(),
                         toughness: t.into(),
                     };
-                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
                         && !is_permanent_body_target(builder.target)
-                        && last_instruction_moved_object(&builder.instructions)
+                        && anaphora_created
+                    {
+                        if dur == ResolvedDuration::UntilEndOfTurn {
+                            builder
+                                .instructions
+                                .push(Instruction::ModifyGroupUntilEndOfTurn {
+                                    group: Box::new(EffectSubject::CreatedTokens),
+                                    power_toughness: Some(pt),
+                                    keywords: BTreeSet::new(),
+                                });
+                        } else {
+                            builder.instructions.push(Instruction::ChangeGroup {
+                                group: Box::new(EffectSubject::CreatedTokens),
+                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
+                                duration: dur,
+                            });
+                        }
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && !is_permanent_body_target(builder.target)
+                        && anaphora_moved
                     {
                         if dur == ResolvedDuration::UntilEndOfTurn {
                             builder
@@ -258,9 +347,20 @@ pub(super) fn lower_counters_pt_instruction(
                         power: Box::new(pe),
                         toughness: Box::new(te),
                     };
-                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
                         && !is_permanent_body_target(builder.target)
-                        && last_instruction_moved_object(&builder.instructions)
+                        && anaphora_created
+                    {
+                        builder.instructions.push(Instruction::ChangeGroup {
+                            group: Box::new(EffectSubject::CreatedTokens),
+                            parts: ResolvedPartsSpec(vec![part]),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && !is_permanent_body_target(builder.target)
+                        && anaphora_moved
                     {
                         builder.instructions.push(Instruction::ChangeGroup {
                             group: Box::new(EffectSubject::LastMoved),
@@ -1116,7 +1216,7 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 SubjectRefAst::TargetObject {
                     filter,
-                    count: TargetCountAst::ChosenX,
+                    count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
                 } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && !in_trigger => {
                     let mut f_clean = filter.as_ref().clone();
                     f_clean.zone = None;
@@ -1124,7 +1224,11 @@ pub(super) fn lower_counters_pt_instruction(
                         &f_clean, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder.x_target_count = true;
+                    if *tc == TargetCountAst::UpToX {
+                        builder.up_to_x_target_count = true;
+                    } else {
+                        builder.x_target_count = true;
+                    }
                     builder
                         .instructions
                         .push(Instruction::AffectPermanentTargets {
@@ -1614,6 +1718,159 @@ pub(super) fn lower_counters_pt_instruction(
             count,
         } => {
             let kind_low_full = counter_kind.trim().to_ascii_lowercase();
+            if matches!(count.as_ref(), ValueExprAst::Const(1))
+                && matches!(
+                    kind_low_full.as_str(),
+                    "each_kind_already_on"
+                        | "of each kind already on it"
+                        | "each kind already on it"
+                        | "another counter of each kind already on it"
+                        | "a counter of each kind already on it"
+                        | "of each kind already there"
+                        | "each kind already there"
+                        | "of each kind already on that permanent"
+                        | "of each kind already on that creature"
+                        | "each kind of counter already on it"
+                        | "of each kind on it"
+                )
+            {
+                let eff_subject = match subject.as_ref() {
+                    SubjectRefAst::InZone {
+                        subject: inner,
+                        zone: ZoneFilter::Battlefield,
+                    } => inner.as_ref(),
+                    other => other,
+                };
+                if let SubjectRefAst::Compound(items) = eff_subject
+                    && !items.is_empty()
+                {
+                    let mut trial = builder.clone();
+                    for item in items {
+                        lower_instruction(
+                            &InstructionAst::PutCounters {
+                                subject: Box::new(item.clone()),
+                                counter_kind: counter_kind.clone(),
+                                count: count.clone(),
+                            },
+                            &mut trial,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        )?;
+                    }
+                    *builder = trial;
+                    return Ok(());
+                }
+                let has_source = in_trigger || self_pronoun_valid || builder.has_source;
+                let mut trial = builder.clone();
+                let target_subj = match eff_subject {
+                    s if has_source && is_self_pronoun(s, &trial, self_pronoun_valid) => {
+                        Some(EffectSubject::AbilitySource)
+                    }
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: TargetCountAst::Exact(1),
+                    } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                        let mut f_clean = filter.as_ref().clone();
+                        f_clean.zone = None;
+                        let bt = lower_battlefield_body_target_in_context(
+                            &f_clean, &trial, in_trigger, vocabulary,
+                        )?;
+                        trial.bind_target(bt)?;
+                        Some(EffectSubject::TargetObject)
+                    }
+                    SubjectRefAst::TargetOneOf {
+                        options,
+                        count: TargetCountAst::Exact(1),
+                    } => {
+                        let bt = lower_target_one_of_permanent_body_target(
+                            options, &trial, in_trigger, vocabulary,
+                        )?;
+                        trial.bind_target(bt)?;
+                        Some(EffectSubject::TargetObject)
+                    }
+                    SubjectRefAst::AttachedHost(_) if has_source => Some(EffectSubject::Matching(
+                        ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                    )),
+                    SubjectRefAst::TriggerSubject if in_trigger => {
+                        Some(EffectSubject::TriggerSubject)
+                    }
+                    SubjectRefAst::Anaphora(_) if is_permanent_body_target(trial.target) => {
+                        Some(EffectSubject::TargetObject)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_created_tokens(&trial.instructions) =>
+                    {
+                        Some(EffectSubject::CreatedTokens)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_moved_object(&trial.instructions) =>
+                    {
+                        Some(EffectSubject::LastMoved)
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if trial.target == BodyTarget::None
+                            && let Some(group_obj) = trial.last_group_filter =>
+                    {
+                        Some(EffectSubject::Matching(group_obj))
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if in_trigger
+                            && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                            && trial.target == BodyTarget::None =>
+                    {
+                        Some(EffectSubject::TriggerSubject)
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
+                        if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                    {
+                        let mut f_clean = f.as_ref().clone();
+                        f_clean.zone = None;
+                        let obj = lower_object_filter_in_context(
+                            &f_clean, &trial, in_trigger, vocabulary,
+                        )?;
+                        bind_filter_player_target(&mut trial, &obj)?;
+                        trial.last_group_filter = Some(obj);
+                        Some(EffectSubject::Matching(obj))
+                    }
+                    _ => None,
+                };
+                if let Some(eff_subj) = target_subj {
+                    trial
+                        .instructions
+                        .push(Instruction::AddOneOfEachCounterKindOnSubject {
+                            subject: Box::new(eff_subj),
+                        });
+                    *builder = trial;
+                    return Ok(());
+                }
+                return Err("oracle:put-counter-kind");
+            }
+            if matches!(count.as_ref(), ValueExprAst::Const(1))
+                && let Some(rest_kind) = kind_low_full.strip_prefix("twice that many ")
+            {
+                let rest_trimmed = rest_kind.trim();
+                if !rest_trimmed.is_empty() {
+                    return lower_instruction(
+                        &InstructionAst::PutCounters {
+                            subject: subject.clone(),
+                            counter_kind: rest_trimmed.to_string(),
+                            count: Box::new(ValueExprAst::Mul(
+                                Box::new(ValueExprAst::Const(2)),
+                                Box::new(ValueExprAst::PriorResult),
+                            )),
+                        },
+                        builder,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    );
+                }
+            }
             let choice_list_stem: Option<&str> = kind_low_full
                 .strip_prefix("choice:")
                 .or_else(|| {
@@ -1810,80 +2067,128 @@ pub(super) fn lower_counters_pt_instruction(
                     }
                 }
             }
-            if let Some((lhs_low, rhs_low)) = kind_low_full.split_once(" and ")
-                && (lhs_low.ends_with(" counter")
-                    || lhs_low.ends_with(" counters")
-                    || parse_counter_kind(lhs_low.trim()).is_some())
+            if !kind_low_full.contains(" or ")
+                && (kind_low_full.contains(" and ") || kind_low_full.contains(", "))
             {
-                let k1 = lhs_low
-                    .strip_suffix(" counters")
-                    .or_else(|| lhs_low.strip_suffix(" counter"))
-                    .unwrap_or(lhs_low)
-                    .trim();
-                let (count2, k2_raw) = if let Some(r) = rhs_low
-                    .strip_prefix("a ")
-                    .or_else(|| rhs_low.strip_prefix("an "))
-                    .or_else(|| rhs_low.strip_prefix("one "))
-                {
-                    (ValueExprAst::Const(1), r.trim())
-                } else if let Some(r) = rhs_low.strip_prefix("two ") {
-                    (ValueExprAst::Const(2), r.trim())
-                } else if let Some(r) = rhs_low.strip_prefix("three ") {
-                    (ValueExprAst::Const(3), r.trim())
-                } else if let Some((tok, rest)) = rhs_low.split_once(' ')
-                    && let Some(n) = parse_small_number_word(tok)
-                    && n > 0
-                {
-                    (ValueExprAst::Const(i32::from(n)), rest.trim())
-                } else {
-                    (ValueExprAst::Const(1), rhs_low.trim())
-                };
-                let k2 = k2_raw
-                    .strip_suffix(" counters")
-                    .or_else(|| k2_raw.strip_suffix(" counter"))
-                    .unwrap_or(k2_raw)
-                    .trim();
-                let second_subject = match subject.as_ref() {
-                    SubjectRefAst::TargetObject {
-                        count: TargetCountAst::Exact(1),
-                        ..
-                    } => Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                    SubjectRefAst::TargetPlayer {
-                        count: TargetCountAst::Exact(1),
-                        ..
+                let mut raw_parts: Vec<&str> = Vec::new();
+                for seg in kind_low_full.split(", ") {
+                    let seg = seg.trim();
+                    if seg.is_empty() {
+                        continue;
                     }
-                    | SubjectRefAst::Player(
-                        PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent,
-                    ) => Box::new(SubjectRefAst::Player(PlayerRefAst::ThatPlayer)),
-                    _ => subject.clone(),
-                };
-                lower_instruction(
-                    &InstructionAst::PutCounters {
-                        subject: subject.clone(),
-                        counter_kind: k1.to_string(),
-                        count: count.clone(),
-                    },
-                    builder,
-                    vocabulary,
-                    ids,
-                    in_trigger,
-                    self_pronoun_valid,
-                    bound_x,
-                )?;
-                lower_instruction(
-                    &InstructionAst::PutCounters {
-                        subject: second_subject,
-                        counter_kind: k2.to_string(),
-                        count: Box::new(count2),
-                    },
-                    builder,
-                    vocabulary,
-                    ids,
-                    in_trigger,
-                    self_pronoun_valid,
-                    bound_x,
-                )?;
-                return Ok(());
+                    if let Some(after_and) = seg.strip_prefix("and ") {
+                        raw_parts.push(after_and.trim());
+                    } else if let Some((lhs, rhs)) = seg.split_once(" and ") {
+                        if !lhs.trim().is_empty() {
+                            raw_parts.push(lhs.trim());
+                        }
+                        if !rhs.trim().is_empty() {
+                            raw_parts.push(rhs.trim());
+                        }
+                    } else {
+                        raw_parts.push(seg);
+                    }
+                }
+                if raw_parts.len() >= 2 {
+                    let mut parsed_items: Vec<(ValueExprAst, String)> = Vec::new();
+                    let mut all_valid = true;
+                    for (idx, part) in raw_parts.iter().enumerate() {
+                        let (item_cnt, rest_after_cnt) = if idx == 0 {
+                            if matches!(count.as_ref(), ValueExprAst::Const(1))
+                                && let Some((tok, rest)) = part.split_once(' ')
+                                && !matches!(tok, "a" | "an" | "one")
+                                && let Some(n) = parse_small_number_word(tok)
+                                && n > 0
+                            {
+                                (ValueExprAst::Const(i32::from(n)), rest.trim())
+                            } else {
+                                ((**count).clone(), *part)
+                            }
+                        } else if let Some(r) = part
+                            .strip_prefix("a ")
+                            .or_else(|| part.strip_prefix("an "))
+                            .or_else(|| part.strip_prefix("one "))
+                        {
+                            (ValueExprAst::Const(1), r.trim())
+                        } else if let Some(r) = part.strip_prefix("two ") {
+                            (ValueExprAst::Const(2), r.trim())
+                        } else if let Some(r) = part.strip_prefix("three ") {
+                            (ValueExprAst::Const(3), r.trim())
+                        } else if let Some((tok, rest)) = part.split_once(' ')
+                            && let Some(n) = parse_small_number_word(tok)
+                            && n > 0
+                        {
+                            (ValueExprAst::Const(i32::from(n)), rest.trim())
+                        } else {
+                            (ValueExprAst::Const(1), *part)
+                        };
+                        let mut k = rest_after_cnt;
+                        while let Some(r) = k
+                            .strip_prefix("an additional ")
+                            .or_else(|| k.strip_prefix("one additional "))
+                            .or_else(|| k.strip_prefix("additional "))
+                            .or_else(|| k.strip_prefix("another "))
+                            .or_else(|| k.strip_prefix("a "))
+                            .or_else(|| k.strip_prefix("an "))
+                            .or_else(|| k.strip_prefix("one "))
+                        {
+                            k = r.trim_start();
+                        }
+                        k = k
+                            .strip_suffix(" counters")
+                            .or_else(|| k.strip_suffix(" counter"))
+                            .unwrap_or(k)
+                            .trim();
+                        if parse_counter_kind(k).is_none() {
+                            all_valid = false;
+                            break;
+                        }
+                        parsed_items.push((item_cnt, k.to_string()));
+                    }
+                    if all_valid && parsed_items.len() >= 2 {
+                        let follow_subject = match subject.as_ref() {
+                            SubjectRefAst::TargetObject {
+                                count: TargetCountAst::Exact(1),
+                                ..
+                            }
+                            | SubjectRefAst::TargetOneOf {
+                                count: TargetCountAst::Exact(1),
+                                ..
+                            } => Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                            SubjectRefAst::TargetPlayer {
+                                count: TargetCountAst::Exact(1),
+                                ..
+                            }
+                            | SubjectRefAst::Player(
+                                PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent,
+                            ) => Box::new(SubjectRefAst::Player(PlayerRefAst::ThatPlayer)),
+                            _ => subject.clone(),
+                        };
+                        let mut trial = builder.clone();
+                        for (idx, (item_cnt, item_kind)) in parsed_items.into_iter().enumerate() {
+                            let item_subj = if idx == 0 {
+                                subject.clone()
+                            } else {
+                                follow_subject.clone()
+                            };
+                            lower_instruction(
+                                &InstructionAst::PutCounters {
+                                    subject: item_subj,
+                                    counter_kind: item_kind,
+                                    count: Box::new(item_cnt),
+                                },
+                                &mut trial,
+                                vocabulary,
+                                ids,
+                                in_trigger,
+                                self_pronoun_valid,
+                                bound_x,
+                            )?;
+                        }
+                        *builder = trial;
+                        return Ok(());
+                    }
+                }
             }
             let mut kind_clean = kind_low_full.as_str();
             while let Some(rest) = kind_clean
@@ -1903,9 +2208,16 @@ pub(super) fn lower_counters_pt_instruction(
                 kind_clean = rest.trim_start();
             }
             kind_clean = kind_clean
+                .trim_end_matches('.')
+                .trim()
                 .strip_suffix(" counters")
-                .or_else(|| kind_clean.strip_suffix(" counter"))
-                .unwrap_or(kind_clean)
+                .or_else(|| {
+                    kind_clean
+                        .trim_end_matches('.')
+                        .trim()
+                        .strip_suffix(" counter")
+                })
+                .unwrap_or(kind_clean.trim_end_matches('.').trim())
                 .trim();
             let ck = parse_counter_kind(kind_clean).ok_or("oracle:put-counter-kind")?;
             let amt = lower_value_expr_in_context(
@@ -1915,6 +2227,28 @@ pub(super) fn lower_counters_pt_instruction(
                 vocabulary,
             )?;
             if ck.is_player_counter() {
+                if let SubjectRefAst::Compound(items) = subject.as_ref()
+                    && !items.is_empty()
+                {
+                    let mut trial = builder.clone();
+                    for item in items {
+                        lower_instruction(
+                            &InstructionAst::PutCounters {
+                                subject: Box::new(item.clone()),
+                                counter_kind: counter_kind.clone(),
+                                count: count.clone(),
+                            },
+                            &mut trial,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        )?;
+                    }
+                    *builder = trial;
+                    return Ok(());
+                }
                 if let SubjectRefAst::Player(p) = subject.as_ref() {
                     let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
                     builder.instructions.push(Instruction::AddPlayerCounter {
@@ -1924,9 +2258,24 @@ pub(super) fn lower_counters_pt_instruction(
                     });
                     return Ok(());
                 }
+                if let SubjectRefAst::Anaphora(raw) = subject.as_ref()
+                    && is_player_anaphora_label(raw)
+                {
+                    let players = lower_affected_players_in_context(
+                        PlayerRefAst::ThatPlayer,
+                        builder,
+                        in_trigger,
+                    )?;
+                    builder.instructions.push(Instruction::AddPlayerCounter {
+                        players,
+                        kind: ck,
+                        amount: amt,
+                    });
+                    return Ok(());
+                }
                 if let SubjectRefAst::TargetPlayer {
                     opponent_only,
-                    count: TargetCountAst::Exact(1),
+                    count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                 } = subject.as_ref()
                 {
                     builder.bind_target(if *opponent_only {
@@ -1934,6 +2283,9 @@ pub(super) fn lower_counters_pt_instruction(
                     } else {
                         BodyTarget::SinglePlayer
                     })?;
+                    if *tc == TargetCountAst::UpTo(1) {
+                        builder.up_to_one_target = true;
+                    }
                     builder.instructions.push(Instruction::AddPlayerCounter {
                         players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                         kind: ck,
@@ -1947,6 +2299,25 @@ pub(super) fn lower_counters_pt_instruction(
                 ValueExpr::Literal(n) => n.to_usize().filter(|&v| v > 0),
                 _ => None,
             };
+            if let SubjectRefAst::InZone {
+                subject: inner,
+                zone: ZoneFilter::Battlefield,
+            } = subject.as_ref()
+            {
+                return lower_instruction(
+                    &InstructionAst::PutCounters {
+                        subject: inner.clone(),
+                        counter_kind: counter_kind.clone(),
+                        count: count.clone(),
+                    },
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                );
+            }
             match subject.as_ref() {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
                     if let (ValueExpr::Literal(n), Some(n_usize)) = (&amt, const_n) {
@@ -1986,8 +2357,12 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::Exact(1),
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     if ck == CounterKind::Indestructible && const_n == Some(1) {
                         builder
@@ -2026,8 +2401,12 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::Exact(n),
-                } if filter.zone.is_none() && *n >= 2 => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && *n >= 2 => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
                         PermanentTargetAction::PutPlusOneCounter
@@ -2049,8 +2428,12 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::UpTo(max),
-                } if filter.zone.is_none() && *max > 0 => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && *max > 0 => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
                         PermanentTargetAction::PutPlusOneCounter
@@ -2113,7 +2496,57 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 SubjectRefAst::TargetOneOf {
                     options,
-                    count: TargetCountAst::UpTo(1),
+                    count: TargetCountAst::Exact(n),
+                } if *n >= 2 => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
+                        PermanentTargetAction::PutPlusOneCounter
+                    } else {
+                        PermanentTargetAction::PutCounters {
+                            kind: ck,
+                            amount: amt,
+                        }
+                    };
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: *n,
+                            maximum: *n,
+                            action,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::UpTo(max),
+                } if *max > 0 => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
+                        PermanentTargetAction::PutPlusOneCounter
+                    } else {
+                        PermanentTargetAction::PutCounters {
+                            kind: ck,
+                            amount: amt,
+                        }
+                    };
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: *max,
+                            action,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::AnyNumber,
                 } => {
                     let bt = lower_target_one_of_permanent_body_target(
                         options, builder, in_trigger, vocabulary,
@@ -2131,7 +2564,37 @@ pub(super) fn lower_counters_pt_instruction(
                         .instructions
                         .push(Instruction::AffectPermanentTargets {
                             minimum: 0,
-                            maximum: 1,
+                            maximum: u16::MAX,
+                            action,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
+                } if !in_trigger => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    if *tc == TargetCountAst::UpToX {
+                        builder.up_to_x_target_count = true;
+                    } else {
+                        builder.x_target_count = true;
+                    }
+                    let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
+                        PermanentTargetAction::PutPlusOneCounter
+                    } else {
+                        PermanentTargetAction::PutCounters {
+                            kind: ck,
+                            amount: amt,
+                        }
+                    };
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: u16::MAX,
                             action,
                         });
                     Ok(())
@@ -2139,8 +2602,12 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::AnyNumber,
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     builder
                         .instructions
@@ -2155,12 +2622,27 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
-                    if last_instruction_created_tokens(&builder.instructions) =>
+                    if last_instruction_created_tokens(&builder.instructions)
+                        || (has_prior_token_creation(&builder.instructions)
+                            && !is_permanent_body_target(builder.target)
+                            && !has_prior_moved_object(&builder.instructions)) =>
                 {
                     builder
                         .instructions
                         .push(Instruction::PutCountersOnSubject {
                             subject: Box::new(EffectSubject::CreatedTokens),
+                            kind: ck,
+                            amount: amt,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if last_instruction_moved_object(&builder.instructions) =>
+                {
+                    builder
+                        .instructions
+                        .push(Instruction::PutCountersOnSubject {
+                            subject: Box::new(EffectSubject::LastMoved),
                             kind: ck,
                             amount: amt,
                         });
@@ -2229,16 +2711,18 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
-                    if f.zone.is_none() =>
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
                 {
-                    let obj = lower_object_filter(f, vocabulary)?;
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.zone = None;
+                    let obj = lower_object_filter(&f_clean, vocabulary)?;
                     bind_filter_player_target(builder, &obj)?;
                     builder.last_group_filter = Some(obj);
                     if ck == CounterKind::PlusOne
                         && const_n == Some(1)
-                        && f.controller == Some(ControllerRelation::You)
+                        && f_clean.controller == Some(ControllerRelation::You)
                         && filter_only_has(
-                            f,
+                            &f_clean,
                             FilterAllow {
                                 types: true,
                                 subtypes: true,
@@ -2248,24 +2732,27 @@ pub(super) fn lower_counters_pt_instruction(
                             },
                         )
                     {
-                        if f.subtypes.len() == 1
-                            && f.flags.is_empty()
-                            && (f.any_types.is_empty() || f.any_types == AstCardTypeMask::CREATURE)
-                            && let Some(ct) = vocabulary.resolve_label(&f.subtypes[0])
+                        if f_clean.subtypes.len() == 1
+                            && f_clean.flags.is_empty()
+                            && (f_clean.any_types.is_empty()
+                                || f_clean.any_types == AstCardTypeMask::CREATURE)
+                            && let Some(ct) = vocabulary.resolve_label(&f_clean.subtypes[0])
                         {
                             builder
                                 .instructions
                                 .push(Instruction::PutCountersOnControlledSubtype(ct));
                             return Ok(());
                         }
-                        if f.any_types == AstCardTypeMask::CREATURE && f.subtypes.is_empty() {
-                            if f.flags == AstFilterFlags::EXCLUDE_SELF && self_pronoun_valid {
+                        if f_clean.any_types == AstCardTypeMask::CREATURE
+                            && f_clean.subtypes.is_empty()
+                        {
+                            if f_clean.flags == AstFilterFlags::EXCLUDE_SELF && self_pronoun_valid {
                                 builder
                                     .instructions
                                     .push(Instruction::PutCountersOnOtherCreatures);
                                 return Ok(());
                             }
-                            if f.flags.is_empty() {
+                            if f_clean.flags.is_empty() {
                                 builder
                                     .instructions
                                     .push(Instruction::PutCountersOnControlledCreatures);
@@ -2284,11 +2771,19 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 SubjectRefAst::TargetObject {
                     filter,
-                    count: TargetCountAst::ChosenX,
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                    count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && !in_trigger => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
-                    builder.x_target_count = true;
+                    if *tc == TargetCountAst::UpToX {
+                        builder.up_to_x_target_count = true;
+                    } else {
+                        builder.x_target_count = true;
+                    }
                     let action = if ck == CounterKind::PlusOne && const_n == Some(1) {
                         PermanentTargetAction::PutPlusOneCounter
                     } else {
@@ -2321,7 +2816,7 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 SubjectRefAst::Anaphora(_)
                     if !is_permanent_body_target(builder.target)
-                        && last_instruction_moved_object(&builder.instructions) =>
+                        && has_prior_moved_object(&builder.instructions) =>
                 {
                     builder
                         .instructions
@@ -2564,9 +3059,12 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
-                    if f.zone.is_none() =>
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
                 {
-                    let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.zone = None;
+                    let obj =
+                        lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
                     bind_filter_player_target(builder, &obj)?;
                     builder.last_group_filter = Some(obj);
                     builder
@@ -2684,6 +3182,34 @@ pub(super) fn lower_counters_pt_instruction(
             self_pronoun_valid,
             bound_x,
         ),
+        InstructionAst::TurnFaceDown { subject } => lower_instruction(
+            &InstructionAst::CombatRuleMod {
+                subject: subject.clone(),
+                rule: "turn_face_down".to_string(),
+                duration: DurationAst::Permanent,
+            },
+            builder,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        ),
+        InstructionAst::Empower {
+            planeswalker,
+            count,
+        } => {
+            if !planeswalker.eq_ignore_ascii_case("jace") {
+                return Err("oracle:unsupported-empower-planeswalker");
+            }
+            let resolved_count = resolve_x(count, bound_x);
+            let expr =
+                lower_value_expr_in_context(resolved_count, builder, in_trigger, vocabulary)?;
+            builder
+                .instructions
+                .push(Instruction::EmpowerJace { count: expr });
+            Ok(())
+        }
         InstructionAst::GainPlayerCounters {
             player,
             counter_kind,
@@ -2962,13 +3488,17 @@ pub(super) fn lower_counters_pt_instruction(
                     && !in_trigger
                     && let SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::ChosenX,
+                        count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
                     } = subject.as_ref()
                     && filter.zone.is_none()
                 {
                     let bt = lower_battlefield_body_target(filter, vocabulary)?;
                     builder.bind_target(bt)?;
-                    builder.x_target_count = true;
+                    if *tc == TargetCountAst::UpToX {
+                        builder.up_to_x_target_count = true;
+                    } else {
+                        builder.x_target_count = true;
+                    }
                     builder
                         .instructions
                         .push(Instruction::DoubleCountersOnTargets);
@@ -3307,16 +3837,16 @@ pub(super) fn lower_counters_pt_instruction(
             description,
             keywords,
             duration,
-        } => lower_animate_or_set_pt(
+        } => lower_animate_or_set_pt_extended(
             subject,
             power,
             toughness,
             description.as_deref(),
             keywords,
             duration,
-            false,
             builder,
             vocabulary,
+            ids,
             in_trigger,
             self_pronoun_valid,
             bound_x,
@@ -4009,12 +4539,16 @@ pub(super) fn emit_resolved_parts_for_subject(
         }
         SubjectRefAst::TargetObject {
             filter,
-            count: TargetCountAst::ChosenX,
+            count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
         } if filter.zone.is_none() && !in_trigger => {
             let bt =
                 lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
             builder.bind_target(bt)?;
-            builder.x_target_count = true;
+            if *tc == TargetCountAst::UpToX {
+                builder.up_to_x_target_count = true;
+            } else {
+                builder.x_target_count = true;
+            }
             builder
                 .instructions
                 .push(Instruction::AffectPermanentTargets {
@@ -4580,4 +5114,413 @@ pub(super) fn partition_temp_keyword_grants(
         }
     }
     (special_parts, remaining)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_animate_or_set_pt_extended(
+    subject: &SubjectRefAst,
+    power: &str,
+    toughness: &str,
+    description: Option<&str>,
+    keywords: &[String],
+    duration: &DurationAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<(), &'static str> {
+    let p_trim = power.trim();
+    let t_trim = toughness.trim();
+    let omit_pt = (p_trim.is_empty() || p_trim.eq_ignore_ascii_case("keep"))
+        && (t_trim.is_empty() || t_trim.eq_ignore_ascii_case("keep"));
+
+    if let Some(desc) = description
+        && omit_pt
+        && keywords.is_empty()
+    {
+        let d_low = desc
+            .trim()
+            .trim_end_matches('.')
+            .trim()
+            .to_ascii_lowercase();
+        let dur = lower_duration(duration)?;
+
+        // Chosen characteristic references (Mistform Wakecaster, Elsewhere Flask, Terraformer, Puca's Eye)
+        if matches!(
+            d_low.as_str(),
+            "the creature type of your choice" | "a creature type of your choice"
+        ) {
+            let mut trial = builder.clone();
+            let slot = ids.creature_type_slot();
+            trial.instructions.push(Instruction::ChooseCreatureType {
+                into: slot,
+                excluding: BTreeSet::new(),
+            });
+            let part = ResolvedPartSpec::Type(TypeChangeSpec {
+                land_subtypes: SubtypeOperation::Keep,
+                supertypes: TypeOperation::Keep,
+                types: TypeOperation::Keep,
+                subtypes: SubtypeOperation::Set(InstructionSubtypeOperand::Chosen(slot)),
+            });
+            emit_resolved_parts_for_subject(
+                subject,
+                ResolvedPartsSpec(vec![part]),
+                dur,
+                &mut trial,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )?;
+            *builder = trial;
+            return Ok(());
+        }
+        if matches!(
+            d_low.as_str(),
+            "that type" | "the chosen type" | "that basic land type" | "the chosen basic land type"
+        ) {
+            let prior_part = builder.instructions.iter().rev().find_map(|op| match op {
+                Instruction::ChooseValue {
+                    domain: ResolutionChoiceDomain::BasicLandType,
+                    ..
+                } => Some(ResolvedPartSpec::ChosenBasicLandType { add: false }),
+                Instruction::ChooseCreatureType { into, .. } => {
+                    Some(ResolvedPartSpec::Type(TypeChangeSpec {
+                        land_subtypes: SubtypeOperation::Keep,
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Keep,
+                        subtypes: SubtypeOperation::Set(InstructionSubtypeOperand::Chosen(*into)),
+                    }))
+                }
+                _ => None,
+            });
+            if let Some(part) = prior_part {
+                let mut trial = builder.clone();
+                emit_resolved_parts_for_subject(
+                    subject,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                    &mut trial,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                )?;
+                *builder = trial;
+                return Ok(());
+            }
+        }
+        if matches!(d_low.as_str(), "the chosen color" | "that color")
+            && builder.instructions.iter().rev().any(|op| {
+                matches!(
+                    op,
+                    Instruction::ChooseValue {
+                        domain: ResolutionChoiceDomain::Color,
+                        ..
+                    }
+                )
+            })
+        {
+            let mut trial = builder.clone();
+            emit_resolved_parts_for_subject(
+                subject,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::ChosenColor { add: false }]),
+                dur,
+                &mut trial,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )?;
+            *builder = trial;
+            return Ok(());
+        }
+
+        // Basic land type choice ("a Plains or an Island", e.g. Tundra Kavu)
+        if d_low.contains(" or ") {
+            let parse_land_opt = |seg: &str| -> Option<(LandType, &'static str)> {
+                let cleaned = seg
+                    .trim()
+                    .trim_start_matches("an ")
+                    .trim_start_matches("a ")
+                    .trim();
+                match cleaned {
+                    "plains" => Some((LandType::Plains, "Plains")),
+                    "island" => Some((LandType::Island, "Island")),
+                    "swamp" => Some((LandType::Swamp, "Swamp")),
+                    "mountain" => Some((LandType::Mountain, "Mountain")),
+                    "forest" => Some((LandType::Forest, "Forest")),
+                    _ => None,
+                }
+            };
+            let land_opts: Vec<(LandType, &'static str)> =
+                d_low.split(" or ").filter_map(parse_land_opt).collect();
+            let raw_count = d_low.split(" or ").count();
+            if raw_count >= 2 && land_opts.len() == raw_count {
+                let mut trial = builder.clone();
+                let is_target_one = matches!(
+                    subject,
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: TargetCountAst::Exact(1),
+                    } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                );
+                let is_self = matches!(subject, SubjectRefAst::SelfObject)
+                    || is_self_pronoun(subject, &trial, self_pronoun_valid);
+                if is_target_one || is_self {
+                    if let SubjectRefAst::TargetObject { filter, .. } = subject {
+                        let mut inner = filter.as_ref().clone();
+                        inner.zone = None;
+                        let bt = lower_battlefield_body_target(&inner, vocabulary)?;
+                        trial.bind_target(bt)?;
+                    }
+                    let branches: Vec<ChooseOptionBranch> = land_opts
+                        .into_iter()
+                        .map(|(lt, label)| {
+                            let parts =
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
+                                    land_subtypes: SubtypeOperation::Set(BTreeSet::from([lt])),
+                                    supertypes: TypeOperation::Keep,
+                                    types: TypeOperation::Keep,
+                                    subtypes: SubtypeOperation::Keep,
+                                })]);
+                            let op = if is_self {
+                                Instruction::ChangeAbilitySource {
+                                    parts,
+                                    duration: dur,
+                                }
+                            } else {
+                                Instruction::CreateContinuousEffect {
+                                    parts,
+                                    duration: dur,
+                                }
+                            };
+                            ChooseOptionBranch {
+                                label: label.to_string(),
+                                body: ExecutableBody::new(BodyTarget::None, vec![op]),
+                            }
+                        })
+                        .collect();
+                    trial.instructions.push(Instruction::ChooseOption {
+                        chooser: ResolvingPlayer::Controller,
+                        options: branches,
+                    });
+                    *builder = trial;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    let mut eff_power = power.to_string();
+    let mut eff_toughness = toughness.to_string();
+    let mut eff_keywords: Vec<String> = keywords.to_vec();
+    let mut extra_unblockable = false;
+    let mut extra_suppressed_kws: BTreeSet<KeywordAbility> = BTreeSet::new();
+    let mut remove_equipment = false;
+    let mut normalized_desc: Option<String> = None;
+
+    if let Some(desc) = description {
+        let mut buf = desc.trim().to_string();
+        let replace_ci = |s: &mut String, needle: &str, with: &str| -> bool {
+            let mut found = false;
+            while let Some(idx) = s.to_ascii_lowercase().find(needle) {
+                s.replace_range(idx..idx + needle.len(), with);
+                found = true;
+            }
+            found
+        };
+
+        replace_ci(&mut buf, "has no abilities", "loses all abilities");
+        replace_ci(&mut buf, "have no abilities", "loses all abilities");
+        replace_ci(
+            &mut buf,
+            "in addition to his other types",
+            "in addition to its other types",
+        );
+        replace_ci(
+            &mut buf,
+            "in addition to her other types",
+            "in addition to its other types",
+        );
+        replace_ci(&mut buf, "that are still lands", "still lands");
+        replace_ci(&mut buf, "that's still a land", "still a land");
+        replace_ci(&mut buf, "that is still a land", "still a land");
+        replace_ci(&mut buf, "that are still artifacts", "still artifacts");
+        replace_ci(&mut buf, "that's still an artifact", "still an artifact");
+        replace_ci(&mut buf, "that is still an artifact", "still an artifact");
+
+        if replace_ci(&mut buf, "that's no longer an equipment", "")
+            || replace_ci(&mut buf, "that is no longer an equipment", "")
+        {
+            remove_equipment = true;
+        }
+        if replace_ci(&mut buf, "and can't be blocked this turn", "")
+            || replace_ci(&mut buf, "and can't be blocked", "")
+        {
+            extra_unblockable = true;
+        }
+
+        // Trailing "and loses <keyword>" (Chimeric Sphere)
+        for lose_pat in [" and loses ", " and lose "] {
+            let buf_low = buf.to_ascii_lowercase();
+            if let Some(idx) = buf_low.find(lose_pat) {
+                let tail = buf[idx + lose_pat.len()..]
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim();
+                if let Some(kw) = lower_keyword_ability_name(&tail.to_ascii_lowercase()) {
+                    extra_suppressed_kws.insert(kw);
+                    buf.truncate(idx);
+                    break;
+                }
+            }
+        }
+
+        // Trailing "and gains <kw1> [and <kw2>]" (Majestic Metamorphosis)
+        for gain_pat in [" and gains ", " and gain "] {
+            let buf_low = buf.to_ascii_lowercase();
+            if let Some(idx) = buf_low.find(gain_pat) {
+                let tail = buf[idx + gain_pat.len()..]
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim();
+                let tail_parts: Vec<&str> = tail
+                    .split(',')
+                    .flat_map(|seg| seg.split(" and "))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !tail_parts.is_empty()
+                    && tail_parts
+                        .iter()
+                        .all(|k| lower_keyword_ability_name(&k.to_ascii_lowercase()).is_some())
+                {
+                    for k in tail_parts {
+                        eff_keywords.push(k.to_string());
+                    }
+                    buf.truncate(idx);
+                    break;
+                }
+            }
+        }
+
+        // Inline "with base power and toughness P/T" when outer power/toughness omitted (The Master, Transcendent)
+        if omit_pt {
+            let buf_low = buf.to_ascii_lowercase();
+            for pt_pat in [
+                " with base power and toughness ",
+                " with power and toughness ",
+            ] {
+                if let Some(idx) = buf_low.find(pt_pat) {
+                    let tail = buf[idx + pt_pat.len()..]
+                        .trim()
+                        .trim_end_matches('.')
+                        .trim();
+                    if let Some((ps, ts)) = tail.split_once('/')
+                        && ps.trim().parse::<i64>().is_ok()
+                        && ts.trim().parse::<i64>().is_ok()
+                    {
+                        eff_power = ps.trim().to_string();
+                        eff_toughness = ts.trim().to_string();
+                        buf.truncate(idx);
+                        break;
+                    }
+                }
+            }
+        }
+
+        normalized_desc = Some(buf.trim().to_string());
+    }
+
+    let mut trial = builder.clone();
+    let before_len = trial.instructions.len();
+    lower_animate_or_set_pt(
+        subject,
+        &eff_power,
+        &eff_toughness,
+        normalized_desc.as_deref(),
+        &eff_keywords,
+        duration,
+        false,
+        &mut trial,
+        vocabulary,
+        in_trigger,
+        self_pronoun_valid,
+        bound_x,
+    )?;
+
+    if extra_unblockable || !extra_suppressed_kws.is_empty() || remove_equipment {
+        if trial.instructions.len() != before_len + 1 {
+            return Err("oracle:unsupported-animate-desc");
+        }
+        let Some(last) = trial.instructions.last_mut() else {
+            return Err("oracle:unsupported-animate-desc");
+        };
+        let parts_mut = match last {
+            Instruction::CreateContinuousEffect { parts, .. }
+            | Instruction::ChangeAbilitySource { parts, .. }
+            | Instruction::ChangeGroup { parts, .. }
+            | Instruction::ModifyAnyNumberOfPermanents { parts, .. }
+            | Instruction::AffectPermanentTargets {
+                action: PermanentTargetAction::Modify { parts, .. },
+                ..
+            } => &mut parts.0,
+            _ => return Err("oracle:unsupported-animate-desc"),
+        };
+        if extra_unblockable || !extra_suppressed_kws.is_empty() {
+            let mut merged_ab = false;
+            for part in parts_mut.iter_mut() {
+                if let ResolvedPartSpec::Abilities(ab) = part {
+                    if extra_unblockable {
+                        ab.grants_unblockable = true;
+                    }
+                    ab.suppressed_keywords
+                        .extend(extra_suppressed_kws.iter().copied());
+                    merged_ab = true;
+                    break;
+                }
+            }
+            if !merged_ab {
+                let ab = AbilityChange {
+                    grants_unblockable: extra_unblockable,
+                    suppressed_keywords: extra_suppressed_kws,
+                    ..AbilityChange::default()
+                };
+                parts_mut.push(ResolvedPartSpec::Abilities(ab));
+            }
+        }
+        if remove_equipment {
+            let mut patched = false;
+            for part in parts_mut.iter_mut() {
+                if let ResolvedPartSpec::Type(base) = part {
+                    let base_clone = base.clone();
+                    *part = ResolvedPartSpec::TypeWithSubtypes {
+                        base: base_clone,
+                        artifact_subtypes: SubtypeOperation::Remove(BTreeSet::from([
+                            ArtifactSubtype::Equipment,
+                        ])),
+                        enchantment_subtypes: SubtypeOperation::Keep,
+                    };
+                    patched = true;
+                    break;
+                }
+                if let ResolvedPartSpec::TypeWithSubtypes {
+                    artifact_subtypes, ..
+                } = part
+                    && matches!(artifact_subtypes, SubtypeOperation::Keep)
+                {
+                    *artifact_subtypes =
+                        SubtypeOperation::Remove(BTreeSet::from([ArtifactSubtype::Equipment]));
+                    patched = true;
+                    break;
+                }
+            }
+            if !patched {
+                return Err("oracle:unsupported-animate-desc");
+            }
+        }
+    }
+
+    *builder = trial;
+    Ok(())
 }

@@ -2528,7 +2528,8 @@ impl EffectWindow {
                     }
                     let check_evaluated = before.view().evaluated.clone();
                     let mut surviving_losses = BTreeSet::new();
-                    for player in self.window.apnap_players()? {
+                    let apnap: Vec<SeatId> = self.window.apnap_players()?.collect();
+                    for player in apnap {
                         if actions.losses.contains(&player) {
                             if self.player_cannot_lose(&check_evaluated, player, false)? {
                                 continue;
@@ -2555,6 +2556,18 @@ impl EffectWindow {
                                 reasons.insert(PlayerLossReason::NonpositiveLife);
                             }
                             if reasons.is_empty() {
+                                continue;
+                            }
+                            let loss_cause = EventCause::StateBasedActions {
+                                event: process.event,
+                                boundary: process.boundary,
+                            };
+                            if self.try_replace_player_loss(
+                                &check_evaluated,
+                                player,
+                                loss_cause,
+                                &mut append,
+                            )? {
                                 continue;
                             }
                             surviving_losses.insert(player);

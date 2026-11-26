@@ -113,6 +113,70 @@ pub(super) fn lower_tokens_copies_instruction(
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
                         Some(MoveSubjectRef::AttachedHost)
                     }
+                    SubjectRefAst::Group(f)
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                            && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                            && (in_trigger || self_pronoun_valid) =>
+                    {
+                        let mut inner = f.as_ref().clone();
+                        inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+                        inner.zone = None;
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter_in_context(&inner, &trial, in_trigger, vocabulary)?
+                        };
+                        if obj.has_target_player() {
+                            None
+                        } else {
+                            trial.instructions.push(Instruction::ChooseObjects {
+                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                                source_zone: SourceZoneFilter::LinkedExile,
+                                filter: Box::new(obj),
+                                min: ValueExpr::literal(1),
+                                max: ValueExpr::literal(1),
+                                distinct_powers: false,
+                                max_total_power: None,
+                                unchosen_action: None,
+                            });
+                            Some(MoveSubjectRef::LastMoved)
+                        }
+                    }
+                    SubjectRefAst::Group(f)
+                        if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                            && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
+                            && !f.any_spell
+                            && !f.is_ability =>
+                    {
+                        let mut inner = f.as_ref().clone();
+                        inner.zone = None;
+                        let source_zone = if inner.controller == Some(ControllerRelation::You) {
+                            inner.controller = None;
+                            SourceZoneFilter::Battlefield
+                        } else {
+                            SourceZoneFilter::AnyBattlefield
+                        };
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter_in_context(&inner, &trial, in_trigger, vocabulary)?
+                        };
+                        if obj.has_target_player() {
+                            None
+                        } else {
+                            trial.instructions.push(Instruction::ChooseObjects {
+                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                                source_zone,
+                                filter: Box::new(obj),
+                                min: ValueExpr::literal(1),
+                                max: ValueExpr::literal(1),
+                                distinct_powers: false,
+                                max_total_power: None,
+                                unchosen_action: None,
+                            });
+                            Some(MoveSubjectRef::LastMoved)
+                        }
+                    }
                     _ => None,
                 };
                 let recipients_opt = match controller {
@@ -1098,7 +1162,7 @@ pub(super) fn lower_tokens_copies_instruction(
                     self_pronoun_valid,
                     bound_x,
                 )?;
-                if trial.instructions.len() != before_len + 1
+                if trial.instructions.len() <= before_len
                     || !apply_defender_scope(&mut trial.instructions)
                 {
                     return Err("oracle:unsupported-qualified-token");
@@ -1375,10 +1439,18 @@ pub(super) fn parse_copy_exceptions(
         }
     }
     for pat in [
+        "except the token isn't legendary",
+        "except the tokens aren't legendary",
+        "except that token isn't legendary",
+        "except those tokens aren't legendary",
         "except it isn't legendary",
         "except they aren't legendary",
         "except it's not legendary",
         "except they're not legendary",
+        "the token isn't legendary",
+        "the tokens aren't legendary",
+        "that token isn't legendary",
+        "those tokens aren't legendary",
         "it isn't legendary",
         "they aren't legendary",
         "it's not legendary",
@@ -1732,6 +1804,12 @@ pub(super) fn parse_token_copy_exceptions(
     let in_addition = colors_are_additive
         || exc_low.contains("in addition to its other types")
         || exc_low.contains("in addition to their other types")
+        || exc_low.contains("in addition to its other creature types")
+        || exc_low.contains("in addition to their other creature types")
+        || exc_low.contains("in addition to its other artifact types")
+        || exc_low.contains("in addition to their other artifact types")
+        || exc_low.contains("in addition to its other land types")
+        || exc_low.contains("in addition to their other land types")
         || exc_low.contains("is also ");
     let mut remainder = exc_low;
     strip_quoted_end_step_token_cleanup(
@@ -1807,10 +1885,18 @@ pub(super) fn parse_token_copy_exceptions(
         remainder.replace_range(idx..idx + "hexproof from ".len() + end_rel, " ");
     }
     for pat in [
+        "except the token isn't legendary",
+        "except the tokens aren't legendary",
+        "except that token isn't legendary",
+        "except those tokens aren't legendary",
         "except it isn't legendary",
         "except they aren't legendary",
         "except it's not legendary",
         "except they're not legendary",
+        "the token isn't legendary",
+        "the tokens aren't legendary",
+        "that token isn't legendary",
+        "those tokens aren't legendary",
         "it isn't legendary",
         "they aren't legendary",
         "it's not legendary",
@@ -1919,6 +2005,12 @@ pub(super) fn parse_token_copy_exceptions(
         "at the beginning of your end step, exile them",
         "in addition to its other colors and types",
         "in addition to their other colors and types",
+        "in addition to its other creature types",
+        "in addition to their other creature types",
+        "in addition to its other artifact types",
+        "in addition to their other artifact types",
+        "in addition to its other land types",
+        "in addition to their other land types",
         "in addition to its other colors",
         "in addition to their other colors",
         "in addition to its other types",
@@ -1955,6 +2047,14 @@ pub(super) fn parse_token_copy_exceptions(
         "they have",
         "it gains",
         "they gain",
+        "and has ",
+        "and have ",
+        "and gains ",
+        "and gain ",
+        ", has ",
+        ", have ",
+        ", gains ",
+        ", gain ",
         "is also",
         "are also",
         "it's an",

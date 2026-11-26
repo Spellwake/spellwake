@@ -886,7 +886,16 @@ fn wrap_restricted_mana_yield(
 pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
     match op {
         Instruction::ExileTopPlay { any_color, .. }
-        | Instruction::GrantCardPlayPermission { any_color, .. } => {
+        | Instruction::GrantCardPlayPermission { any_color, .. }
+        | Instruction::GrantLastMovedPlayPermission { any_color, .. }
+        | Instruction::LookTopChooseExt {
+            keep_dest: spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. },
+            ..
+        }
+        | Instruction::RevealUntilMatchExt {
+            match_dest: spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. },
+            ..
+        } => {
             *any_color = true;
             true
         }
@@ -1080,6 +1089,9 @@ fn parse_two_pile_keep_dest(keep_to: &str) -> Option<spellwake_engine::program::
     } else if low.contains("exile") {
         Some(spellwake_engine::program::LookTopKeepDest::Exile {
             playable: low.contains("play") || low.contains("cast"),
+            free: low.contains("without paying"),
+            cast_only: low.contains("cast") && !low.contains("play"),
+            any_color: low.contains("mana of any"),
             duration: ResolvedDuration::NoStatedDuration,
         })
     } else if !low.contains("bottom") && low.contains("top") {
@@ -1593,6 +1605,33 @@ pub(super) fn try_lower_choose_option_ext(
     if let Ok(kind) = parse_choice_kind(cleaned, true, vocabulary) {
         return emit_choice_for_player_ref(chooser, kind, builder, ids, in_trigger);
     }
+    if matches!(
+        cleaned,
+        "one of them" | "one of those cards" | "a card from among them"
+    ) && matches!(
+        builder.instructions.last(),
+        Some(
+            Instruction::ExileTopPlay { .. }
+                | Instruction::ExileLibraryTop { .. }
+                | Instruction::ExileLibraryTopLinked { .. }
+                | Instruction::LookTopChooseExt { .. }
+                | Instruction::RevealUntilMatchExt { .. }
+                | Instruction::MoveLastMovedFiltered { .. }
+                | Instruction::MoveSubject { .. }
+                | Instruction::MoveGroup { .. }
+                | Instruction::SelectZoneCardsToZone { .. }
+                | Instruction::ChooseObjects { .. }
+                | Instruction::ExileGroupFromZone { .. }
+                | Instruction::ExileFromZone { .. }
+                | Instruction::Mill { .. }
+        )
+    ) && let Ok(chooser_rp) = lower_resolving_player_in_context(chooser, builder, in_trigger)
+    {
+        builder.instructions.push(Instruction::ChooseOneLastMoved {
+            chooser: chooser_rp,
+        });
+        return Ok(());
+    }
     let domain = match cleaned {
         "an opponent at random" | "opponent at random" => ResolutionChoiceDomain::RandomPlayer {
             opponents_only: true,
@@ -2027,6 +2066,7 @@ fn lower_prevention_recipient(
         {
             if !is_valid_prevention_recipient_target(builder.target)
                 || builder.x_target_count
+                || builder.up_to_x_target_count
                 || builder.instructions.iter().any(|op| {
                     matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
                 })
@@ -2418,7 +2458,7 @@ pub(super) fn lower_prevent_all_damage_from(
                 return Err("oracle:unsupported-prevention-source");
             }
             builder.bind_target(target)?;
-        } else if builder.x_target_count
+        } else if builder.x_target_count || builder.up_to_x_target_count
             || builder.instructions.iter().any(|op| {
                 matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
             })

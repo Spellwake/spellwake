@@ -842,6 +842,16 @@ pub enum CombatFilter {
     BlockingOrBlockedBySource,
     /// Currently not attacking.
     NotAttacking,
+    /// Currently attacking the filter controller (not a planeswalker they control).
+    AttackingController,
+    /// Currently attacking the filter controller or a planeswalker they control.
+    AttackingControllerOrPlaneswalker,
+    /// Currently attacking an opponent of the filter controller (not a planeswalker).
+    AttackingOpponent,
+    /// Currently attacking an opponent of the filter controller or a planeswalker they control.
+    AttackingOpponentOrPlaneswalker,
+    /// Currently attacking any player (not a planeswalker).
+    AttackingPlayer,
 }
 
 /// Compact bitflags for less-frequent object predicates.
@@ -1387,6 +1397,11 @@ impl ObjectClause {
                     | CombatFilter::BlockingSource
                     | CombatFilter::BlockedBySource
                     | CombatFilter::BlockingOrBlockedBySource
+                    | CombatFilter::AttackingController
+                    | CombatFilter::AttackingControllerOrPlaneswalker
+                    | CombatFilter::AttackingOpponent
+                    | CombatFilter::AttackingOpponentOrPlaneswalker
+                    | CombatFilter::AttackingPlayer
             )
     }
 

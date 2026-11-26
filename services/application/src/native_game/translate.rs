@@ -2450,6 +2450,7 @@ impl NativeScope<'_> {
                 if matches!(
                     frame.rule(),
                     spellwake_engine::land::EntryTap::UnlessRevealHandLandType(_, _)
+                        | spellwake_engine::land::EntryTap::UnlessRevealHandSubtype { .. }
                 ) =>
             {
                 let values = self.objects(objects)?;
@@ -2524,6 +2525,7 @@ impl NativeScope<'_> {
                 if matches!(
                     frame.rule(),
                     spellwake_engine::land::EntryTap::UnlessRevealHandLandType(_, _)
+                        | spellwake_engine::land::EntryTap::UnlessRevealHandSubtype { .. }
                 ) =>
             {
                 let values = self.objects(objects)?;

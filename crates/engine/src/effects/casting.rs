@@ -814,6 +814,62 @@ impl EffectWindow {
                     ),
                 };
             }
+            if let crate::program::TemporaryRuleKind::CantCastFromZone { zone, filter, .. } =
+                &active.rule
+            {
+                if !active.resolved_players.contains(&actor) {
+                    return false;
+                }
+                let src_zone = self.window.cards().get(spell).map(GameObject::zone);
+                let zone_matches = match (zone, src_zone) {
+                    (crate::program::SourceZoneFilter::Hand, Some(ObjectZone::Hand(_))) => true,
+                    (
+                        crate::program::SourceZoneFilter::Graveyard,
+                        Some(ObjectZone::Graveyard(s)),
+                    ) => s == actor,
+                    (
+                        crate::program::SourceZoneFilter::OpponentGraveyard,
+                        Some(ObjectZone::Graveyard(s)),
+                    ) => s != actor,
+                    (
+                        crate::program::SourceZoneFilter::AnyGraveyard,
+                        Some(ObjectZone::Graveyard(_)),
+                    ) => true,
+                    (
+                        crate::program::SourceZoneFilter::HandOrGraveyard,
+                        Some(ObjectZone::Hand(_) | ObjectZone::Graveyard(_)),
+                    ) => true,
+                    (
+                        crate::program::SourceZoneFilter::Exile
+                        | crate::program::SourceZoneFilter::OpponentExile
+                        | crate::program::SourceZoneFilter::LinkedExile,
+                        Some(ObjectZone::Exile),
+                    ) => true,
+                    (
+                        crate::program::SourceZoneFilter::YourLibrary,
+                        Some(ObjectZone::Library(_)),
+                    ) => true,
+                    (
+                        crate::program::SourceZoneFilter::Battlefield,
+                        Some(ObjectZone::Battlefield),
+                    ) => true,
+                    _ => false,
+                };
+                if !zone_matches {
+                    return false;
+                }
+                return match filter {
+                    None => true,
+                    Some(f) => self.matches_object_filter(
+                        *f,
+                        current_spell,
+                        active.controller,
+                        active.source_object,
+                        &BTreeSet::new(),
+                        &current,
+                    ),
+                };
+            }
             let Some(crate::characteristics::StaticContinuousAbility::Restriction {
                 rule: crate::characteristics::StaticRestriction::ProhibitCasting { player, filter },
                 ..
@@ -1414,6 +1470,14 @@ impl EffectWindow {
         {
             return Err(EffectError::InvalidCastResource);
         }
+        if payload
+            .body()
+            .is_some_and(ExecutableBody::has_up_to_x_target_count)
+            && RulesInteger::from_usize(payment.permanent_targets.len())
+                > payment.chosen_x.clone().unwrap_or_else(|| 0.into())
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
         let one_per_player = payload.body().is_some_and(|body| {
             body.instructions.first() == Some(&Instruction::ShuffleOnePermanentPerPlayer)
         });
@@ -1429,6 +1493,7 @@ impl EffectWindow {
                 if payload.body().is_some_and(|body| {
                     body.instructions == [Instruction::ReturnChosenXGraveyardCreatures]
                         || body.has_x_target_count()
+                        || body.has_up_to_x_target_count()
                 }) {
                     (
                         payment.permanent_targets.len(),
@@ -1493,10 +1558,41 @@ impl EffectWindow {
                     target: chosen,
                 });
             }
-            if let Some(total) = payload
+            let dynamic_division_total: Option<u16> = payload
                 .body()
                 .and_then(ExecutableBody::target_division_total)
-            {
+                .or_else(|| {
+                    let expr = payload
+                        .body()
+                        .and_then(ExecutableBody::target_division_expr)?;
+                    let val = if expr.is_chosen_x() {
+                        payment.chosen_x.clone().unwrap_or_else(|| 0.into())
+                    } else {
+                        let ctx = crate::characteristics::WorldEvalCtx {
+                            active_player: self.window.active_player(),
+                            step: self.current_step,
+                            participants: self.window.participants(),
+                            life: Some(&self.life),
+                            combat: self.combat.as_ref(),
+                            cards: self.window.cards(),
+                            programs: &self.programs,
+                            state: &self.characteristics,
+                            objects: &current.objects,
+                            source: spell,
+                            controller: actor,
+                            name_rules: &self.name_rules,
+                            trigger_subject: None,
+                            related_player: None,
+                            defending_player: None,
+                        };
+                        crate::characteristics::eval_world_value_expr(&ctx, expr)
+                    };
+                    Some(
+                        u16::try_from(val.max(0.into()).to_usize().unwrap_or(0))
+                            .unwrap_or(u16::MAX),
+                    )
+                });
+            if let Some(total) = dynamic_division_total {
                 let shares = &payment.target_division;
                 if shares.len() != mode_targets.len()
                     || shares.contains(&0)
@@ -1547,6 +1643,10 @@ impl EffectWindow {
             && payload
                 .body()
                 .and_then(ExecutableBody::target_division_total)
+                .is_none()
+            && payload
+                .body()
+                .and_then(ExecutableBody::target_division_expr)
                 .is_none()
         {
             return Err(EffectError::InvalidCastResource);
@@ -2490,7 +2590,7 @@ impl EffectWindow {
                         SpellCostModifier::Discount {
                             any_player: true,
                             matching,
-                            amount: SpellDiscount::Fixed(amount),
+                            amount,
                         },
                 } = rule
                     && active_rule(id)
@@ -2500,10 +2600,43 @@ impl EffectWindow {
                         permanent.entry_creature_type,
                     )
                 {
-                    cost.generic = cost
-                        .generic
-                        .minus(&i64::from(amount.get()).into())
-                        .max(0.into());
+                    let delta = match amount {
+                        SpellDiscount::Fixed(amount) => RulesInteger::from(i64::from(amount.get())),
+                        SpellDiscount::SourcePlusOneCounters => {
+                            self.counters_of_kind(permanent.object, CounterKind::PlusOne)
+                        }
+                        SpellDiscount::PerExperienceCounter(value) => self
+                            .experience_counters(actor)
+                            .times(&i64::from(value.get()).into()),
+                        SpellDiscount::ControlledCreaturesWithPlusOneCounters => self
+                            .counted_cast_discount(
+                            crate::program::CastCostCount::ControlledCreaturesWithPlusOneCounters,
+                            spell,
+                            actor,
+                            &current,
+                        ),
+                        SpellDiscount::Dynamic(expr) => {
+                            let ctx = crate::characteristics::WorldEvalCtx {
+                                active_player: self.window.active_player(),
+                                step: self.current_step,
+                                participants: self.window.participants(),
+                                life: Some(&self.life),
+                                combat: self.combat.as_ref(),
+                                cards: self.window.cards(),
+                                programs: &self.programs,
+                                state: &self.characteristics,
+                                objects: &current.objects,
+                                source: permanent.object,
+                                controller: actor,
+                                name_rules: &self.name_rules,
+                                trigger_subject: None,
+                                related_player: None,
+                                defending_player: None,
+                            };
+                            crate::characteristics::eval_world_value_expr(&ctx, expr).max(0.into())
+                        }
+                    };
+                    cost.generic = cost.generic.minus(&delta).max(0.into());
                 }
                 if let StaticContinuousAbility::CostModifier {
                     id,
@@ -2611,6 +2744,27 @@ impl EffectWindow {
                                 actor,
                                 &current,
                             ),
+                            SpellDiscount::Dynamic(expr) => {
+                                let ctx = crate::characteristics::WorldEvalCtx {
+                                    active_player: self.window.active_player(),
+                                    step: self.current_step,
+                                    participants: self.window.participants(),
+                                    life: Some(&self.life),
+                                    combat: self.combat.as_ref(),
+                                    cards: self.window.cards(),
+                                    programs: &self.programs,
+                                    state: &self.characteristics,
+                                    objects: &current.objects,
+                                    source: permanent.object,
+                                    controller: actor,
+                                    name_rules: &self.name_rules,
+                                    trigger_subject: None,
+                                    related_player: None,
+                                    defending_player: None,
+                                };
+                                crate::characteristics::eval_world_value_expr(&ctx, expr)
+                                    .max(0.into())
+                            }
                         }
                     }
                     StaticContinuousAbility::CostModifier {

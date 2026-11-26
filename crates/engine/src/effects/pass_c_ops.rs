@@ -1358,6 +1358,44 @@ impl EffectWindow {
                 )?;
                 Ok(StepOutcome::Continue)
             }
+            Instruction::ChooseOneLastMoved { chooser } => {
+                let cursor_snap = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .clone();
+                let candidates = cursor_snap.results.last_moved_objects.clone();
+                if candidates.len() >= 2 {
+                    let chooser_seat =
+                        self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
+                    let chosen = self
+                        .resolution_cursor_mut()
+                        .and_then(|c| c.chosen_option_index.take());
+                    let Some(idx) = chosen else {
+                        let labels: Vec<String> = candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(i, id)| {
+                                self.object_display_label(*id, &format!("Card {}", i + 1))
+                            })
+                            .collect();
+                        return Ok(StepOutcome::Pending(self.option_frame(
+                            entry.id(),
+                            index,
+                            chooser_seat,
+                            labels,
+                        )?));
+                    };
+                    if let Some(&picked) = candidates.get(usize::from(idx))
+                        && let Some(cur) = self.resolution_cursor_mut()
+                    {
+                        cur.results.last_moved_objects = vec![picked];
+                        cur.results.last_action_count = Some(RulesInteger::from(1));
+                        cur.results.last_action_succeeded = true;
+                    }
+                }
+                self.advance_instruction()?;
+                Ok(StepOutcome::Continue)
+            }
             Instruction::UnlockDoor {
                 subject,
                 door,
@@ -2133,7 +2171,12 @@ impl EffectWindow {
                         ctx.append,
                     )?
                 };
+                let lki: Vec<_> = targets
+                    .iter()
+                    .filter_map(|id| evaluated.get(*id).cloned())
+                    .collect();
                 if let Some(cur) = self.resolution_cursor_mut() {
+                    cur.results.last_action_lki = lki;
                     cur.results.last_action_succeeded = moved > 0;
                     cur.results.last_action_count = Some(RulesInteger::from_usize(moved));
                     cur.results.last_moved_objects = targets;

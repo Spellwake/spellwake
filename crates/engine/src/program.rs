@@ -1617,6 +1617,10 @@ pub enum DamageRecipientsRef {
     EachOtherPlayer,
     /// Every opponent of the damage source's controller.
     EachOtherOpponent,
+    /// Each damage source deals damage to itself.
+    EachSourceToItself,
+    /// Each damage source deals damage to its controller.
+    EachSourceController,
 }
 
 /// Damage amount specification for `Instruction::DealDamageFrom`.
@@ -1661,6 +1665,12 @@ pub enum TemporaryRuleKind {
     },
     CantCastSpells {
         players: AffectedPlayers,
+        filter: Option<ObjectFilter>,
+    },
+    /// Prevent `players` from casting spells from `zone` (optionally matching `filter`).
+    CantCastFromZone {
+        players: AffectedPlayers,
+        zone: SourceZoneFilter,
         filter: Option<ObjectFilter>,
     },
     /// Affected players can't activate abilities (or non-mana abilities when `nonmana_only` is true).
@@ -1734,6 +1744,8 @@ pub enum TemporaryRuleKind {
     },
     /// Duration-scoped non-layer static ability installed by a resolving spell or ability (CR 611.2a).
     TemporaryStatic(Box<crate::characteristics::StaticContinuousAbility>),
+    /// One-shot duration-scoped event replacement (`StaticContinuousAbility::EventReplacement`) consumed on first application.
+    OneShotEventReplacement(Box<crate::characteristics::StaticContinuousAbility>),
     /// Duration-scoped non-layer static ability active only while `condition` holds (CR 611.2a).
     ConditionalTemporaryStatic {
         condition: Box<crate::characteristics::StaticSourceCondition>,
@@ -2156,6 +2168,9 @@ pub enum LookTopKeepDest {
     Graveyard,
     Exile {
         playable: bool,
+        free: bool,
+        cast_only: bool,
+        any_color: bool,
         duration: ResolvedDuration,
     },
 }
@@ -2453,10 +2468,23 @@ pub enum Instruction {
     DivideDamageAmongTargets {
         total: u16,
     },
+    /// Deal dynamic `total` damage divided as chosen at announcement among any number (or up to `max_targets`) of targets (CR 601.2d).
+    DivideDamageExprAmongTargets {
+        total: ValueExpr,
+        max_targets: Option<u16>,
+    },
     /// Attach one resolved permanent to another resolved host if legal (CR 701.3).
     AttachPermanent {
         attachment: MoveSubjectRef,
         host: MoveSubjectRef,
+    },
+    /// Unattach one resolved permanent (Equipment, Aura, or Fortification) from whatever it's attached to (CR 701.3d).
+    UnattachSubject {
+        subject: MoveSubjectRef,
+    },
+    /// Have `chooser` choose one object from `results.last_moved_objects`, narrowing it to that single object.
+    ChooseOneLastMoved {
+        chooser: ResolvingPlayer,
     },
     /// Prevent all permanents matching `subject` from untapping during their controllers' next untap step.
     SkipNextUntap {
@@ -4042,6 +4070,32 @@ pub enum Instruction {
     TurnFaceUpSubject {
         subject: Box<EffectSubject>,
     },
+    /// Turn every face-up nontoken single-faced permanent resolved by `subject` face down as a 2/2 colorless creature (CR 707.2, CR 111.11, CR 712.16).
+    TurnFaceDownSubject {
+        subject: Box<EffectSubject>,
+    },
+    /// Empower Jace N: put N loyalty counters on a Jace token you control, creating one first if you don't control one.
+    EmpowerJace {
+        count: ValueExpr,
+    },
+    /// For each permanent resolved by `subject`, put another counter of each kind already on it onto it.
+    AddOneOfEachCounterKindOnSubject {
+        subject: Box<EffectSubject>,
+    },
+    /// Grant play/cast permissions on objects in `last_moved_objects` matching optional `filter`.
+    GrantLastMovedPlayPermission {
+        player: ResolvingPlayer,
+        filter: Option<Box<ObjectFilter>>,
+        duration: ResolvedDuration,
+        free: bool,
+        cast_only: bool,
+        any_color: bool,
+    },
+    /// Move every surviving object in `last_moved_objects` matching optional `filter` to `destination`.
+    MoveLastMovedFiltered {
+        filter: Option<Box<ObjectFilter>>,
+        destination: SubjectDestination,
+    },
     /// Extended up-to discard with dynamic maximum, optional card filter, and any-number mode.
     DiscardUpToExt {
         players: AffectedPlayers,
@@ -4143,6 +4197,7 @@ impl Instruction {
             | Self::ChooseOption { .. }
             | Self::DealDamageFrom { .. }
             | Self::DivideDamageAmongTargets { .. }
+            | Self::DivideDamageExprAmongTargets { .. }
             | Self::GainControlOfPermanent { .. }
             | Self::GiveFixedTargetControl { .. }
             | Self::BecomeCopy { .. }
@@ -4190,6 +4245,11 @@ impl Instruction {
             | Self::ReturnCardsExiledWithLinkExt { .. }
             | Self::DrawGame
             | Self::TurnFaceUpSubject { .. }
+            | Self::TurnFaceDownSubject { .. }
+            | Self::EmpowerJace { .. }
+            | Self::AddOneOfEachCounterKindOnSubject { .. }
+            | Self::GrantLastMovedPlayPermission { .. }
+            | Self::MoveLastMovedFiltered { .. }
             | Self::MoveGroupToLibrary { .. }
             | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
@@ -4199,6 +4259,8 @@ impl Instruction {
             | Self::RevealUntilMatchExt { .. }
             | Self::CreateTokenCopyExt { .. }
             | Self::AttachPermanent { .. }
+            | Self::UnattachSubject { .. }
+            | Self::ChooseOneLastMoved { .. }
             | Self::SkipNextUntap { .. }
             | Self::RequireCombatAction { .. }
             | Self::CreateTemporaryRule { .. }
@@ -4941,10 +5003,12 @@ impl Instruction {
             }
             Self::SelectZoneCardsToZone {
                 player,
+                filter,
                 destination,
                 ..
             } => {
                 is_target_player(*player)
+                    || filter_uses_target(filter)
                     || matches!(
                         destination,
                         SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
@@ -4979,9 +5043,9 @@ impl Instruction {
                     || recipients_uses
                     || matches!(amount.as_ref(), DamageAmountSpec::Expr(e) if e.uses_target())
             }
-            Self::DivideDamageAmongTargets { .. } | Self::DistributeCountersAmongTargets { .. } => {
-                true
-            }
+            Self::DivideDamageAmongTargets { .. }
+            | Self::DivideDamageExprAmongTargets { .. }
+            | Self::DistributeCountersAmongTargets { .. } => true,
             Self::GainControlOfPermanent {
                 subject,
                 controller,
@@ -5000,7 +5064,12 @@ impl Instruction {
             | Self::RequireCombatAction { subject, .. }
             | Self::SetSubjectTapped { subject, .. }
             | Self::ExileSubjectUntilSourceLeaves { subject }
-            | Self::TurnFaceUpSubject { subject } => subject_uses_target(subject),
+            | Self::TurnFaceUpSubject { subject }
+            | Self::TurnFaceDownSubject { subject }
+            | Self::AddOneOfEachCounterKindOnSubject { subject } => subject_uses_target(subject),
+            Self::GrantLastMovedPlayPermission { player, .. } => is_target_player(*player),
+            Self::MoveLastMovedFiltered { .. } => false,
+            Self::EmpowerJace { count } => count.uses_target(),
             Self::MoveCounters {
                 from, to, amount, ..
             } => {
@@ -5246,6 +5315,8 @@ impl Instruction {
                 matches!(attachment, MoveSubjectRef::TargetObject)
                     || matches!(host, MoveSubjectRef::TargetObject)
             }
+            Self::UnattachSubject { subject } => matches!(subject, MoveSubjectRef::TargetObject),
+            Self::ChooseOneLastMoved { chooser } => is_target_player(*chooser),
             Self::CreateTokenCopy {
                 source,
                 count,
@@ -5283,6 +5354,9 @@ impl Instruction {
                     is_target_affected(*players)
                 }
                 TemporaryRuleKind::CantCastSpells { players, filter }
+                | TemporaryRuleKind::CantCastFromZone {
+                    players, filter, ..
+                }
                 | TemporaryRuleKind::ExileSpellOnResolve { players, filter } => {
                     is_target_affected(*players) || filter.as_ref().is_some_and(filter_uses_target)
                 }
@@ -5416,6 +5490,7 @@ impl Instruction {
                 | TemporaryRuleKind::DamageCantBePrevented
                 | TemporaryRuleKind::PreventAllCombatDamage
                 | TemporaryRuleKind::TemporaryStatic(_)
+                | TemporaryRuleKind::OneShotEventReplacement(_)
                 | TemporaryRuleKind::ConditionalTemporaryStatic { .. } => false,
             },
             Self::GrantCardPlayPermission {
@@ -5835,11 +5910,8 @@ impl Instruction {
             | Self::ExileTopForFreePlay
             | Self::ExileTargetUntilNonlandForFreeCast
             | Self::ExileTopRepeatOnPermanentEntry
-            | Self::ShuffleEachHandAndGraveyard
             | Self::ShuffleTargetGraveyardCards { .. }
             | Self::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-            | Self::FixedTargetClause(_)
-            | Self::Ascend
             | Self::DestroyFixedTargets
             | Self::DestroyTargetAndAttachedEquipment
             | Self::ReturnFixedTargets
@@ -5963,6 +6035,7 @@ impl Instruction {
             | Self::ChooseOption { .. }
             | Self::DealDamageFrom { .. }
             | Self::DivideDamageAmongTargets { .. }
+            | Self::DivideDamageExprAmongTargets { .. }
             | Self::GainControlOfPermanent { .. }
             | Self::GiveFixedTargetControl { .. }
             | Self::BecomeCopy { .. }
@@ -6000,6 +6073,9 @@ impl Instruction {
             | Self::Ripple(_)
             | Self::Demonstrate
             | Self::Enlist
+            | Self::ShuffleEachHandAndGraveyard
+            | Self::FixedTargetClause(_)
+            | Self::Ascend
             | Self::ExileResolvingSpell
             | Self::ReturnResolvingSpellToHand
             | Self::ForEachPlayer { .. }
@@ -6012,6 +6088,11 @@ impl Instruction {
             | Self::ReturnCardsExiledWithLinkExt { .. }
             | Self::DrawGame
             | Self::TurnFaceUpSubject { .. }
+            | Self::TurnFaceDownSubject { .. }
+            | Self::EmpowerJace { .. }
+            | Self::AddOneOfEachCounterKindOnSubject { .. }
+            | Self::GrantLastMovedPlayPermission { .. }
+            | Self::MoveLastMovedFiltered { .. }
             | Self::MoveGroupToLibrary { .. }
             | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
@@ -6021,6 +6102,8 @@ impl Instruction {
             | Self::RevealUntilMatchExt { .. }
             | Self::CreateTokenCopyExt { .. }
             | Self::AttachPermanent { .. }
+            | Self::UnattachSubject { .. }
+            | Self::ChooseOneLastMoved { .. }
             | Self::SkipNextUntap { .. }
             | Self::RequireCombatAction { .. }
             | Self::CreateTemporaryRule { .. }
@@ -6415,6 +6498,7 @@ impl Instruction {
                 | Self::DistributePlusOneCounters { .. }
                 | Self::DamageOrderedTargets { .. }
                 | Self::DivideDamageAmongTargets { .. }
+                | Self::DivideDamageExprAmongTargets { .. }
                 | Self::DistributeCountersAmongTargets { .. }
                 | Self::DealDamageToAnnouncedTargets { .. }
                 | Self::ExileUntilOtherTargetLeaves
@@ -6580,6 +6664,11 @@ impl Instruction {
                 | Self::MoveCounters { .. }
                 | Self::ExileSubjectUntilSourceLeaves { .. }
                 | Self::TurnFaceUpSubject { .. }
+                | Self::TurnFaceDownSubject { .. }
+                | Self::EmpowerJace { .. }
+                | Self::AddOneOfEachCounterKindOnSubject { .. }
+                | Self::GrantLastMovedPlayPermission { .. }
+                | Self::MoveLastMovedFiltered { .. }
                 | Self::PreventDamageThisTurn(
                     crate::damage::TurnPreventionFilter::Combat
                         | crate::damage::TurnPreventionFilter::All
@@ -6763,6 +6852,7 @@ pub struct ExecutableBody {
     pub(crate) triggered_modes: Option<TriggeredModes>,
     graveyard_target_bounds: Option<(usize, usize)>,
     x_target_count: bool,
+    up_to_x_target_count: bool,
     up_to_one_target: bool,
 }
 
@@ -6852,6 +6942,14 @@ impl ExecutableBody {
         })
     }
 
+    /// Dynamic damage total expression for `DivideDamageExprAmongTargets`.
+    pub fn target_division_expr(&self) -> Option<&ValueExpr> {
+        self.instructions.iter().find_map(|op| match op {
+            Instruction::DivideDamageExprAmongTargets { total, .. } => Some(total),
+            _ => None,
+        })
+    }
+
     pub fn permanent_target_bounds(&self) -> Option<(usize, usize)> {
         self.graveyard_target_bounds
             .or_else(|| self.inferred_permanent_target_bounds())
@@ -6860,6 +6958,12 @@ impl ExecutableBody {
     fn inferred_permanent_target_bounds(&self) -> Option<(usize, usize)> {
         if let Some(total) = self.target_division_total() {
             return Some((1, usize::from(total)));
+        }
+        if let Some(max_t) = self.instructions.iter().find_map(|op| match op {
+            Instruction::DivideDamageExprAmongTargets { max_targets, .. } => Some(*max_targets),
+            _ => None,
+        }) {
+            return Some((0, max_t.map_or(usize::MAX, usize::from)));
         }
         if self.target == BodyTarget::None {
             return None;
@@ -7029,6 +7133,7 @@ impl ExecutableBody {
             triggered_modes: None,
             graveyard_target_bounds: None,
             x_target_count: false,
+            up_to_x_target_count: false,
             up_to_one_target: false,
         }
     }
@@ -7048,6 +7153,17 @@ impl ExecutableBody {
     /// True when the spell's chosen X must equal the number of selected targets.
     pub fn has_x_target_count(&self) -> bool {
         self.x_target_count
+    }
+
+    /// Allow 0..=X distinct targets to be chosen ("up to X target ...").
+    pub fn with_up_to_x_target_count(mut self) -> Self {
+        self.up_to_x_target_count = true;
+        self
+    }
+
+    /// True when the number of selected targets must be at most the spell/ability's chosen X.
+    pub fn has_up_to_x_target_count(&self) -> bool {
+        self.up_to_x_target_count
     }
 
     /// Set the number of distinct cards in this body's graveyard target clause.
@@ -7125,17 +7241,20 @@ impl ExecutableBody {
                     Instruction::Fight { .. }
                         | Instruction::AffectPermanentTargets { .. }
                         | Instruction::DealDamageFrom { .. }
+                        | Instruction::AttachPermanent { .. }
+                        | Instruction::UnattachSubject { .. }
                 )
             });
             if !valid_target
                 || !has_safe_consumer
                 || self.graveyard_target_bounds.is_some()
                 || self.x_target_count
+                || self.up_to_x_target_count
             {
                 return Err(DefinitionError::InvalidInstruction);
             }
         }
-        if self.x_target_count {
+        if self.x_target_count || self.up_to_x_target_count {
             let valid_bounds = self
                 .permanent_target_bounds()
                 .is_some_and(|(min, max)| min == 0 && max >= usize::from(u16::MAX));
@@ -7440,7 +7559,8 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if !facts.definitely_selected_graveyard_exile
+                    if !(facts.definitely_selected_graveyard_exile
+                        || facts.maybe_selected_graveyard_exile)
                         && [&condition.left, &condition.right].contains(&&ValueExpr::event(
                             EventValueKind::SelectedGraveyardExileCreatures,
                         ))
@@ -10805,7 +10925,12 @@ impl ExecutableBody {
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                     min.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     max.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    player.validate(context, self.target, facts.definitely_exiled_target)?
+                    let mut fam =
+                        player.validate(context, self.target, facts.definitely_exiled_target)?;
+                    if filter.has_target_player() {
+                        fam = merge_family(fam, Some(OperandFamily::Player))?;
+                    }
+                    fam
                 }
                 Instruction::ChooseObjects {
                     players,
@@ -10823,7 +10948,12 @@ impl ExecutableBody {
                     if let Some(limit) = max_total_power {
                         limit.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     }
-                    players.validate(context, self.target, facts.definitely_exiled_target)?
+                    let mut fam =
+                        players.validate(context, self.target, facts.definitely_exiled_target)?;
+                    if filter.has_target_player() {
+                        fam = merge_family(fam, Some(OperandFamily::Player))?;
+                    }
+                    fam
                 }
                 Instruction::ChooseOption { chooser, options } => {
                     if options.len() < 2 || options.len() > usize::from(u8::MAX) {
@@ -10981,7 +11111,9 @@ impl ExecutableBody {
                         | DamageRecipientsRef::CreatedTokens
                         | DamageRecipientsRef::OtherCreaturesAndEachPlayer
                         | DamageRecipientsRef::EachOtherPlayer
-                        | DamageRecipientsRef::EachOtherOpponent => None,
+                        | DamageRecipientsRef::EachOtherOpponent
+                        | DamageRecipientsRef::EachSourceToItself
+                        | DamageRecipientsRef::EachSourceController => None,
                         DamageRecipientsRef::Group(group) => {
                             let mut grp_fam = None;
                             if let DamageGroup::Filtered(f) = group {
@@ -11023,6 +11155,20 @@ impl ExecutableBody {
                         family = rec_family;
                     }
                     family
+                }
+                Instruction::DivideDamageExprAmongTargets { total, .. } => {
+                    total.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    match self.target {
+                        BodyTarget::SingleAnyTarget
+                        | BodyTarget::SingleCreature
+                        | BodyTarget::SinglePlaneswalker
+                        | BodyTarget::SingleCreatureOrPlayer
+                        | BodyTarget::SinglePlayerOrPlaneswalker
+                        | BodyTarget::SingleOpponentOrPlaneswalker
+                        | BodyTarget::SinglePermanent
+                        | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::DamageRecipient),
+                        _ => return Err(DefinitionError::OperandFamily),
+                    }
                 }
                 Instruction::DivideDamageAmongTargets { total } => {
                     if *total == 0 {
@@ -12439,7 +12585,13 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::DrawGame => None,
-                Instruction::TurnFaceUpSubject { subject } => {
+                Instruction::EmpowerJace { count } => {
+                    count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    None
+                }
+                Instruction::TurnFaceUpSubject { subject }
+                | Instruction::TurnFaceDownSubject { subject }
+                | Instruction::AddOneOfEachCounterKindOnSubject { subject } => {
                     subject
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -12547,6 +12699,49 @@ impl ExecutableBody {
                         }
                     }
                     family
+                }
+                Instruction::UnattachSubject { subject } => match subject {
+                    MoveSubjectRef::TargetObject => Some(match self.target {
+                        BodyTarget::SingleCreature
+                        | BodyTarget::SinglePermanent
+                        | BodyTarget::SinglePlaneswalker
+                        | BodyTarget::FilteredPermanent(_) => OperandFamily::Permanent,
+                        _ => return Err(DefinitionError::OperandFamily),
+                    }),
+                    MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
+                        if !context.has_source() {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        None
+                    }
+                    MoveSubjectRef::TriggeringObject => {
+                        if !matches!(context, BodyContext::TriggerBound { .. }) {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        None
+                    }
+                    MoveSubjectRef::RevealedCard => {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    MoveSubjectRef::CreatedTokens
+                    | MoveSubjectRef::LastMoved
+                    | MoveSubjectRef::RememberedFirst
+                    | MoveSubjectRef::RememberedSecond => None,
+                },
+                Instruction::ChooseOneLastMoved { chooser } => {
+                    chooser.validate(context, self.target, facts.definitely_exiled_target)?
+                }
+                Instruction::GrantLastMovedPlayPermission { player, filter, .. } => {
+                    if let Some(f) = filter {
+                        f.validate_vocabulary(vocabulary)?;
+                    }
+                    player.validate(context, self.target, facts.definitely_exiled_target)?
+                }
+                Instruction::MoveLastMovedFiltered { filter, .. } => {
+                    if let Some(f) = filter {
+                        f.validate_vocabulary(vocabulary)?;
+                    }
+                    None
                 }
                 Instruction::AttachPermanentToPlayer { attachment, player } => {
                     let att_fam = match attachment {
@@ -12720,7 +12915,10 @@ impl ExecutableBody {
                         }
                         _ => None,
                     },
-                    TemporaryRuleKind::CantCastSpells { players, filter } => {
+                    TemporaryRuleKind::CantCastSpells { players, filter }
+                    | TemporaryRuleKind::CantCastFromZone {
+                        players, filter, ..
+                    } => {
                         if let Some(f) = filter {
                             f.validate_vocabulary(vocabulary)
                                 .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -12820,7 +13018,17 @@ impl ExecutableBody {
                         }
                     }
                     TemporaryRuleKind::NextSpellKeyword { filter, keyword } => {
-                        if !matches!(keyword, KeywordAbility::Convoke | KeywordAbility::Improvise) {
+                        if !matches!(
+                            keyword,
+                            KeywordAbility::Convoke
+                                | KeywordAbility::Improvise
+                                | KeywordAbility::Delve
+                                | KeywordAbility::Flash
+                                | KeywordAbility::Bargain
+                                | KeywordAbility::Retrace
+                                | KeywordAbility::JumpStart
+                                | KeywordAbility::Rebound
+                        ) {
                             return Err(DefinitionError::InvalidInstruction);
                         }
                         filter
@@ -12843,6 +13051,18 @@ impl ExecutableBody {
                     }
                     TemporaryRuleKind::DamageCantBePrevented
                     | TemporaryRuleKind::PreventAllCombatDamage => None,
+                    TemporaryRuleKind::OneShotEventReplacement(ability) => {
+                        if !matches!(
+                            ability.as_ref(),
+                            crate::characteristics::StaticContinuousAbility::EventReplacement { .. }
+                        ) {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        ability
+                            .validate(vocabulary)
+                            .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        None
+                    }
                     TemporaryRuleKind::TemporaryStatic(ability)
                     | TemporaryRuleKind::ConditionalTemporaryStatic { ability, .. } => {
                         if let TemporaryRuleKind::ConditionalTemporaryStatic { condition, .. } =
@@ -12950,7 +13170,8 @@ impl ExecutableBody {
                                 SpellCostModifier::Discount {
                                     amount: SpellDiscount::Fixed(_)
                                         | SpellDiscount::PerExperienceCounter(_)
-                                        | SpellDiscount::ControlledCreaturesWithPlusOneCounters,
+                                        | SpellDiscount::ControlledCreaturesWithPlusOneCounters
+                                        | SpellDiscount::Dynamic(_),
                                     ..
                                 } | SpellCostModifier::IncreaseExceptType { .. }
                                     | SpellCostModifier::Increase { .. }
@@ -13401,7 +13622,10 @@ impl ExecutableBody {
                     expr.required_operand_family(self.target)?
                 }
                 Instruction::PutResolvingSpellInLibrary(placement) => {
-                    if !matches!(context, BodyContext::Unbound) {
+                    if matches!(
+                        context,
+                        BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
+                    ) {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     if let LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
@@ -14784,14 +15008,24 @@ impl ExecutableBody {
                 }
                 Instruction::WatchNextSpellOrLoyaltyTwice
                     if self.target == BodyTarget::None
-                        && matches!(context, BodyContext::Unbound) =>
+                        && !matches!(
+                            context,
+                            BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
+                        ) =>
                 {
                     None
                 }
                 Instruction::WatchNextSpellOrLoyaltyTwice => {
                     return Err(DefinitionError::InvalidInstruction);
                 }
-                Instruction::CopyResolvingSpell if matches!(context, BodyContext::Unbound) => None,
+                Instruction::CopyResolvingSpell
+                    if !matches!(
+                        context,
+                        BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
+                    ) =>
+                {
+                    None
+                }
                 Instruction::CopyResolvingSpell => return Err(DefinitionError::InvalidInstruction),
                 Instruction::WatchNextLoyaltyCopy
                 | Instruction::ChoosePlaneswalkerTypeForCopies
@@ -15394,10 +15628,8 @@ impl ExecutableBody {
                         BodyContext::TriggerBound {
                             condition: TriggerSpec {
                                 event: TriggerEvent::SpellCast { .. }
-                                    | TriggerEvent::Targeted {
-                                        instant_or_sorcery_only: false,
-                                        ..
-                                    },
+                                    | TriggerEvent::AbilityActivated { .. }
+                                    | TriggerEvent::Targeted { .. },
                                 ..
                             },
                             grouping: TriggerGrouping::EachOccurrence
@@ -16486,6 +16718,7 @@ impl ExecutableBody {
                     | Instruction::ChooseOption { .. }
                     | Instruction::DealDamageFrom { .. }
                     | Instruction::DivideDamageAmongTargets { .. }
+                    | Instruction::DivideDamageExprAmongTargets { .. }
                     | Instruction::GainControlOfPermanent { .. }
                     | Instruction::GiveFixedTargetControl { .. }
                     | Instruction::BecomeCopy { .. }
@@ -16537,6 +16770,8 @@ impl ExecutableBody {
                     | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::CreateTokenCopyExt { .. }
                     | Instruction::AttachPermanent { .. }
+                    | Instruction::UnattachSubject { .. }
+                    | Instruction::ChooseOneLastMoved { .. }
                     | Instruction::SkipNextUntap { .. }
                     | Instruction::RequireCombatAction { .. }
                     | Instruction::CreateTemporaryRule { .. }
@@ -16749,6 +16984,11 @@ impl ExecutableBody {
                     | Instruction::ReturnCardsExiledWithLinkExt { .. }
                     | Instruction::DrawGame
                     | Instruction::TurnFaceUpSubject { .. }
+                    | Instruction::TurnFaceDownSubject { .. }
+                    | Instruction::EmpowerJace { .. }
+                    | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+                    | Instruction::GrantLastMovedPlayPermission { .. }
+                    | Instruction::MoveLastMovedFiltered { .. }
                     | Instruction::DiscardUpToExt { .. }
                     | Instruction::Earthbend { .. }
                     | Instruction::ReturnEarthbentCard
@@ -20369,6 +20609,7 @@ impl Program {
                             | Instruction::ChooseOption { .. }
                             | Instruction::DealDamageFrom { .. }
                             | Instruction::DivideDamageAmongTargets { .. }
+                            | Instruction::DivideDamageExprAmongTargets { .. }
                             | Instruction::GainControlOfPermanent { .. }
                             | Instruction::GiveFixedTargetControl { .. }
                             | Instruction::BecomeCopyFixedTargets { .. }
@@ -20460,7 +20701,12 @@ impl Program {
                             | Instruction::DoublePowerToughnessSubject { .. }
                             | Instruction::MoveCounters { .. }
                             | Instruction::ExileSubjectUntilSourceLeaves { .. }
-                            | Instruction::TurnFaceUpSubject { .. } => {
+                            | Instruction::TurnFaceUpSubject { .. }
+                            | Instruction::TurnFaceDownSubject { .. }
+                            | Instruction::EmpowerJace { .. }
+                            | Instruction::AddOneOfEachCounterKindOnSubject { .. }
+                            | Instruction::GrantLastMovedPlayPermission { .. }
+                            | Instruction::MoveLastMovedFiltered { .. } => {
                                 !operation.uses_mode_target()
                             }
                             Instruction::Scry { player, .. }
@@ -20474,6 +20720,12 @@ impl Program {
                             }
                             Instruction::AddManaForPlayer { player, .. } => {
                                 targetless_player(*player) && !operation.uses_mode_target()
+                            }
+                            Instruction::UnattachSubject { subject } => {
+                                !matches!(subject, MoveSubjectRef::TargetObject)
+                            }
+                            Instruction::ChooseOneLastMoved { chooser } => {
+                                targetless_player(*chooser)
                             }
                             Instruction::AttachPermanentToPlayer { attachment, player } => {
                                 !matches!(attachment, MoveSubjectRef::TargetObject)
