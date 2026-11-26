@@ -1518,6 +1518,47 @@ fn lower_face(
                 continue;
             }
             if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
+                && let StaticAbilityAst::GrantKeywords {
+                    subject,
+                    keywords,
+                    condition: Some(cond),
+                    paired_rule: None,
+                } = static_ability.as_ref()
+                && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                && matches!(keywords.as_slice(), [kw] if kw.trim().eq_ignore_ascii_case("flash"))
+            {
+                if conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                conditional_flash = Some(lower_self_flash_condition(cond, vocabulary)?);
+                continue;
+            }
+            if let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = ins
+                && let [InstructionAst::TemporaryStatic { static_ability, .. }] =
+                    then_body.as_slice()
+                && let StaticAbilityAst::GrantKeywords {
+                    subject,
+                    keywords,
+                    condition: inner_cond,
+                    paired_rule: None,
+                } = static_ability.as_ref()
+                && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                && matches!(keywords.as_slice(), [kw] if kw.trim().eq_ignore_ascii_case("flash"))
+            {
+                if conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                let combined_cond = match inner_cond.as_deref() {
+                    Some(ic) => ConditionAst::And(condition.clone(), Box::new(ic.clone())),
+                    None => condition.as_ref().clone(),
+                };
+                conditional_flash = Some(lower_self_flash_condition(&combined_cond, vocabulary)?);
+                continue;
+            }
+            if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
                 && conditional_free_cast.is_none()
                 && let StaticAbilityAst::AlternativeCastCost {
                     cost,
@@ -4290,6 +4331,11 @@ mod wave12_die_roll_tests;
 
 #[cfg(test)]
 mod wave12_condition_scope_tests;
+
+#[cfg(test)]
+mod mega_batch_1_primitives_tests;
+#[cfg(test)]
+mod wave14_selector_filter_tests;
 
 #[cfg(test)]
 use super::vocabulary as creature_vocabulary;

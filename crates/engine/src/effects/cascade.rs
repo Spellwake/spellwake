@@ -58,42 +58,68 @@ impl EffectWindow {
             })
         })
     }
+    fn instruction_uses_random(op: &Instruction) -> bool {
+        match op {
+            Instruction::Cascade
+            | Instruction::CascadeBottom
+            | Instruction::ReturnRandomLinkedExile
+            | Instruction::RevealCreatureOfSacrificedType
+            | Instruction::ExileNonlandForFormerControllers
+            | Instruction::DiscardOneAtRandom(_)
+            | Instruction::SacrificeRandomUntilLand
+            | Instruction::ReturnRandomGraveyardCards { .. }
+            | Instruction::FlipCoin { .. }
+            | Instruction::RollDie { .. }
+            | Instruction::FlipCoins { .. }
+            | Instruction::Discover { .. }
+            | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::ShuffleTargetIntoLibrary
+            | Instruction::ShuffleSubjectIntoLibrary { .. }
+            | Instruction::RevealPlayerHand(_)
+            | Instruction::ShuffleAbilitySourceIntoLibrary
+            | Instruction::ShuffleOwnGraveyardIntoLibrary
+            | Instruction::ShuffleTargetGraveyardCards { .. }
+            | Instruction::ShuffleEachHandAndGraveyard
+            | Instruction::RevealCreatureForEachTargetController
+            | Instruction::RevealUntilLandKind
+            | Instruction::LookTopPlaneswalkers
+            | Instruction::LookTopTakeOne { .. }
+            | Instruction::LookTopReveal { .. }
+            | Instruction::SearchLibrary { .. }
+            | Instruction::LookTopChoose {
+                random_rest_order: true,
+                ..
+            }
+            | Instruction::LookTopChooseExt {
+                rest_dest: crate::program::LookTopRestDest::BottomRandom,
+                ..
+            }
+            | Instruction::RevealUntilMatch {
+                random_rest_order: true,
+                ..
+            }
+            | Instruction::RevealUntilMatchExt {
+                rest_dest: crate::program::LookTopRestDest::BottomRandom,
+                ..
+            } => true,
+            Instruction::ForEachPlayer { body, .. } => {
+                body.instructions.iter().any(Self::instruction_uses_random)
+            }
+            Instruction::RepeatLoop { body, .. }
+            | Instruction::EmitReflexiveTrigger { body }
+            | Instruction::FixedTargetClause(body) => {
+                body.instructions.iter().any(Self::instruction_uses_random)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn has_stacked_random_operation(&self) -> bool {
         self.payloads
             .values()
             .filter_map(StackPayload::instructions)
-            .any(|body| {
-                body.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::Cascade
-                            | Instruction::CascadeBottom
-                            | Instruction::ReturnRandomLinkedExile
-                            | Instruction::RevealCreatureOfSacrificedType
-                            | Instruction::ExileNonlandForFormerControllers
-                            | Instruction::DiscardOneAtRandom(_)
-                            | Instruction::SacrificeRandomUntilLand
-                            | Instruction::ReturnRandomGraveyardCards { .. }
-                            | Instruction::FlipCoin { .. }
-                            | Instruction::RollDie { .. }
-                            | Instruction::FlipCoins { .. }
-                            | Instruction::Discover { .. }
-                            | Instruction::ShuffleOwnLibrary
-                            | Instruction::ShufflePlayerLibrary(_)
-                            | Instruction::ShuffleTargetIntoLibrary
-                            | Instruction::RevealPlayerHand(_)
-                            | Instruction::ShuffleAbilitySourceIntoLibrary
-                            | Instruction::ShuffleOwnGraveyardIntoLibrary
-                            | Instruction::ShuffleTargetGraveyardCards { .. }
-                            | Instruction::ShuffleEachHandAndGraveyard
-                            | Instruction::RevealCreatureForEachTargetController
-                            | Instruction::RevealUntilLandKind
-                            | Instruction::LookTopPlaneswalkers
-                            | Instruction::LookTopTakeOne { .. }
-                            | Instruction::LookTopReveal { .. }
-                    )
-                })
-            })
+            .any(|body| body.iter().any(Self::instruction_uses_random))
     }
 
     pub(super) fn cascade_batch(&self, entry: StackEntryId) -> Option<&CascadeBatch> {

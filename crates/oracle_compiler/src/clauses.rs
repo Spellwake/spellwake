@@ -665,8 +665,14 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         {
             return Ok(CostAtomAst::SacrificeAll(Box::new(flt)));
         }
+        let has_conjoined_two_object_sacrifice = (rest.contains(" and a ")
+            || rest.contains(" and an ")
+            || rest.contains(" and another "))
+            && !rest.contains(" with ")
+            && !rest.contains(" without ");
         if rest.ends_with(" and ~")
             || rest.starts_with("~ and ")
+            || has_conjoined_two_object_sacrifice
             || (rest.contains(", ") && !rest.contains(", or "))
         {
             return Err(format!("unparsed_cost:{a}"));
@@ -4949,17 +4955,33 @@ pub fn parse_atomic_effect(
                 condition: None,
             }]);
         }
-        "activate no more than twice each turn" | "activate no more than three times each turn" => {
+        "activate no more than twice each turn" => {
             return Ok(vec![InstructionAst::AbilityRestriction {
-                restriction: "AtMostNTimesEachTurn".to_string(),
+                restriction: "AtMost2TimesEachTurn".to_string(),
                 condition: None,
             }]);
         }
-        "activate only during combat"
-        | "activate only during the declare blockers step"
-        | "activate only during the declare attackers step" => {
+        "activate no more than three times each turn" => {
+            return Ok(vec![InstructionAst::AbilityRestriction {
+                restriction: "AtMost3TimesEachTurn".to_string(),
+                condition: None,
+            }]);
+        }
+        "activate only during combat" => {
             return Ok(vec![InstructionAst::AbilityRestriction {
                 restriction: "DuringCombat".to_string(),
+                condition: None,
+            }]);
+        }
+        "activate only during the declare attackers step" => {
+            return Ok(vec![InstructionAst::AbilityRestriction {
+                restriction: "DuringDeclareAttackersStep".to_string(),
+                condition: None,
+            }]);
+        }
+        "activate only during the declare blockers step" => {
+            return Ok(vec![InstructionAst::AbilityRestriction {
+                restriction: "DuringDeclareBlockersStep".to_string(),
                 condition: None,
             }]);
         }
@@ -4969,6 +4991,19 @@ pub fn parse_atomic_effect(
                 restriction: low,
                 condition: None,
             }]);
+        }
+        _ if low.starts_with("activate no more than ") && low.ends_with(" times each turn") => {
+            if let Some(count_raw) = low
+                .strip_prefix("activate no more than ")
+                .and_then(|rest| rest.strip_suffix(" times each turn"))
+                && let Some(count) = parse_number_word(count_raw.trim())
+                && count >= 2
+            {
+                return Ok(vec![InstructionAst::AbilityRestriction {
+                    restriction: format!("AtMost{count}TimesEachTurn"),
+                    condition: None,
+                }]);
+            }
         }
         "choose left or right" | "choose odd or even" => {
             return Ok(vec![InstructionAst::ChooseOption(low)]);
@@ -7382,15 +7417,22 @@ pub fn parse_atomic_effect(
     }
 
     // CR 701.16 Reveal-Until Loop: "[<player>] reveal(s) cards from the top of <whose> library until <who> reveal(s) [<cnt>] <flt>"
+    // Also passive voice: "... until [<cnt>] <flt> are revealed" / "is revealed" (e.g. Mind Funeral).
     if let Some((who, after)) = split_leading_player_verb(&low, "reveal", "reveals")
         && let Some((top_part, until_part)) = after.split_once(" until ")
         && top_part.starts_with("cards from the top of ")
         && top_part.ends_with(" library")
-        && let Some((_, flt_side)) = until_part
+        && let Some(flt_side) = until_part
             .split_once(" reveals ")
             .or_else(|| until_part.split_once(" reveal "))
+            .map(|(_, rhs)| rhs)
+            .or_else(|| {
+                until_part
+                    .strip_suffix(" are revealed")
+                    .or_else(|| until_part.strip_suffix(" is revealed"))
+            })
     {
-        let (cnt, flt_raw) = peel_leading_count(flt_side, vocab);
+        let (cnt, flt_raw) = peel_leading_count(flt_side.trim(), vocab);
         if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
             return Ok(vec![InstructionAst::RevealUntil {
                 player: who,
@@ -10355,13 +10397,14 @@ pub fn parse_atomic_effect(
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         && (rest.contains(" named ") || rest.contains('"'))
     {
+        let (power, toughness, keywords) = parse_named_or_quoted_animation_fields(rest, vocab);
         let mut out = vec![InstructionAst::AnimateOrSetBasePT {
             subject: Box::new(subj.clone()),
-            power: String::new(),
-            toughness: String::new(),
+            power,
+            toughness,
             description: Some(rest.trim().to_string()),
-            keywords: Vec::new(),
-            duration: dur.clone(),
+            keywords,
+            duration: dur_perm.clone(),
         }];
         if let Some(q_start) = rest.find('"')
             && let Some(q_end) = rest.rfind('"')
@@ -10372,7 +10415,7 @@ pub fn parse_atomic_effect(
                 out.push(InstructionAst::GrantAbilityText {
                     subject: Box::new(subj),
                     ability_text: q_text.to_string(),
-                    duration: dur.clone(),
+                    duration: dur_perm.clone(),
                     compiled: Some(compiled),
                 });
                 return Ok(out);
@@ -14220,6 +14263,78 @@ fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<InstructionAst>
     None
 }
 
+/// Extract embedded base power/toughness and keyword lists from named or quoted
+/// animation descriptions such as "legendary 0/0 Elemental creature with haste named Vitu-Ghazi".
+fn parse_named_or_quoted_animation_fields(
+    rest: &str,
+    vocab: &Vocabulary,
+) -> (String, String, Vec<String>) {
+    let non_quoted = rest.split_once('"').map_or(rest, |(head, _)| head);
+    let low = non_quoted.to_ascii_lowercase();
+    let (before_named, after_named) = match low.split_once(" named ") {
+        Some((head, tail)) => (head.trim(), Some(tail.trim())),
+        None => (low.trim(), None),
+    };
+    let mut pt = before_named
+        .split_whitespace()
+        .find_map(|tok| parse_base_pt(tok.trim_end_matches(',')));
+    if pt.is_none()
+        && let Some(tail) = after_named
+        && let Some((_, after_bpt)) = tail.split_once("base power and toughness ")
+        && let Some(tok) = after_bpt.split_whitespace().next()
+    {
+        pt = parse_base_pt(tok.trim_end_matches(','));
+    }
+    let keywords = before_named
+        .split_once(" with ")
+        .and_then(|(_, kw_part)| parse_keyword_list(kw_part.trim(), vocab))
+        .unwrap_or_default();
+    match pt {
+        Some((power, toughness)) => (power, toughness, keywords),
+        None => (String::new(), String::new(), keywords),
+    }
+}
+
+/// Parse a single search-card clause, handling both "<type> named <name>" and
+/// regular object filters while refusing compound search phrases inside a single name.
+fn parse_search_single_filter(flt_raw: &str, vocab: &Vocabulary) -> Option<ObjectFilterAst> {
+    if let Some((type_part, name_raw)) = flt_raw.split_once(" named ")
+        && !type_part.trim_end().ends_with(" not")
+        && type_part.trim() != "not"
+        && !type_part.trim_end().ends_with(" for cards")
+        && !type_part.trim_end().ends_with(" drafted cards")
+    {
+        let n = name_raw.trim();
+        if n.is_empty()
+            || n.contains(" and/or a ")
+            || n.contains(" and/or an ")
+            || n.contains(" or a ")
+            || n.contains(" or an ")
+            || n.contains(" and a ")
+            || n.contains(" and an ")
+        {
+            return None;
+        }
+        let mut base_flt = if matches!(type_part.trim(), "card" | "cards") {
+            ObjectFilterAst {
+                any_card: true,
+                ..ObjectFilterAst::default()
+            }
+        } else {
+            parse_object_filter(type_part.trim(), vocab).ok()?
+        };
+        let nf = if n == "~" {
+            NameFilterAst::SelfName
+        } else {
+            NameFilterAst::Exact(n.to_string())
+        };
+        base_flt.named = Some(nf);
+        Some(base_flt)
+    } else {
+        parse_object_filter(flt_raw, vocab).ok()
+    }
+}
+
 fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
     let low_owned = if low.contains(" which have ") {
         low.replace(" which have ", " that have ")
@@ -14256,18 +14371,31 @@ fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<Instruction
         return None;
     };
 
-    // Cluster 7 + Wave E2: Support single-zone, multi-zone, and pile searches
-    let (lib_who, extra_zones, rest_raw) = if let Some((lw, r)) =
-        after.split_once(" library, graveyard, and/or outside the game for ")
+    // Cluster 7 + Wave E2: Support single-zone, multi-zone (with or without Oxford comma), and pile searches
+    let (lib_who, extra_zones, rest_raw) = if let Some((lw, r)) = after
+        .split_once(" library, graveyard, and/or outside the game for ")
+        .or_else(|| after.split_once(" library, graveyard and/or outside the game for "))
     {
         (lw, vec![ZoneFilter::YourGraveyard, ZoneFilter::Exile], r)
-    } else if let Some((lw, r)) = after.split_once(" library, graveyard, and/or hand for ") {
+    } else if let Some((lw, r)) = after
+        .split_once(" library, graveyard, and/or hand for ")
+        .or_else(|| after.split_once(" library, graveyard and/or hand for "))
+    {
         (lw, vec![ZoneFilter::YourGraveyard, ZoneFilter::YourHand], r)
-    } else if let Some((lw, r)) = after.split_once(" library, hand, and/or graveyard for ") {
+    } else if let Some((lw, r)) = after
+        .split_once(" library, hand, and/or graveyard for ")
+        .or_else(|| after.split_once(" library, hand and/or graveyard for "))
+    {
         (lw, vec![ZoneFilter::YourHand, ZoneFilter::YourGraveyard], r)
-    } else if let Some((lw, r)) = after.split_once(" graveyard, hand, and/or library for ") {
+    } else if let Some((lw, r)) = after
+        .split_once(" graveyard, hand, and/or library for ")
+        .or_else(|| after.split_once(" graveyard, hand and/or library for "))
+    {
         (lw, vec![ZoneFilter::YourGraveyard, ZoneFilter::YourHand], r)
-    } else if let Some((lw, r)) = after.split_once(" graveyard, hand, and library for ") {
+    } else if let Some((lw, r)) = after
+        .split_once(" graveyard, hand, and library for ")
+        .or_else(|| after.split_once(" graveyard, hand and library for "))
+    {
         (lw, vec![ZoneFilter::YourGraveyard, ZoneFilter::YourHand], r)
     } else if let Some((lw, r)) = after.split_once(" library and/or graveyard for ") {
         (lw, vec![ZoneFilter::YourGraveyard], r)
@@ -14459,19 +14587,27 @@ fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<Instruction
         .or_else(|| flt_part_raw.strip_prefix("exactly "))
         .unwrap_or(flt_part_raw);
 
-    // Optional compound search target: "<flt1> and a/an <flt2>" or "<flt1> or a/an <flt2>"
+    // Optional compound search target: "<flt1> and/or a/an <flt2>", "<flt1> and a/an <flt2>",
+    // or "<flt1> or a/an <flt2>". The right side must parse as a valid search filter (named or typed),
+    // which supports both "a card named A and/or a card named B" and "a card named A or an Equipment card"
+    // while keeping single card names such as "Sword of Feast and Famine" intact.
     let (primary_raw, secondary_filter, secondary_is_or) = if let Some((left_f, right_f)) =
         flt_clean
-            .split_once(" and a ")
-            .or_else(|| flt_clean.split_once(" and an "))
-        && !left_f.contains(" named ")
-        && let Ok(sf) = parse_object_filter(right_f.trim(), vocab)
+            .split_once(" and/or a ")
+            .or_else(|| flt_clean.split_once(" and/or an "))
+        && let Some(sf) = parse_search_single_filter(right_f.trim(), vocab)
+    {
+        (left_f.trim(), Some(Box::new(sf)), false)
+    } else if let Some((left_f, right_f)) = flt_clean
+        .split_once(" and a ")
+        .or_else(|| flt_clean.split_once(" and an "))
+        && let Some(sf) = parse_search_single_filter(right_f.trim(), vocab)
     {
         (left_f.trim(), Some(Box::new(sf)), false)
     } else if let Some((left_f, right_f)) = flt_clean
         .split_once(" or a ")
         .or_else(|| flt_clean.split_once(" or an "))
-        && let Ok(sf) = parse_object_filter(right_f.trim(), vocab)
+        && let Some(sf) = parse_search_single_filter(right_f.trim(), vocab)
     {
         (left_f.trim(), Some(Box::new(sf)), true)
     } else {
@@ -14490,39 +14626,7 @@ fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<Instruction
     } else {
         peel_leading_count(primary_raw, vocab)
     };
-    let flt = if let Some((type_part, name_raw)) = flt_raw.split_once(" named ")
-        && !type_part.trim_end().ends_with(" not")
-        && type_part.trim() != "not"
-        && !type_part.trim_end().ends_with(" for cards")
-        && !type_part.trim_end().ends_with(" drafted cards")
-    {
-        let n = name_raw.trim();
-        if n.is_empty()
-            || n.contains(" or a ")
-            || n.contains(" or an ")
-            || n.contains(" and a ")
-            || n.contains(" and an ")
-        {
-            return None;
-        }
-        let mut base_flt = if matches!(type_part.trim(), "card" | "cards") {
-            ObjectFilterAst {
-                any_card: true,
-                ..ObjectFilterAst::default()
-            }
-        } else {
-            parse_object_filter(type_part.trim(), vocab).ok()?
-        };
-        let nf = if n == "~" {
-            NameFilterAst::SelfName
-        } else {
-            NameFilterAst::Exact(n.to_string())
-        };
-        base_flt.named = Some(nf);
-        base_flt
-    } else {
-        parse_object_filter(flt_raw, vocab).ok()?
-    };
+    let flt = parse_search_single_filter(flt_raw, vocab)?;
 
     let has_exile = tail_main.contains("exile it")
         || tail_main.contains("exiles it")
@@ -16315,7 +16419,7 @@ fn try_parse_combat_and_animate(
                     toughness: "X".to_string(),
                     description: Some(rhs.to_string()),
                     keywords: Vec::new(),
-                    duration: dur.clone(),
+                    duration: dur_perm.clone(),
                 });
             }
         }
@@ -16328,7 +16432,7 @@ fn try_parse_combat_and_animate(
                 toughness: "X".to_string(),
                 description: Some(rhs.to_string()),
                 keywords: Vec::new(),
-                duration: dur.clone(),
+                duration: dur_perm.clone(),
             });
         }
         if rhs.contains(" with ") && rhs.contains("base power and toughness equal to ") {
@@ -16338,7 +16442,7 @@ fn try_parse_combat_and_animate(
                 toughness: "X".to_string(),
                 description: Some(rhs.to_string()),
                 keywords: Vec::new(),
-                duration: dur.clone(),
+                duration: dur_perm.clone(),
             });
         }
         if let Some((ty_part, kw_raw)) = rhs
@@ -16354,7 +16458,7 @@ fn try_parse_combat_and_animate(
                 toughness: "keep".to_string(),
                 description: Some(ty_part.trim().to_string()),
                 keywords,
-                duration: dur.clone(),
+                duration: dur_perm.clone(),
             });
         }
     }
@@ -16806,7 +16910,7 @@ fn try_parse_combat_and_animate(
                 toughness: "keep".to_string(),
                 description: Some(rest.to_string()),
                 keywords: Vec::new(),
-                duration: dur.clone(),
+                duration: dur_perm.clone(),
             });
         }
         let (type_part, kws) = match rest.split_once(" with ") {

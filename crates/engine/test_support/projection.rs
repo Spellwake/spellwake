@@ -446,6 +446,9 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::ChooseDamageRecipient(recipient) => {
             json!({"tag":"ChooseDamageRecipient","recipient":target(*recipient)})
         }
+        DecisionReply::ChooseDamageSource(source) => {
+            json!({"tag":"ChooseDamageSource","source":opaque(source)})
+        }
         DecisionReply::OpponentChoice(seat) => json!({"tag":"OpponentChoice","player":seat.0}),
         DecisionReply::ReplacementChooser(seat) => {
             json!({"tag":"ReplacementChooser","player":seat.0})
@@ -2705,6 +2708,9 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::DamageRecipientChoice(value) => {
             json!({"tag":"DamageRecipientChoice","chooser":value.chooser().0,"recipients":value.recipients().iter().copied().map(target).collect::<Vec<_>>()})
         }
+        RuleFrame::DamageSourceChoice(value) => {
+            json!({"tag":"DamageSourceChoice","chooser":value.chooser().0,"sources":value.sources().iter().map(opaque).collect::<Vec<_>>()})
+        }
         RuleFrame::OpponentChoice(value) => {
             json!({"tag":"OpponentChoice","chooser":value.chooser().0,"opponents":value.opponents().iter().map(|s|s.0).collect::<Vec<_>>()})
         }
@@ -3972,6 +3978,14 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             filter,
         } => {
             json!({"tag":"TurnPreventionCreated","creator":opaque(creator),"instruction":instruction,"controller":controller.0,"filter":opaque(filter)})
+        }
+        RulesOccurrence::TurnPreventionSpecCreated {
+            creator,
+            instruction,
+            controller,
+            spec,
+        } => {
+            json!({"tag":"TurnPreventionSpecCreated","creator":opaque(creator),"instruction":instruction,"controller":controller.0,"spec":opaque(spec)})
         }
         RulesOccurrence::CommanderTypeManaSpent {
             source,

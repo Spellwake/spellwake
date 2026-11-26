@@ -340,8 +340,9 @@ use control::FlowFacts;
 pub use control::{Comparison, ResolutionCondition};
 pub use object_filter::{
     CardTypeMask, ColorMask, CombatFilter, ControllerFilter, DynamicStatAnchor, EffectSubject,
-    ManaValueFilter, ObjectClause, ObjectColorFilter, ObjectFilter, ObjectFilterFlags, PowerFilter,
-    SourceRelation, SubtypeFilter, SupertypeMask, ToughnessFilter,
+    ExactNameKey, ManaValueFilter, ObjectClause, ObjectColorFilter, ObjectFilter,
+    ObjectFilterFlags, PowerFilter, SingleSubtype, SourceRelation, SubtypeFilter, SubtypeList,
+    SupertypeMask, ToughnessFilter,
 };
 pub use spell_filter::{SpellCastZoneFilter, SpellFilter, SpellSpecialFilter, SpellTargetShape};
 pub use trigger_spec::{
@@ -1405,6 +1406,11 @@ pub enum PermanentTargetAction {
     },
     /// Create a regeneration shield for each still-legal targeted permanent.
     Regenerate,
+    /// Prevent damage dealt by (and optionally to) each still-legal targeted permanent this turn.
+    PreventDamageThisTurn {
+        combat_only: bool,
+        both_directions: bool,
+    },
 }
 
 /// Position in the physical card owner's library.
@@ -2619,6 +2625,8 @@ pub enum Instruction {
     RequireTargetAttack,
     /// Remove an attacking or blocking creature from combat, preserving its zone and status.
     RemoveTargetFromCombat,
+    /// Remove every battlefield object resolved from this subject from combat (CR 506.4).
+    RemoveSubjectFromCombat(Box<EffectSubject>),
     /// Reveal your top card, remove the captured attacker if it's a Forest, then bottom it.
     RevealTopAndRemoveAttackerIfForest,
     RegenerateTarget,
@@ -2879,6 +2887,8 @@ pub enum Instruction {
     },
     /// Create a continuous damage-prevention effect lasting through this turn.
     PreventDamageThisTurn(crate::damage::TurnPreventionFilter),
+    /// Create a generalized until-end-of-turn damage prevention effect (including source/color choice and recipient/source scopes).
+    PreventDamageSpec(Box<crate::damage::TurnPreventionSpec>),
     /// The resolving controller takes a turn immediately after the current turn.
     TakeExtraTurn,
     /// Damage can't be prevented this turn (CR 101.2 / Skullcrack, Stomp, Flaring Pain).
@@ -3700,6 +3710,12 @@ pub enum Instruction {
         /// Evaluated types are distinct from physical Battlefield/control checks.
         filter: PermanentTypeFilter,
     },
+    /// Each affected player chooses up to `amount` eligible controlled permanents matching `filter` and sacrifices them.
+    SacrificeUpTo {
+        players: AffectedPlayers,
+        amount: ValueExpr,
+        filter: PermanentTypeFilter,
+    },
     /// Each affected player chooses as many eligible cards from their own hand
     /// as possible matching `filter`, then discards the complete selection simultaneously.
     DiscardFiltered {
@@ -4053,6 +4069,11 @@ pub enum Instruction {
         player: ResolvingPlayer,
         count: u8,
     },
+    /// Schedule skipping `player`'s next occurrence of `step` (CR 614.10).
+    SkipNextStep {
+        player: ResolvingPlayer,
+        step: crate::turn::Step,
+    },
     /// Select the player with the highest or lowest life total as `ResolvingPlayer::ChosenPlayer`.
     SelectExtremeLifePlayer {
         highest: bool,
@@ -4208,6 +4229,7 @@ impl Instruction {
             | Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
+            | Self::RemoveSubjectFromCombat(_)
             | Self::RevealTopAndRemoveAttackerIfForest
             | Self::RegenerateTarget
             | Self::RegenerateSource
@@ -4332,6 +4354,7 @@ impl Instruction {
             | Self::GainCastCardAbilities { .. }
             | Self::ExileCardsFromGraveyard { .. }
             | Self::PreventDamageThisTurn(..)
+            | Self::PreventDamageSpec(..)
             | Self::TakeExtraTurn
             | Self::DisallowDamagePreventionThisTurn
             | Self::GrantNoMaxHandSizeRestOfGame
@@ -4630,6 +4653,7 @@ impl Instruction {
             | Self::AffectPermanentTargets { .. }
             | Self::ModifyAnyNumberOfPermanents { .. }
             | Self::Sacrifice { .. }
+            | Self::SacrificeUpTo { .. }
             | Self::DiscardFiltered { .. }
             | Self::DiscardUpTo { .. }
             | Self::DiscardUpToExt { .. }
@@ -4638,6 +4662,7 @@ impl Instruction {
             | Self::RegenerateSubject { .. }
             | Self::AddManaForPlayer { .. }
             | Self::SkipNextTurns { .. }
+            | Self::SkipNextStep { .. }
             | Self::SelectExtremeLifePlayer { .. }
             | Self::AttachFixedTargets
             | Self::AttachPermanentToPlayer { .. }
@@ -4773,6 +4798,18 @@ impl Instruction {
                     | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                     | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget
             ),
+            Self::PreventDamageSpec(spec) => {
+                matches!(
+                    spec.source,
+                    crate::damage::PreventionSourceSpec::TargetPermanent
+                        | crate::damage::PreventionSourceSpec::TargetSpell
+                        | crate::damage::PreventionSourceSpec::AllPermanentTargets
+                        | crate::damage::PreventionSourceSpec::CreaturesOtherThanTarget
+                ) || matches!(
+                    spec.recipient,
+                    crate::damage::PreventionRecipientSpec::Target
+                )
+            }
             Self::OfferManaPayment { payer, .. } | Self::OfferDynamicManaPayment { payer, .. } => {
                 is_target_player(*payer)
             }
@@ -4803,7 +4840,8 @@ impl Instruction {
             | Self::ExileChosenPermanents { players, .. }
             | Self::Discard { players, .. }
             | Self::DiscardFiltered { players, .. }
-            | Self::Sacrifice { players, .. } => is_target_affected(*players),
+            | Self::Sacrifice { players, .. }
+            | Self::SacrificeUpTo { players, .. } => is_target_affected(*players),
             Self::DrawPlayer { players, amount } => {
                 is_target_affected(*players) || amount.uses_target()
             }
@@ -4860,7 +4898,9 @@ impl Instruction {
             }
             Self::Earthbend { .. } => true,
             Self::RegenerateSubject { subject } => subject_uses_target(subject),
-            Self::SkipNextTurns { player, .. } => is_target_player(*player),
+            Self::SkipNextTurns { player, .. } | Self::SkipNextStep { player, .. } => {
+                is_target_player(*player)
+            }
             Self::AttachPermanentToPlayer { attachment, player } => {
                 matches!(attachment, MoveSubjectRef::TargetObject) || is_target_player(*player)
             }
@@ -5384,6 +5424,7 @@ impl Instruction {
             Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
+            | Self::RemoveSubjectFromCombat(_)
             | Self::RegenerateTarget
             | Self::TapTargetWhileControllingSource
             | Self::TransformSourceAndAttachToTarget
@@ -6018,6 +6059,7 @@ impl Instruction {
             | Self::DoublePowerToughness { .. }
             | Self::MillEachPlayer(_)
             | Self::PreventDamageThisTurn(_)
+            | Self::PreventDamageSpec(_)
             | Self::PhaseOut(_)
             | Self::PhaseOutObjects(_)
             | Self::ExileGraveyardTarget
@@ -6061,6 +6103,7 @@ impl Instruction {
             | Self::RegenerateSubject { .. }
             | Self::AddManaForPlayer { .. }
             | Self::SkipNextTurns { .. }
+            | Self::SkipNextStep { .. }
             | Self::SelectExtremeLifePlayer { .. }
             | Self::AttachPermanentToPlayer { .. }
             | Self::AttachChoosingPermanent { .. }
@@ -6069,6 +6112,10 @@ impl Instruction {
                 ..
             }
             | Self::Sacrifice {
+                players: AffectedPlayers::One(_),
+                ..
+            }
+            | Self::SacrificeUpTo {
                 players: AffectedPlayers::One(_),
                 ..
             }
@@ -6122,6 +6169,7 @@ impl Instruction {
             | Self::ReturnControlledPermanents { .. }
             | Self::ChooseOtherControlledCreature { .. }
             | Self::Sacrifice { .. }
+            | Self::SacrificeUpTo { .. }
             | Self::SacrificeRandomUntilLand
             | Self::SacrificeToContinue { .. }
             | Self::Discard { .. }
@@ -6294,6 +6342,7 @@ impl Instruction {
             | Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
+            | Self::RemoveSubjectFromCombat(_)
             | Self::DestroyTarget
             | Self::DestroyTargetWithoutRegeneration
             | Self::ExileCreatureAtMostRevealedPower
@@ -6411,6 +6460,7 @@ impl Instruction {
                 | Self::RegenerateSubject { .. }
                 | Self::AddManaForPlayer { .. }
                 | Self::SkipNextTurns { .. }
+                | Self::SkipNextStep { .. }
                 | Self::SelectExtremeLifePlayer { .. }
                 | Self::AttachPermanentToPlayer { .. }
                 | Self::AttachChoosingPermanent { .. }
@@ -6542,6 +6592,7 @@ impl Instruction {
                         | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
                         | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
                 )
+                | Self::PreventDamageSpec(_)
         )
     }
 }
@@ -7869,6 +7920,39 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     None
+                }
+                Instruction::PreventDamageSpec(spec) => {
+                    use crate::damage::{PreventionRecipientSpec, PreventionSourceSpec};
+                    let needs_source =
+                        matches!(
+                            spec.source,
+                            PreventionSourceSpec::AbilitySource
+                                | PreventionSourceSpec::CreaturesOtherThanAbilitySource
+                        ) || matches!(spec.recipient, PreventionRecipientSpec::AbilitySource);
+                    if needs_source && !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    let source_family = match spec.source {
+                        PreventionSourceSpec::TargetPermanent
+                        | PreventionSourceSpec::AllPermanentTargets
+                        | PreventionSourceSpec::CreaturesOtherThanTarget => {
+                            Some(OperandFamily::Permanent)
+                        }
+                        PreventionSourceSpec::TargetSpell => Some(OperandFamily::Spell),
+                        _ => None,
+                    };
+                    let recipient_family = match spec.recipient {
+                        PreventionRecipientSpec::Target => match self.target {
+                            BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            _ => Some(OperandFamily::DamageRecipient),
+                        },
+                        _ => None,
+                    };
+                    match (source_family, recipient_family) {
+                        (Some(_), Some(_)) => return Err(DefinitionError::InvalidInstruction),
+                        (Some(f), None) | (None, Some(f)) => Some(f),
+                        (None, None) => None,
+                    }
                 }
                 Instruction::TakeExtraTurn
                 | Instruction::DisallowDamagePreventionThisTurn
@@ -10430,6 +10514,7 @@ impl ExecutableBody {
                                 | PermanentTargetAction::Modify { .. }
                                 | PermanentTargetAction::ModifyWithPartner { .. }
                                 | PermanentTargetAction::Regenerate
+                                | PermanentTargetAction::PreventDamageThisTurn { .. }
                         )
                         && self.instructions.iter().all(|op| {
                             !matches!(op, Instruction::FixedTargetClause(_))
@@ -11410,6 +11495,9 @@ impl ExecutableBody {
                 Instruction::SelectExtremeLifePlayer { .. } => {
                     facts.chose_player = true;
                     None
+                }
+                Instruction::SkipNextStep { player, .. } => {
+                    player.validate(context, self.target, facts.definitely_exiled_target)?
                 }
                 Instruction::SkipNextTurns { player, count } => {
                     if *count == 0 {
@@ -13832,12 +13920,20 @@ impl ExecutableBody {
                     players,
                     amount,
                     filter,
+                }
+                | Instruction::SacrificeUpTo {
+                    players,
+                    amount,
+                    filter,
                 } => {
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     filter.validate(vocabulary)?;
-                    if matches!(instruction, Instruction::Sacrifice { .. }) {
+                    if matches!(
+                        instruction,
+                        Instruction::Sacrifice { .. } | Instruction::SacrificeUpTo { .. }
+                    ) {
                         let single_sac = matches!(players, AffectedPlayers::One(_))
                             && matches!(amount, ValueExpr::Literal(value) if *value == 1.into());
                         facts.definitely_sacrificed |= single_sac;
@@ -14228,7 +14324,8 @@ impl ExecutableBody {
                     }
                     fam
                 }
-                Instruction::SetSubjectTapped { subject, .. } => {
+                Instruction::SetSubjectTapped { subject, .. }
+                | Instruction::RemoveSubjectFromCombat(subject) => {
                     subject
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -16157,6 +16254,7 @@ impl ExecutableBody {
                     | Instruction::DisallowDamagePreventionThisTurn
                     | Instruction::GrantNoMaxHandSizeRestOfGame
                     | Instruction::PreventDamageThisTurn(_)
+                    | Instruction::PreventDamageSpec(_)
                     | Instruction::MoveGroup { .. }
                     | Instruction::PutTargetInLibrary(_)
                     | Instruction::PutOwnHandCardOnLibraryBottom
@@ -16207,6 +16305,7 @@ impl ExecutableBody {
                     | Instruction::UntapControlledCreatures
                     | Instruction::SetGroupTapped { .. }
                     | Instruction::SetSubjectTapped { .. }
+                    | Instruction::RemoveSubjectFromCombat(_)
                     | Instruction::TapAttackersAndSkipNextUntap
                     | Instruction::AttachOnEntry { .. }
                     | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -16637,6 +16736,7 @@ impl ExecutableBody {
                     | Instruction::ReturnControlledPermanents { .. }
                     | Instruction::ChooseOtherControlledCreature { .. }
                     | Instruction::Sacrifice { .. }
+                    | Instruction::SacrificeUpTo { .. }
                     | Instruction::DiscardOneAtRandom(_)
                     | Instruction::SacrificeRandomUntilLand
                     | Instruction::DiscardUpTo { .. }
@@ -16655,6 +16755,7 @@ impl ExecutableBody {
                     | Instruction::RegenerateSubject { .. }
                     | Instruction::AddManaForPlayer { .. }
                     | Instruction::SkipNextTurns { .. }
+                    | Instruction::SkipNextStep { .. }
                     | Instruction::SelectExtremeLifePlayer { .. }
                     | Instruction::AttachFixedTargets
                     | Instruction::AttachPermanentToPlayer { .. }
@@ -19073,9 +19174,22 @@ impl Program {
                         | Instruction::PutCounterOnRelatedPermanent
                         | Instruction::PutCountersOnOtherCreatures
                         | Instruction::DamageFromPower(PowerDamageSource::AbilitySource) => true,
+                        Instruction::PreventDamageSpec(spec)
+                            if matches!(
+                                spec.source,
+                                crate::damage::PreventionSourceSpec::AbilitySource
+                                    | crate::damage::PreventionSourceSpec::CreaturesOtherThanAbilitySource
+                            ) || matches!(
+                                spec.recipient,
+                                crate::damage::PreventionRecipientSpec::AbilitySource
+                            ) =>
+                        {
+                            true
+                        }
                         Instruction::ModifyGroupByAmount { group, .. }
                         | Instruction::ModifyGroupUntilEndOfTurn { group, .. }
                         | Instruction::PutCountersOnSubject { subject: group, .. }
+                        | Instruction::RemoveSubjectFromCombat(group)
                         | Instruction::ChangeGroup { group, .. }
                             if matches!(group.as_ref(), EffectSubject::AbilitySource) =>
                         {
@@ -19653,6 +19767,7 @@ impl Program {
                             }
                             | Instruction::Earthbend { amount }
                             | Instruction::Sacrifice { amount, .. }
+                            | Instruction::SacrificeUpTo { amount, .. }
                             | Instruction::AddPlayerCounter { amount, .. }
                             | Instruction::PutNamedCounterOnTarget { amount, .. }
                             | Instruction::PutCountersOnSubject { amount, .. }
@@ -20088,6 +20203,7 @@ impl Program {
                             | Instruction::DisallowDamagePreventionThisTurn
                             | Instruction::GrantNoMaxHandSizeRestOfGame
                             | Instruction::PreventDamageThisTurn(_)
+                            | Instruction::PreventDamageSpec(_)
                             | Instruction::MoveGroup { .. }
                             | Instruction::PutTargetInLibrary(_)
                             | Instruction::PutOwnHandCardOnLibraryBottom
@@ -20153,6 +20269,7 @@ impl Program {
                             | Instruction::UntapControlledCreatures
                             | Instruction::SetGroupTapped { .. }
                             | Instruction::SetSubjectTapped { .. }
+                            | Instruction::RemoveSubjectFromCombat(_)
                             | Instruction::PutCountersOnSubject { .. }
                             | Instruction::PutHandPermanentsOntoBattlefield { .. }
                             | Instruction::TapAttackersAndSkipNextUntap
@@ -20351,6 +20468,7 @@ impl Program {
                             | Instruction::Mill { player, .. }
                             | Instruction::ManifestTop { player, .. }
                             | Instruction::SkipNextTurns { player, .. }
+                            | Instruction::SkipNextStep { player, .. }
                             | Instruction::ExileLibraryTop { player, .. } => {
                                 targetless_player(*player)
                             }
@@ -20369,6 +20487,7 @@ impl Program {
                             | Instruction::ReturnControlledPermanents { players, .. }
                             | Instruction::ExileChosenPermanents { players, .. }
                             | Instruction::Sacrifice { players, .. }
+                            | Instruction::SacrificeUpTo { players, .. }
                             | Instruction::Discard { players, .. }
                             | Instruction::DiscardFiltered { players, .. }
                             | Instruction::AddPlayerCounter { players, .. } => {

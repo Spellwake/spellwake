@@ -5338,6 +5338,22 @@ pub(super) fn lower_zone_moves_instruction(
             }
             _ => Err("oracle:unsupported-sacrifice"),
         },
+        InstructionAst::SacrificeAnyNumber { player, subject } => match subject.as_ref() {
+            SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f)
+                if f.zone.is_none() =>
+            {
+                let f = strip_matching_chooser(f, *player);
+                let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
+                let ptf = lower_permanent_type_filter(&f, vocabulary)?;
+                builder.instructions.push(Instruction::SacrificeUpTo {
+                    players,
+                    amount: ValueExpr::literal(i64::from(u16::MAX)),
+                    filter: ptf,
+                });
+                Ok(())
+            }
+            _ => Err("oracle:unsupported-sacrifice"),
+        },
         InstructionAst::SacrificeUnlessPay {
             subject,
             cost: CostAtomAst::PayMana(raw),
@@ -5437,6 +5453,38 @@ pub(super) fn lower_zone_moves_instruction(
             });
             builder.instructions.push(Instruction::Discard {
                 players: AffectedPlayers::One(rp),
+                amount: amt,
+            });
+            Ok(())
+        }
+        InstructionAst::Discard {
+            player,
+            count: None,
+            filter,
+            anaphora: Some(a),
+            random,
+        } if matches!(
+            a.trim().to_ascii_lowercase().as_str(),
+            "that many cards" | "that many card" | "that many"
+        ) && filter
+            .as_deref()
+            .is_none_or(|f| is_unrestricted_filter(&strip_matching_chooser(f, *player))) =>
+        {
+            let amt = ValueExpr::EventValue(EventValueKind::LastActionCount);
+            if *random {
+                let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+                builder.instructions.push(Instruction::RepeatLoop {
+                    count: amt,
+                    body: Box::new(ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::DiscardOneAtRandom(rp)],
+                    )),
+                });
+                return Ok(());
+            }
+            let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
+            builder.instructions.push(Instruction::Discard {
+                players,
                 amount: amt,
             });
             Ok(())

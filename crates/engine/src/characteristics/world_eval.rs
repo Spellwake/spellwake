@@ -210,7 +210,13 @@ fn matches_compact_clause(
     subtypes: &BTreeSet<CreatureTypeId>,
     artifact_subtypes: Option<&BTreeSet<crate::program::ArtifactSubtype>>,
 ) -> bool {
-    use crate::program::{SubtypeFilter, Supertype};
+    use crate::program::{SingleSubtype, SubtypeFilter, Supertype};
+    if clause.exact_name.is_some()
+        || clause.required_counter_kind.is_some()
+        || clause.forbidden_counter_kind.is_some()
+    {
+        return false;
+    }
     if !clause.any_types.is_empty() && (types.bits() & clause.any_types.bits()) == 0 {
         return false;
     }
@@ -237,6 +243,21 @@ fn matches_compact_clause(
         SubtypeFilter::AnyOf(cts) => cts.iter().any(|ct| subtypes.contains(ct)),
         SubtypeFilter::NoneOf(cts) => cts.iter().all(|ct| !subtypes.contains(ct)),
         SubtypeFilter::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(&art)),
+        SubtypeFilter::AnyOfList(list) => list.iter().any(|item| match item {
+            SingleSubtype::Creature(ct) => subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(art)),
+            _ => false,
+        }),
+        SubtypeFilter::AllOfList(list) => list.iter().all(|item| match item {
+            SingleSubtype::Creature(ct) => subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(art)),
+            _ => false,
+        }),
+        SubtypeFilter::NoneOfList(list) => list.iter().all(|item| match item {
+            SingleSubtype::Creature(ct) => !subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| !set.contains(art)),
+            _ => false,
+        }),
         _ => false,
     };
     if !subtype_ok {
@@ -392,6 +413,13 @@ fn matches_world_clause(
                     .shares_name(&p.current_names, &src.current_names)
             })
         }
+        SourceRelation::OtherThanAbilitySourceSharingName => {
+            id != ctx.source
+                && ctx.objects.get(&ctx.source).is_some_and(|src| {
+                    ctx.name_rules
+                        .shares_name(&p.current_names, &src.current_names)
+                })
+        }
         SourceRelation::SelfObject => id == ctx.source,
         SourceRelation::AttachedToSelf => {
             ctx.state.attachments.get(&ctx.source) == Some(&TargetRef::Object(id))
@@ -481,6 +509,21 @@ fn matches_world_clause(
         CombatFilter::NotAttacking => !ctx.combat.is_some_and(|c| c.attacker(id).is_some()),
     };
     if !combat_ok {
+        return false;
+    }
+    if let Some(exact) = clause.exact_name
+        && !exact.matches_with_rules(&p.current_names, ctx.name_rules)
+    {
+        return false;
+    }
+    if let Some(kind) = clause.required_counter_kind
+        && !ctx.state.permanent_counter_count(id, kind).is_positive()
+    {
+        return false;
+    }
+    if let Some(kind) = clause.forbidden_counter_kind
+        && ctx.state.permanent_counter_count(id, kind).is_positive()
+    {
         return false;
     }
     if clause.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS)
@@ -677,6 +720,20 @@ fn matches_world_clause(
     if clause.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !p.defined.has_adventure {
         return false;
     }
+    if clause.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !p.defined.has_x_in_cost {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+        && !p
+            .toxic_value
+            .as_ref()
+            .is_some_and(RulesInteger::is_positive)
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !p.has_no_abilities() {
+        return false;
+    }
     if clause
         .flags
         .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
@@ -840,7 +897,10 @@ fn matches_world_clause(
         return false;
     }
     let excluded = BTreeSet::new();
-    clause.matches_static_characteristics(p, &excluded, || object_mana_value(ctx, p))
+    // Exact-name matching already ran above with NameRules (interchangeable names).
+    let mut static_clause = clause;
+    static_clause.exact_name = None;
+    static_clause.matches_static_characteristics(p, &excluded, || object_mana_value(ctx, p))
 }
 
 fn matches_world_object_filter(
@@ -1113,6 +1173,7 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             });
             RulesInteger::from_usize(compute_party_size(creatures, **roles))
         }
+        ValueExpr::LastActionMatchingCount(_) => 0.into(),
         ValueExpr::DistinctColors { filter } => {
             let mut colors = BTreeSet::new();
             for o in ctx.objects.values() {
@@ -2121,6 +2182,17 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     .unwrap_or(0),
             )
             .into(),
+            PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn => ctx
+                .state
+                .nonland_permanents_left_battlefield_this_turn
+                .values()
+                .copied()
+                .map(i64::from)
+                .sum::<i64>()
+                .into(),
+            PlayerStatExpr::AnySpellWarpedThisTurn => {
+                i64::from(ctx.state.any_spell_warped_this_turn).into()
+            }
             PlayerStatExpr::EnteredPermanentThisTurn => i64::from(
                 ctx.state
                     .permanents_entered_this_turn

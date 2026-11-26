@@ -1758,6 +1758,704 @@ fn emit_domain_for_player_ref(
     }
 }
 
+/// Check whether an `ObjectFilterAst` has only the explicitly permitted fields set for a
+/// damage-source prevention filter (fail-closed on any predicate, subtype, stat bound, etc.).
+fn prevention_filter_base_clean(f: &ObjectFilterAst) -> bool {
+    f.forbidden_types.is_empty()
+        && f.required_supertypes.is_empty()
+        && f.forbidden_supertypes.is_empty()
+        && f.subtypes.is_empty()
+        && f.forbidden_subtypes.is_empty()
+        && f.owner.is_none()
+        && f.tapped.is_none()
+        && f.token.is_none()
+        && f.stat_bounds.is_empty()
+        && f.counter_kind.is_none()
+        && f.named.is_none()
+        && f.extra_zones.is_empty()
+        && !f.is_ability
+        && !f.any_spell
+        && matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+}
+
+fn parse_color_sources_anaphora(raw: &str) -> Option<spellwake_engine::program::ColorMask> {
+    use spellwake_engine::program::ColorMask;
+    let body = raw
+        .trim()
+        .strip_prefix("that ")
+        .unwrap_or(raw.trim())
+        .trim();
+    let mut mask = ColorMask::EMPTY;
+    let mut count = 0usize;
+    let parts: Vec<&str> = if body.contains(" and/or ") {
+        body.split(" and/or ").collect()
+    } else if body.contains(" and ") {
+        body.split(" and ").collect()
+    } else {
+        return None;
+    };
+    if parts.len() < 2 {
+        return None;
+    }
+    for (idx, part) in parts.iter().enumerate() {
+        let p = part.trim();
+        let color_word = if let Some(c) = p.strip_suffix(" sources") {
+            c.trim()
+        } else if idx + 1 < parts.len() {
+            // Form "black and/or red sources": earlier terms omit "sources", final term must have it.
+            p
+        } else {
+            return None;
+        };
+        let bit = match color_word {
+            "white" => ColorMask::WHITE,
+            "blue" => ColorMask::BLUE,
+            "black" => ColorMask::BLACK,
+            "red" => ColorMask::RED,
+            "green" => ColorMask::GREEN,
+            _ => return None,
+        };
+        mask = mask.union(bit);
+        count += 1;
+    }
+    (count >= 2 && !mask.is_empty()).then_some(mask)
+}
+
+fn lower_prevention_source_filter_single(
+    f: &ObjectFilterAst,
+) -> Option<spellwake_engine::damage::PreventionSourceFilter> {
+    use spellwake_engine::damage::PreventionSourceFilter;
+    if !prevention_filter_base_clean(f)
+        || !f.predicates.is_empty()
+        || !f.flags.is_empty()
+        || f.required_keywords.len() > 1
+        || f.forbidden_keywords.len() > 1
+    {
+        return None;
+    }
+    let creatures_only = if f.any_types.is_empty() {
+        false
+    } else if f.any_types == AstCardTypeMask::CREATURE {
+        true
+    } else {
+        return None;
+    };
+    let colorless_only = match f.color_arity {
+        None => false,
+        Some(ColorArity::Colorless) => true,
+        Some(_) => return None,
+    };
+    let (attacking_only, blocking_only, unblocked_only) = match f.combat {
+        None => (false, false, false),
+        Some(CombatState::Attacking) => (true, false, false),
+        Some(CombatState::Blocking) => (false, true, false),
+        Some(CombatState::Unblocked) => (false, false, true),
+        Some(_) => return None,
+    };
+    let required_keyword = match f.required_keywords.first() {
+        None => None,
+        Some(name) => Some(lower_keyword_ability_name(name)?),
+    };
+    let forbidden_keyword = match f.forbidden_keywords.first() {
+        None => None,
+        Some(name) => Some(lower_keyword_ability_name(name)?),
+    };
+    let controller = match f.controller {
+        None => ControllerFilter::Any,
+        Some(ControllerRelation::You) => ControllerFilter::You,
+        Some(ControllerRelation::Opponent) => ControllerFilter::Opponent,
+        Some(ControllerRelation::NotYou) => ControllerFilter::NotYou,
+        Some(_) => return None,
+    };
+    Some(PreventionSourceFilter {
+        creatures_only,
+        attacking_only,
+        blocking_only,
+        unblocked_only,
+        any_colors: lower_color_mask(f.any_colors),
+        forbidden_colors: lower_color_mask(f.forbidden_colors),
+        colorless_only,
+        required_keyword,
+        forbidden_keyword,
+        controller,
+    })
+}
+
+fn is_plain_controlled_creatures_filter(f: &ObjectFilterAst) -> bool {
+    prevention_filter_base_clean(f)
+        && f.predicates.is_empty()
+        && f.flags.is_empty()
+        && f.any_types == AstCardTypeMask::CREATURE
+        && f.any_colors.is_empty()
+        && f.forbidden_colors.is_empty()
+        && f.color_arity.is_none()
+        && f.combat.is_none()
+        && f.required_keywords.is_empty()
+        && f.forbidden_keywords.is_empty()
+        && f.controller == Some(ControllerRelation::You)
+}
+
+fn is_plain_all_creatures_filter(f: &ObjectFilterAst) -> bool {
+    prevention_filter_base_clean(f)
+        && f.predicates.is_empty()
+        && f.flags.is_empty()
+        && f.any_types == AstCardTypeMask::CREATURE
+        && f.any_colors.is_empty()
+        && f.forbidden_colors.is_empty()
+        && f.color_arity.is_none()
+        && f.combat.is_none()
+        && f.required_keywords.is_empty()
+        && f.forbidden_keywords.is_empty()
+        && f.controller.is_none()
+}
+
+fn is_plain_controlled_permanents_filter(f: &ObjectFilterAst) -> bool {
+    prevention_filter_base_clean(f)
+        && f.predicates.is_empty()
+        && f.flags.is_empty()
+        && f.any_types.is_empty()
+        && f.any_permanent
+        && f.any_colors.is_empty()
+        && f.forbidden_colors.is_empty()
+        && f.color_arity.is_none()
+        && f.combat.is_none()
+        && f.required_keywords.is_empty()
+        && f.forbidden_keywords.is_empty()
+        && f.controller == Some(ControllerRelation::You)
+}
+
+fn lower_prevention_recipient(
+    recipient: Option<&SubjectRefAst>,
+    builder: &BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    self_pronoun_valid: bool,
+) -> Result<
+    (
+        spellwake_engine::damage::PreventionRecipientSpec,
+        Option<BodyTarget>,
+    ),
+    &'static str,
+> {
+    use spellwake_engine::damage::PreventionRecipientSpec;
+    match recipient {
+        None => Ok((PreventionRecipientSpec::Any, None)),
+        Some(SubjectRefAst::Player(PlayerRefAst::You)) => {
+            Ok((PreventionRecipientSpec::Controller, None))
+        }
+        Some(SubjectRefAst::Player(PlayerRefAst::EachPlayer)) => {
+            Ok((PreventionRecipientSpec::AllPlayers, None))
+        }
+        Some(rec) if is_self_pronoun(rec, builder, self_pronoun_valid) => {
+            if !builder.has_source {
+                return Err("oracle:unsupported-prevention-recipient");
+            }
+            Ok((PreventionRecipientSpec::AbilitySource, None))
+        }
+        Some(SubjectRefAst::Group(g)) if is_plain_controlled_creatures_filter(g) => {
+            Ok((PreventionRecipientSpec::ControlledCreatures, None))
+        }
+        Some(SubjectRefAst::Group(g)) if is_plain_all_creatures_filter(g) => {
+            Ok((PreventionRecipientSpec::AllCreatures, None))
+        }
+        Some(SubjectRefAst::Compound(parts)) if parts.len() == 2 => {
+            let has_you = parts
+                .iter()
+                .any(|p| matches!(p, SubjectRefAst::Player(PlayerRefAst::You)));
+            let has_ctrl_creatures = parts.iter().any(
+                |p| matches!(p, SubjectRefAst::Group(g) if is_plain_controlled_creatures_filter(g)),
+            );
+            let has_ctrl_perms = parts.iter().any(
+                |p| matches!(p, SubjectRefAst::Group(g) if is_plain_controlled_permanents_filter(g)),
+            );
+            if has_you && has_ctrl_creatures {
+                Ok((
+                    PreventionRecipientSpec::ControllerAndControlledCreatures,
+                    None,
+                ))
+            } else if has_you && has_ctrl_perms {
+                Ok((
+                    PreventionRecipientSpec::ControllerAndControlledPermanents,
+                    None,
+                ))
+            } else {
+                Err("oracle:unsupported-prevention-recipient")
+            }
+        }
+        Some(
+            rec @ (SubjectRefAst::AnyTarget
+            | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
+            | SubjectRefAst::TargetObject {
+                count: TargetCountAst::Exact(1),
+                ..
+            }
+            | SubjectRefAst::TargetPlayer {
+                count: TargetCountAst::Exact(1),
+                ..
+            }
+            | SubjectRefAst::TargetOneOf {
+                count: TargetCountAst::Exact(1),
+                ..
+            }
+            | SubjectRefAst::Player(PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent)),
+        ) => {
+            let bt = lower_target_subject(rec, vocabulary)?;
+            if !is_valid_prevention_recipient_target(bt) {
+                return Err("oracle:unsupported-prevention-recipient");
+            }
+            Ok((PreventionRecipientSpec::Target, Some(bt)))
+        }
+        Some(SubjectRefAst::Anaphora(raw)) if raw.ends_with(" this turn") => {
+            let trimmed = raw.strip_suffix(" this turn").unwrap_or(raw).trim();
+            if trimmed.is_empty() {
+                return Err("oracle:unsupported-prevention-recipient");
+            }
+            let reparsed = spellwake_oracle_compiler::filter::parse_subject_or_target(
+                trimmed,
+                &cached_compiler_vocab(vocabulary),
+            )
+            .unwrap_or_else(|_| SubjectRefAst::Anaphora(trimmed.to_owned()));
+            if matches!(&reparsed, SubjectRefAst::Anaphora(next) if next.ends_with(" this turn")) {
+                return Err("oracle:unsupported-prevention-recipient");
+            }
+            lower_prevention_recipient(Some(&reparsed), builder, vocabulary, self_pronoun_valid)
+        }
+        Some(SubjectRefAst::Anaphora(text))
+            if matches!(
+                text.as_str(),
+                "it" | "that creature" | "that permanent" | "that player"
+            ) =>
+        {
+            if !is_valid_prevention_recipient_target(builder.target)
+                || builder.x_target_count
+                || builder.instructions.iter().any(|op| {
+                    matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
+                })
+            {
+                return Err("oracle:unsupported-prevention-recipient");
+            }
+            Ok((PreventionRecipientSpec::Target, None))
+        }
+        Some(_) => Err("oracle:unsupported-prevention-recipient"),
+    }
+}
+
+pub(super) fn lower_prevent_all_damage(
+    combat_only: bool,
+    target: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    self_pronoun_valid: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::damage::{
+        PreventionRecipientSpec, PreventionSourceSpec, TurnPreventionSpec,
+    };
+
+    let (resolved_recipient, recipient_target_to_bind) =
+        lower_prevention_recipient(Some(target), builder, vocabulary, self_pronoun_valid)?;
+    if !combat_only
+        && resolved_recipient == PreventionRecipientSpec::Target
+        && let Some(bt) = recipient_target_to_bind
+    {
+        builder.bind_target(bt)?;
+        builder
+            .instructions
+            .push(Instruction::PreventDamageThisTurn(
+                TurnPreventionFilter::ToTarget,
+            ));
+        return Ok(());
+    }
+    if let Some(bt) = recipient_target_to_bind {
+        builder.bind_target(bt)?;
+    }
+    builder
+        .instructions
+        .push(Instruction::PreventDamageSpec(Box::new(
+            TurnPreventionSpec {
+                combat_only,
+                source: PreventionSourceSpec::Any,
+                recipient: resolved_recipient,
+                both_directions: false,
+            },
+        )));
+    Ok(())
+}
+
+fn is_valid_prevention_recipient_target(target: BodyTarget) -> bool {
+    matches!(
+        target,
+        BodyTarget::SingleAnyTarget
+            | BodyTarget::SingleCreature
+            | BodyTarget::SinglePermanent
+            | BodyTarget::SinglePlaneswalker
+            | BodyTarget::SinglePlayer
+            | BodyTarget::SingleOpponent
+            | BodyTarget::SinglePlayerOrPlaneswalker
+            | BodyTarget::SingleOpponentOrPlaneswalker
+            | BodyTarget::SingleCreatureOrPlayer
+            | BodyTarget::FilteredPermanent(_)
+    )
+}
+
+/// Lower `InstructionAst::PreventAllDamageFrom` including interactive source choice
+/// (CR 609.7a/b), chosen-color prevention, spell-source prevention, multi-target prevention,
+/// and generalized source/recipient scopes while keeping dependent prevention-event followups
+/// and unsupported predicates strictly fail-closed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_prevent_all_damage_from(
+    combat_only: bool,
+    source: &SubjectRefAst,
+    recipient: Option<&SubjectRefAst>,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::damage::{
+        DamageSourceChoiceFilter, PreventionRecipientSpec, PreventionSourceFilter,
+        PreventionSourceSpec, TurnPreventionSpec,
+    };
+    use spellwake_oracle_compiler::ast::FilterPredicateAst;
+
+    let both_directions =
+        matches!(recipient, Some(SubjectRefAst::Anaphora(text)) if text == "and dealt");
+    if both_directions && !combat_only {
+        return Err("oracle:unsupported-prevention-recipient");
+    }
+
+    // 1. Lower the recipient scope (binding a target if the recipient is targeted).
+    let (resolved_recipient, recipient_target_to_bind) = if both_directions {
+        (PreventionRecipientSpec::Any, None)
+    } else {
+        lower_prevention_recipient(recipient, builder, vocabulary, self_pronoun_valid)?
+    };
+
+    // 2. Fast-path exact legacy `TurnPreventionFilter` cases when recipient is `Any`
+    // (preserves existing tests such as `wave12_prevention_followup_tests`).
+    if resolved_recipient == PreventionRecipientSpec::Any {
+        if is_self_pronoun(source, builder, self_pronoun_valid) {
+            if !builder.has_source {
+                return Err("oracle:unsupported-prevention-source");
+            }
+            let filter = match (combat_only, both_directions) {
+                (true, true) => TurnPreventionFilter::CombatToOrFromAbilitySource,
+                (true, false) => TurnPreventionFilter::CombatFromAbilitySource,
+                (false, _) => TurnPreventionFilter::FromAbilitySource,
+            };
+            builder
+                .instructions
+                .push(Instruction::PreventDamageThisTurn(filter));
+            return Ok(());
+        }
+        if let SubjectRefAst::Group(group) = source
+            && !both_directions
+            && matches!(group.zone, None | Some(ZoneFilter::Battlefield))
+            && group.predicates.is_empty()
+            && group.flags.is_empty()
+            && let Ok(lowered) = lower_object_filter(group, vocabulary)
+        {
+            if lowered == ObjectFilter::creature() {
+                builder
+                    .instructions
+                    .push(Instruction::PreventDamageThisTurn(if combat_only {
+                        TurnPreventionFilter::CombatFromCreatures
+                    } else {
+                        TurnPreventionFilter::Creatures
+                    }));
+                return Ok(());
+            }
+            if !combat_only && lowered == ObjectFilter::creature().opposing() {
+                builder
+                    .instructions
+                    .push(Instruction::PreventDamageThisTurn(
+                        TurnPreventionFilter::CreaturesControlledByOpponents,
+                    ));
+                return Ok(());
+            }
+            if combat_only && group.forbidden_subtypes.len() == 1 {
+                let subtype = vocabulary
+                    .resolve_label(&group.forbidden_subtypes[0])
+                    .ok_or("oracle:unsupported-prevention-source")?;
+                if lowered == ObjectFilter::creature().without_subtype(subtype) {
+                    builder
+                        .instructions
+                        .push(Instruction::PreventDamageThisTurn(
+                            TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(subtype),
+                        ));
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // 3. Multi-target permanent sources (`Soul Parry`, `Serene Sunset`, `Energy Arc`).
+    if resolved_recipient == PreventionRecipientSpec::Any {
+        if let SubjectRefAst::TargetObject { filter, count } = source
+            && !filter.any_spell
+            && !filter.is_ability
+            && matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            && (matches!(count, TargetCountAst::Exact(n) if *n >= 2)
+                || matches!(count, TargetCountAst::UpTo(max) if *max > 0)
+                || matches!(count, TargetCountAst::AnyNumber)
+                || (matches!(count, TargetCountAst::ChosenX | TargetCountAst::UpToX)
+                    && !in_trigger))
+        {
+            let (min_t, max_t, is_x) = match *count {
+                TargetCountAst::Exact(n) => (n, n, false),
+                TargetCountAst::UpTo(max) => (0, max, false),
+                TargetCountAst::AnyNumber => (0, u16::MAX, false),
+                TargetCountAst::ChosenX | TargetCountAst::UpToX => (0, u16::MAX, true),
+            };
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let bt = lower_battlefield_body_target(&f_clean, vocabulary)?;
+            builder.bind_target(bt)?;
+            if is_x {
+                builder.x_target_count = true;
+            }
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: min_t,
+                    maximum: max_t,
+                    action: PermanentTargetAction::PreventDamageThisTurn {
+                        combat_only,
+                        both_directions,
+                    },
+                });
+            return Ok(());
+        }
+        if let SubjectRefAst::Anaphora(text) = source
+            && matches!(text.as_str(), "those creatures" | "those permanents")
+            && let Some((min_t, max_t)) = builder.instructions.iter().find_map(|op| match op {
+                Instruction::AffectPermanentTargets {
+                    minimum, maximum, ..
+                } => Some((*minimum, *maximum)),
+                _ => None,
+            })
+        {
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: min_t,
+                    maximum: max_t,
+                    action: PermanentTargetAction::PreventDamageThisTurn {
+                        combat_only,
+                        both_directions,
+                    },
+                });
+            return Ok(());
+        }
+    }
+
+    // 4. Lower generalized `PreventionSourceSpec`.
+    let resolved_source = if is_self_pronoun(source, builder, self_pronoun_valid) {
+        if !builder.has_source {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        PreventionSourceSpec::AbilitySource
+    } else if let SubjectRefAst::Group(group) = source {
+        if both_directions {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        // 4a. Interactive damage source choice (CR 609.7a): "a [red] source / creature of your choice".
+        if group.predicates == [FilterPredicateAst::ChosenByPlayer(PlayerRefAst::You)] {
+            if !prevention_filter_base_clean(group)
+                || !group.flags.is_empty()
+                || !group.forbidden_colors.is_empty()
+                || group.color_arity.is_some()
+                || group.controller.is_some()
+                || group.combat.is_some()
+                || !group.required_keywords.is_empty()
+                || !group.forbidden_keywords.is_empty()
+            {
+                return Err("oracle:unsupported-prevention-source");
+            }
+            let choice_filter = if group.any_types.is_empty() && group.any_colors.is_empty() {
+                DamageSourceChoiceFilter::Any
+            } else if group.any_types.is_empty() && !group.any_colors.is_empty() {
+                DamageSourceChoiceFilter::Colors(lower_color_mask(group.any_colors))
+            } else if group.any_types == AstCardTypeMask::CREATURE && group.any_colors.is_empty() {
+                DamageSourceChoiceFilter::Creature
+            } else {
+                return Err("oracle:unsupported-prevention-source");
+            };
+            PreventionSourceSpec::ChosenSource(choice_filter)
+        } else if group.flags == AstFilterFlags::MATCHES_CHOSEN_COLOR
+            && group.predicates.is_empty()
+            && prevention_filter_base_clean(group)
+            && group.any_types.is_empty()
+            && group.any_colors.is_empty()
+            && group.forbidden_colors.is_empty()
+            && group.color_arity.is_none()
+            && group.controller.is_none()
+            && group.combat.is_none()
+            && group.required_keywords.is_empty()
+            && group.forbidden_keywords.is_empty()
+        {
+            // 4b. Interactive color choice: "sources of the color of your choice" (`Avacyn`, `Prismatic Strands`).
+            PreventionSourceSpec::ChosenColor
+        } else if group.flags == AstFilterFlags::EXCLUDE_SELF
+            && group.predicates.is_empty()
+            && prevention_filter_base_clean(group)
+            && group.any_types == AstCardTypeMask::CREATURE
+            && group.any_colors.is_empty()
+            && group.forbidden_colors.is_empty()
+            && group.color_arity.is_none()
+            && group.controller.is_none()
+            && group.combat.is_none()
+            && group.required_keywords.is_empty()
+            && group.forbidden_keywords.is_empty()
+        {
+            // 4c. "other creatures" (`Haze Frog`).
+            if !builder.has_source {
+                return Err("oracle:unsupported-prevention-source");
+            }
+            PreventionSourceSpec::CreaturesOtherThanAbilitySource
+        } else if let Some(filter) = lower_prevention_source_filter_single(group) {
+            PreventionSourceSpec::Filter(filter)
+        } else {
+            return Err("oracle:unsupported-prevention-source");
+        }
+    } else if let SubjectRefAst::Anaphora(raw) = source
+        && !both_directions
+        && raw.trim() == "that creatures"
+    {
+        PreventionSourceSpec::Filter(PreventionSourceFilter {
+            creatures_only: true,
+            ..Default::default()
+        })
+    } else if let SubjectRefAst::Anaphora(raw) = source
+        && !both_directions
+        && raw.trim() == "that other creatures"
+    {
+        if !builder.has_source {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        PreventionSourceSpec::CreaturesOtherThanAbilitySource
+    } else if let SubjectRefAst::Anaphora(raw) = source
+        && !both_directions
+        && let Some(any_colors) = parse_color_sources_anaphora(raw)
+    {
+        PreventionSourceSpec::Filter(PreventionSourceFilter {
+            any_colors,
+            ..Default::default()
+        })
+    } else if let SubjectRefAst::Compound(groups) = source {
+        // E.g. "black sources and red sources" (`Luminesce`), "blue creatures and black creatures" (`Radiant Kavu`).
+        if both_directions || groups.is_empty() {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        let mut combined: Option<PreventionSourceFilter> = None;
+        for part in groups {
+            let SubjectRefAst::Group(g) = part else {
+                return Err("oracle:unsupported-prevention-source");
+            };
+            let f = lower_prevention_source_filter_single(g)
+                .ok_or("oracle:unsupported-prevention-source")?;
+            if f.any_colors.is_empty() || !f.forbidden_colors.is_empty() || f.colorless_only {
+                return Err("oracle:unsupported-prevention-source");
+            }
+            match &mut combined {
+                None => combined = Some(f),
+                Some(acc) => {
+                    if acc.creatures_only != f.creatures_only
+                        || acc.attacking_only != f.attacking_only
+                        || acc.blocking_only != f.blocking_only
+                        || acc.unblocked_only != f.unblocked_only
+                        || acc.required_keyword != f.required_keyword
+                        || acc.forbidden_keyword != f.forbidden_keyword
+                        || acc.controller != f.controller
+                    {
+                        return Err("oracle:unsupported-prevention-source");
+                    }
+                    acc.any_colors = acc.any_colors.union(f.any_colors);
+                }
+            }
+        }
+        PreventionSourceSpec::Filter(combined.ok_or("oracle:unsupported-prevention-source")?)
+    } else if let SubjectRefAst::TargetObject {
+        filter,
+        count: TargetCountAst::Exact(1),
+    } = source
+        && (filter.any_spell || filter.zone == Some(ZoneFilter::Stack))
+    {
+        if both_directions || resolved_recipient == PreventionRecipientSpec::Target {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        let bt = lower_target_subject(source, vocabulary)?;
+        if !matches!(bt, BodyTarget::SingleSpell(_)) {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        builder.bind_target(bt)?;
+        PreventionSourceSpec::TargetSpell
+    } else {
+        // Single targeted permanent or anaphora to previously targeted permanent.
+        let target = match source {
+            SubjectRefAst::TargetObject {
+                count: TargetCountAst::Exact(1),
+                ..
+            } => lower_target_subject(source, vocabulary)?,
+            SubjectRefAst::Anaphora(text)
+                if matches!(text.as_str(), "it" | "that creature" | "that permanent") =>
+            {
+                builder.target
+            }
+            _ => return Err("oracle:unsupported-prevention-source"),
+        };
+        if !matches!(
+            target,
+            BodyTarget::SingleCreature
+                | BodyTarget::SinglePermanent
+                | BodyTarget::SinglePlaneswalker
+                | BodyTarget::FilteredPermanent(_)
+        ) {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        if matches!(source, SubjectRefAst::TargetObject { .. }) {
+            if recipient_target_to_bind.is_some()
+                || resolved_recipient == PreventionRecipientSpec::Target
+            {
+                return Err("oracle:unsupported-prevention-source");
+            }
+            builder.bind_target(target)?;
+        } else if builder.x_target_count
+            || builder.instructions.iter().any(|op| {
+                matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
+            })
+        {
+            return Err("oracle:unsupported-prevention-source");
+        }
+        if resolved_recipient == PreventionRecipientSpec::Any {
+            let filter = match (combat_only, both_directions) {
+                (true, true) => TurnPreventionFilter::CombatToOrFromTarget,
+                (true, false) => TurnPreventionFilter::CombatFromTarget,
+                (false, _) => TurnPreventionFilter::FromTarget,
+            };
+            builder
+                .instructions
+                .push(Instruction::PreventDamageThisTurn(filter));
+            return Ok(());
+        }
+        PreventionSourceSpec::TargetPermanent
+    };
+
+    if let Some(bt) = recipient_target_to_bind {
+        builder.bind_target(bt)?;
+    }
+
+    builder
+        .instructions
+        .push(Instruction::PreventDamageSpec(Box::new(
+            TurnPreventionSpec {
+                combat_only,
+                source: resolved_source,
+                recipient: resolved_recipient,
+                both_directions,
+            },
+        )));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1767,12 +2465,19 @@ mod tests {
             "test".to_owned(),
             [0u8; 32],
             [
+                "Angel",
                 "Assassin",
+                "Cleric",
                 "Dragon",
                 "Elf",
+                "Frog",
+                "Inkling",
+                "Kithkin",
                 "Mercenary",
                 "Pirate",
                 "Rogue",
+                "Saproling",
+                "Scarecrow",
                 "Warlock",
                 "Wizard",
             ]
@@ -1837,5 +2542,220 @@ mod tests {
             panic!("expected predicate");
         };
         assert_eq!(outlaw_pred.spell_clauses.len(), 5);
+    }
+
+    fn card_fixture(
+        name: &str,
+        type_line: &str,
+        mana_cost: &str,
+        oracle_text: &str,
+    ) -> InventoryCard {
+        InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            name: name.into(),
+            layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: name.into(),
+                type_line: Some(type_line.into()),
+                oracle_text: Some(oracle_text.into()),
+                mana_cost: Some(mana_cost.into()),
+                power: None,
+                toughness: None,
+            }],
+            legalities: BTreeMap::new(),
+            eligible_formats: Vec::new(),
+            required_by_base_formats: true,
+            program_evidence: "test",
+        }
+    }
+
+    #[test]
+    fn wave14_prevention_lowers_source_choice_and_scopes_while_keeping_guarded_cards_fail_closed() {
+        let vocab = test_vocab();
+
+        // Positive: source choice, color choice, spell target, multi-target, recipient/source scopes.
+        let positive_cases = [
+            (
+                "Pay No Heed",
+                "Instant",
+                "{W}",
+                "Prevent all damage a source of your choice would deal this turn.",
+            ),
+            (
+                "Auriok Replica",
+                "Artifact Creature \u{2014} Cleric",
+                "{3}",
+                "{W}, Sacrifice this creature: Prevent all damage a source of your choice would deal to you this turn.",
+            ),
+            (
+                "Burrenton Forge-Tender",
+                "Creature \u{2014} Kithkin Wizard",
+                "{W}",
+                "Protection from red\nSacrifice this creature: Prevent all damage a red source of your choice would deal this turn.",
+            ),
+            (
+                "Al-abara's Carpet",
+                "Artifact",
+                "{5}",
+                "{5}, {T}: Prevent all damage that would be dealt to you this turn by attacking creatures without flying.",
+            ),
+            (
+                "Eerie Interference",
+                "Instant",
+                "{2}{W}",
+                "Prevent all damage that would be dealt to you and creatures you control this turn by creatures.",
+            ),
+            (
+                "Surge of Salvation",
+                "Instant",
+                "{W}",
+                "You and permanents you control gain hexproof until end of turn. Prevent all damage that black and/or red sources would deal to creatures you control this turn.",
+            ),
+            (
+                "Luminesce",
+                "Instant",
+                "{W}",
+                "Prevent all damage that black sources and red sources would deal this turn.",
+            ),
+            (
+                "Hunter's Ambush",
+                "Instant",
+                "{2}{G}",
+                "Prevent all combat damage that would be dealt by nongreen creatures this turn.",
+            ),
+            (
+                "Snag",
+                "Instant",
+                "{3}{G}",
+                "You may discard a Forest card rather than pay this spell's mana cost.\nPrevent all combat damage that would be dealt by unblocked creatures this turn.",
+            ),
+            (
+                "Lithomancer's Focus",
+                "Instant",
+                "{W}",
+                "Target creature gets +2/+2 until end of turn. Prevent all damage that would be dealt to that creature this turn by colorless sources.",
+            ),
+            (
+                "Soul Parry",
+                "Instant",
+                "{1}{W}",
+                "Prevent all damage one or two target creatures would deal this turn.",
+            ),
+            (
+                "Energy Arc",
+                "Instant",
+                "{W}{U}",
+                "Untap any number of target creatures. Prevent all combat damage that would be dealt to and dealt by those creatures this turn.",
+            ),
+            (
+                "Serene Sunset",
+                "Instant",
+                "{X}{G}",
+                "Prevent all combat damage X target creatures would deal this turn.",
+            ),
+            (
+                "Blinding Fog",
+                "Instant",
+                "{2}{G}",
+                "Prevent all damage that would be dealt to creatures this turn. Creatures you control gain hexproof until end of turn.",
+            ),
+            (
+                "Commencement of Festivities",
+                "Instant",
+                "{1}{G}",
+                "Prevent all combat damage that would be dealt to players this turn.",
+            ),
+            (
+                "Riot Control",
+                "Instant",
+                "{2}{W}",
+                "You gain 1 life for each creature your opponents control. Prevent all damage that would be dealt to you this turn.",
+            ),
+            (
+                "Safe Passage",
+                "Instant",
+                "{2}{W}",
+                "Prevent all damage that would be dealt to you and creatures you control this turn.",
+            ),
+            (
+                "Endure",
+                "Instant",
+                "{3}{W}{W}",
+                "Prevent all damage that would be dealt to you and permanents you control this turn.",
+            ),
+            (
+                "Djeru's Resolve",
+                "Instant",
+                "{W}",
+                "Untap target creature. Prevent all damage that would be dealt to it this turn.",
+            ),
+            (
+                "Chameleon Blur",
+                "Instant",
+                "{3}{G}",
+                "Prevent all damage that creatures would deal to players this turn.",
+            ),
+            (
+                "Haze Frog",
+                "Creature \u{2014} Frog",
+                "{3}{G}{G}",
+                "Flash\nWhen this creature enters, prevent all combat damage that other creatures would deal this turn.",
+            ),
+        ];
+        for (name, ty, cost, text) in positive_cases {
+            let mut c = card_fixture(name, ty, cost, text);
+            if ty.contains("Creature") {
+                c.faces[0].power = Some("1".into());
+                c.faces[0].toughness = Some("1".into());
+            }
+            assert!(
+                compile_with_reason(&c, &vocab).is_ok(),
+                "{name} should lower cleanly, got {:?}",
+                compile_with_reason(&c, &vocab)
+            );
+        }
+
+        // Fail-closed guards: dependent prevention-event followups, activation mana-color provenance, ongoing duration.
+        let guarded_cases = [
+            (
+                "Hallow",
+                "Instant",
+                "{W}",
+                "Prevent all damage target spell would deal this turn. You gain life equal to the damage prevented this way.",
+            ),
+            (
+                "Channel Harm",
+                "Instant",
+                "{5}{W}",
+                "Prevent all damage that would be dealt to you and permanents you control this turn by sources you don't control. If damage is prevented this way, you may have Channel Harm deal that much damage to target creature.",
+            ),
+            (
+                "Protective Sphere",
+                "Enchantment",
+                "{2}{W}",
+                "{1}, Pay 1 life: Prevent all damage that would be dealt to you this turn by a source of your choice that shares a color with the mana spent on this activation cost.",
+            ),
+            (
+                "Inkshield",
+                "Instant",
+                "{3}{W}{B}",
+                "Prevent all combat damage that would be dealt to you this turn. For each 1 damage prevented this way, create a 2/1 white and black Inkling creature token with flying.",
+            ),
+        ];
+        for (name, ty, cost, text) in guarded_cases {
+            let c = card_fixture(name, ty, cost, text);
+            if compile_with_reason(&c, &vocab).is_ok() {
+                let parsed = spellwake_oracle_compiler::compile_face(
+                    spellwake_oracle_compiler::FaceInput {
+                        name,
+                        type_line: ty,
+                        oracle_text: text,
+                    },
+                    &cached_compiler_vocab(&vocab),
+                );
+                panic!("{name} MUST remain fail-closed! AST={parsed:?}");
+            }
+        }
     }
 }

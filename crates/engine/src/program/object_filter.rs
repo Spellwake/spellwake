@@ -302,6 +302,160 @@ impl ObjectColorFilter {
     }
 }
 
+/// Maximum number of subtypes stored inline in a [`SubtypeList`].
+pub const MAX_INLINE_SUBTYPES: usize = 6;
+
+/// Single typed subtype atom across creature, land, artifact, enchantment, planeswalker, spell, and Aura subtypes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SingleSubtype {
+    Creature(CreatureTypeId),
+    Land(LandType),
+    Artifact(ArtifactSubtype),
+    Enchantment(EnchantmentSubtype),
+    Planeswalker(super::PlaneswalkerSubtype),
+    Spell(super::SpellSubtype),
+    Aura,
+}
+
+impl SingleSubtype {
+    /// Evaluate this single subtype atom against an object's subtype sets.
+    #[must_use]
+    // Borrows concrete subtype sets directly to stay allocation-free on hot filter matching.
+    #[allow(clippy::too_many_arguments)]
+    pub fn matches_sets(
+        self,
+        creatures: &BTreeSet<CreatureTypeId>,
+        lands: &BTreeSet<LandType>,
+        artifacts: &BTreeSet<ArtifactSubtype>,
+        enchantments: &BTreeSet<EnchantmentSubtype>,
+        planeswalkers: &BTreeSet<super::PlaneswalkerSubtype>,
+        spells: &BTreeSet<super::SpellSubtype>,
+        is_aura: bool,
+    ) -> bool {
+        match self {
+            Self::Creature(kind) => creatures.contains(&kind),
+            Self::Land(kind) => lands.contains(&kind),
+            Self::Artifact(kind) => artifacts.contains(&kind),
+            Self::Enchantment(kind) => enchantments.contains(&kind),
+            Self::Planeswalker(kind) => planeswalkers.contains(&kind),
+            Self::Spell(kind) => spells.contains(&kind),
+            Self::Aura => is_aura,
+        }
+    }
+}
+
+/// Fixed-capacity `Copy` list of up to [`MAX_INLINE_SUBTYPES`] typed subtypes.
+/// Unused trailing slots are canonically filled with [`SingleSubtype::Aura`] so
+/// structural equality is exact and deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubtypeList {
+    len: u8,
+    items: [SingleSubtype; MAX_INLINE_SUBTYPES],
+}
+
+impl SubtypeList {
+    /// Construct a canonical list from `slice`, returning `None` if empty or longer than [`MAX_INLINE_SUBTYPES`].
+    #[must_use]
+    pub fn from_slice(slice: &[SingleSubtype]) -> Option<Self> {
+        if slice.is_empty() || slice.len() > MAX_INLINE_SUBTYPES {
+            return None;
+        }
+        let len = u8::try_from(slice.len()).ok()?;
+        let mut items = [SingleSubtype::Aura; MAX_INLINE_SUBTYPES];
+        items[..slice.len()].copy_from_slice(slice);
+        Some(Self { len, items })
+    }
+
+    /// Borrow the active prefix of subtypes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[SingleSubtype] {
+        &self.items[..usize::from(self.len)]
+    }
+
+    /// Mutably borrow the active prefix of subtypes.
+    pub fn as_mut_slice(&mut self) -> &mut [SingleSubtype] {
+        &mut self.items[..usize::from(self.len)]
+    }
+
+    /// Iterate over the stored subtypes.
+    pub fn iter(&self) -> std::slice::Iter<'_, SingleSubtype> {
+        self.as_slice().iter()
+    }
+}
+
+/// Maximum byte length for an inline exact English card name on [`ObjectClause`].
+pub const MAX_EXACT_NAME_BYTES: usize = 64;
+
+/// Fixed-capacity `Copy` exact English card name key for [`ObjectClause`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ExactNameKey {
+    len: u8,
+    bytes: [u8; MAX_EXACT_NAME_BYTES],
+}
+
+impl ExactNameKey {
+    /// Validate and store an exact English card name label (1..=64 UTF-8 bytes).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let raw = name.as_bytes();
+        if raw.is_empty() || raw.len() > MAX_EXACT_NAME_BYTES {
+            return None;
+        }
+        if spellwake_contracts::names::EnglishCardName::new(name.to_owned()).is_err() {
+            return None;
+        }
+        let len = u8::try_from(raw.len()).ok()?;
+        let mut bytes = [0u8; MAX_EXACT_NAME_BYTES];
+        bytes[..raw.len()].copy_from_slice(raw);
+        Some(Self { len, bytes })
+    }
+
+    /// Borrow the stored exact card name string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("")
+    }
+
+    /// Match against `names` using `name_rules` (honoring interchangeable names, ASCII case-insensitively).
+    #[must_use]
+    pub fn matches_with_rules(
+        self,
+        names: &spellwake_contracts::names::ObjectNames,
+        name_rules: &spellwake_contracts::names::NameRules,
+    ) -> bool {
+        let target = self.as_str();
+        if names
+            .iter()
+            .any(|held| held.as_str().eq_ignore_ascii_case(target))
+        {
+            return true;
+        }
+        name_rules.groups().iter().any(|group| {
+            group
+                .iter()
+                .any(|n| n.as_str().eq_ignore_ascii_case(target))
+                && group
+                    .iter()
+                    .any(|n| names.iter().any(|held| held.as_str() == n.as_str()))
+        })
+    }
+
+    /// Match directly against `names` when `NameRules` is unavailable (ASCII case-insensitively).
+    #[must_use]
+    pub fn matches_exact_names(self, names: &spellwake_contracts::names::ObjectNames) -> bool {
+        let target = self.as_str();
+        names
+            .iter()
+            .any(|n| n.as_str().eq_ignore_ascii_case(target))
+    }
+}
+
+impl std::fmt::Debug for ExactNameKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ExactNameKey({:?})", self.as_str())
+    }
+}
+
 /// Subtype predicate covering creature, land, artifact, and enchantment subtypes without allocation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SubtypeFilter {
@@ -315,6 +469,12 @@ pub enum SubtypeFilter {
     AnyOf([CreatureTypeId; 3]),
     /// Object has none of these three creature subtypes.
     NoneOf([CreatureTypeId; 3]),
+    /// Object has at least one subtype in this cross-category list (up to 6).
+    AnyOfList(SubtypeList),
+    /// Object has every subtype in this conjunctive list (for example, Eldrazi Scion).
+    AllOfList(SubtypeList),
+    /// Object lacks every subtype in this cross-category list (up to 6).
+    NoneOfList(SubtypeList),
     /// Object lacks the creature subtype chosen into this resolution slot.
     ExceptChosenSlot(CreatureTypeSlot),
     /// Object has the creature subtype chosen into this resolution slot.
@@ -342,6 +502,75 @@ pub enum SubtypeFilter {
 }
 
 impl SubtypeFilter {
+    /// Evaluate every non-slot subtype predicate against concrete subtype sets.
+    /// Returns `None` only for resolution-slot variants (`ExceptChosenSlot`, `MatchesChosenSlot`, `OutsideNamedSlots`).
+    #[must_use]
+    // Borrows concrete subtype sets directly to stay allocation-free on hot filter matching.
+    #[allow(clippy::too_many_arguments)]
+    pub fn matches_sets(
+        self,
+        creatures: &BTreeSet<CreatureTypeId>,
+        lands: &BTreeSet<LandType>,
+        artifacts: &BTreeSet<ArtifactSubtype>,
+        enchantments: &BTreeSet<EnchantmentSubtype>,
+        planeswalkers: &BTreeSet<super::PlaneswalkerSubtype>,
+        spells: &BTreeSet<super::SpellSubtype>,
+        is_aura: bool,
+    ) -> Option<bool> {
+        Some(match self {
+            Self::Any => true,
+            Self::Has(kind) => creatures.contains(&kind),
+            Self::Lacks(kind) => !creatures.contains(&kind),
+            Self::AnyOf(kinds) => kinds.iter().any(|kind| creatures.contains(kind)),
+            Self::NoneOf(kinds) => kinds.iter().all(|kind| !creatures.contains(kind)),
+            Self::AnyOfList(list) => list.iter().any(|item| {
+                item.matches_sets(
+                    creatures,
+                    lands,
+                    artifacts,
+                    enchantments,
+                    planeswalkers,
+                    spells,
+                    is_aura,
+                )
+            }),
+            Self::AllOfList(list) => list.iter().all(|item| {
+                item.matches_sets(
+                    creatures,
+                    lands,
+                    artifacts,
+                    enchantments,
+                    planeswalkers,
+                    spells,
+                    is_aura,
+                )
+            }),
+            Self::NoneOfList(list) => list.iter().all(|item| {
+                !item.matches_sets(
+                    creatures,
+                    lands,
+                    artifacts,
+                    enchantments,
+                    planeswalkers,
+                    spells,
+                    is_aura,
+                )
+            }),
+            Self::Land(kind) => lands.contains(&kind),
+            Self::NotLand(kind) => !lands.contains(&kind),
+            Self::AnyLandMask(mask) => lands.iter().any(|lt| (mask & lt.bit()) != 0),
+            Self::NotLandMask(mask) => lands.iter().all(|lt| (mask & lt.bit()) == 0),
+            Self::Artifact(kind) => artifacts.contains(&kind),
+            Self::Enchantment(kind) => enchantments.contains(&kind),
+            Self::Planeswalker(kind) => planeswalkers.contains(&kind),
+            Self::Spell(kind) => spells.contains(&kind),
+            Self::Aura => is_aura,
+            Self::ExceptChosenSlot(_) | Self::MatchesChosenSlot(_) | Self::OutsideNamedSlots => {
+                return None;
+            }
+        })
+    }
+
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
         let replace = |kind: &mut CreatureTypeId| {
@@ -354,6 +583,13 @@ impl SubtypeFilter {
             Self::AnyOf(kinds) | Self::NoneOf(kinds) => {
                 for kind in kinds {
                     replace(kind);
+                }
+            }
+            Self::AnyOfList(list) | Self::AllOfList(list) | Self::NoneOfList(list) => {
+                for item in list.as_mut_slice() {
+                    if let SingleSubtype::Creature(kind) = item {
+                        replace(kind);
+                    }
                 }
             }
             Self::Any
@@ -389,6 +625,14 @@ impl SubtypeFilter {
             Self::AnyOf(kinds) | Self::NoneOf(kinds) => {
                 for kind in kinds {
                     check(kind)?;
+                }
+                Ok(())
+            }
+            Self::AnyOfList(list) | Self::AllOfList(list) | Self::NoneOfList(list) => {
+                for item in list.iter() {
+                    if let SingleSubtype::Creature(kind) = item {
+                        check(*kind)?;
+                    }
                 }
                 Ok(())
             }
@@ -499,6 +743,8 @@ pub enum SourceRelation {
     OtherThanBound(ObjectId),
     /// Must share a current name with the ability's source permanent.
     SharingNameWithAbilitySource,
+    /// Excludes the ability's own source permanent and must share a current name with it.
+    OtherThanAbilitySourceSharingName,
     /// Must share a name with a secret/face-up Conspiracy agenda slot on the source.
     MatchesNamedAgendaSlot,
 }
@@ -666,6 +912,12 @@ impl ObjectFilterFlags {
     pub const WITH_MINUS_ONE_COUNTER: Self = Self(1 << 35);
     /// Object that has an Adventure alternative face (CR 715).
     pub const HAS_ADVENTURE: Self = Self(1 << 36);
+    /// Spell or card with `{X}` in its mana cost (CR 107.3).
+    pub const HAS_X_IN_COST: Self = Self(1 << 37);
+    /// Permanent or card with toxic (CR 702.164).
+    pub const HAS_TOXIC: Self = Self(1 << 38);
+    /// Permanent or card with no abilities (CR 113.1).
+    pub const NO_ABILITIES: Self = Self(1 << 39);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -700,6 +952,12 @@ pub struct ObjectClause {
     pub tapped: Option<bool>,
     pub token: Option<bool>,
     pub flags: ObjectFilterFlags,
+    /// Require at least one counter of this specific permanent counter kind on the object.
+    pub required_counter_kind: Option<crate::effects::CounterKind>,
+    /// Forbid any counter of this specific permanent counter kind on the object.
+    pub forbidden_counter_kind: Option<crate::effects::CounterKind>,
+    /// Require the object to have this exact English card name.
+    pub exact_name: Option<ExactNameKey>,
 }
 
 impl ObjectClause {
@@ -725,7 +983,28 @@ impl ObjectClause {
             tapped: None,
             token: None,
             flags: ObjectFilterFlags::EMPTY,
+            required_counter_kind: None,
+            forbidden_counter_kind: None,
+            exact_name: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_counter_kind(mut self, kind: crate::effects::CounterKind) -> Self {
+        self.required_counter_kind = Some(kind);
+        self
+    }
+
+    #[must_use]
+    pub const fn without_counter_kind(mut self, kind: crate::effects::CounterKind) -> Self {
+        self.forbidden_counter_kind = Some(kind);
+        self
+    }
+
+    #[must_use]
+    pub const fn named(mut self, name: ExactNameKey) -> Self {
+        self.exact_name = Some(name);
+        self
     }
 
     #[must_use]
@@ -1177,41 +1456,28 @@ impl ObjectClause {
         {
             return false;
         }
-        let subtype_ok = match self.subtypes {
-            SubtypeFilter::Any => true,
-            SubtypeFilter::Has(kind) => p.current_creature_subtypes.contains(&kind),
-            SubtypeFilter::Lacks(kind) => !p.current_creature_subtypes.contains(&kind),
-            SubtypeFilter::AnyOf(kinds) => kinds
-                .iter()
-                .any(|kind| p.current_creature_subtypes.contains(kind)),
-            SubtypeFilter::NoneOf(kinds) => kinds
-                .iter()
-                .all(|kind| !p.current_creature_subtypes.contains(kind)),
-            SubtypeFilter::ExceptChosenSlot(_) | SubtypeFilter::OutsideNamedSlots => {
-                p.current_creature_subtypes.is_disjoint(excluded_subtypes)
-            }
-            SubtypeFilter::MatchesChosenSlot(_) => false,
-            SubtypeFilter::Land(kind) => p.current_land_subtypes.contains(&kind),
-            SubtypeFilter::NotLand(kind) => !p.current_land_subtypes.contains(&kind),
-            SubtypeFilter::AnyLandMask(mask) => p
-                .current_land_subtypes
-                .iter()
-                .any(|lt| (mask & lt.bit()) != 0),
-            SubtypeFilter::NotLandMask(mask) => p
-                .current_land_subtypes
-                .iter()
-                .all(|lt| (mask & lt.bit()) == 0),
-            SubtypeFilter::Artifact(kind) => p.current_artifact_subtypes.contains(&kind),
-            SubtypeFilter::Enchantment(kind) => p.current_enchantment_subtypes.contains(&kind),
-            SubtypeFilter::Planeswalker(kind) => p.current_planeswalker_subtypes.contains(&kind),
-            SubtypeFilter::Spell(kind) => p.current_spell_subtypes.contains(&kind),
-            SubtypeFilter::Aura => {
-                matches!(
-                    p.attachment_kind,
-                    Some(crate::attachment::AttachmentKind::Aura(_))
-                )
-            }
-        };
+        let is_aura = matches!(
+            p.attachment_kind,
+            Some(crate::attachment::AttachmentKind::Aura(_))
+        );
+        let subtype_ok = self
+            .subtypes
+            .matches_sets(
+                &p.current_creature_subtypes,
+                &p.current_land_subtypes,
+                &p.current_artifact_subtypes,
+                &p.current_enchantment_subtypes,
+                &p.current_planeswalker_subtypes,
+                &p.current_spell_subtypes,
+                is_aura,
+            )
+            .unwrap_or_else(|| match self.subtypes {
+                SubtypeFilter::ExceptChosenSlot(_) | SubtypeFilter::OutsideNamedSlots => {
+                    p.current_creature_subtypes.is_disjoint(excluded_subtypes)
+                }
+                SubtypeFilter::MatchesChosenSlot(_) => false,
+                _ => false,
+            });
         if !subtype_ok {
             return false;
         }
@@ -1242,6 +1508,34 @@ impl ObjectClause {
         if self.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
             return false;
         }
+        if let Some(exact) = self.exact_name
+            && !exact.matches_exact_names(&p.current_names)
+        {
+            return false;
+        }
+        if let Some(kind) = self.required_counter_kind
+            && !p.present_counter_kinds.contains(&kind)
+        {
+            return false;
+        }
+        if let Some(kind) = self.forbidden_counter_kind
+            && p.present_counter_kinds.contains(&kind)
+        {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::WITHOUT_COUNTERS) && p.has_any_counter {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::WITH_ANY_COUNTER) && !p.has_any_counter {
+            return false;
+        }
+        if self
+            .flags
+            .contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)
+            && !p.has_plus_one_counter
+        {
+            return false;
+        }
         if self
             .flags
             .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
@@ -1253,6 +1547,20 @@ impl ObjectClause {
             return false;
         }
         if self.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !p.defined.has_adventure {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !p.defined.has_x_in_cost {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+            && !p
+                .toxic_value
+                .as_ref()
+                .is_some_and(crate::RulesInteger::is_positive)
+        {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !p.has_no_abilities() {
             return false;
         }
         if self.flags.contains(ObjectFilterFlags::COMMANDER_ONLY) && p.commander_owner.is_none() {
@@ -1981,12 +2289,16 @@ impl ObjectFilter {
     /// True if any clause excludes the ability source directly.
     #[must_use]
     pub const fn excludes_ability_source(self) -> bool {
+        const fn excludes(r: SourceRelation) -> bool {
+            matches!(
+                r,
+                SourceRelation::OtherThanAbilitySource
+                    | SourceRelation::OtherThanAbilitySourceSharingName
+            )
+        }
         match self {
-            Self::Clause(a) => matches!(a.source_relation, SourceRelation::OtherThanAbilitySource),
-            Self::Either(a, b) => {
-                matches!(a.source_relation, SourceRelation::OtherThanAbilitySource)
-                    || matches!(b.source_relation, SourceRelation::OtherThanAbilitySource)
-            }
+            Self::Clause(a) => excludes(a.source_relation),
+            Self::Either(a, b) => excludes(a.source_relation) || excludes(b.source_relation),
         }
     }
 
@@ -2017,22 +2329,16 @@ impl ObjectFilter {
     /// True if any clause requires sharing a name with the ability source.
     #[must_use]
     pub const fn requires_same_name_as_source(self) -> bool {
+        const fn shares(r: SourceRelation) -> bool {
+            matches!(
+                r,
+                SourceRelation::SharingNameWithAbilitySource
+                    | SourceRelation::OtherThanAbilitySourceSharingName
+            )
+        }
         match self {
-            Self::Clause(a) => {
-                matches!(
-                    a.source_relation,
-                    SourceRelation::SharingNameWithAbilitySource
-                )
-            }
-            Self::Either(a, b) => {
-                matches!(
-                    a.source_relation,
-                    SourceRelation::SharingNameWithAbilitySource
-                ) || matches!(
-                    b.source_relation,
-                    SourceRelation::SharingNameWithAbilitySource
-                )
-            }
+            Self::Clause(a) => shares(a.source_relation),
+            Self::Either(a, b) => shares(a.source_relation) || shares(b.source_relation),
         }
     }
 
@@ -2611,6 +2917,10 @@ impl ObjectFilter {
                 || c.flags.contains(ObjectFilterFlags::HISTORIC)
                 || c.flags.contains(ObjectFilterFlags::NON_HISTORIC)
                 || c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE)
+                || c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST)
+                || c.required_counter_kind.is_some()
+                || c.forbidden_counter_kind.is_some()
+                || c.exact_name.is_some()
             {
                 return false;
             }
@@ -2690,6 +3000,15 @@ impl ObjectFilter {
             if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !spell.has_adventure {
                 return false;
             }
+            if c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !spell.has_x_in_cost {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_TOXIC) && !spell.has_toxic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !spell.has_no_abilities {
+                return false;
+            }
             if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
                 && spell.commander_owner.is_none()
             {
@@ -2699,39 +3018,30 @@ impl ObjectFilter {
             {
                 return false;
             }
+            if let Some(exact) = c.exact_name
+                && !exact.matches_exact_names(&spell.current_names)
+            {
+                return false;
+            }
+            if c.required_counter_kind.is_some() || c.forbidden_counter_kind.is_some() {
+                return false;
+            }
             if !c.color.matches(&spell.colors) {
                 return false;
             }
-            match c.subtypes {
-                SubtypeFilter::Any => true,
-                SubtypeFilter::Has(kind) => spell.creature_subtypes.contains(&kind),
-                SubtypeFilter::Lacks(kind) => !spell.creature_subtypes.contains(&kind),
-                SubtypeFilter::AnyOf(kinds) => kinds
-                    .iter()
-                    .any(|kind| spell.creature_subtypes.contains(kind)),
-                SubtypeFilter::NoneOf(kinds) => kinds
-                    .iter()
-                    .all(|kind| !spell.creature_subtypes.contains(kind)),
-                SubtypeFilter::Land(kind) => spell.land_subtypes.contains(&kind),
-                SubtypeFilter::NotLand(kind) => !spell.land_subtypes.contains(&kind),
-                SubtypeFilter::AnyLandMask(mask) => {
-                    spell.land_subtypes.iter().any(|lt| (mask & lt.bit()) != 0)
-                }
-                SubtypeFilter::NotLandMask(mask) => {
-                    spell.land_subtypes.iter().all(|lt| (mask & lt.bit()) == 0)
-                }
-                SubtypeFilter::Artifact(kind) => spell.artifact_subtypes.contains(&kind),
-                SubtypeFilter::Enchantment(kind) => spell.enchantment_subtypes.contains(&kind),
-                SubtypeFilter::Planeswalker(kind) => spell.planeswalker_subtypes.contains(&kind),
-                SubtypeFilter::Spell(kind) => spell.spell_subtypes.contains(&kind),
-                SubtypeFilter::Aura => {
-                    spell.types.contains(&CardType::Enchantment)
-                        && spell.enchantment_subtypes.is_empty()
-                }
-                SubtypeFilter::ExceptChosenSlot(_)
-                | SubtypeFilter::MatchesChosenSlot(_)
-                | SubtypeFilter::OutsideNamedSlots => false,
-            }
+            let is_aura = spell.types.contains(&CardType::Enchantment)
+                && spell.enchantment_subtypes.is_empty();
+            c.subtypes
+                .matches_sets(
+                    &spell.creature_subtypes,
+                    &spell.land_subtypes,
+                    &spell.artifact_subtypes,
+                    &spell.enchantment_subtypes,
+                    &spell.planeswalker_subtypes,
+                    &spell.spell_subtypes,
+                    is_aura,
+                )
+                .unwrap_or(false)
         }
         match self {
             Self::Clause(a) => clause_ok(a, spell),
@@ -2767,6 +3077,14 @@ impl ObjectFilter {
                 SourceRelation::OtherThanBound(id) => object.object.id() != id,
                 SourceRelation::SharingNameWithAbilitySource => {
                     !source.current_names.is_empty()
+                        && source
+                            .current_names
+                            .iter()
+                            .any(|name| object.current_names.iter().any(|other| other == name))
+                }
+                SourceRelation::OtherThanAbilitySourceSharingName => {
+                    !same
+                        && !source.current_names.is_empty()
                         && source
                             .current_names
                             .iter()
@@ -2924,36 +3242,67 @@ impl ObjectFilter {
             if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !object.has_adventure {
                 return false;
             }
+            if c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !object.has_x_in_cost {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_TOXIC) && !object.has_toxic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !object.has_no_abilities {
+                return false;
+            }
+            if let Some(exact) = c.exact_name
+                && !exact.matches_exact_names(&object.current_names)
+            {
+                return false;
+            }
+            if let Some(kind) = c.required_counter_kind {
+                let present = match kind {
+                    crate::effects::CounterKind::PlusOne => object
+                        .battlefield_counters
+                        .as_ref()
+                        .is_some_and(|counters| counters.plus_one.is_positive()),
+                    crate::effects::CounterKind::MinusOne => object
+                        .battlefield_counters
+                        .as_ref()
+                        .is_some_and(|counters| counters.minus_one.is_positive()),
+                    _ => false,
+                };
+                if !present {
+                    return false;
+                }
+            }
+            if let Some(kind) = c.forbidden_counter_kind {
+                let absent = match kind {
+                    crate::effects::CounterKind::PlusOne => !object
+                        .battlefield_counters
+                        .as_ref()
+                        .is_some_and(|counters| counters.plus_one.is_positive()),
+                    crate::effects::CounterKind::MinusOne => !object
+                        .battlefield_counters
+                        .as_ref()
+                        .is_some_and(|counters| counters.minus_one.is_positive()),
+                    _ => false,
+                };
+                if !absent {
+                    return false;
+                }
+            }
             if !c.color.matches(&object.colors) {
                 return false;
             }
-            let subtype_ok = match c.subtypes {
-                SubtypeFilter::Any => true,
-                SubtypeFilter::Has(kind) => object.creature_subtypes.contains(&kind),
-                SubtypeFilter::Lacks(kind) => !object.creature_subtypes.contains(&kind),
-                SubtypeFilter::AnyOf(kinds) => kinds
-                    .iter()
-                    .any(|kind| object.creature_subtypes.contains(kind)),
-                SubtypeFilter::NoneOf(kinds) => kinds
-                    .iter()
-                    .all(|kind| !object.creature_subtypes.contains(kind)),
-                SubtypeFilter::Land(kind) => object.land_subtypes.contains(&kind),
-                SubtypeFilter::NotLand(kind) => !object.land_subtypes.contains(&kind),
-                SubtypeFilter::AnyLandMask(mask) => {
-                    object.land_subtypes.iter().any(|lt| (mask & lt.bit()) != 0)
-                }
-                SubtypeFilter::NotLandMask(mask) => {
-                    object.land_subtypes.iter().all(|lt| (mask & lt.bit()) == 0)
-                }
-                SubtypeFilter::Artifact(kind) => object.artifact_subtypes.contains(&kind),
-                SubtypeFilter::Enchantment(kind) => object.enchantment_subtypes.contains(&kind),
-                SubtypeFilter::Planeswalker(kind) => object.planeswalker_subtypes.contains(&kind),
-                SubtypeFilter::Spell(kind) => object.spell_subtypes.contains(&kind),
-                SubtypeFilter::Aura => false,
-                SubtypeFilter::ExceptChosenSlot(_)
-                | SubtypeFilter::MatchesChosenSlot(_)
-                | SubtypeFilter::OutsideNamedSlots => false,
-            };
+            let subtype_ok = c
+                .subtypes
+                .matches_sets(
+                    &object.creature_subtypes,
+                    &object.land_subtypes,
+                    &object.artifact_subtypes,
+                    &object.enchantment_subtypes,
+                    &object.planeswalker_subtypes,
+                    &object.spell_subtypes,
+                    false,
+                )
+                .unwrap_or(false);
             if !subtype_ok {
                 return false;
             }
@@ -3091,5 +3440,230 @@ impl EffectSubject {
             | Self::TargetAndSharingColorMatching(filter) => filter.validate_vocabulary(vocabulary),
             _ => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod wave14_object_filter_tests {
+    use super::*;
+    use spellwake_contracts::{
+        creature_types::CreatureTypeVocabulary,
+        names::{EnglishCardName, NameRules, ObjectNames},
+    };
+    use std::collections::BTreeSet;
+
+    fn sample_vocab() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new(
+            "wave14-test".into(),
+            [0u8; 32],
+            vec![
+                "Eldrazi".into(),
+                "Elf".into(),
+                "Frog".into(),
+                "Goblin".into(),
+                "Human".into(),
+                "Mount".into(),
+                "Rabbit".into(),
+                "Raccoon".into(),
+                "Scion".into(),
+                "Squirrel".into(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn subtype_list_all_any_none_and_capacity_bounds() {
+        let vocab = sample_vocab();
+        let eldrazi = vocab.resolve_label("Eldrazi").unwrap();
+        let scion = vocab.resolve_label("Scion").unwrap();
+        let frog = vocab.resolve_label("Frog").unwrap();
+        let rabbit = vocab.resolve_label("Rabbit").unwrap();
+        let raccoon = vocab.resolve_label("Raccoon").unwrap();
+        let squirrel = vocab.resolve_label("Squirrel").unwrap();
+        let mount = vocab.resolve_label("Mount").unwrap();
+        let elf = vocab.resolve_label("Elf").unwrap();
+
+        assert!(SubtypeList::from_slice(&[]).is_none());
+        let too_many = [SingleSubtype::Creature(elf); MAX_INLINE_SUBTYPES + 1];
+        assert!(SubtypeList::from_slice(&too_many).is_none());
+
+        let empty_l = BTreeSet::new();
+        let empty_a = BTreeSet::new();
+        let empty_e = BTreeSet::new();
+        let empty_p = BTreeSet::new();
+        let empty_s = BTreeSet::new();
+
+        // Conjunctive Eldrazi Scion
+        let all_filter = SubtypeFilter::AllOfList(
+            SubtypeList::from_slice(&[
+                SingleSubtype::Creature(eldrazi),
+                SingleSubtype::Creature(scion),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(
+            all_filter.matches_sets(
+                &BTreeSet::from([eldrazi, scion]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            all_filter.matches_sets(
+                &BTreeSet::from([eldrazi]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(false)
+        );
+
+        // 4-subtype Bloomburrow disjunction + cross-category Mount/Vehicle
+        let any_four = SubtypeFilter::AnyOfList(
+            SubtypeList::from_slice(&[
+                SingleSubtype::Creature(frog),
+                SingleSubtype::Creature(rabbit),
+                SingleSubtype::Creature(raccoon),
+                SingleSubtype::Creature(squirrel),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(
+            any_four.matches_sets(
+                &BTreeSet::from([squirrel]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            any_four.matches_sets(
+                &BTreeSet::from([elf]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(false)
+        );
+
+        let mixed = SubtypeFilter::AnyOfList(
+            SubtypeList::from_slice(&[
+                SingleSubtype::Creature(mount),
+                SingleSubtype::Artifact(ArtifactSubtype::Vehicle),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(
+            mixed.matches_sets(
+                &BTreeSet::new(),
+                &empty_l,
+                &BTreeSet::from([ArtifactSubtype::Vehicle]),
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(true)
+        );
+
+        // Negated list
+        let none_filter = SubtypeFilter::NoneOfList(
+            SubtypeList::from_slice(&[
+                SingleSubtype::Creature(elf),
+                SingleSubtype::Artifact(ArtifactSubtype::Equipment),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(
+            none_filter.matches_sets(
+                &BTreeSet::from([elf]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            none_filter.matches_sets(
+                &BTreeSet::new(),
+                &empty_l,
+                &BTreeSet::from([ArtifactSubtype::Equipment]),
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            none_filter.matches_sets(
+                &BTreeSet::from([frog]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(true)
+        );
+
+        // Rewrite creature subtype inside list
+        let mut rewritten = any_four;
+        rewritten.rewrite(squirrel, elf);
+        assert_eq!(
+            rewritten.matches_sets(
+                &BTreeSet::from([elf]),
+                &empty_l,
+                &empty_a,
+                &empty_e,
+                &empty_p,
+                &empty_s,
+                false
+            ),
+            Some(true)
+        );
+        assert!(rewritten.validate_vocabulary(&vocab).is_ok());
+    }
+
+    #[test]
+    fn exact_name_key_validates_bounds_and_matches_names() {
+        assert!(ExactNameKey::from_name("").is_none());
+        assert!(ExactNameKey::from_name(" leading").is_none());
+        let too_long = "A".repeat(MAX_EXACT_NAME_BYTES + 1);
+        assert!(ExactNameKey::from_name(&too_long).is_none());
+
+        let key = ExactNameKey::from_name("Hare Apparent").unwrap();
+        assert_eq!(key.as_str(), "Hare Apparent");
+        let matching = ObjectNames::single(EnglishCardName::new("Hare Apparent".into()).unwrap());
+        let other = ObjectNames::single(EnglishCardName::new("Grizzly Bears".into()).unwrap());
+        let rules = NameRules::literal_names();
+        assert!(key.matches_with_rules(&matching, &rules));
+        assert!(!key.matches_with_rules(&other, &rules));
+        assert!(key.matches_exact_names(&matching));
+        assert!(!key.matches_exact_names(&other));
+        let lower_key = ExactNameKey::from_name("hare apparent").unwrap();
+        assert!(lower_key.matches_with_rules(&matching, &rules));
+        assert!(lower_key.matches_exact_names(&matching));
+        assert!(!lower_key.matches_with_rules(&other, &rules));
     }
 }

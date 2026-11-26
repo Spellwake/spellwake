@@ -111,6 +111,7 @@ fn family(input: &GameInput) -> (&'static str, Option<&'static str>) {
                     DecisionReply::ResolutionPayment(_) => "resolution-payment",
                     DecisionReply::ChooseLandKind(_) => "choose-land-kind",
                     DecisionReply::ChooseDamageRecipient(_) => "choose-damage-recipient",
+                    DecisionReply::ChooseDamageSource(_) => "choose-damage-source",
                     DecisionReply::MutateOnTop(_) => "mutate-on-top",
                     DecisionReply::ChoosePile(_) => "choose-pile",
                     DecisionReply::PlaneswalkerType(_) => "planeswalker-type",

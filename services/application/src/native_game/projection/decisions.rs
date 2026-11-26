@@ -1020,6 +1020,98 @@ impl Projection<'_, '_> {
                 let targets = frame.recipients().iter().map(|&recipient| self.target(recipient)).collect::<Result<_, _>>()?;
                 (DecisionKind::DamageRecipient, PlayerDomain::Targets { targets })
             }
+            RuleFrame::DamageSourceChoice(frame) => {
+                let mut options = Vec::with_capacity(frame.sources().len());
+                for &damage_source in frame.sources() {
+                    let label = match damage_source {
+                        spellwake_engine::damage::DamageSourceId::Object(id) => {
+                            if let Some(object) = source.execution().window().cards().get(id) {
+                                if matches!(object.zone(), ObjectZone::Library(_))
+                                    || matches!(object.zone(), ObjectZone::Hand(seat) if seat != self.scope.binding.actor)
+                                {
+                                    return Err(NativeProjectionError::HiddenReference);
+                                }
+                                if object.face_down().is_some() {
+                                    "a face-down source".to_owned()
+                                } else {
+                                    let program = source
+                                        .execution()
+                                        .copiable_program(id)
+                                        .or_else(|| {
+                                            object.card_id().and_then(|cid| {
+                                                source
+                                                    .execution()
+                                                    .programs()
+                                                    .find(|(key, _)| *key == cid)
+                                                    .map(|(_, p)| p)
+                                            })
+                                        });
+                                    let base = if let Some(program) = program {
+                                        self.display.object(object, program)?.characteristics.name
+                                    } else {
+                                        "a source".to_owned()
+                                    };
+                                    match object.zone() {
+                                        ObjectZone::Stack => format!("{base} (spell)"),
+                                        ObjectZone::Command => format!("{base} (command zone)"),
+                                        _ => base,
+                                    }
+                                }
+                            } else if let Some(departed) =
+                                source.execution().departed_damage_sources().get(&id)
+                            {
+                                if departed.object.face_down().is_some() {
+                                    "a face-down source".to_owned()
+                                } else {
+                                    let program = source
+                                        .execution()
+                                        .copiable_program(id)
+                                        .or_else(|| {
+                                            departed.object.card_id().and_then(|cid| {
+                                                source
+                                                    .execution()
+                                                    .programs()
+                                                    .find(|(key, _)| *key == cid)
+                                                    .map(|(_, p)| p)
+                                            })
+                                        });
+                                    if let Some(program) = program {
+                                        format!(
+                                            "{} (departed source)",
+                                            self.display
+                                                .object(&departed.object, program)?
+                                                .characteristics
+                                                .name
+                                        )
+                                    } else {
+                                        "a departed source".to_owned()
+                                    }
+                                }
+                            } else {
+                                return Err(NativeProjectionError::MissingNativeValue);
+                            }
+                        }
+                        spellwake_engine::damage::DamageSourceId::SpellCopy(entry_id) => {
+                            if let Some(name) = source.execution().stack_copiable_names(entry_id).and_then(|names| names.iter().next()) {
+                                format!("{} (spell copy)", name.as_str())
+                            } else {
+                                "a spell copy".to_owned()
+                            }
+                        }
+                        spellwake_engine::damage::DamageSourceId::Emblem(_) => {
+                            "an emblem".to_owned()
+                        }
+                    };
+                    options.push(self.option(NativeReference::DamageSource(damage_source), label)?);
+                }
+                (
+                    DecisionKind::DamageSource,
+                    PlayerDomain::Options {
+                        options,
+                        query: None,
+                    },
+                )
+            }
             RuleFrame::OpponentChoice(frame) => {
                 let targets=frame.opponents().iter().map(|seat|self.target(TargetRef::Player(*seat))).collect::<Result<_,_>>()?;
                 (DecisionKind::OpponentChoice, PlayerDomain::Targets {targets})
@@ -1534,6 +1626,7 @@ impl Projection<'_, '_> {
                 }
             }),
             RuleFrame::DamageRecipientChoice(_) => Some("Choose who or what is dealt damage.".into()),
+            RuleFrame::DamageSourceChoice(_) => Some("Choose a source of damage.".into()),
             RuleFrame::ReplacementChooser(_) => Some("Choose a player to make the decision for the player who left.".into()),
             RuleFrame::Checks(CheckDecision::BattleProtector(frame)) => {
                 let _ = self.visible_object(frame.battle())?;

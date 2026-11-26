@@ -805,6 +805,7 @@ pub enum EffectDecision {
     AttackDirection(AttackDirectionFrame),
     OpponentChoice(OpponentChoiceFrame),
     DamageRecipientChoice(DamageRecipientChoiceFrame),
+    DamageSourceChoice(DamageSourceChoiceFrame),
     DrawReplacement(DrawReplacementFrame),
     LoyaltyRemoval(LoyaltyRemovalChoice),
     CastRecovery(CastRecoveryFrame),
@@ -851,6 +852,7 @@ impl EffectDecision {
             Self::AttackDirection(f) => f.chooser,
             Self::OpponentChoice(f) => f.chooser,
             Self::DamageRecipientChoice(f) => f.chooser,
+            Self::DamageSourceChoice(f) => f.chooser,
             Self::DrawReplacement(f) => f.chooser,
             Self::LoyaltyRemoval(f) => f.chooser,
             Self::CastRecovery(f) => f.chooser(),
@@ -896,9 +898,9 @@ impl EffectDecision {
             | Self::OpponentChoice(_)
             | Self::UntapKeepTapped(_)
             | Self::LoyaltyRemoval(_) => EffectError::SelectionRequired,
-            Self::DamageRecipientChoice(_) | Self::LinkedAuraChoice(_) => {
-                EffectError::SelectionRequired
-            }
+            Self::DamageRecipientChoice(_)
+            | Self::DamageSourceChoice(_)
+            | Self::LinkedAuraChoice(_) => EffectError::SelectionRequired,
             Self::LinkedReturnOrder(_) => EffectError::TimestampOrderRequired,
             Self::EntryChoice(_) => EffectError::SelectionRequired,
             Self::TokenEntryChoice(_) | Self::TokenAuraChoice(_) => EffectError::SelectionRequired,
@@ -980,6 +982,7 @@ pub enum DecisionReply {
     AttackDirection(AttackDirection),
     OpponentChoice(SeatId),
     ChooseDamageRecipient(TargetRef),
+    ChooseDamageSource(crate::damage::DamageSourceId),
     DrawReplacement(DrawReplacementChoice),
     ChoosePile(u8),
     OptionIndex(u8),
@@ -1355,6 +1358,7 @@ pub struct EffectWindow {
     resume_turn_order_at: Option<SeatId>,
     /// Turns remaining to be skipped per living player (CR 614.10).
     skip_turns_remaining: BTreeMap<SeatId, u16>,
+    skip_steps_remaining: BTreeMap<(SeatId, crate::turn::Step), u16>,
     /// Departed seats whose turn slots were passed before the upcoming untap.
     skipped_turns: BTreeSet<SeatId>,
     departed_damage_sources: BTreeMap<ObjectId, crate::damage::DepartedDamageSource>,
@@ -1650,6 +1654,25 @@ impl DamageRecipientChoiceFrame {
     /// Exact recipients available to the resolving instruction.
     pub fn recipients(&self) -> &[TargetRef] {
         &self.recipients
+    }
+}
+/// The resolving effect's non-targeted choice of a source of damage (CR 609.7a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DamageSourceChoiceFrame {
+    revision: u64,
+    entry: StackEntryId,
+    instruction: usize,
+    chooser: SeatId,
+    sources: Vec<crate::damage::DamageSourceId>,
+}
+impl DamageSourceChoiceFrame {
+    /// The controller selecting the damage source.
+    pub fn chooser(&self) -> SeatId {
+        self.chooser
+    }
+    /// Exact legal public damage sources available to the resolving instruction.
+    pub fn sources(&self) -> &[crate::damage::DamageSourceId] {
+        &self.sources
     }
 }
 
@@ -2023,6 +2046,7 @@ struct ResolutionResults {
     last_sacrifice: bool,
     last_action_succeeded: bool,
     last_action_count: Option<RulesInteger>,
+    last_action_lki: Vec<crate::characteristics::ObjectCharacteristics>,
     discarded_types: BTreeSet<CardType>,
     moved_library_types: BTreeSet<CardType>,
     milled_mana_values: Vec<RulesInteger>,
@@ -2080,6 +2104,7 @@ impl Default for ResolutionResults {
             last_sacrifice: false,
             last_action_succeeded: false,
             last_action_count: None,
+            last_action_lki: Vec::new(),
             discarded_types: BTreeSet::new(),
             moved_library_types: BTreeSet::new(),
             milled_mana_values: Vec::new(),
@@ -2121,6 +2146,7 @@ impl Default for ResolutionResults {
 struct ResolutionCursor {
     chosen_opponent: Option<SeatId>,
     chosen_damage_recipient: Option<TargetRef>,
+    chosen_damage_source: Option<crate::damage::DamageSourceId>,
     damage_offer_opponents: Option<std::collections::VecDeque<SeatId>>,
     vowed_creatures: BTreeSet<ObjectId>,
     meld_pair: Option<[(ObjectId, Option<CardId>); 2]>,
@@ -2632,6 +2658,7 @@ impl EffectWindow {
             additional_combats:0,
             resume_turn_order_at: None,
             skip_turns_remaining: BTreeMap::new(),
+            skip_steps_remaining: BTreeMap::new(),
             skipped_turns: BTreeSet::new(),
             departed_damage_sources: BTreeMap::new(),
             departed_reflexive_sources: BTreeMap::new(),
@@ -4561,6 +4588,7 @@ impl EffectWindow {
         next.characteristics
             .nonland_permanents_left_battlefield_this_turn
             .clear();
+        next.characteristics.any_spell_warped_this_turn = false;
         next.characteristics.creatures_died_this_turn_count = 0;
         next.characteristics
             .controlled_creatures_died_this_turn
@@ -7254,6 +7282,7 @@ impl EffectWindow {
                     revealed_piles: None,
                     chosen_opponent: None,
                     chosen_damage_recipient: None,
+                    chosen_damage_source: None,
                     damage_offer_opponents: None,
                     vowed_creatures: Default::default(),
                     meld_pair: None,
@@ -7399,6 +7428,7 @@ impl EffectWindow {
             revealed_piles: None,
             chosen_opponent: None,
             chosen_damage_recipient: None,
+            chosen_damage_source: None,
             damage_offer_opponents: None,
             vowed_creatures: Default::default(),
             meld_pair: None,
@@ -7523,6 +7553,13 @@ impl EffectWindow {
                 &mut append,
             )?
             .ok_or(EffectError::InconsistentProgram)?;
+        if destination == crate::program::PublicZoneDestination::Battlefield {
+            self.damage_state.propagate_permanent_spell_identity(
+                entry.id(),
+                movement.before.id(),
+                movement.after.id(),
+            );
+        }
         Ok(RuleProgress::new(
             self,
             RuleResult::Complete {
@@ -8890,6 +8927,17 @@ impl EffectWindow {
                 .and_then(|src| self.ability_source_names(src, evaluated))
                 .or(source.names)
                 .is_some_and(|src_names| self.name_rules.shares_name(&p.current_names, src_names)),
+            SourceRelation::OtherThanAbilitySourceSharingName => {
+                ability_source.is_some_and(|src| {
+                    id != src
+                        && self
+                            .ability_source_names(src, evaluated)
+                            .or(source.names)
+                            .is_some_and(|src_names| {
+                                self.name_rules.shares_name(&p.current_names, src_names)
+                            })
+                })
+            }
             SourceRelation::SelfObject => ability_source == Some(id),
             SourceRelation::AttachedToSelf => ability_source.is_some_and(|src| {
                 self.characteristics.attachments.get(&src)
@@ -8972,6 +9020,27 @@ impl EffectWindow {
                 .cards()
                 .get(id)
                 .is_some_and(|o| o.is_token() == required_token)
+        {
+            return false;
+        }
+        if let Some(exact) = clause.exact_name
+            && !exact.matches_with_rules(&p.current_names, &self.name_rules)
+        {
+            return false;
+        }
+        if let Some(kind) = clause.required_counter_kind
+            && !self
+                .characteristics
+                .permanent_counter_count(id, kind)
+                .is_positive()
+        {
+            return false;
+        }
+        if let Some(kind) = clause.forbidden_counter_kind
+            && self
+                .characteristics
+                .permanent_counter_count(id, kind)
+                .is_positive()
         {
             return false;
         }
@@ -9222,6 +9291,25 @@ impl EffectWindow {
         {
             return false;
         }
+        if clause.flags.contains(ObjectFilterFlags::HAS_X_IN_COST)
+            && !(p.defined.has_x_in_cost
+                || self
+                    .copiable_program(id)
+                    .is_some_and(|prog| prog.x_mana_symbols > 0))
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+            && !p
+                .toxic_value
+                .as_ref()
+                .is_some_and(RulesInteger::is_positive)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !p.has_no_abilities() {
+            return false;
+        }
         if clause
             .flags
             .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
@@ -9405,7 +9493,10 @@ impl EffectWindow {
         {
             return false;
         }
-        clause.matches_static_characteristics(p, excluded_subtypes, || {
+        // Exact-name matching already ran above with NameRules (interchangeable names).
+        let mut static_clause = clause;
+        static_clause.exact_name = None;
+        static_clause.matches_static_characteristics(p, excluded_subtypes, || {
             if p.zone == ObjectZone::Battlefield {
                 self.permanent_mana_value(id)
             } else {
@@ -10042,6 +10133,7 @@ impl EffectWindow {
             | Instruction::ReturnControlledPermanents { .. }
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
+            | Instruction::SacrificeUpTo { .. }
             | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
@@ -10111,6 +10203,7 @@ impl EffectWindow {
             }
             Instruction::RemoveTargetFromCombat => matches!(target, TargetRef::Object(id)
                 if self.combat.as_ref().is_some_and(|combat| combat.attacker(id).is_some() || combat.blocker(id).is_some())),
+            Instruction::RemoveSubjectFromCombat(_) => true,
             Instruction::GoadTarget | Instruction::RequireTargetAttack => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|p| p.zone == ObjectZone::Battlefield && p.is_creature()))
             }
@@ -10339,6 +10432,7 @@ impl EffectWindow {
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. }
@@ -10507,6 +10601,7 @@ impl EffectWindow {
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::PutGroupOnLibraryBottom(_)

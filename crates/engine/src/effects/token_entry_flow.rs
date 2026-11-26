@@ -89,44 +89,28 @@ impl EffectWindow {
             {
                 return false;
             }
+            if let Some(exact) = c.exact_name
+                && !exact.matches_exact_names(&program.names)
+            {
+                return false;
+            }
+            if c.required_counter_kind.is_some() || c.forbidden_counter_kind.is_some() {
+                return false;
+            }
             let attachment = program.permanent().and_then(|p| p.attachment);
-            let subtype_ok = match c.subtypes {
-                crate::program::SubtypeFilter::Any => true,
-                crate::program::SubtypeFilter::Has(k) => program.creature_subtypes.contains(&k),
-                crate::program::SubtypeFilter::Lacks(k) => !program.creature_subtypes.contains(&k),
-                crate::program::SubtypeFilter::AnyOf(ks) => {
-                    ks.iter().any(|k| program.creature_subtypes.contains(k))
-                }
-                crate::program::SubtypeFilter::NoneOf(ks) => {
-                    ks.iter().all(|k| !program.creature_subtypes.contains(k))
-                }
-                crate::program::SubtypeFilter::Land(k) => program.land_subtypes.contains(&k),
-                crate::program::SubtypeFilter::NotLand(k) => !program.land_subtypes.contains(&k),
-                crate::program::SubtypeFilter::AnyLandMask(mask) => program
-                    .land_subtypes
-                    .iter()
-                    .any(|lt| (mask & lt.bit()) != 0),
-                crate::program::SubtypeFilter::NotLandMask(mask) => program
-                    .land_subtypes
-                    .iter()
-                    .all(|lt| (mask & lt.bit()) == 0),
-                crate::program::SubtypeFilter::Artifact(k) => {
-                    program.artifact_subtypes.contains(&k)
-                }
-                crate::program::SubtypeFilter::Enchantment(k) => {
-                    program.enchantment_subtypes.contains(&k)
-                }
-                crate::program::SubtypeFilter::Planeswalker(k) => {
-                    program.planeswalker_subtypes.contains(&k)
-                }
-                crate::program::SubtypeFilter::Spell(k) => program.spell_subtypes.contains(&k),
-                crate::program::SubtypeFilter::Aura => {
-                    matches!(attachment, Some(crate::attachment::AttachmentKind::Aura(_)))
-                }
-                crate::program::SubtypeFilter::ExceptChosenSlot(_)
-                | crate::program::SubtypeFilter::MatchesChosenSlot(_)
-                | crate::program::SubtypeFilter::OutsideNamedSlots => false,
-            };
+            let is_aura = matches!(attachment, Some(crate::attachment::AttachmentKind::Aura(_)));
+            let subtype_ok = c
+                .subtypes
+                .matches_sets(
+                    &program.creature_subtypes,
+                    &program.land_subtypes,
+                    &program.artifact_subtypes,
+                    &program.enchantment_subtypes,
+                    &program.planeswalker_subtypes,
+                    &program.spell_subtypes,
+                    is_aura,
+                )
+                .unwrap_or(false);
             if !subtype_ok {
                 return false;
             }

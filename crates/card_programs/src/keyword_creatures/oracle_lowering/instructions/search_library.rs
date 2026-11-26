@@ -1004,8 +1004,22 @@ pub(super) fn lower_search_library_group(
                     .push(Instruction::CounterTriggeringStackObject);
                 return Ok(());
             }
-            let bt = lower_target_subject(target, vocabulary)?;
-            builder.bind_target(bt)?;
+            let reuse_bound_spell = matches!(
+                builder.target,
+                BodyTarget::SingleSpell(_)
+                    | BodyTarget::SingleStackObject(_)
+                    | BodyTarget::SingleStackEntry
+            ) && matches!(
+                target.as_ref(),
+                SubjectRefAst::Anaphora(raw) if matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "that spell" | "that spell or ability" | "that ability" | "it"
+                )
+            );
+            if !reuse_bound_spell {
+                let bt = lower_target_subject(target, vocabulary)?;
+                builder.bind_target(bt)?;
+            }
             if let Some(cost_atom) = unless_pay {
                 match cost_atom {
                     CostAtomAst::PayMana(raw) => {

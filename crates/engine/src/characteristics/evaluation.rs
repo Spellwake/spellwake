@@ -85,6 +85,7 @@ fn defined(program: &Program) -> DefinedCharacteristics {
             .permanent()
             .and_then(|value| value.printed_pt.clone()),
         has_adventure: program.adventure.is_some(),
+        has_x_in_cost: program.x_mana_symbols > 0,
     }
 }
 fn initial_pt(object: ObjectId, defined: &DefinedCharacteristics) -> PowerToughnessEvaluation {
@@ -142,36 +143,8 @@ pub(crate) fn evaluate(
         });
         let physical_id = physical.id();
         let pt_counters = world.state.counters(physical_id);
-        let has_any_counter = pt_counters.plus_one.is_positive()
-            || pt_counters.minus_one.is_positive()
-            || [
-                &world.state.blessing_counters,
-                &world.state.despair_counters,
-                &world.state.hatchling_counters,
-                &world.state.indestructible_counters,
-                &world.state.page_counters,
-                &world.state.quest_counters,
-                &world.state.verse_counters,
-                &world.state.suspect_counters,
-                &world.state.charge,
-                &world.state.storage,
-                &world.state.loyalty,
-                &world.state.lore,
-                &world.state.time_counters,
-                &world.state.fade,
-                &world.state.age,
-            ]
-            .iter()
-            .any(|counts| {
-                counts
-                    .get(&physical_id)
-                    .is_some_and(RulesInteger::is_positive)
-            })
-            || world.state.named_counters.values().any(|counts| {
-                counts
-                    .get(&physical_id)
-                    .is_some_and(RulesInteger::is_positive)
-            });
+        let present_counter_kinds = world.state.present_permanent_counter_kinds(physical_id);
+        let has_any_counter = !present_counter_kinds.is_empty();
         let mut object = ObjectCharacteristics {
             paired_with: world.state.paired_creatures.get(&physical_id).copied(),
             tapped: physical.tapped(),
@@ -210,6 +183,7 @@ pub(crate) fn evaluate(
             has_minus_one_counter: pt_counters.minus_one.is_positive(),
             plus_one_counters: pt_counters.plus_one.clone(),
             has_any_counter,
+            present_counter_kinds,
             blessing_counters: world
                 .state
                 .blessing_counters
@@ -228,6 +202,33 @@ pub(crate) fn evaluate(
                 .and_then(|seat| world.state.speed.get(&seat).copied())
                 .unwrap_or(0),
             saddled: world.state.saddled.contains(&physical.id()),
+            is_face_down: physical.face_down().is_some(),
+            entered_this_turn: world.state.entered_objects_this_turn.contains(&physical_id),
+            entry_color: world.state.entry_color_choices.get(&physical_id).copied(),
+            attacked_this_turn: world
+                .state
+                .attacked_objects_this_turn
+                .contains(&physical_id),
+            dealt_damage_this_turn: world
+                .state
+                .object_damage_taken_this_turn
+                .get(&physical_id)
+                .is_some_and(RulesInteger::is_positive),
+            kicked: world.state.kicked.contains(&physical_id)
+                || world
+                    .state
+                    .kicker_counts
+                    .get(&physical_id)
+                    .is_some_and(|counts| !counts.is_empty()),
+            renowned: world.state.renowned.contains(&physical_id),
+            monstrous: world.state.monstrous.contains(&physical_id),
+            suspected: world
+                .state
+                .suspect_counters
+                .get(&physical_id)
+                .is_some_and(RulesInteger::is_positive),
+            solved: world.state.solved_cases.contains(&physical_id),
+            exerted: world.state.exerted_objects_this_turn.contains(&physical_id),
             attached_to: world.state.attachments.get(&physical.id()).copied(),
             object: physical.id(),
             zone: physical.zone(),
@@ -1140,6 +1141,20 @@ fn apply_definitions(
     }
     Ok(())
 }
+fn selector_subtype_matches(sub: SelectorSubtype, object: &ObjectCharacteristics) -> bool {
+    match sub {
+        SelectorSubtype::Creature(kind) => object.current_creature_subtypes.contains(&kind),
+        SelectorSubtype::Land(kind) => object.current_land_subtypes.contains(&kind),
+        SelectorSubtype::Artifact(kind) => object.current_artifact_subtypes.contains(&kind),
+        SelectorSubtype::Enchantment(kind) => object.current_enchantment_subtypes.contains(&kind),
+        SelectorSubtype::Planeswalker(kind) => object.current_planeswalker_subtypes.contains(&kind),
+        SelectorSubtype::Aura => matches!(
+            object.attachment_kind,
+            Some(crate::attachment::AttachmentKind::Aura(_))
+        ),
+    }
+}
+
 // Private selector helper passes borrowed evaluation context slices directly to avoid allocating a wrapper struct on hot layer sweeps.
 #[allow(clippy::too_many_arguments)]
 fn select_affected(
@@ -1293,17 +1308,7 @@ fn select_affected(
                     if let Some(st) = state {
                         st.permanent_counter_count(*id, kind).is_positive()
                     } else {
-                        match kind {
-                            crate::effects::CounterKind::PlusOne => object.has_plus_one_counter,
-                            crate::effects::CounterKind::MinusOne => object.has_minus_one_counter,
-                            crate::effects::CounterKind::Charge => {
-                                object.charge_counters.is_positive()
-                            }
-                            crate::effects::CounterKind::Blessing => {
-                                object.blessing_counters.is_positive()
-                            }
-                            _ => object.has_any_counter,
-                        }
+                        object.present_counter_kinds.contains(&kind)
                     }
                 })
                 && selector
@@ -1407,6 +1412,84 @@ fn select_affected(
                     || !selector
                         .any_land_subtypes
                         .is_disjoint(&object.current_land_subtypes))
+                && selector
+                    .required_subtypes
+                    .iter()
+                    .all(|sub| selector_subtype_matches(*sub, object))
+                && (selector.any_subtypes.is_empty()
+                    || selector
+                        .any_subtypes
+                        .iter()
+                        .any(|sub| selector_subtype_matches(*sub, object)))
+                && selector
+                    .forbidden_subtypes
+                    .iter()
+                    .all(|sub| !selector_subtype_matches(*sub, object))
+                && selector
+                    .commander
+                    .is_none_or(|want| object.commander_owner.is_some() == want)
+                && (!selector.requires_modified
+                    || object.has_any_counter
+                    || battlefield
+                        .iter()
+                        .filter_map(|aid| objects.get(aid))
+                        .any(|att| {
+                            att.attached_to == Some(crate::targets::TargetRef::Object(*id))
+                                && ((att.has_type(CardType::Artifact)
+                                    && att
+                                        .current_artifact_subtypes
+                                        .contains(&crate::program::ArtifactSubtype::Equipment))
+                                    || (att.has_type(CardType::Enchantment)
+                                        && matches!(
+                                            att.attachment_kind,
+                                            Some(crate::attachment::AttachmentKind::Aura(_))
+                                        )
+                                        && object.controller.is_some()
+                                        && att.controller == object.controller))
+                        }))
+                && selector
+                    .face_down
+                    .is_none_or(|want| object.is_face_down == want)
+                && (!selector.entered_this_turn || object.entered_this_turn)
+                && (!selector.matches_source_entry_color
+                    || objects
+                        .get(&source)
+                        .and_then(|src| src.entry_color)
+                        .is_some_and(|c| object.current_colors.contains(&c)))
+                && (!selector.without_counters || !object.has_any_counter)
+                && (!selector.attached_to_source_permanent
+                    || object.attached_to == Some(crate::targets::TargetRef::Object(source)))
+                && (!selector.attached_to_source_host
+                    || objects
+                        .get(&source)
+                        .and_then(|src| src.attached_to)
+                        .is_some_and(|host| object.attached_to == Some(host)))
+                && (selector.any_required_keywords.is_empty()
+                    || selector
+                        .any_required_keywords
+                        .iter()
+                        .any(|kw| object.has_keyword(*kw)))
+                && selector.historic.is_none_or(|want| {
+                    let is_historic = object.has_type(CardType::Artifact)
+                        || object
+                            .current_supertypes
+                            .contains(&crate::program::Supertype::Legendary)
+                        || object
+                            .current_enchantment_subtypes
+                            .contains(&crate::program::EnchantmentSubtype::Saga);
+                    is_historic == want
+                })
+                && selector
+                    .attacked_this_turn
+                    .is_none_or(|want| object.attacked_this_turn == want)
+                && (!selector.dealt_damage_this_turn || object.dealt_damage_this_turn)
+                && (!selector.kicked || object.kicked)
+                && (!selector.renowned || object.renowned)
+                && (!selector.saddled || object.saddled)
+                && (!selector.monstrous || object.monstrous)
+                && (!selector.suspected || object.suspected)
+                && (!selector.solved || object.solved)
+                && (!selector.exerted || object.exerted)
                 && selector.color.matches(&object.current_colors)
                 && match &selector.name {
                     NameFilter::Any => true,
@@ -1444,7 +1527,13 @@ fn select_affected(
                     ControllerSelector::SelfAtMaxSpeed => {
                         *id == source && object.controller_speed == 4
                     }
+                    ControllerSelector::OwnerIsSourceController => object.owner == controller,
+                    ControllerSelector::OwnerIsOpponent => object.owner != controller,
                 }
+                && selector.owner.is_none_or(|owner| match owner {
+                    OwnerSelector::SourceController => object.owner == controller,
+                    OwnerSelector::Opponents => object.owner != controller,
+                })
         })
         .collect()
 }

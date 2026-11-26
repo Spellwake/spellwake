@@ -600,6 +600,7 @@ impl EffectWindow {
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
             | Instruction::PutOwnHandCardOnLibraryBottom
@@ -801,6 +802,7 @@ impl EffectWindow {
             | Instruction::GoadTarget
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
+            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
@@ -976,6 +978,7 @@ impl EffectWindow {
             | Instruction::ReturnControlledPermanents { .. }
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
+            | Instruction::SacrificeUpTo { .. }
             | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
@@ -1009,6 +1012,7 @@ impl EffectWindow {
             | Instruction::RegenerateSubject { .. }
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. }

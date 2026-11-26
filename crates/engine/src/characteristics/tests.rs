@@ -1532,3 +1532,545 @@ fn station_striation_turns_on_and_off_at_its_current_charge_total() {
         );
     }
 }
+
+// wave14_selector_tests_sentinel
+fn w14_creature(
+    vocab: &CreatureTypeVocabulary,
+    power: i64,
+    toughness: i64,
+    labels: &[&str],
+) -> Program {
+    Program::new(
+        BTreeSet::from([CardType::Creature]),
+        labels
+            .iter()
+            .map(|label| vocab.resolve_label(label).unwrap())
+            .collect(),
+        BTreeSet::new(),
+        ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
+            printed_pt: Some(pair(power, toughness).into()),
+            casting_cost: Some(ManaCost::free()),
+        }),
+    )
+}
+#[test]
+fn wave14_selector_conjunctive_disjunctive_and_forbidden_subtypes_are_exact() {
+    let vocab = vocabulary();
+    let eldrazi = vocab.resolve_label("Eldrazi").unwrap();
+    let spawn = vocab.resolve_label("Spawn").unwrap();
+    let mount = vocab.resolve_label("Mount").unwrap();
+    let human = vocab.resolve_label("Human").unwrap();
+    let elf = vocab.resolve_label("Elf").unwrap();
+    let goblin = vocab.resolve_label("Goblin").unwrap();
+
+    // Conjunctive: Eldrazi AND Spawn get +2/+1.
+    let mut lord_conj = w14_creature(&vocab, 2, 2, &[]);
+    lord_conj.continuous = Some(StaticContinuousAbility::Battlefield {
+        id: StaticAbilityId(1),
+        selector: PermanentSelector {
+            controller: ControllerSelector::SourceController,
+            required_subtypes: BTreeSet::from([
+                SelectorSubtype::Creature(eldrazi),
+                SelectorSubtype::Creature(spawn),
+            ]),
+            ..PermanentSelector::default()
+        },
+        parts: StaticParts(vec![StaticPart::ModifyPT(NumericPair {
+            power: NumericExpression::Literal(2.into()),
+            toughness: NumericExpression::Literal(1.into()),
+        })]),
+    });
+
+    // Disjunctive cross-category: Mount OR Vehicle get hexproof.
+    let mut lord_disj = w14_creature(&vocab, 2, 2, &[]);
+    lord_disj.continuous = Some(StaticContinuousAbility::Battlefield {
+        id: StaticAbilityId(2),
+        selector: PermanentSelector {
+            controller: ControllerSelector::SourceController,
+            any_subtypes: BTreeSet::from([
+                SelectorSubtype::Creature(mount),
+                SelectorSubtype::Artifact(crate::program::ArtifactSubtype::Vehicle),
+            ]),
+            ..PermanentSelector::default()
+        },
+        parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::grant_keywords(
+            [KeywordAbility::Hexproof],
+        ))]),
+    });
+
+    // Multi-forbidden: creatures that are neither Human nor Elf get +1/+0.
+    let mut lord_forb = w14_creature(&vocab, 2, 2, &[]);
+    lord_forb.continuous = Some(StaticContinuousAbility::Battlefield {
+        id: StaticAbilityId(3),
+        selector: PermanentSelector {
+            controller: ControllerSelector::SourceController,
+            required_types: BTreeSet::from([CardType::Creature]),
+            forbidden_subtypes: BTreeSet::from([
+                SelectorSubtype::Creature(human),
+                SelectorSubtype::Creature(elf),
+            ]),
+            exclude_source: true,
+            ..PermanentSelector::default()
+        },
+        parts: StaticParts(vec![StaticPart::ModifyPT(NumericPair {
+            power: NumericExpression::Literal(1.into()),
+            toughness: NumericExpression::Literal(0.into()),
+        })]),
+    });
+
+    let mut vehicle = Program::artifact(None, vec![]);
+    vehicle
+        .artifact_subtypes
+        .insert(crate::program::ArtifactSubtype::Vehicle);
+
+    let fixture = Fixture::new(
+        vocab.clone(),
+        vec![
+            (
+                "lord_conj",
+                ObjectDestination::Battlefield { controller: P0 },
+                lord_conj,
+            ),
+            (
+                "lord_disj",
+                ObjectDestination::Battlefield { controller: P0 },
+                lord_disj,
+            ),
+            (
+                "lord_forb",
+                ObjectDestination::Battlefield { controller: P0 },
+                lord_forb,
+            ),
+            (
+                "eldrazi_spawn",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 0, 1, &["Eldrazi", "Spawn"]),
+            ),
+            (
+                "eldrazi_only",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 1, 1, &["Eldrazi"]),
+            ),
+            (
+                "spawn_only",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 1, 1, &["Spawn"]),
+            ),
+            (
+                "mount_cr",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 2, 2, &["Mount"]),
+            ),
+            (
+                "vehicle_art",
+                ObjectDestination::Battlefield { controller: P0 },
+                vehicle,
+            ),
+            (
+                "human_cr",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 1, 1, &["Human"]),
+            ),
+            (
+                "elf_cr",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 1, 1, &["Elf"]),
+            ),
+            (
+                "goblin_cr",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 1, 1, &["Goblin"]),
+            ),
+        ],
+        &[
+            "lord_conj",
+            "lord_disj",
+            "lord_forb",
+            "eldrazi_spawn",
+            "eldrazi_only",
+            "spawn_only",
+            "mount_cr",
+            "vehicle_art",
+            "human_cr",
+            "elf_cr",
+            "goblin_cr",
+        ],
+    );
+
+    let evaluated = evaluate(fixture.world()).unwrap();
+    // Eldrazi Spawn gets +2/+1 from lord_conj AND +1/+0 from lord_forb = 3/2.
+    assert_eq!(
+        evaluated
+            .get(fixture.object("eldrazi_spawn"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(3, 2)
+    );
+    // Plain Eldrazi and plain Spawn do NOT get +2/+1 (only +1/+0 from lord_forb = 2/1).
+    assert_eq!(
+        evaluated
+            .get(fixture.object("eldrazi_only"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(2, 1)
+    );
+    assert_eq!(
+        evaluated
+            .get(fixture.object("spawn_only"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(2, 1)
+    );
+    // Mount creature and Vehicle artifact both get hexproof; Goblin does not.
+    assert!(
+        evaluated
+            .get(fixture.object("mount_cr"))
+            .unwrap()
+            .has_keyword(KeywordAbility::Hexproof)
+    );
+    assert!(
+        evaluated
+            .get(fixture.object("vehicle_art"))
+            .unwrap()
+            .has_keyword(KeywordAbility::Hexproof)
+    );
+    assert!(
+        !evaluated
+            .get(fixture.object("goblin_cr"))
+            .unwrap()
+            .has_keyword(KeywordAbility::Hexproof)
+    );
+    // Human and Elf are excluded by forbidden_subtypes (stay 1/1); Goblin gets +1/+0 (2/1).
+    assert_eq!(
+        evaluated
+            .get(fixture.object("human_cr"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(1, 1)
+    );
+    assert_eq!(
+        evaluated
+            .get(fixture.object("elf_cr"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(1, 1)
+    );
+    assert_eq!(
+        evaluated
+            .get(fixture.object("goblin_cr"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(2, 1)
+    );
+    assert_eq!(goblin, vocab.resolve_label("Goblin").unwrap());
+}
+
+#[test]
+fn wave14_selector_validation_rejects_contradictions_and_foreign_subtypes() {
+    let vocab = vocabulary();
+    let elf = vocab.resolve_label("Elf").unwrap();
+
+    let contradictory_subtypes = PermanentSelector {
+        required_subtypes: BTreeSet::from([SelectorSubtype::Creature(elf)]),
+        forbidden_subtypes: BTreeSet::from([SelectorSubtype::Creature(elf)]),
+        ..PermanentSelector::default()
+    };
+    assert_eq!(
+        contradictory_subtypes.validate(&vocab),
+        Err(CharacteristicDefinitionError::ContradictorySelector)
+    );
+
+    let contradictory_counters = PermanentSelector {
+        without_counters: true,
+        required_counter_kind: Some(crate::effects::CounterKind::Oil),
+        ..PermanentSelector::default()
+    };
+    assert_eq!(
+        contradictory_counters.validate(&vocab),
+        Err(CharacteristicDefinitionError::ContradictorySelector)
+    );
+}
+
+#[test]
+fn wave14_selector_background_owner_and_modified_cr700_9_are_exact() {
+    const P1: SeatId = SeatId(1);
+    let vocab = vocabulary();
+
+    // Background: Commander creatures you own get +3/+3.
+    let mut background = Program::enchantment(None);
+    background.continuous = Some(StaticContinuousAbility::Battlefield {
+        id: StaticAbilityId(1),
+        selector: PermanentSelector {
+            required_types: BTreeSet::from([CardType::Creature]),
+            controller: ControllerSelector::OwnerIsSourceController,
+            commander: Some(true),
+            ..PermanentSelector::default()
+        },
+        parts: StaticParts(vec![StaticPart::ModifyPT(NumericPair {
+            power: NumericExpression::Literal(3.into()),
+            toughness: NumericExpression::Literal(3.into()),
+        })]),
+    });
+
+    // Modified lord: Modified creatures you control have trample.
+    let mut mod_lord = w14_creature(&vocab, 2, 2, &[]);
+    mod_lord.continuous = Some(StaticContinuousAbility::Battlefield {
+        id: StaticAbilityId(2),
+        selector: PermanentSelector {
+            required_types: BTreeSet::from([CardType::Creature]),
+            controller: ControllerSelector::SourceController,
+            requires_modified: true,
+            ..PermanentSelector::default()
+        },
+        parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::grant_keywords(
+            [KeywordAbility::Trample],
+        ))]),
+    });
+
+    let mut aura = Program::enchantment(None);
+    if let ProgramKind::Permanent(def) = &mut aura.kind {
+        def.attachment = Some(crate::attachment::AttachmentKind::Aura(
+            crate::attachment::EnchantRestriction::Creature,
+        ));
+    }
+
+    let mut fixture = Fixture::new(
+        vocab.clone(),
+        vec![
+            (
+                "bg",
+                ObjectDestination::Battlefield { controller: P0 },
+                background,
+            ),
+            (
+                "mod_lord",
+                ObjectDestination::Battlefield { controller: P0 },
+                mod_lord,
+            ),
+            // P0's commander controlled by P1 (stolen): P0 still owns it, so Background buffs it!
+            (
+                "stolen_cmdr",
+                ObjectDestination::Battlefield { controller: P1 },
+                w14_creature(&vocab, 2, 2, &[]),
+            ),
+            (
+                "plain_owned",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 2, 2, &[]),
+            ),
+            (
+                "with_counter",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 2, 2, &[]),
+            ),
+            (
+                "opp_aura_target",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 2, 2, &[]),
+            ),
+            (
+                "opp_aura",
+                ObjectDestination::Battlefield { controller: P1 },
+                aura,
+            ),
+        ],
+        &[
+            "bg",
+            "mod_lord",
+            "stolen_cmdr",
+            "plain_owned",
+            "with_counter",
+            "opp_aura_target",
+            "opp_aura",
+        ],
+    );
+    // Mark stolen_cmdr as P0's commander card.
+    let cmdr_card_id = fixture
+        .cards
+        .get(fixture.object("stolen_cmdr"))
+        .unwrap()
+        .card_id()
+        .unwrap();
+    fixture.state.commander_cards.insert(cmdr_card_id);
+    // Put a +1/+1 counter on with_counter.
+    fixture.state.counters.insert(
+        fixture.object("with_counter"),
+        PowerToughnessCounters {
+            plus_one: 1.into(),
+            minus_one: 0.into(),
+        },
+    );
+    // Attach opponent's Aura to opp_aura_target (must NOT count as modified under CR 700.9!).
+    fixture.state.attachments.insert(
+        fixture.object("opp_aura"),
+        crate::targets::TargetRef::Object(fixture.object("opp_aura_target")),
+    );
+
+    let evaluated = evaluate(fixture.world()).unwrap();
+    assert_eq!(
+        evaluated
+            .get(fixture.object("stolen_cmdr"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(5, 5),
+        "Background buffs owned commander even when controlled by opponent"
+    );
+    assert_eq!(
+        evaluated
+            .get(fixture.object("plain_owned"))
+            .unwrap()
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived,
+        pair(2, 2),
+        "Background does not buff non-commander"
+    );
+    assert!(
+        evaluated
+            .get(fixture.object("with_counter"))
+            .unwrap()
+            .has_keyword(KeywordAbility::Trample),
+        "Creature with counter is modified"
+    );
+    assert!(
+        !evaluated
+            .get(fixture.object("opp_aura_target"))
+            .unwrap()
+            .has_keyword(KeywordAbility::Trample),
+        "Opponent-controlled Aura does not make a creature modified under CR 700.9"
+    );
+}
+
+#[test]
+fn wave14_counter_zero_removal_and_named_counter_distinctions_are_exact() {
+    let vocab = vocabulary();
+    let mut fixture = Fixture::new(
+        vocab.clone(),
+        vec![
+            (
+                "bear",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 2, 2, &["Bear"]),
+            ),
+            (
+                "elf",
+                ObjectDestination::Battlefield { controller: P0 },
+                w14_creature(&vocab, 1, 1, &["Elf"]),
+            ),
+        ],
+        &["bear", "elf"],
+    );
+    let bear_id = fixture.object("bear");
+    let elf_id = fixture.object("elf");
+
+    // Put an Oil counter on bear and a +1/+1 counter on elf.
+    fixture
+        .state
+        .named_counters
+        .entry(crate::effects::CounterKind::Oil)
+        .or_default()
+        .insert(bear_id, 1.into());
+    fixture.state.counters.insert(
+        elf_id,
+        PowerToughnessCounters {
+            plus_one: 1.into(),
+            minus_one: 0.into(),
+        },
+    );
+
+    let evaluated = evaluate(fixture.world()).unwrap();
+    let bear_view = evaluated.get(bear_id).unwrap();
+    let elf_view = evaluated.get(elf_id).unwrap();
+    let empty = BTreeSet::new();
+
+    assert!(bear_view.has_any_counter);
+    assert!(
+        bear_view
+            .present_counter_kinds
+            .contains(&crate::effects::CounterKind::Oil)
+    );
+    assert!(
+        !bear_view
+            .present_counter_kinds
+            .contains(&crate::effects::CounterKind::PlusOne)
+    );
+
+    assert!(elf_view.has_any_counter);
+    assert!(
+        elf_view
+            .present_counter_kinds
+            .contains(&crate::effects::CounterKind::PlusOne)
+    );
+    assert!(
+        !elf_view
+            .present_counter_kinds
+            .contains(&crate::effects::CounterKind::Oil)
+    );
+
+    let req_oil =
+        crate::program::ObjectClause::any().with_counter_kind(crate::effects::CounterKind::Oil);
+    let forb_oil =
+        crate::program::ObjectClause::any().without_counter_kind(crate::effects::CounterKind::Oil);
+    let no_counters = crate::program::ObjectClause::any()
+        .with_flags(crate::program::ObjectFilterFlags::WITHOUT_COUNTERS);
+
+    assert!(req_oil.matches_static_characteristics(bear_view, &empty, || None));
+    assert!(!req_oil.matches_static_characteristics(elf_view, &empty, || None));
+    assert!(!forb_oil.matches_static_characteristics(bear_view, &empty, || None));
+    assert!(forb_oil.matches_static_characteristics(elf_view, &empty, || None));
+    assert!(!no_counters.matches_static_characteristics(bear_view, &empty, || None));
+
+    // Decrement Oil counter on bear to 0 (retained zero entry in map must NOT count as present!).
+    fixture
+        .state
+        .named_counters
+        .entry(crate::effects::CounterKind::Oil)
+        .or_default()
+        .insert(bear_id, 0.into());
+
+    let after_zero = evaluate(fixture.world()).unwrap();
+    let bear_after_zero = after_zero.get(bear_id).unwrap();
+    assert!(!bear_after_zero.has_any_counter);
+    assert!(bear_after_zero.present_counter_kinds.is_empty());
+    assert!(!req_oil.matches_static_characteristics(bear_after_zero, &empty, || None));
+    assert!(forb_oil.matches_static_characteristics(bear_after_zero, &empty, || None));
+    assert!(no_counters.matches_static_characteristics(bear_after_zero, &empty, || None));
+
+    // Remove the zero entry altogether and verify identical clean state.
+    fixture
+        .state
+        .named_counters
+        .entry(crate::effects::CounterKind::Oil)
+        .or_default()
+        .remove(&bear_id);
+    let after_remove = evaluate(fixture.world()).unwrap();
+    let bear_after_remove = after_remove.get(bear_id).unwrap();
+    assert!(!bear_after_remove.has_any_counter);
+    assert!(bear_after_remove.present_counter_kinds.is_empty());
+    assert!(forb_oil.matches_static_characteristics(bear_after_remove, &empty, || None));
+    assert!(no_counters.matches_static_characteristics(bear_after_remove, &empty, || None));
+}

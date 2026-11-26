@@ -95,8 +95,12 @@ impl EffectWindow {
         converted
     }
 
-    /// Whether active battlefield or temporary rules cause `active` to skip `step`.
-    pub(crate) fn should_skip_step(&self, active: SeatId, step: Step) -> Result<bool, EffectError> {
+    /// Whether active battlefield or temporary rules (not one-shot step skips) cause `active` to skip `step`.
+    pub(crate) fn has_static_skip_step(
+        &self,
+        active: SeatId,
+        step: Step,
+    ) -> Result<bool, EffectError> {
         let check_ability = |ability: &crate::characteristics::StaticContinuousAbility,
                              rule_ctrl: SeatId|
          -> Result<bool, EffectError> {
@@ -150,6 +154,40 @@ impl EffectWindow {
                     return Ok(true);
                 }
             }
+        }
+        Ok(false)
+    }
+
+    /// Whether active static rules or a pending one-shot skip effect causes `active` to skip `step`.
+    pub(crate) fn should_skip_step(&self, active: SeatId, step: Step) -> Result<bool, EffectError> {
+        if self.has_static_skip_step(active, step)? {
+            return Ok(true);
+        }
+        Ok(self
+            .skip_steps_remaining
+            .get(&(active, step))
+            .copied()
+            .unwrap_or(0)
+            > 0)
+    }
+
+    /// Consume one pending one-shot skip for `(active, step)` if no static rule is already skipping it (CR 614.10).
+    pub(crate) fn consume_skipped_step(
+        &mut self,
+        active: SeatId,
+        step: Step,
+    ) -> Result<bool, EffectError> {
+        if self.has_static_skip_step(active, step)? {
+            return Ok(false);
+        }
+        if let Some(remaining) = self.skip_steps_remaining.get_mut(&(active, step))
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.skip_steps_remaining.remove(&(active, step));
+            }
+            return Ok(true);
         }
         Ok(false)
     }
@@ -602,6 +640,7 @@ impl EffectWindow {
         let mut append = RulesJournal::default();
         let active = next.window.active_player();
         if next.should_skip_step(active, Step::Untap)? {
+            next.consume_skipped_step(active, Step::Untap)?;
             return Ok(RulesTransition::new(next, None, append));
         }
         if !next.untap_preface_done {

@@ -84,6 +84,15 @@ fn selector(change: CreatureTypeTextChange, value: &mut PermanentSelector) {
         word(change, subtype);
     }
     words(change, &mut value.any_creature_subtypes);
+    for set in [
+        &mut value.required_subtypes,
+        &mut value.any_subtypes,
+        &mut value.forbidden_subtypes,
+    ] {
+        if set.remove(&SelectorSubtype::Creature(change.from)) {
+            set.insert(SelectorSubtype::Creature(change.to));
+        }
+    }
     if let Some(cond) = &mut value.source_condition {
         static_source_condition(change, cond);
     }
@@ -372,6 +381,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::Sacrifice { amount, .. }
+            | Instruction::SacrificeUpTo { amount, .. }
             | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
             | Instruction::DrainOpponents(amount)
@@ -394,6 +404,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 filter.rewrite_creature_type(change.from, change.to);
             }
             Instruction::Sacrifice { filter, .. }
+            | Instruction::SacrificeUpTo { filter, .. }
             | Instruction::ReturnControlledPermanents { filter, .. }
             | Instruction::ExileChosenPermanents { filter, .. }
             | Instruction::SacrificeToContinue { filter } => {
@@ -984,6 +995,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::damage::TurnPreventionFilter::All
                 | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
             )
+            | Instruction::PreventDamageSpec(_)
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::ExileAbilitySource
@@ -1161,6 +1173,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::AddManaForPlayer { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. }
@@ -1286,6 +1299,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::GoadTarget
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
+            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ReturnToOwnersHand

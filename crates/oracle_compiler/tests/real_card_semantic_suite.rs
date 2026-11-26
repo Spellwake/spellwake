@@ -1572,3 +1572,687 @@ fn condition_scope_keeps_explicit_conjunctions_and_unconditional_siblings() {
         items[1]
     );
 }
+
+// --- Wave 14 semantic fidelity regression suite ---
+
+fn load_w14_cards() -> Vec<FixtureCard> {
+    let raw = include_str!("fixtures/semantic_fidelity_w14_cards.json");
+    serde_json::from_str(raw).expect("valid w14 semantic fixture")
+}
+
+fn compile_and_audit_w14_card(
+    name: &str,
+    vocab: &Vocabulary,
+) -> (CardAst, spellwake_oracle_compiler::audit::CardAuditReport) {
+    let cards = load_w14_cards();
+    let card = cards
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("missing fixture card: {name}"));
+    let faces: Vec<FaceInput<'_>> = card
+        .faces
+        .iter()
+        .map(|f| FaceInput {
+            name: &f.name,
+            type_line: &f.type_line,
+            oracle_text: &f.oracle_text,
+        })
+        .collect();
+    let input = CardInput {
+        oracle_id: &card.oracle_id,
+        name: &card.name,
+        layout: &card.layout,
+        faces,
+    };
+    let ast = compile_card_with_options(&input, vocab, CompileOptions::default());
+    assert!(
+        ast.strictly_compiled,
+        "{name} failed strict compile: {:?}",
+        ast.faces[0].failures
+    );
+    let report = audit_card(&input, &ast, CompileOptions::default());
+    assert!(
+        report.critical_defects.is_empty(),
+        "{name} has critical defects: {:?}",
+        report.critical_defects
+    );
+    (ast, report)
+}
+
+#[test]
+fn anaphora_singular_definite_noun_does_not_broaden_to_group() {
+    use spellwake_oracle_compiler::filter::parse_subject_or_target;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: Delirium preserves singular "the creature" as Anaphora rather than Group(all creatures).
+    let (delirium, _) = compile_and_audit_w14_card("Delirium", &vocab);
+    assert!(
+        delirium.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::PreventAllDamageFrom {
+                combat_only: true,
+                source,
+                duration: DurationAst::UntilEndOfTurn,
+                ..
+            } if matches!(source.as_ref(), SubjectRefAst::Anaphora(s) if s == "the creature")
+        )),
+        "Delirium should reference Anaphora('the creature'): {:?}",
+        delirium.faces[0].spell_effects
+    );
+
+    // Positive: Flash Conscription and Paralyze keep singular "the creature" anaphoric.
+    let (flash, _) = compile_and_audit_w14_card("Flash Conscription", &vocab);
+    assert!(
+        flash.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::IfCondition { then_body, .. }
+                if then_body.iter().any(|inner| matches!(
+                    inner,
+                    InstructionAst::GrantAbilityText { subject, .. }
+                        if matches!(subject.as_ref(), SubjectRefAst::Anaphora(s) if s == "the creature")
+                ))
+        )),
+        "Flash Conscription should grant ability to Anaphora('the creature'): {:?}",
+        flash.faces[0].spell_effects
+    );
+
+    let (paralyze, _) = compile_and_audit_w14_card("Paralyze", &vocab);
+    let paralyze_json = serde_json::to_string(&paralyze).expect("serialize paralyze");
+    assert!(
+        paralyze_json.contains(r#""Anaphora":"the creature""#),
+        "Paralyze should untap Anaphora('the creature'): {paralyze_json}"
+    );
+    assert!(
+        !paralyze_json.contains(r#""Group""#),
+        "Paralyze must not broaden 'the creature' to Group: {paralyze_json}"
+    );
+
+    let (fury, _) = compile_and_audit_w14_card("Boros Fury-Shield", &vocab);
+    let fury_json = serde_json::to_string(&fury).expect("serialize boros fury-shield");
+    assert!(
+        fury_json.contains(r#""Anaphora":"the creature""#),
+        "Boros Fury-Shield should read power of Anaphora('the creature'): {fury_json}"
+    );
+
+    // Negative: plural filters must NOT become singular anaphora.
+    assert!(matches!(
+        parse_subject_or_target("creatures", &vocab).expect("parse creatures"),
+        SubjectRefAst::Group(_)
+    ));
+    assert!(matches!(
+        parse_subject_or_target("all creatures", &vocab).expect("parse all creatures"),
+        SubjectRefAst::All(_)
+    ));
+    assert!(matches!(
+        parse_subject_or_target("the creature", &vocab).expect("parse the creature"),
+        SubjectRefAst::Anaphora(ref s) if s == "the creature"
+    ));
+    assert!(matches!(
+        parse_subject_or_target("the artifact", &vocab).expect("parse the artifact"),
+        SubjectRefAst::Anaphora(ref s) if s == "the artifact"
+    ));
+}
+
+#[test]
+fn conjoined_controls_conditions_stay_independent_and_preserve_single_object_negatives() {
+    use spellwake_oracle_compiler::ast::{CardTypeMask, ColorMask, CompareOp};
+    use spellwake_oracle_compiler::filter::parse_condition;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: Plains and Island split into independent ControlsCount gates.
+    let plains_and_island =
+        parse_condition("you control a Plains and an Island", &vocab).expect("parse plains+island");
+    let ConditionAst::And(lhs, rhs) = plains_and_island else {
+        panic!("expected ConditionAst::And, got {plains_and_island:?}");
+    };
+    assert!(matches!(
+        lhs.as_ref(),
+        ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter,
+            op: CompareOp::Ge,
+            value: 1,
+        } if filter.subtypes == vec!["Plains".to_string()]
+    ));
+    assert!(matches!(
+        rhs.as_ref(),
+        ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter,
+            op: CompareOp::Ge,
+            value: 1,
+        } if filter.subtypes == vec!["Island".to_string()]
+    ));
+
+    // Positive: third-person player controls + 3-item Oxford-comma conjunction.
+    let that_player = parse_condition("that player controls a Plains and an Island", &vocab)
+        .expect("parse that player controls");
+    assert!(matches!(
+        that_player,
+        ConditionAst::And(ref a, ref b)
+            if matches!(a.as_ref(), ConditionAst::ControlsCount { player: PlayerRefAst::ThatPlayer, .. })
+                && matches!(b.as_ref(), ConditionAst::ControlsCount { player: PlayerRefAst::ThatPlayer, .. })
+    ));
+
+    let three_lands = parse_condition("you control a Plains, an Island, and a Swamp", &vocab)
+        .expect("parse 3-land conjunction");
+    assert!(matches!(
+        three_lands,
+        ConditionAst::And(ref ab, ref c)
+            if matches!(ab.as_ref(), ConditionAst::And(_, _))
+                && matches!(c.as_ref(), ConditionAst::ControlsCount { filter, .. } if filter.subtypes == vec!["Swamp".to_string()])
+    ));
+
+    // Positive real cards: Soul Transfer, Raka Sanctuary, Of One Mind, Urza's Tower.
+    let (soul_transfer, _) = compile_and_audit_w14_card("Soul Transfer", &vocab);
+    assert!(
+        soul_transfer.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::IfCondition { condition, .. }
+                if matches!(
+                    condition.as_ref(),
+                    ConditionAst::And(a, b)
+                        if matches!(a.as_ref(), ConditionAst::ControlsCount { filter, .. } if filter.any_types == CardTypeMask::ARTIFACT)
+                            && matches!(b.as_ref(), ConditionAst::ControlsCount { filter, .. } if filter.any_types == CardTypeMask::ENCHANTMENT)
+                )
+        )),
+        "Soul Transfer must require independent artifact and enchantment: {:?}",
+        soul_transfer.faces[0].spell_effects
+    );
+
+    let (raka, _) = compile_and_audit_w14_card("Raka Sanctuary", &vocab);
+    let raka_json = serde_json::to_string(&raka).expect("serialize raka");
+    assert!(
+        raka_json.contains(r#""And":[{"ControlsCount""#),
+        "Raka Sanctuary must split white permanent and blue permanent: {raka_json}"
+    );
+
+    let (of_one_mind, _) = compile_and_audit_w14_card("Of One Mind", &vocab);
+    assert!(
+        of_one_mind.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CostModifier {
+                condition: Some(condition),
+                ..
+            } if matches!(
+                condition.as_ref(),
+                ConditionAst::And(a, b)
+                    if matches!(a.as_ref(), ConditionAst::ControlsCount { filter, .. } if filter.subtypes == vec!["Human".to_string()] && filter.forbidden_subtypes.is_empty())
+                        && matches!(b.as_ref(), ConditionAst::ControlsCount { filter, .. } if filter.subtypes.is_empty() && filter.forbidden_subtypes == vec!["Human".to_string()])
+            )
+        )),
+        "Of One Mind must split Human and non-Human creatures cleanly: {:?}",
+        of_one_mind.faces[0].statics
+    );
+
+    let (urza_tower, _) = compile_and_audit_w14_card("Urza's Tower", &vocab);
+    let urza_json = serde_json::to_string(&urza_tower).expect("serialize urza tower");
+    assert!(
+        urza_json.contains(r#""subtypes":["Urza's","Mine"]"#)
+            && urza_json.contains(r#""subtypes":["Urza's","Power-Plant"]"#),
+        "Urza's Tower must split Urza's Mine and Urza's Power-Plant: {urza_json}"
+    );
+
+    // Negative: single-object multicolored/disjunctive/with-clause phrases MUST stay single ControlsCount.
+    let single_multicolor = parse_condition("you control a white and blue permanent", &vocab)
+        .expect("single multicolor");
+    assert!(
+        matches!(
+            single_multicolor,
+            ConditionAst::ControlsCount { ref filter, .. }
+                if filter.any_colors == ColorMask::WHITE.union(ColorMask::BLUE)
+        ),
+        "single multicolored permanent must not split: {single_multicolor:?}"
+    );
+
+    let single_disjunction = parse_condition("you control a white or blue permanent", &vocab)
+        .expect("single disjunction");
+    assert!(
+        matches!(single_disjunction, ConditionAst::ControlsCount { .. }),
+        "disjunction must stay a single ControlsCount: {single_disjunction:?}"
+    );
+
+    let single_with_counters = parse_condition(
+        "you control a creature with a +1/+1 counter and a flying counter",
+        &vocab,
+    );
+    assert!(
+        !matches!(single_with_counters, Ok(ConditionAst::And(_, _))),
+        "with-clause counters on one creature must not split into two ControlsCount checks: {single_with_counters:?}"
+    );
+}
+
+#[test]
+fn activation_limits_and_step_timings_preserve_exact_distinctions() {
+    use spellwake_oracle_compiler::clauses::parse_atomic_effect;
+    let vocab = load_pinned_vocabulary();
+
+    let (pit_imp, pit_audit) = compile_and_audit_w14_card("Pit Imp", &vocab);
+    let (cinder, cinder_audit) = compile_and_audit_w14_card("Manaforge Cinder", &vocab);
+    let (werewolf, werewolf_audit) = compile_and_audit_w14_card("Lesser Werewolf", &vocab);
+
+    let extract_restriction = |ast: &CardAst| -> String {
+        ast.faces[0]
+            .abilities
+            .iter()
+            .find_map(|ab| {
+                let AbilityAst::Activated { body, .. } = ab else {
+                    return None;
+                };
+                body.iter().find_map(|ins| match ins {
+                    InstructionAst::AbilityRestriction { restriction, .. } => {
+                        Some(restriction.clone())
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| panic!("missing AbilityRestriction in {}", ast.name))
+    };
+
+    let pit_tag = extract_restriction(&pit_imp);
+    let cinder_tag = extract_restriction(&cinder);
+    let werewolf_tag = extract_restriction(&werewolf);
+
+    assert_eq!(pit_tag, "AtMost2TimesEachTurn");
+    assert_eq!(cinder_tag, "AtMost3TimesEachTurn");
+    assert_ne!(pit_tag, cinder_tag);
+    assert_eq!(werewolf_tag, "DuringDeclareBlockersStep");
+    assert_ne!(werewolf_tag, "DuringCombat");
+
+    // General N and DeclareAttackers vs generic DuringCombat distinctions.
+    let four_times =
+        parse_atomic_effect("Activate no more than four times each turn", &vocab).expect("4x");
+    assert!(matches!(
+        four_times.as_slice(),
+        [InstructionAst::AbilityRestriction { restriction, condition: None }]
+            if restriction == "AtMost4TimesEachTurn"
+    ));
+
+    let attackers_step =
+        parse_atomic_effect("Activate only during the declare attackers step", &vocab)
+            .expect("declare attackers");
+    assert!(matches!(
+        attackers_step.as_slice(),
+        [InstructionAst::AbilityRestriction { restriction, condition: None }]
+            if restriction == "DuringDeclareAttackersStep"
+    ));
+
+    let generic_combat =
+        parse_atomic_effect("Activate only during combat", &vocab).expect("during combat");
+    assert!(matches!(
+        generic_combat.as_slice(),
+        [InstructionAst::AbilityRestriction { restriction, condition: None }]
+            if restriction == "DuringCombat"
+    ));
+
+    // Negative: none of these structured tags may introduce opaque-prose audit findings.
+    for (name, audit) in [
+        ("Pit Imp", &pit_audit),
+        ("Manaforge Cinder", &cinder_audit),
+        ("Lesser Werewolf", &werewolf_audit),
+    ] {
+        assert!(
+            audit.opaque_strings.is_empty(),
+            "{name} should have zero opaque strings: {:?}",
+            audit.opaque_strings
+        );
+    }
+}
+
+#[test]
+fn permanent_animation_preserves_duration_pt_and_keywords() {
+    use spellwake_oracle_compiler::clauses::parse_atomic_effect;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: Awakening of Vitu-Ghazi is permanent, 0/0, haste, named Vitu-Ghazi, still a land.
+    let (awakening, _) = compile_and_audit_w14_card("Awakening of Vitu-Ghazi", &vocab);
+    assert!(
+        awakening.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::AnimateOrSetBasePT {
+                subject,
+                power,
+                toughness,
+                keywords,
+                duration: DurationAst::Permanent,
+                description: Some(desc),
+            } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(s) if s == "it")
+                && power == "0"
+                && toughness == "0"
+                && keywords == &vec!["haste".to_string()]
+                && desc.contains("legendary")
+                && desc.contains("named Vitu-Ghazi")
+        )),
+        "Awakening of Vitu-Ghazi must be Permanent 0/0 haste: {:?}",
+        awakening.faces[0].spell_effects
+    );
+    assert!(
+        awakening.faces[0].spell_effects.iter().any(
+            |ins| matches!(ins, InstructionAst::KeepExistingTypes(s) if s == "it's still a land")
+        ),
+        "Awakening of Vitu-Ghazi must preserve KeepExistingTypes"
+    );
+
+    // Positive: Rageform and Woodcaller Automaton default to Permanent duration.
+    let (rageform, _) = compile_and_audit_w14_card("Rageform", &vocab);
+    assert!(
+        rageform.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Triggered { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::AnimateOrSetBasePT { duration: DurationAst::Permanent, .. }
+                ))
+        )),
+        "Rageform animation must be Permanent: {:?}",
+        rageform.faces[0].abilities
+    );
+
+    let (woodcaller, _) = compile_and_audit_w14_card("Woodcaller Automaton", &vocab);
+    assert!(
+        woodcaller.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Triggered { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::AnimateOrSetBasePT { duration: DurationAst::Permanent, .. }
+                ))
+        )),
+        "Woodcaller Automaton animation must be Permanent: {:?}",
+        woodcaller.faces[0].abilities
+    );
+
+    // Negative: explicit "until end of turn" animation MUST remain UntilEndOfTurn.
+    let temp = parse_atomic_effect(
+        "It becomes a legendary 3/3 Elemental creature with haste named Temp until end of turn",
+        &vocab,
+    )
+    .expect("parse temporary named animation");
+    assert!(
+        matches!(
+            temp.as_slice(),
+            [InstructionAst::AnimateOrSetBasePT {
+                power,
+                toughness,
+                keywords,
+                duration: DurationAst::UntilEndOfTurn,
+                ..
+            }] if power == "3" && toughness == "3" && keywords == &vec!["haste".to_string()]
+        ),
+        "explicit until end of turn must stay UntilEndOfTurn: {temp:?}"
+    );
+}
+
+#[test]
+fn search_library_preserves_multi_zone_and_multi_named_targets() {
+    use spellwake_oracle_compiler::clauses::parse_atomic_effect;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: Agency Outfitter keeps clean library="your", both extra zones, and split names.
+    let (outfitter, _) = compile_and_audit_w14_card("Agency Outfitter", &vocab);
+    let outfitter_search = outfitter.faces[0]
+        .abilities
+        .iter()
+        .find_map(|ab| {
+            let AbilityAst::Triggered { body, .. } = ab else {
+                return None;
+            };
+            body.iter().find_map(|ins| match ins {
+                InstructionAst::Optional(inner) => inner
+                    .iter()
+                    .find(|i| matches!(i, InstructionAst::SearchLibrary { .. })),
+                _ => None,
+            })
+        })
+        .expect("Agency Outfitter SearchLibrary");
+    assert!(
+        matches!(
+            outfitter_search,
+            InstructionAst::SearchLibrary {
+                library,
+                extra_zones,
+                filter,
+                secondary_filter: Some(secondary),
+                secondary_is_or: false,
+                to_zone,
+                ..
+            } if library == "your"
+                && extra_zones == &vec![ZoneFilter::YourGraveyard, ZoneFilter::YourHand]
+                && filter.named == Some(NameFilterAst::Exact("magnifying glass".to_string()))
+                && secondary.named == Some(NameFilterAst::Exact("thinking cap".to_string()))
+                && to_zone == "the battlefield"
+        ),
+        "Agency Outfitter SearchLibrary mismatch: {outfitter_search:?}"
+    );
+
+    // Positive: Alpine Houndmaster splits both named targets instead of concatenating into one bogus name.
+    let (houndmaster, _) = compile_and_audit_w14_card("Alpine Houndmaster", &vocab);
+    let hound_json = serde_json::to_string(&houndmaster).expect("serialize houndmaster");
+    assert!(
+        hound_json.contains(r#""Exact":"alpine watchdog""#)
+            && hound_json.contains(r#""Exact":"igneous cur""#),
+        "Alpine Houndmaster must split both card names: {hound_json}"
+    );
+    assert!(
+        !hound_json.contains("and/or a card named"),
+        "Alpine Houndmaster must not leave raw conjunction inside Exact name: {hound_json}"
+    );
+
+    // Positive: Forging the Tyrite Sword keeps named primary + typed Equipment secondary with secondary_is_or=true.
+    let (forging, _) = compile_and_audit_w14_card("Forging the Tyrite Sword", &vocab);
+    let forging_json = serde_json::to_string(&forging).expect("serialize forging");
+    assert!(
+        forging_json.contains(r#""Exact":"halvar, god of battle""#)
+            && forging_json.contains(r#""subtypes":["Equipment"]"#)
+            && forging_json.contains(r#""secondary_is_or":true"#),
+        "Forging the Tyrite Sword must keep named OR Equipment search: {forging_json}"
+    );
+
+    // Negative: single card name containing "and" stays a single Exact name with no secondary_filter.
+    let single_named = parse_atomic_effect(
+        "Search your library for a card named Sword of Feast and Famine, reveal it, put it into your hand, then shuffle",
+        &vocab,
+    )
+    .expect("parse single named search");
+    assert!(
+        matches!(
+            single_named.as_slice(),
+            [InstructionAst::SearchLibrary {
+                filter,
+                secondary_filter: None,
+                ..
+            }] if filter.named == Some(NameFilterAst::Exact("sword of feast and famine".to_string()))
+        ),
+        "single named card with 'and' must not split: {single_named:?}"
+    );
+}
+// --- Wave 15 subtype disjunction & compound sacrifice suite ---
+
+fn load_w15_cards() -> Vec<FixtureCard> {
+    let raw = include_str!("fixtures/subtype_disjunction_w15_cards.json");
+    serde_json::from_str(raw).expect("valid w15 subtype fixture")
+}
+
+fn compile_and_audit_w15_card(name: &str, vocab: &Vocabulary) -> CardAst {
+    let cards = load_w15_cards();
+    let card = cards
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("missing fixture card: {name}"));
+    let faces: Vec<FaceInput<'_>> = card
+        .faces
+        .iter()
+        .map(|f| FaceInput {
+            name: &f.name,
+            type_line: &f.type_line,
+            oracle_text: &f.oracle_text,
+        })
+        .collect();
+    let input = CardInput {
+        oracle_id: &card.oracle_id,
+        name: &card.name,
+        layout: &card.layout,
+        faces,
+    };
+    let ast = compile_card_with_options(&input, vocab, CompileOptions::default());
+    assert!(
+        ast.strictly_compiled,
+        "{name} failed strict compile: {:?}",
+        ast.faces[0].failures
+    );
+    let report = audit_card(&input, &ast, CompileOptions::default());
+    assert!(
+        report.critical_defects.is_empty(),
+        "{name} has critical defects: {:?}",
+        report.critical_defects
+    );
+    ast
+}
+
+#[test]
+fn disjunctive_subtype_and_lists_emit_subtypes_match_any_while_compound_subtypes_stay_conjunctive()
+{
+    use spellwake_oracle_compiler::filter::parse_object_filter;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: plural/collective "and" subtype lists MUST emit SubtypesMatchAny.
+    for (name, expected_subtypes) in [
+        ("Cloudspire Captain", vec!["Mount", "Vehicle"]),
+        (
+            "Death-Priest of Myrkul",
+            vec!["Skeleton", "Vampire", "Zombie"],
+        ),
+        ("Nightpack Ambusher", vec!["Wolf", "Werewolf"]),
+        ("Gisa, the Hellraiser", vec!["Skeleton", "Zombie"]),
+        ("Bosk Banneret", vec!["Treefolk", "Shaman"]),
+        ("Danitha Capashen, Paragon", vec!["Aura", "Equipment"]),
+    ] {
+        let ast = compile_and_audit_w15_card(name, &vocab);
+        let expected: Vec<String> = expected_subtypes.into_iter().map(str::to_string).collect();
+        let has_match_any = ast.faces[0].statics.iter().any(|st| {
+            let subj = match st {
+                StaticAbilityAst::ContinuousModifyPT { subject, .. }
+                | StaticAbilityAst::GrantKeywords { subject, .. }
+                | StaticAbilityAst::CostModifier { subject, .. } => subject.as_ref(),
+                _ => return false,
+            };
+            let SubjectRefAst::Group(flt) = subj else {
+                return false;
+            };
+            flt.subtypes == expected
+                && flt
+                    .predicates
+                    .contains(&FilterPredicateAst::SubtypesMatchAny)
+        });
+        assert!(
+            has_match_any,
+            "{name} should emit SubtypesMatchAny for {expected:?}: {:?}",
+            ast.faces[0].statics
+        );
+    }
+
+    // Negative: adjacent compound subtypes MUST stay conjunctive (NO SubtypesMatchAny).
+    for (name, expected_subtypes) in [
+        ("Broodwarden", vec!["Eldrazi", "Spawn"]),
+        ("Brood Birthing", vec!["Eldrazi", "Spawn"]),
+        ("Radioactive Spider", vec!["Spider", "Hero"]),
+    ] {
+        let ast = compile_and_audit_w15_card(name, &vocab);
+        let json = serde_json::to_string(&ast).expect("serialize compound subtype card");
+        for sub in expected_subtypes {
+            assert!(json.contains(sub), "{name} missing subtype {sub}: {json}");
+        }
+        assert!(
+            !json.contains("SubtypesMatchAny"),
+            "{name} compound subtype must stay conjunctive without SubtypesMatchAny: {json}"
+        );
+    }
+
+    // Negative: "a Swamp and a Forest" has an indefinite article after "and", so parse_object_filter
+    // must NOT treat it as SubtypesMatchAny.
+    let two_obj = parse_object_filter("a Swamp and a Forest", &vocab).expect("parse filter");
+    assert!(
+        !two_obj
+            .predicates
+            .contains(&FilterPredicateAst::SubtypesMatchAny),
+        "indefinite 'a Swamp and a Forest' must not set SubtypesMatchAny: {two_obj:?}"
+    );
+
+    // Negative: single subtype followed by color conjunction must not set SubtypesMatchAny.
+    let color_conj =
+        parse_object_filter("Elf creatures that are white and green", &vocab).expect("color conj");
+    assert!(
+        !color_conj
+            .predicates
+            .contains(&FilterPredicateAst::SubtypesMatchAny),
+        "single subtype with color conjunction must not set SubtypesMatchAny: {color_conj:?}"
+    );
+}
+
+#[test]
+fn conjoined_two_object_sacrifice_costs_split_into_independent_cost_atoms() {
+    use spellwake_oracle_compiler::ast::{CardTypeMask, SupertypeMask};
+    use spellwake_oracle_compiler::clauses::parse_cost_list;
+    let vocab = load_pinned_vocabulary();
+
+    // Positive: Jarad's "Sacrifice a Swamp and a Forest" splits into two Sacrifice cost atoms.
+    let jarad = compile_and_audit_w15_card("Jarad, Golgari Lich Lord", &vocab);
+    let jarad_has_split_cost = jarad.faces[0].abilities.iter().any(|ab| {
+        let AbilityAst::Activated { cost, .. } = ab else {
+            return false;
+        };
+        matches!(
+            cost.as_slice(),
+            [
+                CostAtomAst::Sacrifice { count: c1, filter: f1, .. },
+                CostAtomAst::Sacrifice { count: c2, filter: f2, .. },
+            ] if matches!(c1.as_ref(), ValueExprAst::Const(1))
+                && matches!(c2.as_ref(), ValueExprAst::Const(1))
+                && f1.subtypes == vec!["Swamp".to_string()]
+                && f2.subtypes == vec!["Forest".to_string()]
+        )
+    });
+    assert!(
+        jarad_has_split_cost,
+        "Jarad must split 'Sacrifice a Swamp and a Forest' into two Sacrifice atoms: {:?}",
+        jarad.faces[0].abilities
+    );
+
+    // Positive: Viscerid Drone splits both "Sacrifice a creature and a Swamp" and
+    // "Sacrifice a creature and a snow Swamp".
+    let drone = compile_and_audit_w15_card("Viscerid Drone", &vocab);
+    let mut saw_plain_swamp = false;
+    let mut saw_snow_swamp = false;
+    for ab in &drone.faces[0].abilities {
+        if let AbilityAst::Activated { cost, .. } = ab
+            && let [
+                CostAtomAst::TapSelf,
+                CostAtomAst::Sacrifice { filter: f1, .. },
+                CostAtomAst::Sacrifice { filter: f2, .. },
+            ] = cost.as_slice()
+            && f1.any_types == CardTypeMask::CREATURE
+            && f1.subtypes.is_empty()
+            && f2.subtypes == vec!["Swamp".to_string()]
+        {
+            if f2.required_supertypes == SupertypeMask::SNOW {
+                saw_snow_swamp = true;
+            } else {
+                saw_plain_swamp = true;
+            }
+        }
+    }
+    assert!(
+        saw_plain_swamp && saw_snow_swamp,
+        "Viscerid Drone must split creature + Swamp and creature + snow Swamp: {:?}",
+        drone.faces[0].abilities
+    );
+
+    // Negative: single-object sacrifice with a "with ... and a ..." counter clause stays one atom.
+    let single_sac = parse_cost_list("Sacrifice a creature with a +1/+1 counter on it", &vocab)
+        .expect("single creature sacrifice");
+    assert_eq!(
+        single_sac.len(),
+        1,
+        "single sacrifice must stay 1 atom: {single_sac:?}"
+    );
+}

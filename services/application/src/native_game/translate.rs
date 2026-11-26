@@ -2112,6 +2112,12 @@ impl NativeScope<'_> {
             (RuleFrame::DamageRecipientChoice(_), PlayerChoice::Target { target }) => {
                 DecisionReply::ChooseDamageRecipient(self.target(target)?)
             }
+            (RuleFrame::DamageSourceChoice(_), PlayerChoice::Option { option }) => {
+                let NativeReference::DamageSource(value) = self.reference(option)? else {
+                    return Err(NativeBridgeError::WrongReferenceKind);
+                };
+                DecisionReply::ChooseDamageSource(value)
+            }
             (RuleFrame::OpponentChoice(_), PlayerChoice::Target { target }) => {
                 let TargetRef::Player(seat) = self.target(target)? else {
                     return Err(NativeBridgeError::WrongReferenceKind);

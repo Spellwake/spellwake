@@ -193,6 +193,9 @@ pub(super) enum Location {
     DamageApplication {
         index: NativeRevision,
     },
+    DamageSource {
+        index: NativeRevision,
+    },
     DamageAttempt {
         index: NativeRevision,
     },
@@ -374,6 +377,14 @@ impl Location {
                 };
                 Self::DamageApplication {
                     index: find(choice.applications(), &value)?,
+                }
+            }
+            NativeReference::DamageSource(value) => {
+                let RuleFrame::DamageSourceChoice(choice) = frame(scope)? else {
+                    return Err(NativeCodecError::InvalidRecord);
+                };
+                Self::DamageSource {
+                    index: find(choice.sources(), &value)?,
                 }
             }
             NativeReference::DamageAttempt(value) => {
@@ -608,6 +619,12 @@ impl Location {
                     return Err(NativeCodecError::InvalidRecord);
                 };
                 NativeReference::DamageApplication(at(choice.applications(), *index)?)
+            }
+            Self::DamageSource { index } => {
+                let RuleFrame::DamageSourceChoice(choice) = frame(scope)? else {
+                    return Err(NativeCodecError::InvalidRecord);
+                };
+                NativeReference::DamageSource(at(choice.sources(), *index)?)
             }
             Self::DamageAttempt { index: value } => {
                 let RuleFrame::Damage(DamageDecision::Allocation(choice)) = frame(scope)? else {

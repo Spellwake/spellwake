@@ -1028,6 +1028,7 @@ pub(in super::super) fn rewrite_body_prior_result(
                 }
                 | Instruction::Earthbend { amount }
                 | Instruction::Sacrifice { amount, .. }
+                | Instruction::SacrificeUpTo { amount, .. }
                 | Instruction::ReturnControlledPermanents { amount, .. }
                 | Instruction::AddPlayerCounter { amount, .. }
                 | Instruction::PutNamedCounterOnTarget { amount, .. }
@@ -2403,6 +2404,11 @@ pub(super) fn is_activation_restriction_text(raw: &str) -> bool {
             | "duringyourturn"
             | "duringopponentsturn"
             | "duringcombat"
+            | "duringdeclareattackersstep"
+            | "duringdeclareblockersstep"
+            | "duringbeginningofcombatstep"
+            | "duringcombatdamagestep"
+            | "duringendofcombatstep"
             | "duringyourmainphase"
             | "main phase"
             | "sorceryonceeachturn"
@@ -2441,6 +2447,7 @@ pub(super) fn is_activation_restriction_text(raw: &str) -> bool {
         || low.starts_with("triggers ")
         || low.starts_with("entry_option:")
         || low.starts_with("during ")
+        || (low.starts_with("atmost") && low.ends_with("timeseachturn"))
         || parse_max_per_turn_activation(&low).is_some()
     {
         return true;
@@ -3282,6 +3289,31 @@ pub(in super::super) fn parse_activation_restriction(
         "duringyourturn" => return Ok(ActivationRestriction::DuringYourTurn),
         "duringopponentsturn" => return Ok(ActivationRestriction::DuringOpponentsTurn),
         "duringcombat" => return Ok(ActivationRestriction::DuringCombat),
+        "duringdeclareattackersstep" => {
+            return Ok(ActivationRestriction::DuringStep(
+                spellwake_engine::turn::Step::DeclareAttackers,
+            ));
+        }
+        "duringdeclareblockersstep" => {
+            return Ok(ActivationRestriction::DuringStep(
+                spellwake_engine::turn::Step::DeclareBlockers,
+            ));
+        }
+        "duringbeginningofcombatstep" => {
+            return Ok(ActivationRestriction::DuringStep(
+                spellwake_engine::turn::Step::BeginningCombat,
+            ));
+        }
+        "duringcombatdamagestep" => {
+            return Ok(ActivationRestriction::DuringStep(
+                spellwake_engine::turn::Step::CombatDamage,
+            ));
+        }
+        "duringendofcombatstep" => {
+            return Ok(ActivationRestriction::DuringStep(
+                spellwake_engine::turn::Step::EndCombat,
+            ));
+        }
         "sorceryonceeachturn" => return Ok(ActivationRestriction::SorceryOnceEachTurn),
         "duringyourturnonceeachturn" => {
             return Ok(ActivationRestriction::DuringYourTurnOnceEachTurn);
@@ -3299,6 +3331,18 @@ pub(in super::super) fn parse_activation_restriction(
             return Ok(ActivationRestriction::SourceEntryOption(1));
         }
         _ => {}
+    }
+    if let Some(mid) = low
+        .strip_prefix("atmost")
+        .and_then(|rest| rest.strip_suffix("timeseachturn"))
+        && let Ok(n) = mid.parse::<u8>()
+        && n >= 1
+    {
+        return Ok(if n == 1 {
+            ActivationRestriction::OnceEachTurn
+        } else {
+            ActivationRestriction::MaxPerTurn(n)
+        });
     }
     if let Some(opt_raw) = low.strip_prefix("entry_option:")
         && let Ok(opt_idx) = opt_raw.trim().parse::<u8>()

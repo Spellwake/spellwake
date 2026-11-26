@@ -6,7 +6,7 @@ use spellwake_engine::{
     activated::ActivatedAbilityId,
     characteristics::{EvaluatedCharacteristics, ObjectCharacteristics, StaticAbilityId},
     checks::{CheckDecision, LegendConflictId},
-    damage::{DamageApplication, DamageAttemptId},
+    damage::{DamageApplication, DamageAttemptId, DamageSourceId},
     effects::{CopyTargetChoice, DamageDecision, OptionalEffectChoice},
     game::{DecisionId, RuleFrame},
     mana::{ManaAbilityRef, ManaType},
@@ -51,6 +51,7 @@ pub enum NativeReference {
     TokenMember(TokenBatchMember),
     DamageApplication(DamageApplication),
     DamageAttempt(DamageAttemptId),
+    DamageSource(DamageSourceId),
     DrawLandKind(Option<bool>),
     MiracleReveal(bool),
     PlaneswalkerType(spellwake_engine::program::PlaneswalkerSubtype),
@@ -248,6 +249,9 @@ impl NativeScope<'_> {
             }
             NativeReference::DamageApplication(application) => {
                 matches!(self.frame()?, RuleFrame::Damage(DamageDecision::Order(frame)) if frame.applications().contains(&application))
+            }
+            NativeReference::DamageSource(source) => {
+                matches!(self.frame()?, RuleFrame::DamageSourceChoice(frame) if frame.sources().contains(&source))
             }
             NativeReference::DamageAttempt(attempt) => {
                 matches!(self.frame()?, RuleFrame::Damage(DamageDecision::Allocation(frame)) if frame.eligible().iter().any(|domain| domain.attempt() == attempt))

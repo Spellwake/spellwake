@@ -3986,6 +3986,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::DiscardOneAtRandom(rp)
             | Instruction::WinGame(rp)
             | Instruction::SkipNextTurns { player: rp, .. }
+            | Instruction::SkipNextStep { player: rp, .. }
             | Instruction::AttachPermanentToPlayer { player: rp, .. }
             | Instruction::ExileLibraryTop { player: rp, .. }
             | Instruction::ExileCardsFromGraveyard { player: rp, .. }

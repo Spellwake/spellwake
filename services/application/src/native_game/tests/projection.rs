@@ -1231,6 +1231,44 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
                     expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
                 }
             }
+            RuleFrame::DamageSourceChoice(frame) => {
+                for &damage_source in frame.sources() {
+                    if let spellwake_engine::damage::DamageSourceId::Object(id) = damage_source {
+                        if let Some(obj) = source.execution().window().cards().get(id) {
+                            if obj.face_down().is_none()
+                                && let Some(prog) =
+                                    source.execution().copiable_program(id).or_else(|| {
+                                        obj.card_id().and_then(|cid| {
+                                            source
+                                                .execution()
+                                                .programs()
+                                                .find(|(key, _)| *key == cid)
+                                                .map(|(_, p)| p)
+                                        })
+                                    })
+                            {
+                                expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
+                            }
+                        } else if let Some(departed) =
+                            source.execution().departed_damage_sources().get(&id)
+                            && departed.object.face_down().is_none()
+                            && let Some(prog) =
+                                source.execution().copiable_program(id).or_else(|| {
+                                    departed.object.card_id().and_then(|cid| {
+                                        source
+                                            .execution()
+                                            .programs()
+                                            .find(|(key, _)| *key == cid)
+                                            .map(|(_, p)| p)
+                                    })
+                                })
+                        {
+                            expected
+                                .push(DisplayCall::Object(departed.object.clone(), prog.clone()));
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }

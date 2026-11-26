@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 pub const SUPPORT_CACHE_SCHEMA_VERSION: u32 = 1;
 
 /// Rolling compiler revision tag embedded in cached entries; bump whenever lowering semantics change.
-pub const SUPPORT_COMPILER_REVISION: &str = "keyword-gameplay-current-v22-oracle-compiler-v1";
+pub const SUPPORT_COMPILER_REVISION: &str = "keyword-gameplay-current-v24-oracle-compiler-v1";
 
 /// Cached Stage 1 + Stage 2 result for a single card keyed by its semantic fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

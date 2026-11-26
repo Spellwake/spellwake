@@ -239,6 +239,151 @@ pub enum TurnPreventionFilter {
     All,
     CreaturesControlledByOpponents,
 }
+
+/// Source restriction when choosing a source of damage at resolution (CR 609.7a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageSourceChoiceFilter {
+    /// Any legal public damage source (permanent, spell/copy on stack, ability source, face-up command-zone object/emblem).
+    Any,
+    /// Any legal public damage source with at least one of these colors (e.g. a red source of your choice).
+    Colors(crate::program::ColorMask),
+    /// Any legal creature damage source (e.g. a creature of your choice).
+    Creature,
+}
+
+/// Structured characteristic filter for turn-long damage prevention sources.
+///
+/// Evaluated dynamically against battlefield permanents, stack spells, spell copies, emblems,
+/// and departed battlefield sources without broadening to unmatched sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PreventionSourceFilter {
+    /// Require the damage source to be a creature.
+    pub creatures_only: bool,
+    /// Require the damage source to be an attacking creature.
+    pub attacking_only: bool,
+    /// Require the damage source to be a blocking creature.
+    pub blocking_only: bool,
+    /// Require the damage source to be an unblocked attacking creature.
+    pub unblocked_only: bool,
+    /// When non-empty, the source must have at least one of these colors.
+    pub any_colors: crate::program::ColorMask,
+    /// When non-empty, the source must not have any of these colors.
+    pub forbidden_colors: crate::program::ColorMask,
+    /// Require the source to be colorless.
+    pub colorless_only: bool,
+    /// Require the source to have this keyword ability.
+    pub required_keyword: Option<crate::characteristics::KeywordAbility>,
+    /// Forbid the source from having this keyword ability.
+    pub forbidden_keyword: Option<crate::characteristics::KeywordAbility>,
+    /// Restrict by source controller relative to the prevention effect's controller.
+    pub controller: crate::program::ControllerFilter,
+}
+
+/// Which damage sources a generalized turn-long prevention effect applies to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreventionSourceSpec {
+    /// Any damage source.
+    Any,
+    /// The resolving ability or spell's own source incarnation.
+    AbilitySource,
+    /// The single announced permanent target incarnation.
+    TargetPermanent,
+    /// The single announced spell target (physical card spell or spell copy; propagates to the
+    /// permanent it becomes under CR 400.7c / 609.7b).
+    TargetSpell,
+    /// Every still-legal announced permanent target.
+    AllPermanentTargets,
+    /// Interactively choose a legal damage source at resolution (CR 609.7a/b).
+    ChosenSource(DamageSourceChoiceFilter),
+    /// Interactively choose one of the five colors at resolution.
+    ChosenColor,
+    /// Dynamic characteristic filter over damage sources.
+    Filter(PreventionSourceFilter),
+    /// Creatures other than the single announced permanent target.
+    CreaturesOtherThanTarget,
+    /// Creatures other than the resolving ability source.
+    CreaturesOtherThanAbilitySource,
+}
+
+/// Which damage recipients a generalized turn-long prevention effect protects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreventionRecipientSpec {
+    /// Any damage recipient.
+    Any,
+    /// The prevention effect's controller ("to you").
+    Controller,
+    /// The prevention effect's controller and creatures they control.
+    ControllerAndControlledCreatures,
+    /// The prevention effect's controller and permanents they control.
+    ControllerAndControlledPermanents,
+    /// Creatures controlled by the prevention effect's controller.
+    ControlledCreatures,
+    /// Any player ("to players").
+    AllPlayers,
+    /// Any creature on the battlefield ("to creatures").
+    AllCreatures,
+    /// The resolving ability's own source permanent.
+    AbilitySource,
+    /// The single announced target recipient (player, creature, planeswalker, or battle).
+    Target,
+}
+
+/// Generalized until-end-of-turn damage prevention specification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnPreventionSpec {
+    pub combat_only: bool,
+    pub source: PreventionSourceSpec,
+    pub recipient: PreventionRecipientSpec,
+    /// Also prevent damage dealt to the captured source object(s) (e.g. "to and dealt by").
+    pub both_directions: bool,
+}
+
+/// Active turn-long prevention entry stored in [`DamageState`] until cleanup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveTurnPrevention {
+    pub controller: SeatId,
+    pub kind: ActiveTurnPreventionKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ActiveTurnPreventionKind {
+    Legacy {
+        filter: TurnPreventionFilter,
+        protected_source: Option<ObjectId>,
+    },
+    Spec {
+        combat_only: bool,
+        source: ResolvedPreventionSource,
+        recipient: ResolvedPreventionRecipient,
+        both_directions: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedPreventionSource {
+    Any,
+    /// Exact captured source identities (permanents, stack spells, spell copies, emblems, and
+    /// permanent incarnations propagated from resolving tracked permanent spells under CR 400.7c / 609.7b).
+    ExactSources(BTreeSet<DamageSourceId>),
+    /// Sources of a color chosen on resolution.
+    Color(crate::characteristics::Color),
+    /// Dynamic source filter evaluated at damage time.
+    Filter(PreventionSourceFilter),
+    /// Creatures other than a specific excluded permanent incarnation.
+    CreaturesOtherThan(ObjectId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedPreventionRecipient {
+    Any,
+    Controller,
+    ControllerAndControlledCreatures,
+    ControllerAndControlledPermanents,
+    ControlledCreatures,
+    AllPlayers,
+    AllCreatures,
+    ExactTarget(crate::targets::TargetRef),
+}
 /// Creator provenance survives creator exit and never supplies source matching.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreventionShield {
@@ -932,14 +1077,7 @@ pub(crate) struct DamageState {
     next_batch: u64,
     next_attempt: u64,
     pub(crate) prevention_disallowed_this_turn: bool,
-    pub(crate) turn_preventions: BTreeMap<
-        (StackEntryId, usize),
-        (
-            SeatId,
-            TurnPreventionFilter,
-            Option<crate::object_identity::ObjectId>,
-        ),
-    >,
+    pub(crate) turn_preventions: BTreeMap<(StackEntryId, usize), ActiveTurnPrevention>,
     shields: BTreeMap<PreventionShieldId, PreventionShield>,
     reflections: BTreeMap<PreventionShieldId, DamageReflection>,
     multipliers: BTreeMap<DamageMultiplierId, DamageMultiplier>,
@@ -973,6 +1111,29 @@ impl DamageState {
         self.next_multiplier = self.next_multiplier.max(mark[1]);
         self.next_batch = self.next_batch.max(mark[2]);
         self.next_attempt = self.next_attempt.max(mark[3]);
+    }
+
+    /// CR 400.7c / 609.7b: when a tracked permanent spell (or permanent spell copy) on the stack
+    /// resolves onto the battlefield, retain its damage-source identity on the resulting permanent.
+    pub(crate) fn propagate_permanent_spell_identity(
+        &mut self,
+        entry: StackEntryId,
+        before: ObjectId,
+        after: ObjectId,
+    ) {
+        let before_obj = DamageSourceId::Object(before);
+        let before_copy = DamageSourceId::SpellCopy(entry);
+        let after_obj = DamageSourceId::Object(after);
+        for active in self.turn_preventions.values_mut() {
+            if let ActiveTurnPreventionKind::Spec {
+                source: ResolvedPreventionSource::ExactSources(sources),
+                ..
+            } = &mut active.kind
+                && (sources.contains(&before_obj) || sources.contains(&before_copy))
+            {
+                sources.insert(after_obj);
+            }
+        }
     }
 
     pub(crate) fn counters(&self) -> (u64, u64, u64, u64) {

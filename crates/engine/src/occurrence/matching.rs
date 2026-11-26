@@ -692,6 +692,12 @@ fn matches_evaluated_permanent(
             crate::program::SourceRelation::SharingNameWithAbilitySource => after
                 .name_rules
                 .shares_name(&candidate.current_names, &source.current_names),
+            crate::program::SourceRelation::OtherThanAbilitySourceSharingName => {
+                !same
+                    && after
+                        .name_rules
+                        .shares_name(&candidate.current_names, &source.current_names)
+            }
             crate::program::SourceRelation::MatchesNamedAgendaSlot => false,
         };
         if !source_ok {
@@ -815,6 +821,27 @@ fn matches_evaluated_permanent(
                                 .has_name(&candidate.current_names, &card_name)
                         })
                 })
+        {
+            return false;
+        }
+        if let Some(exact) = c.exact_name
+            && !exact.matches_with_rules(&candidate.current_names, after.name_rules)
+        {
+            return false;
+        }
+        if let Some(kind) = c.required_counter_kind
+            && !after
+                .characteristics
+                .permanent_counter_count(candidate.object, kind)
+                .is_positive()
+        {
+            return false;
+        }
+        if let Some(kind) = c.forbidden_counter_kind
+            && after
+                .characteristics
+                .permanent_counter_count(candidate.object, kind)
+                .is_positive()
         {
             return false;
         }
@@ -973,16 +1000,70 @@ impl AppearanceFilterExt for ObjectFilter {
             {
                 return false;
             }
-            if clause.source_relation
-                == crate::program::SourceRelation::SharingNameWithAbilitySource
+            if let Some(exact) = clause.exact_name {
+                if !exact.matches_with_rules(&object.current_names, after.name_rules) {
+                    return false;
+                }
+                clause.exact_name = None;
+            }
+            if let Some(kind) = clause.required_counter_kind
+                && !matches!(
+                    kind,
+                    crate::effects::CounterKind::PlusOne | crate::effects::CounterKind::MinusOne
+                )
             {
+                let live_bf = after
+                    .cards
+                    .get(object.object.id())
+                    .is_some_and(|card| card.zone() == ObjectZone::Battlefield);
+                if !live_bf
+                    || !after
+                        .characteristics
+                        .permanent_counter_count(object.object.id(), kind)
+                        .is_positive()
+                {
+                    return false;
+                }
+                clause.required_counter_kind = None;
+            }
+            if let Some(kind) = clause.forbidden_counter_kind
+                && !matches!(
+                    kind,
+                    crate::effects::CounterKind::PlusOne | crate::effects::CounterKind::MinusOne
+                )
+            {
+                let live_bf = after
+                    .cards
+                    .get(object.object.id())
+                    .is_some_and(|card| card.zone() == ObjectZone::Battlefield);
+                if !live_bf
+                    || after
+                        .characteristics
+                        .permanent_counter_count(object.object.id(), kind)
+                        .is_positive()
+                {
+                    return false;
+                }
+                clause.forbidden_counter_kind = None;
+            }
+            if matches!(
+                clause.source_relation,
+                crate::program::SourceRelation::SharingNameWithAbilitySource
+                    | crate::program::SourceRelation::OtherThanAbilitySourceSharingName
+            ) {
                 if !after
                     .name_rules
                     .shares_name(&source.current_names, &object.current_names)
                 {
                     return false;
                 }
-                clause.source_relation = crate::program::SourceRelation::Any;
+                clause.source_relation = if clause.source_relation
+                    == crate::program::SourceRelation::OtherThanAbilitySourceSharingName
+                {
+                    crate::program::SourceRelation::OtherThanAbilitySource
+                } else {
+                    crate::program::SourceRelation::Any
+                };
             }
             ObjectFilter::Clause(clause).matches_appearance(source, controller, object)
         };
@@ -2897,6 +2978,18 @@ pub(super) fn match_trigger_event(
                     let subtype_ok = match source_filter {
                         ObjectFilter::Clause(c) => match c.subtypes {
                             SubtypeFilter::Has(k) => source_subtypes.contains(&k),
+                            SubtypeFilter::Lacks(k) => !source_subtypes.contains(&k),
+                            SubtypeFilter::AnyOf(ks) => ks.iter().any(|k| source_subtypes.contains(k)),
+                            SubtypeFilter::NoneOf(ks) => ks.iter().all(|k| !source_subtypes.contains(k)),
+                            SubtypeFilter::AnyOfList(list) => list.iter().any(|item| {
+                                matches!(item, crate::program::SingleSubtype::Creature(k) if source_subtypes.contains(k))
+                            }),
+                            SubtypeFilter::AllOfList(list) => list.iter().all(|item| {
+                                matches!(item, crate::program::SingleSubtype::Creature(k) if source_subtypes.contains(k))
+                            }),
+                            SubtypeFilter::NoneOfList(list) => list.iter().all(|item| {
+                                matches!(item, crate::program::SingleSubtype::Creature(k) if !source_subtypes.contains(k))
+                            }),
                             SubtypeFilter::Any => true,
                             _ => false,
                         },
@@ -4416,6 +4509,18 @@ pub(super) fn match_trigger_event(
                         && match source_filter {
                             ObjectFilter::Clause(c) => match c.subtypes {
                                 SubtypeFilter::Has(k) => source_subtypes.contains(&k),
+                                SubtypeFilter::Lacks(k) => !source_subtypes.contains(&k),
+                                SubtypeFilter::AnyOf(ks) => ks.iter().any(|k| source_subtypes.contains(k)),
+                                SubtypeFilter::NoneOf(ks) => ks.iter().all(|k| !source_subtypes.contains(k)),
+                                SubtypeFilter::AnyOfList(list) => list.iter().any(|item| {
+                                    matches!(item, crate::program::SingleSubtype::Creature(k) if source_subtypes.contains(k))
+                                }),
+                                SubtypeFilter::AllOfList(list) => list.iter().all(|item| {
+                                    matches!(item, crate::program::SingleSubtype::Creature(k) if source_subtypes.contains(k))
+                                }),
+                                SubtypeFilter::NoneOfList(list) => list.iter().all(|item| {
+                                    matches!(item, crate::program::SingleSubtype::Creature(k) if !source_subtypes.contains(k))
+                                }),
                                 SubtypeFilter::Any => true,
                                 _ => false,
                             },

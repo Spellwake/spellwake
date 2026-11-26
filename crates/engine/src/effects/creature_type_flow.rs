@@ -84,7 +84,13 @@ fn matches_compact_clause(
     subtypes: &BTreeSet<CreatureTypeId>,
     artifact_subtypes: Option<&BTreeSet<crate::program::ArtifactSubtype>>,
 ) -> bool {
-    use crate::program::{ObjectFilterFlags, SubtypeFilter, Supertype};
+    use crate::program::{ObjectFilterFlags, SingleSubtype, SubtypeFilter, Supertype};
+    if clause.exact_name.is_some()
+        || clause.required_counter_kind.is_some()
+        || clause.forbidden_counter_kind.is_some()
+    {
+        return false;
+    }
     if !clause.any_types.is_empty() && (types.bits() & clause.any_types.bits()) == 0 {
         return false;
     }
@@ -111,6 +117,21 @@ fn matches_compact_clause(
         SubtypeFilter::AnyOf(cts) => cts.iter().any(|ct| subtypes.contains(ct)),
         SubtypeFilter::NoneOf(cts) => cts.iter().all(|ct| !subtypes.contains(ct)),
         SubtypeFilter::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(&art)),
+        SubtypeFilter::AnyOfList(list) => list.iter().any(|item| match item {
+            SingleSubtype::Creature(ct) => subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(art)),
+            _ => false,
+        }),
+        SubtypeFilter::AllOfList(list) => list.iter().all(|item| match item {
+            SingleSubtype::Creature(ct) => subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(art)),
+            _ => false,
+        }),
+        SubtypeFilter::NoneOfList(list) => list.iter().all(|item| match item {
+            SingleSubtype::Creature(ct) => !subtypes.contains(ct),
+            SingleSubtype::Artifact(art) => artifact_subtypes.is_some_and(|set| !set.contains(art)),
+            _ => false,
+        }),
         _ => false,
     };
     if !subtype_ok {
@@ -660,6 +681,34 @@ impl EffectWindow {
                 Ok(RulesInteger::from_usize(
                     crate::characteristics::compute_party_size(creatures, **roles),
                 ))
+            }
+            ValueExpr::LastActionMatchingCount(filter) => {
+                let ability_source = if filter.excludes_ability_source() {
+                    Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
+                } else {
+                    None
+                };
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                let Some(cursor) = self.resolution_cursor() else {
+                    return Ok(0.into());
+                };
+                let count = cursor
+                    .results
+                    .last_action_lki
+                    .iter()
+                    .filter(|o| {
+                        self.matches_object_filter(
+                            **filter,
+                            o,
+                            controller,
+                            ability_source,
+                            &excluded,
+                            &evaluated,
+                        )
+                    })
+                    .count();
+                Ok(RulesInteger::from_usize(count))
             }
             ValueExpr::DistinctColors { filter } => {
                 let ability_source = if filter.excludes_ability_source() {
@@ -2278,6 +2327,17 @@ impl EffectWindow {
                         .unwrap_or(0),
                 )
                 .into()),
+                PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn => Ok(self
+                    .characteristics
+                    .nonland_permanents_left_battlefield_this_turn
+                    .values()
+                    .copied()
+                    .map(i64::from)
+                    .sum::<i64>()
+                    .into()),
+                PlayerStatExpr::AnySpellWarpedThisTurn => {
+                    Ok(i64::from(self.characteristics.any_spell_warped_this_turn).into())
+                }
                 PlayerStatExpr::EnteredPermanentThisTurn => Ok(i64::from(
                     self.characteristics
                         .permanents_entered_this_turn

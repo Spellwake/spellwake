@@ -211,6 +211,7 @@ pub enum RuleFrame {
     DrawReplacement(crate::effects::DrawReplacementFrame),
     OpponentChoice(crate::effects::OpponentChoiceFrame),
     DamageRecipientChoice(crate::effects::DamageRecipientChoiceFrame),
+    DamageSourceChoice(crate::effects::DamageSourceChoiceFrame),
     LoyaltyRemoval(crate::effects::LoyaltyRemovalChoice),
     Combat(CombatDecision),
     Proliferate(crate::effects::ProliferateChoice),
@@ -256,6 +257,7 @@ impl RuleFrame {
             Self::DrawReplacement(f) => f.chooser,
             Self::OpponentChoice(f) => f.chooser(),
             Self::DamageRecipientChoice(f) => f.chooser(),
+            Self::DamageSourceChoice(f) => f.chooser(),
             Self::LoyaltyRemoval(f) => f.chooser(),
             Self::Combat(f) => f.chooser(),
             Self::Proliferate(f) => f.chooser(),
@@ -306,6 +308,7 @@ impl RuleFrame {
             Self::DamageRecipientChoice(f) => {
                 Some(EffectDecision::DamageRecipientChoice(f.clone()))
             }
+            Self::DamageSourceChoice(f) => Some(EffectDecision::DamageSourceChoice(f.clone())),
             Self::LoyaltyRemoval(f) => Some(EffectDecision::LoyaltyRemoval(f.clone())),
             Self::TransformOrder(f) => Some(EffectDecision::TransformOrder(f.clone())),
             Self::UntapKeepTapped(f) => Some(EffectDecision::UntapKeepTapped(f.clone())),
@@ -326,6 +329,7 @@ impl From<EffectDecision> for RuleFrame {
             EffectDecision::DrawReplacement(f) => Self::DrawReplacement(f),
             EffectDecision::OpponentChoice(f) => Self::OpponentChoice(f),
             EffectDecision::DamageRecipientChoice(f) => Self::DamageRecipientChoice(f),
+            EffectDecision::DamageSourceChoice(f) => Self::DamageSourceChoice(f),
             EffectDecision::LoyaltyRemoval(f) => Self::LoyaltyRemoval(f),
             EffectDecision::CastRecovery(f) => Self::CastRecovery(f),
             EffectDecision::LinkedAuraChoice(f) => Self::LinkedAuraChoice(f),
@@ -2839,10 +2843,19 @@ impl GameState {
                     let skip_draw = turn.position().step == Step::Upkeep
                         && self.execution.should_skip_step(active_player, Step::Draw)?;
                     let mut skip_err: Option<crate::effects::EffectError> = None;
+                    let mut consumed_skips: Vec<Step> = Vec::new();
+                    if skip_draw {
+                        consumed_skips.push(Step::Draw);
+                    }
                     let mut next =
                         turn.complete_priority_with_step_skip(completed, skip_draw, |candidate| {
                             match self.execution.should_skip_step(active_player, candidate) {
-                                Ok(skip) => skip,
+                                Ok(skip) => {
+                                    if skip {
+                                        consumed_skips.push(candidate);
+                                    }
+                                    skip
+                                }
                                 Err(err) => {
                                     if skip_err.is_none() {
                                         skip_err = Some(err);
@@ -2853,6 +2866,10 @@ impl GameState {
                         })?;
                     if let Some(err) = skip_err {
                         return Err(err.into());
+                    }
+                    for skipped in consumed_skips {
+                        self.execution
+                            .consume_skipped_step(active_player, skipped)?;
                     }
                     if matches!(turn.position().step, Step::EndCombat | Step::PostcombatMain)
                         && self.execution.take_additional_combat()

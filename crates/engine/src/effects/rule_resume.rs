@@ -286,6 +286,41 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
+            EffectDecision::DamageSourceChoice(bound) => {
+                let revision = self.next_revision(expected)?;
+                let DecisionReply::ChooseDamageSource(source) = reply else {
+                    return Err(EffectError::WrongDecisionKind);
+                };
+                let cursor = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let entry = self
+                    .window
+                    .resolving()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                if bound.revision != expected
+                    || bound.chooser != actor
+                    || entry.controller() != actor
+                    || bound.entry != cursor.entry
+                    || bound.instruction != cursor.instruction
+                    || cursor.chosen_damage_source.is_some()
+                    || !bound.sources.contains(&source)
+                {
+                    return Err(EffectError::WrongResolutionFrame);
+                }
+                let mut next = self.clone();
+                next.revision = revision;
+                next.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_damage_source = Some(source);
+                next.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    RulesJournal::default(),
+                )
+            }
             EffectDecision::LoyaltyRemoval(bound) => {
                 let revision = self.next_revision(expected)?;
                 let DecisionReply::SelectResolution(objects) = reply else {
@@ -415,6 +450,14 @@ impl EffectWindow {
                                     | Instruction::GrantChosenProtection { .. },
                                     _,
                                 ) => bound.colors == mana_domains::colored_mana(),
+                                (Instruction::PreventDamageSpec(spec), _)
+                                    if matches!(
+                                        spec.source,
+                                        crate::damage::PreventionSourceSpec::ChosenColor
+                                    ) =>
+                                {
+                                    bound.colors == mana_domains::colored_mana()
+                                }
                                 _ => false,
                             }
                         {

@@ -558,6 +558,9 @@ pub(super) fn body_turn_record_filter_supported(
             && c.mana_value == ManaValueFilter::Any
             && c.flags == empty_flags
             && c.source_relation == SourceRelation::Any
+            && c.exact_name.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
     };
     let (a, b) = filter.clauses();
     clause_ok(a) && b.is_none_or(clause_ok)
@@ -2689,7 +2692,12 @@ pub(super) fn lower_marker_or_action_condition(
             right: ValueExpr::literal(1),
         }),
         ConditionAst::Marker(GameMarker::NonlandPermanentLeftThisTurn) => Ok(ResolutionCondition {
-            left: ValueExpr::PlayerStat(PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn),
+            left: ValueExpr::PlayerStat(PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        }),
+        ConditionAst::Marker(GameMarker::SpellWarpedThisTurn) => Ok(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::AnySpellWarpedThisTurn),
             comparison: Comparison::GreaterOrEqual,
             right: ValueExpr::literal(1),
         }),

@@ -5,7 +5,7 @@
 use spellwake_contracts::RulesInteger;
 
 /// A main phase has no steps; these positions include those two phase boundaries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Step {
     Untap,
     Upkeep,

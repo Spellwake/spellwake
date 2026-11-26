@@ -276,6 +276,10 @@ pub enum PlayerStatExpr {
     ControllerSacrificedThisTurn,
     PermanentLeftBattlefieldThisTurn,
     NonlandPermanentLeftBattlefieldThisTurn,
+    /// Total nonland permanents that left the battlefield under any player's control this turn (Void).
+    AnyNonlandPermanentLeftBattlefieldThisTurn,
+    /// `1` if any spell was cast via its warp cost this turn, else `0` (Void).
+    AnySpellWarpedThisTurn,
     EnteredPermanentThisTurn,
     EnteredTypeThisTurn(super::CardType),
     CreatureEnteredUnderControlThisTurn,
@@ -520,6 +524,8 @@ pub enum ValueExpr {
     PartyCount(Box<[CreatureTypeId; 4]>),
     /// Number of distinct WUBRG colors among battlefield permanents matching `filter` (0..=5).
     DistinctColors { filter: Box<ObjectFilter> },
+    /// Count of objects affected by the immediately preceding resolution action whose LKI matches `filter`.
+    LastActionMatchingCount(Box<ObjectFilter>),
     /// Number of distinct mana values among cards in `player`'s graveyard.
     DistinctManaValuesInGraveyard(ResolvingPlayer),
     /// Source-permanent state or turn-history scalar.
@@ -785,6 +791,7 @@ impl ValueExpr {
             | Self::OpponentMaxCount { filter, .. }
             | Self::OpponentMinCount { filter, .. }
             | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter)
             | Self::Aggregate { filter, .. } => filter.excludes_ability_source(),
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.references_ability_source()
@@ -860,6 +867,7 @@ impl ValueExpr {
                         | ValueZone::Exile(_)
                 ) && world_filter(filter)
             }
+            Self::LastActionMatchingCount(_) => false,
             Self::DistinctColors { filter } | Self::Aggregate { filter, .. } => {
                 world_filter(filter)
             }
@@ -1041,6 +1049,7 @@ impl ValueExpr {
                         | ValueZone::Exile(_)
                 ) && world_filter(filter)
             }
+            Self::LastActionMatchingCount(_) => false,
             Self::DistinctColors { filter } | Self::Aggregate { filter, .. } => {
                 world_filter(filter)
             }
@@ -1214,6 +1223,7 @@ impl ValueExpr {
             | Self::OpponentMaxCount { filter, .. }
             | Self::OpponentMinCount { filter, .. }
             | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter)
             | Self::Aggregate { filter, .. }
             | Self::ObjectMatches { filter, .. } => filter.validate_vocabulary(vocabulary),
             Self::PlayerStat(
@@ -1266,6 +1276,7 @@ impl ValueExpr {
             | Self::OpponentMaxCount { filter, .. }
             | Self::OpponentMinCount { filter, .. }
             | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter)
             | Self::Aggregate { filter, .. }
             | Self::ObjectMatches { filter, .. } => filter.validate_vocabulary(vocabulary),
             Self::PlayerStat(
@@ -1589,7 +1600,9 @@ impl ValueExpr {
                 }
                 Ok(out)
             }
-            Self::Aggregate { filter, .. } | Self::DistinctColors { filter } => {
+            Self::Aggregate { filter, .. }
+            | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter) => {
                 if filter.has_target_player() {
                     Ok(Some(OperandFamily::Player))
                 } else {
@@ -1763,6 +1776,7 @@ impl ValueExpr {
             | Self::OpponentMaxCount { filter, .. }
             | Self::OpponentMinCount { filter, .. }
             | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter)
             | Self::Aggregate { filter, .. }
             | Self::ObjectMatches { filter, .. } => filter.rewrite_creature_type(from, to),
             Self::PartyCount(roles) => {
@@ -1863,7 +1877,8 @@ impl ValueExpr {
             }
             Self::OpponentMaxCount { filter, .. }
             | Self::OpponentMinCount { filter, .. }
-            | Self::DistinctColors { filter } => {
+            | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter) => {
                 filter
                     .validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -2268,6 +2283,8 @@ impl ValueExpr {
                 | PlayerStatExpr::ControllerSacrificedThisTurn
                 | PlayerStatExpr::PermanentLeftBattlefieldThisTurn
                 | PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn
+                | PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn
+                | PlayerStatExpr::AnySpellWarpedThisTurn
                 | PlayerStatExpr::EnteredPermanentThisTurn
                 | PlayerStatExpr::EnteredTypeThisTurn(_)
                 | PlayerStatExpr::CreatureEnteredUnderControlThisTurn
@@ -2694,6 +2711,7 @@ impl ValueExpr {
             | Self::OpponentMaxCount { filter, .. }
             | Self::OpponentMinCount { filter, .. }
             | Self::DistinctColors { filter }
+            | Self::LastActionMatchingCount(filter)
             | Self::Aggregate { filter, .. } => filter
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
