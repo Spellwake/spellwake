@@ -594,6 +594,116 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                     }
                 }
             }
+            FilterPredicateAst::Exclude(subj)
+                if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
+            {
+                sel.exclude_source = true;
+            }
+            FilterPredicateAst::Exclude(subj)
+                if matches!(subj.as_ref(), SubjectRefAst::Group(_)) =>
+            {
+                let SubjectRefAst::Group(excl) = subj.as_ref() else {
+                    unreachable!();
+                };
+                let preds_only_subtype_any = excl
+                    .predicates
+                    .iter()
+                    .all(|p| matches!(p, FilterPredicateAst::SubtypesMatchAny));
+                let excl_simple_shell = excl.zone.is_none()
+                    && excl.extra_zones.is_empty()
+                    && excl.controller.is_none()
+                    && excl.owner.is_none()
+                    && excl.combat.is_none()
+                    && excl.stat_bounds.is_empty()
+                    && excl.counter_kind.is_none()
+                    && excl.named.is_none()
+                    && excl.forbidden_types.0 == 0
+                    && excl.forbidden_supertypes.0 == 0
+                    && excl.forbidden_subtypes.is_empty()
+                    && excl.forbidden_colors.0 == 0
+                    && excl.forbidden_keywords.is_empty()
+                    && excl.color_arity.is_none()
+                    && !excl.any_spell
+                    && !excl.is_ability
+                    && excl.flags.0 == 0
+                    && preds_only_subtype_any;
+                if !excl_simple_shell || excl.tapped == Some(false) || excl.token == Some(false) {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+                let dim_types = excl.any_types.0 != 0;
+                let dim_supers = excl.required_supertypes.0 != 0;
+                let dim_subs = !excl.subtypes.is_empty();
+                let dim_tapped = excl.tapped == Some(true);
+                let dim_token = excl.token == Some(true);
+                let dim_kws = !excl.required_keywords.is_empty();
+                let dim_colors = excl.any_colors.0 != 0;
+                let active_dims = usize::from(dim_types)
+                    + usize::from(dim_supers)
+                    + usize::from(dim_subs)
+                    + usize::from(dim_tapped)
+                    + usize::from(dim_token)
+                    + usize::from(dim_kws)
+                    + usize::from(dim_colors);
+                if active_dims != 1 || dim_colors {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+                if dim_subs {
+                    let is_disjunctive = excl.subtypes.len() == 1
+                        || excl
+                            .predicates
+                            .contains(&FilterPredicateAst::SubtypesMatchAny);
+                    if !is_disjunctive {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    for fst in &excl.subtypes {
+                        if fst.eq_ignore_ascii_case("aura") {
+                            sel.exclude_auras = true;
+                        } else if let Some(sub) =
+                            resolve_selector_subtype(fst, f.any_types, vocabulary)
+                        {
+                            sel.forbidden_subtypes.insert(sub);
+                        } else {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                    }
+                } else if dim_types {
+                    for ct in card_type_mask_to_set(excl.any_types)? {
+                        sel.forbidden_types.insert(ct);
+                    }
+                } else if dim_supers {
+                    if (excl.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0 {
+                        if excl.required_supertypes.0 != AstSupertypeMask::HISTORIC.0
+                            || sel.historic == Some(true)
+                        {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.historic = Some(false);
+                    } else {
+                        if excl.required_supertypes.0.count_ones() != 1 {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        for st in supertype_mask_to_set(excl.required_supertypes)? {
+                            sel.forbidden_supertypes.insert(st);
+                        }
+                    }
+                } else if dim_token {
+                    if sel.token == Some(true) {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    sel.token = Some(false);
+                } else if dim_tapped {
+                    if sel.requires_tapped {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    sel.requires_untapped = true;
+                } else if dim_kws {
+                    for kw_raw in &excl.required_keywords {
+                        let kw = lower_keyword_ability_name(kw_raw)
+                            .ok_or("oracle:unsupported-selector-predicate")?;
+                        sel.forbidden_keywords.insert(kw);
+                    }
+                }
+            }
             _ => return Err("oracle:unsupported-selector-predicate"),
         }
     }
@@ -3888,6 +3998,7 @@ pub(super) fn lower_object_filter(
     let mut mana_value_pair: Option<(u32, u32)> = None;
     let mut any_of_pair: Option<(ObjectClause, ObjectClause)> = None;
     let mut subtypes_match_any = false;
+    let mut extra_forbidden_subtypes: Vec<&str> = Vec::new();
     for pred in &f.predicates {
         match pred {
             FilterPredicateAst::HasAbilityKind {
@@ -3950,6 +4061,121 @@ pub(super) fn lower_object_filter(
                     &mut clause.source_relation,
                     SourceRelation::OtherThanAbilitySource,
                 )?;
+            }
+            FilterPredicateAst::Exclude(subj)
+                if matches!(subj.as_ref(), SubjectRefAst::Group(_)) =>
+            {
+                let SubjectRefAst::Group(excl) = subj.as_ref() else {
+                    unreachable!();
+                };
+                // Pure single-dimension negation: fold into forbidden_types / forbidden_subtypes /
+                // forbidden_supertypes / color / tapped / token / forbidden_keyword without
+                // distorting multi-attribute conjunctions (De Morgan safety).
+                let preds_only_subtype_any = excl
+                    .predicates
+                    .iter()
+                    .all(|p| matches!(p, FilterPredicateAst::SubtypesMatchAny));
+                let excl_simple_shell = excl.zone.is_none()
+                    && excl.extra_zones.is_empty()
+                    && excl.controller.is_none()
+                    && excl.owner.is_none()
+                    && excl.combat.is_none()
+                    && excl.stat_bounds.is_empty()
+                    && excl.counter_kind.is_none()
+                    && excl.named.is_none()
+                    && excl.forbidden_types.0 == 0
+                    && excl.forbidden_supertypes.0 == 0
+                    && excl.forbidden_subtypes.is_empty()
+                    && excl.forbidden_colors.0 == 0
+                    && excl.forbidden_keywords.is_empty()
+                    && excl.color_arity.is_none()
+                    && !excl.any_spell
+                    && !excl.is_ability
+                    && excl.flags.0 == 0
+                    && preds_only_subtype_any;
+                if !excl_simple_shell {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                let dim_types = excl.any_types.0 != 0;
+                let dim_supers = excl.required_supertypes.0 != 0;
+                let dim_subs = !excl.subtypes.is_empty();
+                let dim_colors = excl.any_colors.0 != 0;
+                let dim_tapped = excl.tapped == Some(true);
+                let dim_token = excl.token == Some(true);
+                let dim_kws = !excl.required_keywords.is_empty();
+                if excl.tapped == Some(false) || excl.token == Some(false) {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                let active_dims = usize::from(dim_types)
+                    + usize::from(dim_supers)
+                    + usize::from(dim_subs)
+                    + usize::from(dim_colors)
+                    + usize::from(dim_tapped)
+                    + usize::from(dim_token)
+                    + usize::from(dim_kws);
+                if active_dims != 1 {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                if dim_subs {
+                    let is_disjunctive = excl.subtypes.len() == 1
+                        || excl
+                            .predicates
+                            .contains(&FilterPredicateAst::SubtypesMatchAny);
+                    if !is_disjunctive {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    extra_forbidden_subtypes.extend(excl.subtypes.iter().map(String::as_str));
+                } else if dim_types {
+                    let ft = lower_card_type_mask(excl.any_types)?;
+                    clause.forbidden_types = clause.forbidden_types.union(ft);
+                } else if dim_supers {
+                    if (excl.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0
+                        || excl.required_supertypes.0.count_ones() != 1
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    for st in supertype_mask_to_set(excl.required_supertypes)? {
+                        clause.forbidden_supertypes =
+                            clause.forbidden_supertypes.union(SupertypeMask::from_supertype(st));
+                    }
+                } else if dim_colors {
+                    let cm = lower_color_mask(excl.any_colors);
+                    match clause.color {
+                        ObjectColorFilter::Any => {
+                            clause.color = ObjectColorFilter::Mask {
+                                any_of: ColorMask::EMPTY,
+                                none_of: cm,
+                            };
+                        }
+                        ObjectColorFilter::Mask { any_of, none_of } => {
+                            clause.color = ObjectColorFilter::Mask {
+                                any_of,
+                                none_of: none_of.union(cm),
+                            };
+                        }
+                        _ => return Err("oracle:unsupported-filter-predicate"),
+                    }
+                } else if dim_token {
+                    if clause.token.is_some_and(|v| v) {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.token = Some(false);
+                } else if dim_tapped {
+                    if clause.tapped.is_some_and(|v| v) {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.tapped = Some(false);
+                } else if dim_kws {
+                    let [kw_raw] = excl.required_keywords.as_slice() else {
+                        return Err("oracle:unsupported-filter-predicate");
+                    };
+                    let kw = lower_keyword_ability_name(kw_raw)
+                        .ok_or("oracle:unsupported-filter-predicate")?;
+                    if clause.forbidden_keyword.is_some_and(|prev| prev != kw) {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.forbidden_keyword = Some(kw);
+                }
             }
             FilterPredicateAst::AttachedTo(subj)
                 if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
@@ -4435,7 +4661,12 @@ pub(super) fn lower_object_filter(
     let mut forb_creature_types = Vec::new();
     let mut forb_land_types = Vec::new();
     let mut forb_other_atoms = Vec::new();
-    for fst in &f.forbidden_subtypes {
+    for fst in f
+        .forbidden_subtypes
+        .iter()
+        .map(String::as_str)
+        .chain(extra_forbidden_subtypes)
+    {
         if fst.eq_ignore_ascii_case("aura") {
             clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
         } else if fst.eq_ignore_ascii_case("saga") {

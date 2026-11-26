@@ -2241,7 +2241,7 @@ fn conjoined_two_object_sacrifice_costs_split_into_independent_cost_atoms() {
     );
 
     // Negative: single-object sacrifice with a "with ... and a ..." counter clause stays one atom.
-    let single_sac = parse_cost_list("Sacrifice a creature with a +1/+1 counter", &vocab)
+    let single_sac = parse_cost_list("Sacrifice a creature with a +1/+1 counter on it", &vocab)
         .expect("single creature sacrifice");
     assert_eq!(single_sac.len(), 1, "single sacrifice must stay 1 atom: {single_sac:?}");
 }

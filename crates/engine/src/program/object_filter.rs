@@ -416,23 +416,35 @@ impl ExactNameKey {
         std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("")
     }
 
-    /// Match against `names` using `name_rules` (honoring interchangeable names).
+    /// Match against `names` using `name_rules` (honoring interchangeable names, ASCII case-insensitively).
     #[must_use]
     pub fn matches_with_rules(
         self,
         names: &spellwake_contracts::names::ObjectNames,
         name_rules: &spellwake_contracts::names::NameRules,
     ) -> bool {
-        spellwake_contracts::names::EnglishCardName::new(self.as_str().to_owned())
-            .ok()
-            .is_some_and(|card_name| name_rules.has_name(names, &card_name))
+        let target = self.as_str();
+        if names
+            .iter()
+            .any(|held| held.as_str().eq_ignore_ascii_case(target))
+        {
+            return true;
+        }
+        name_rules.groups().iter().any(|group| {
+            group
+                .iter()
+                .any(|n| n.as_str().eq_ignore_ascii_case(target))
+                && group
+                    .iter()
+                    .any(|n| names.iter().any(|held| held.as_str() == n.as_str()))
+        })
     }
 
-    /// Match directly against `names` when `NameRules` is unavailable.
+    /// Match directly against `names` when `NameRules` is unavailable (ASCII case-insensitively).
     #[must_use]
     pub fn matches_exact_names(self, names: &spellwake_contracts::names::ObjectNames) -> bool {
         let target = self.as_str();
-        names.iter().any(|n| n.as_str() == target)
+        names.iter().any(|n| n.as_str().eq_ignore_ascii_case(target))
     }
 }
 
@@ -3608,5 +3620,9 @@ mod wave14_object_filter_tests {
         assert!(!key.matches_with_rules(&other, &rules));
         assert!(key.matches_exact_names(&matching));
         assert!(!key.matches_exact_names(&other));
+        let lower_key = ExactNameKey::from_name("hare apparent").unwrap();
+        assert!(lower_key.matches_with_rules(&matching, &rules));
+        assert!(lower_key.matches_exact_names(&matching));
+        assert!(!lower_key.matches_with_rules(&other, &rules));
     }
 }

@@ -115,10 +115,10 @@ fn wave14_cross_category_or_selector_buffs_food_and_golem_creatures_only() {
 #[test]
 fn wave14_ambiguous_multi_subtype_without_or_marker_fails_closed() {
     let vocab = vocabulary();
-    // Stage 1 currently omits SubtypesMatchAny for both plural "and" lists ("Mounts and Vehicles")
-    // and adjacent compound subtypes ("Eldrazi Spawn"); both must fail closed rather than silently
-    // inverting conjunction vs disjunction.
-    let miriam_err = compile_with_reason(
+    // Stage 1 marks plural "and" subtype lists ("Mounts and Vehicles") with SubtypesMatchAny so
+    // Miriam grants hexproof to both Mounts and Vehicles (and not Bears), while adjacent compound
+    // subtypes ("Eldrazi Spawn") without an explicit disjunction still fail closed.
+    let miriam = compile_with_reason(
         &make_card(
             "Miriam, Herd Whisperer",
             "Legendary Creature \u{2014} Human Druid",
@@ -129,8 +129,24 @@ fn wave14_ambiguous_multi_subtype_without_or_marker_fails_closed() {
         ),
         &vocab,
     )
-    .expect_err("Miriam plural 'and' multi-subtype must fail closed until Stage 1 marks disjunction");
-    assert_eq!(miriam_err, "oracle:selector-multi-subtypes");
+    .expect("Miriam plural 'and' multi-subtype compiles with SubtypesMatchAny");
+    let mount = permanent(&vocab, &[CardType::Creature], Some((2, 2)), &["Mount"]);
+    let mut vehicle = permanent(&vocab, &[CardType::Artifact], None, &[]);
+    vehicle.artifact_subtypes.insert(ArtifactSubtype::Vehicle);
+    let bear = permanent(&vocab, &[CardType::Creature], Some((2, 2)), &["Bear"]);
+    let game = world(
+        vocab.clone(),
+        vec![
+            card(1, miriam, true),
+            card(2, mount, true),
+            card(3, vehicle, true),
+            card(4, bear, true),
+        ],
+        vec![CardId(1), CardId(2), CardId(3), CardId(4)],
+    );
+    assert!(current(&game, object(&game, 2)).has_keyword(KeywordAbility::Hexproof));
+    assert!(current(&game, object(&game, 3)).has_keyword(KeywordAbility::Hexproof));
+    assert!(!current(&game, object(&game, 4)).has_keyword(KeywordAbility::Hexproof));
 
     let broodwarden_err = compile_with_reason(
         &make_card(
@@ -261,7 +277,7 @@ fn wave14_oil_gorger_troll_requires_exact_oil_counter_not_plus_one() {
     )
     .expect("Oil-Gorger Troll compiles");
     if let spellwake_engine::program::ProgramKind::Permanent(def) = &mut troll.kind {
-        def.cost = ManaCost::free();
+        def.casting_cost = Some(ManaCost::free());
     }
 
     let put_plus_one = spell(
@@ -293,12 +309,12 @@ fn wave14_oil_gorger_troll_requires_exact_oil_counter_not_plus_one() {
             card(2, troll_prog, false),
             put_plus_one.clone(),
             put_oil.clone(),
-            spellwake_engine::game::CardSpec::new(
-                CardId(20),
-                P0,
-                ObjectDestination::LibraryTop(P0),
-                permanent(&vocab, &[CardType::Creature], Some((1, 1)), &["Elf"]),
-            ),
+            spellwake_engine::effects::SeedCard {
+                card: CardId(20),
+                owner: P0,
+                destination: ObjectDestination::LibraryTop,
+                program: permanent(&vocab, &[CardType::Creature], Some((1, 1)), &["Elf"]),
+            },
         ]
     };
 
@@ -388,14 +404,15 @@ fn wave14_charmed_stray_exact_name_buffs_only_named_other_creatures() {
         &vocab,
     )
     .expect("Charmed Stray compiles");
+    stray.names = ObjectNames::single(EnglishCardName::new("Charmed Stray".into()).unwrap());
     if let spellwake_engine::program::ProgramKind::Permanent(def) = &mut stray.kind {
-        def.cost = ManaCost::free();
+        def.casting_cost = Some(ManaCost::free());
     }
 
     let mut other_stray = permanent(&vocab, &[CardType::Creature], Some((1, 1)), &["Cat"]);
-    other_stray.names = ObjectNames::named(EnglishCardName::new("Charmed Stray".into()).unwrap());
+    other_stray.names = ObjectNames::single(EnglishCardName::new("Charmed Stray".into()).unwrap());
     let mut bear = permanent(&vocab, &[CardType::Creature], Some((2, 2)), &["Bear"]);
-    bear.names = ObjectNames::named(EnglishCardName::new("Grizzly Bears".into()).unwrap());
+    bear.names = ObjectNames::single(EnglishCardName::new("Grizzly Bears".into()).unwrap());
 
     let game = world(
         vocab.clone(),
@@ -431,6 +448,47 @@ fn wave14_charmed_stray_exact_name_buffs_only_named_other_creatures() {
         0.into(),
         "Entering Charmed Stray excludes itself"
     );
+
+    // Also verify NameFilterAst::Exact (lowercase Stage 1 exact name) matches mixed-case ObjectNames.
+    let mut exact_spell = compile_with_reason(
+        &make_card(
+            "Stray Rally",
+            "Sorcery",
+            "{W}",
+            None,
+            None,
+            "Put a +1/+1 counter on each creature you control named Charmed Stray.",
+        ),
+        &vocab,
+    )
+    .expect("Exact-name spell compiles");
+    if let spellwake_engine::program::ProgramKind::Spell(def) = &mut exact_spell.kind {
+        def.cost = ManaCost::free();
+    }
+    let mut named_cat = permanent(&vocab, &[CardType::Creature], Some((1, 1)), &["Cat"]);
+    named_cat.names = ObjectNames::single(EnglishCardName::new("Charmed Stray".into()).unwrap());
+    let mut named_bear = permanent(&vocab, &[CardType::Creature], Some((2, 2)), &["Bear"]);
+    named_bear.names = ObjectNames::single(EnglishCardName::new("Grizzly Bears".into()).unwrap());
+    let game2 = world(
+        vocab.clone(),
+        vec![
+            card(1, named_cat, true),
+            card(2, named_bear, true),
+            card(3, exact_spell, false),
+        ],
+        vec![CardId(1), CardId(2)],
+    );
+    let cast2 = submit(
+        &game2,
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(&game2, 3),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let game2 = pass_pair(cast2.state()).into_state();
+    assert_eq!(current(&game2, object(&game2, 1)).plus_one_counters, 1.into());
+    assert_eq!(current(&game2, object(&game2, 2)).plus_one_counters, 0.into());
 }
 
 #[test]
@@ -449,7 +507,7 @@ fn wave14_six_subtype_disjunction_and_five_subtype_forbidden_list_execute() {
     )
     .expect("Animal Sanctuary 6-subtype AnyOfList compiles");
     assert!(
-        !sanctuary.activated_abilities.is_empty(),
+        !sanctuary.activated.is_empty(),
         "Animal Sanctuary should produce activated abilities"
     );
 
