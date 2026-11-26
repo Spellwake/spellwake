@@ -758,6 +758,180 @@ fn matches_world_clause(
     }
     if clause
         .flags
+        .contains(ObjectFilterFlags::NOT_OWNED_BY_CONTROLLER)
+        && !p.controller.is_some_and(|ctrl| p.owner != ctrl)
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::EVEN_MANA_VALUE)
+        && !object_mana_value(ctx, p)
+            .and_then(|mv| mv.to_usize())
+            .is_some_and(|n| n.is_multiple_of(2))
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::ODD_MANA_VALUE)
+        && !object_mana_value(ctx, p)
+            .and_then(|mv| mv.to_usize())
+            .is_some_and(|n| !n.is_multiple_of(2))
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::HAS_BASIC_LAND_TYPE)
+        && p.current_land_subtypes.is_empty()
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::SAME_TOTAL_PT)
+        && !p
+            .power_toughness
+            .as_ref()
+            .is_some_and(|pt| pt.derived.power == pt.derived.toughness)
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER)
+        && !p
+            .power_toughness
+            .as_ref()
+            .is_some_and(|pt| pt.derived.toughness > pt.derived.power)
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::POWER_GREATER_THAN_TOUGHNESS)
+        && !p
+            .power_toughness
+            .as_ref()
+            .is_some_and(|pt| pt.derived.power > pt.derived.toughness)
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::HAS_ACTIVATED_ABILITY)
+        && !p.has_activated_ability()
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::NO_ACTIVATED_ABILITIES)
+        && p.has_activated_ability()
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE)
+        && !ctx.objects.get(&ctx.source).is_some_and(|src_view| {
+            p.current_colors
+                .iter()
+                .any(|c| src_view.current_colors.contains(c))
+        })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE)
+        && !ctx.objects.get(&ctx.source).is_some_and(|src_view| {
+            p.current_creature_subtypes
+                .iter()
+                .any(|st| src_view.current_creature_subtypes.contains(st))
+        })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE)
+        && !ctx.objects.get(&ctx.source).is_some_and(|src_view| {
+            p.current_types
+                .iter()
+                .any(|t| src_view.current_types.contains(t))
+        })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+        && !ctx.objects.get(&ctx.source).is_some_and(|src_view| {
+            ctx.name_rules
+                .shares_name(&p.current_names, &src_view.current_names)
+        })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE)
+        && ctx.objects.get(&ctx.source).is_some_and(|src_view| {
+            ctx.name_rules
+                .shares_name(&p.current_names, &src_view.current_names)
+        })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::UNIQUE_NAME_AMONG_CONTROLLED)
+        && ctx.objects.values().any(|other| {
+            other.object != id
+                && other.zone == ObjectZone::Battlefield
+                && other.controller == Some(ctx.controller)
+                && ctx
+                    .name_rules
+                    .shares_name(&p.current_names, &other.current_names)
+        })
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::SUSPENDED)
+        && !(p.zone == ObjectZone::Exile
+            && ctx
+                .state
+                .permanent_counter_count(id, CounterKind::Time)
+                .is_positive())
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::FACE_UP)
+        && !ctx
+            .cards
+            .get(id)
+            .is_some_and(|card| card.face_down().is_none())
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_COLOR_WITH_TARGET)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SAME_NAME_AS_TARGET)
+        || clause.flags.contains(ObjectFilterFlags::IN_LAST_MOVED)
+        || clause.flags.contains(ObjectFilterFlags::ATTACHED_TO_TARGET)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED)
+    {
+        return false;
+    }
+    if clause
+        .flags
         .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
         && !ctx
             .state
@@ -875,6 +1049,20 @@ fn matches_world_clause(
                 .trigger_subject
                 .and_then(|tid| ctx.objects.get(&tid))
                 .and_then(|o| object_mana_value(ctx, o)),
+            DynamicStatAnchor::TriggerSubjectToughness => ctx
+                .trigger_subject
+                .and_then(|tid| ctx.objects.get(&tid))
+                .and_then(|o| {
+                    o.power_toughness
+                        .as_ref()
+                        .map(|pt| pt.derived.toughness.clone())
+                }),
+            DynamicStatAnchor::TargetToughness
+            | DynamicStatAnchor::TargetManaValue
+            | DynamicStatAnchor::LastSacrificedPower
+            | DynamicStatAnchor::LastSacrificedToughness
+            | DynamicStatAnchor::LastSacrificedManaValue
+            | DynamicStatAnchor::LastMovedCount => None,
         }
     };
     if let PowerFilter::CompareAnchor { op, anchor } = clause.power

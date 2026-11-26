@@ -2551,6 +2551,14 @@ pub struct ObjectCharacteristics {
     pub power_toughness: Option<PowerToughnessEvaluation>,
 }
 impl ObjectCharacteristics {
+    /// Whether this object currently has at least one activated ability (CR 602.1).
+    #[must_use]
+    pub fn has_activated_ability(&self) -> bool {
+        !self.abilities.activated.is_empty()
+            || !self.abilities.mana.is_empty()
+            || !self.intrinsic_mana.is_empty()
+    }
+
     /// True when this object has no surviving abilities after layers (CR 113.1 / CR 613.1f).
     #[must_use]
     pub fn has_no_abilities(&self) -> bool {

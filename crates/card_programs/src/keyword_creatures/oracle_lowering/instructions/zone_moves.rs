@@ -468,7 +468,7 @@ pub(super) fn lower_zone_moves_instruction(
                 count: TargetCountAst::Exact(1),
             } => {
                 let bt = lower_target_subject(subject, vocabulary)?;
-                if filter.zone.is_some() {
+                if filter.zone.is_some() && filter.zone != Some(ZoneFilter::Battlefield) {
                     if matches!(
                         bt,
                         BodyTarget::SingleOwnGraveyardCard
@@ -5609,6 +5609,28 @@ pub(super) fn lower_zone_moves_instruction(
                         });
                         return Ok(());
                     }
+                    SubjectRefAst::Anaphora(raw)
+                        if pd == PublicZoneDestination::Hand
+                            && matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "your commander" | "your commander from the command zone"
+                            ) =>
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::SelectZoneCardsToZone {
+                                player: ResolvingPlayer::Controller,
+                                source_zone: SourceZoneFilter::CommandZone,
+                                filter: Box::new(ObjectFilter::any().with_flags(
+                                    spellwake_engine::program::ObjectFilterFlags::COMMANDER_ONLY,
+                                )),
+                                min: ValueExpr::literal(1),
+                                max: ValueExpr::literal(1),
+                                destination: SubjectDestination::Hand,
+                                reveal: false,
+                            });
+                        return Ok(());
+                    }
                     SubjectRefAst::Anaphora(_)
                         if matches!(
                             builder.target,
@@ -7736,6 +7758,7 @@ pub(super) fn lower_zone_moves_instruction(
                     duration: ResolvedDuration::NoStatedDuration,
                 },
                 rest_dest: spellwake_engine::program::LookTopRestDest::Exile,
+                keep_all_revealed: false,
             });
             Ok(())
         }
@@ -8021,7 +8044,8 @@ pub(super) fn has_live_last_moved_producer(
                 ..
             } => {
                 return match keep_dest {
-                    spellwake_engine::program::LookTopKeepDest::Exile { .. } => matches!(
+                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
+                    | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. } => matches!(
                         expected,
                         LastMovedProducerKind::Any | LastMovedProducerKind::Exile
                     ),
@@ -8031,6 +8055,9 @@ pub(super) fn has_live_last_moved_producer(
                     ),
                     _ => matches!(expected, LastMovedProducerKind::Any),
                 };
+            }
+            Instruction::ChooseObjects { .. } => {
+                return matches!(expected, LastMovedProducerKind::Any);
             }
             Instruction::MoveGroup { destination, .. } => {
                 return match destination {
@@ -8123,23 +8150,33 @@ pub(super) fn strip_last_moved_predicates(
                         "milled_this_way"
                         | "among_the_cards_milled_this_way"
                         | "among the cards milled this way"
+                        | "among_cards_milled_this_way"
+                        | "among cards milled this way"
                         | "cards_milled_this_way"
                         | "from_among_the_cards_milled_this_way"
-                        | "from among the cards milled this way" => {
+                        | "from among the cards milled this way"
+                        | "from_among_cards_milled_this_way"
+                        | "from among cards milled this way" => {
                             Some(MatchKind::Producer(LastMovedProducerKind::Mill))
                         }
                         "exiled_this_way"
                         | "among_the_cards_exiled_this_way"
                         | "among the cards exiled this way"
+                        | "among_cards_exiled_this_way"
+                        | "among cards exiled this way"
                         | "cards_exiled_this_way"
                         | "from_among_the_cards_exiled_this_way"
                         | "from among the cards exiled this way"
+                        | "from_among_cards_exiled_this_way"
+                        | "from among cards exiled this way"
                         | "from_among_those_cards_exiled_this_way" => {
                             Some(MatchKind::Producer(LastMovedProducerKind::Exile))
                         }
                         "discarded_this_way"
                         | "among_the_cards_discarded_this_way"
-                        | "from_among_the_cards_discarded_this_way" => {
+                        | "among_cards_discarded_this_way"
+                        | "from_among_the_cards_discarded_this_way"
+                        | "from_among_cards_discarded_this_way" => {
                             Some(MatchKind::Producer(LastMovedProducerKind::Discard))
                         }
                         "put_into_graveyard_this_way"
@@ -8149,9 +8186,9 @@ pub(super) fn strip_last_moved_predicates(
                         }
                         "revealed_this_way"
                         | "among_the_cards_revealed_this_way"
-                        | "from_among_the_cards_revealed_this_way" => {
-                            Some(MatchKind::RevealedMoved)
-                        }
+                        | "among_cards_revealed_this_way"
+                        | "from_among_the_cards_revealed_this_way"
+                        | "from_among_cards_revealed_this_way" => Some(MatchKind::RevealedMoved),
                         _ => None,
                     }
                 }
@@ -8295,6 +8332,12 @@ pub(super) fn resolve_select_zone(
         {
             filter.controller = None;
             Ok((ResolvingPlayer::Controller, SourceZoneFilter::OpponentExile))
+        }
+        Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
+            Ok((ResolvingPlayer::Controller, SourceZoneFilter::OpponentHand))
+        }
+        Some(ZoneFilter::CommandZone) => {
+            Ok((ResolvingPlayer::Controller, SourceZoneFilter::CommandZone))
         }
         Some(ZoneFilter::Exile) => Ok((ResolvingPlayer::Controller, SourceZoneFilter::Exile)),
         _ => Err("oracle:unsupported-move-zone"),
@@ -8599,13 +8642,19 @@ fn lower_linked_exile_group_move(
     let mut inner = f.clone();
     inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
     inner.zone = None;
-    if strip_owner_that_player
-        && matches!(
+    if strip_owner_that_player {
+        if matches!(
             inner.controller,
             Some(ControllerRelation::OwnerThatPlayer | ControllerRelation::ThatPlayer)
-        )
-    {
-        inner.controller = None;
+        ) {
+            inner.controller = None;
+        }
+        if matches!(
+            inner.owner,
+            Some(ControllerRelation::OwnerThatPlayer | ControllerRelation::ThatPlayer)
+        ) {
+            inner.owner = None;
+        }
     }
     if is_unrestricted_filter(&inner) {
         builder.instructions.push(Instruction::ReturnLinkedExile {
@@ -9086,7 +9135,54 @@ pub(super) fn resolve_return_select_zone(
     let Some(fz) = from_zone else {
         return Ok((ResolvingPlayer::Controller, default_zone));
     };
-    let fl = fz.to_ascii_lowercase();
+    let fl = fz.trim().to_ascii_lowercase();
+    if matches!(
+        fl.as_str(),
+        "among them"
+            | "from among them"
+            | "them"
+            | "among those cards"
+            | "from among those cards"
+            | "those cards"
+            | "those"
+    ) && has_live_last_moved_producer(&builder.instructions, LastMovedProducerKind::Any)
+    {
+        return Ok((ResolvingPlayer::Controller, SourceZoneFilter::LastMoved));
+    }
+    if fl.contains("command zone") {
+        return Ok((ResolvingPlayer::Controller, SourceZoneFilter::CommandZone));
+    }
+    if fl.contains("target opponent's graveyard") {
+        builder.bind_target(BodyTarget::SingleOpponent)?;
+        return Ok((
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::TargetPlayerGraveyard,
+        ));
+    }
+    if fl.contains("target player's graveyard") {
+        builder.bind_target(BodyTarget::SinglePlayer)?;
+        return Ok((
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::TargetPlayerGraveyard,
+        ));
+    }
+    if fl.contains("target opponent's hand") {
+        builder.bind_target(BodyTarget::SingleOpponent)?;
+        return Ok((
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::TargetPlayerHand,
+        ));
+    }
+    if fl.contains("target player's hand") {
+        builder.bind_target(BodyTarget::SinglePlayer)?;
+        return Ok((
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::TargetPlayerHand,
+        ));
+    }
+    if fl.contains("opponent's hand") || fl.contains("opponents' hands") {
+        return Ok((ResolvingPlayer::Controller, SourceZoneFilter::OpponentHand));
+    }
     if fl.contains("that player's graveyard") || fl.contains("their graveyard") {
         let rp = lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)?;
         Ok((rp, SourceZoneFilter::Graveyard))

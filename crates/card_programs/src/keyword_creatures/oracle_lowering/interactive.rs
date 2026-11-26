@@ -889,11 +889,15 @@ pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
         | Instruction::GrantCardPlayPermission { any_color, .. }
         | Instruction::GrantLastMovedPlayPermission { any_color, .. }
         | Instruction::LookTopChooseExt {
-            keep_dest: spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. },
+            keep_dest:
+                spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
+                | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
             ..
         }
         | Instruction::RevealUntilMatchExt {
-            match_dest: spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. },
+            match_dest:
+                spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
+                | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
             ..
         } => {
             *any_color = true;
@@ -934,9 +938,42 @@ pub(super) fn lower_populate(
     Ok(())
 }
 
+/// Strip a revealed-hand reference (`from it`, `from them`, `from that hand`, `from their hand`,
+/// or `of those cards`) whether trailing or embedded before a qualifier clause (for example
+/// `"a nonland card from it with mana value 3 or less"`).
+fn strip_revealed_hand_ref(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('.').trim();
+    for suffix in [
+        " from it",
+        " from them",
+        " from that hand",
+        " from their hand",
+        " of those cards",
+    ] {
+        if let Some(rest) = trimmed.strip_suffix(suffix) {
+            let cleaned = rest.trim();
+            return (!cleaned.is_empty()).then(|| cleaned.to_owned());
+        }
+    }
+    for mid in [
+        " from it ",
+        " from them ",
+        " from that hand ",
+        " from their hand ",
+        " of those cards ",
+    ] {
+        if let Some((head, tail)) = trimmed.split_once(mid) {
+            let joined = format!("{} {}", head.trim(), tail.trim());
+            let cleaned = joined.trim();
+            return (!cleaned.is_empty()).then(|| cleaned.to_owned());
+        }
+    }
+    None
+}
+
 /// Extract a `"<filter> from it/them"` hand-choice description from either
 /// `InstructionAst::ChooseOption` or `InstructionAst::InteractiveChoice(ChooseFromGroup)`.
-pub(super) fn extract_revealed_hand_choice_desc(op: &InstructionAst) -> Option<&str> {
+pub(super) fn extract_revealed_hand_choice_desc(op: &InstructionAst) -> Option<String> {
     let raw = match op {
         InstructionAst::ChooseOption(s) => s.as_str(),
         InstructionAst::InteractiveChoice(InteractiveChoiceKind::ChooseFromGroup {
@@ -945,14 +982,7 @@ pub(super) fn extract_revealed_hand_choice_desc(op: &InstructionAst) -> Option<&
         }) => description.as_str(),
         _ => return None,
     };
-    let trimmed = raw.trim().trim_end_matches('.');
-    trimmed
-        .strip_suffix(" from it")
-        .or_else(|| trimmed.strip_suffix(" from them"))
-        .or_else(|| trimmed.strip_suffix(" from that hand"))
-        .or_else(|| trimmed.strip_suffix(" of those cards"))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+    strip_revealed_hand_ref(raw)
 }
 
 /// Unwrap either a bare `LookTopLibrary` or a single-instruction `BindX([LookTopLibrary])`
@@ -1163,7 +1193,90 @@ pub(super) fn lower_choose_from_group(
     }
     if chooser == PlayerRefAst::You {
         match group {
-            SubjectRefAst::TargetObject { .. } => {
+            SubjectRefAst::TargetObject {
+                filter,
+                count: TargetCountAst::UpTo(1),
+            } => {
+                let single = SubjectRefAst::TargetObject {
+                    filter: filter.clone(),
+                    count: TargetCountAst::Exact(1),
+                };
+                let bt = lower_target_subject(&single, vocabulary)?;
+                match bt {
+                    BodyTarget::SingleOwnGraveyardCard
+                    | BodyTarget::FilteredOwnGraveyardCard(_)
+                    | BodyTarget::AnyGraveyardCard
+                    | BodyTarget::AnyGraveyardCreature
+                    | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                        builder.bind_target(bt)?;
+                        builder.graveyard_target_bounds = Some((0, 1));
+                        return Ok(());
+                    }
+                    BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_) => {
+                        builder.bind_target(bt)?;
+                        builder.up_to_one_target = true;
+                        return Ok(());
+                    }
+                    _ => return Err("oracle:unsupported-target-subject"),
+                }
+            }
+            SubjectRefAst::TargetObject { filter, count }
+                if filter.zone.is_some()
+                    && (matches!(count, TargetCountAst::Exact(n) if *n >= 2)
+                        || matches!(count, TargetCountAst::UpTo(max) if *max >= 2)
+                        || matches!(count, TargetCountAst::AnyNumber)) =>
+            {
+                let (min_t, max_t) = match *count {
+                    TargetCountAst::Exact(n) => (usize::from(n), usize::from(n)),
+                    TargetCountAst::UpTo(max) => (0, usize::from(max)),
+                    TargetCountAst::AnyNumber => (0, usize::MAX),
+                    _ => return Err("oracle:unsupported-target-subject"),
+                };
+                let single = SubjectRefAst::TargetObject {
+                    filter: filter.clone(),
+                    count: TargetCountAst::Exact(1),
+                };
+                let bt = lower_target_subject(&single, vocabulary)?;
+                if matches!(
+                    bt,
+                    BodyTarget::SingleOwnGraveyardCard
+                        | BodyTarget::FilteredOwnGraveyardCard(_)
+                        | BodyTarget::AnyGraveyardCard
+                        | BodyTarget::AnyGraveyardCreature
+                        | BodyTarget::FilteredAnyGraveyardCard { .. }
+                ) {
+                    builder.bind_target(bt)?;
+                    builder.graveyard_target_bounds = Some((min_t, max_t));
+                    return Ok(());
+                }
+                return Err("oracle:unsupported-target-subject");
+            }
+            SubjectRefAst::TargetOneOf {
+                options,
+                count: TargetCountAst::UpTo(1),
+            } => {
+                let single = SubjectRefAst::TargetOneOf {
+                    options: options.clone(),
+                    count: TargetCountAst::Exact(1),
+                };
+                let bt = lower_target_subject(&single, vocabulary)?;
+                if matches!(
+                    bt,
+                    BodyTarget::SingleCreature
+                        | BodyTarget::SinglePermanent
+                        | BodyTarget::SinglePlaneswalker
+                        | BodyTarget::FilteredPermanent(_)
+                ) {
+                    builder.bind_target(bt)?;
+                    builder.up_to_one_target = true;
+                    return Ok(());
+                }
+                return Err("oracle:unsupported-target-subject");
+            }
+            SubjectRefAst::TargetObject { .. } | SubjectRefAst::TargetOneOf { .. } => {
                 let bt = lower_target_subject(group, vocabulary)?;
                 builder.bind_target(bt)?;
                 return Ok(());
@@ -1391,31 +1504,97 @@ fn lower_group_choose_spec(
     use spellwake_engine::program::SourceZoneFilter;
     use spellwake_oracle_compiler::ast::{ControllerRelation, ZoneFilter};
     let players = lower_affected_players_in_context(chooser, builder, in_trigger)?;
-    let (source_zone, stripped_ctrl) = match filter_ast.zone {
-        Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand | ZoneFilter::AnyHand) => {
-            (SourceZoneFilter::Hand, false)
-        }
-        Some(ZoneFilter::YourGraveyard | ZoneFilter::ThatPlayerGraveyard) => {
-            (SourceZoneFilter::Graveyard, false)
-        }
-        Some(ZoneFilter::OpponentGraveyard | ZoneFilter::TargetOpponentGraveyard) => {
-            (SourceZoneFilter::OpponentGraveyard, false)
-        }
-        Some(ZoneFilter::AnyGraveyard) => (SourceZoneFilter::AnyGraveyard, false),
-        Some(ZoneFilter::Exile) => (SourceZoneFilter::Exile, false),
-        None | Some(ZoneFilter::Battlefield) => {
-            if matches!(
-                filter_ast.controller,
-                Some(ControllerRelation::You | ControllerRelation::ThatPlayer)
-            ) {
-                (SourceZoneFilter::Battlefield, true)
-            } else {
-                (SourceZoneFilter::AnyBattlefield, false)
-            }
-        }
-        _ => return Err("oracle:unsupported-instruction"),
-    };
     let mut normalized = filter_ast.clone();
+    let (source_zone, stripped_ctrl) = if (normalized.flags.0
+        & spellwake_oracle_compiler::ast::ObjectFilterFlags::EXILED_WITH_SELF.0)
+        != 0
+        && matches!(normalized.zone, None | Some(ZoneFilter::Exile))
+        && (in_trigger || builder.has_source)
+    {
+        normalized.flags.0 &=
+            !spellwake_oracle_compiler::ast::ObjectFilterFlags::EXILED_WITH_SELF.0;
+        (SourceZoneFilter::LinkedExile, false)
+    } else if strip_interactive_last_moved_predicates(&mut normalized, &builder.instructions) {
+        (SourceZoneFilter::LastMoved, false)
+    } else {
+        match normalized.zone {
+            Some(ZoneFilter::YourHand) if chooser == PlayerRefAst::You => {
+                (SourceZoneFilter::Hand, false)
+            }
+            Some(ZoneFilter::ThatPlayerHand)
+                if chooser == PlayerRefAst::You
+                    && matches!(
+                        builder.target,
+                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                    ) =>
+            {
+                (SourceZoneFilter::TargetPlayerHand, false)
+            }
+            Some(ZoneFilter::ThatPlayerHand) if chooser != PlayerRefAst::You => {
+                (SourceZoneFilter::Hand, false)
+            }
+            Some(ZoneFilter::TargetPlayerHand) if chooser == PlayerRefAst::You => {
+                builder.bind_target(BodyTarget::SinglePlayer)?;
+                (SourceZoneFilter::TargetPlayerHand, false)
+            }
+            Some(ZoneFilter::TargetOpponentHand) if chooser == PlayerRefAst::You => {
+                builder.bind_target(BodyTarget::SingleOpponent)?;
+                (SourceZoneFilter::TargetPlayerHand, false)
+            }
+            Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
+                (SourceZoneFilter::OpponentHand, false)
+            }
+            Some(ZoneFilter::YourGraveyard) if chooser == PlayerRefAst::You => {
+                (SourceZoneFilter::Graveyard, false)
+            }
+            Some(ZoneFilter::ThatPlayerGraveyard)
+                if chooser == PlayerRefAst::You
+                    && matches!(
+                        builder.target,
+                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                    ) =>
+            {
+                (SourceZoneFilter::TargetPlayerGraveyard, false)
+            }
+            Some(ZoneFilter::ThatPlayerGraveyard) if chooser != PlayerRefAst::You => {
+                (SourceZoneFilter::Graveyard, false)
+            }
+            Some(ZoneFilter::TargetPlayerGraveyard) if chooser == PlayerRefAst::You => {
+                builder.bind_target(BodyTarget::SinglePlayer)?;
+                (SourceZoneFilter::TargetPlayerGraveyard, false)
+            }
+            Some(ZoneFilter::TargetOpponentGraveyard) if chooser == PlayerRefAst::You => {
+                builder.bind_target(BodyTarget::SingleOpponent)?;
+                (SourceZoneFilter::TargetPlayerGraveyard, false)
+            }
+            Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
+                (SourceZoneFilter::OpponentGraveyard, false)
+            }
+            Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
+                (SourceZoneFilter::AnyGraveyard, false)
+            }
+            Some(ZoneFilter::CommandZone) if chooser == PlayerRefAst::You => {
+                (SourceZoneFilter::CommandZone, false)
+            }
+            Some(ZoneFilter::Exile) => (SourceZoneFilter::Exile, false),
+            None | Some(ZoneFilter::Battlefield) => {
+                if (chooser == PlayerRefAst::You
+                    && normalized.controller == Some(ControllerRelation::You))
+                    || (chooser != PlayerRefAst::You
+                        && normalized.controller == Some(ControllerRelation::ThatPlayer))
+                {
+                    (SourceZoneFilter::Battlefield, true)
+                } else if chooser != PlayerRefAst::You
+                    && normalized.controller == Some(ControllerRelation::You)
+                {
+                    return Err("oracle:unsupported-instruction");
+                } else {
+                    (SourceZoneFilter::AnyBattlefield, false)
+                }
+            }
+            _ => return Err("oracle:unsupported-instruction"),
+        }
+    };
     normalized.zone = None;
     if stripped_ctrl {
         normalized.controller = None;
@@ -1444,10 +1623,53 @@ fn parse_interactive_choose_objects(
         .trim()
         .trim_end_matches('.')
         .to_ascii_lowercase();
-    if raw.contains("target") || raw.contains("from it") || raw.contains("from them") {
+    if raw.contains("target")
+        && !raw.contains("in target player's ")
+        && !raw.contains("from target player's ")
+        && !raw.contains("in target opponent's ")
+        && !raw.contains("from target opponent's ")
+    {
         return None;
     }
     let players = lower_affected_players_in_context(chooser, builder, in_trigger).ok()?;
+
+    // Revealed target player's hand choice (for example Brain Maggot, Kitesail Freebooter):
+    // immediately after `RevealPlayerHand(TargetPlayer)`, "a nonland card from it [with ...]"
+    // lowers to `ChooseObjects` over `SourceZoneFilter::TargetPlayerHand`.
+    if chooser == PlayerRefAst::You
+        && matches!(
+            builder.instructions.last(),
+            Some(Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer))
+        )
+        && let Some(core) = strip_revealed_hand_ref(&raw)
+    {
+        let (min_val, max_val, flt_phrase) = parse_choose_objects_count_prefix(&core)?;
+        let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            flt_phrase,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if parsed.zone.is_some()
+            || parsed.controller.is_some()
+            || parsed.owner.is_some()
+            || parsed.named.is_some()
+        {
+            return None;
+        }
+        let filter = super::filters::lower_object_filter(&parsed, vocabulary).ok()?;
+        return Some(ChooseObjectsSpec {
+            players,
+            source_zone: SourceZoneFilter::TargetPlayerHand,
+            filter,
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+        });
+    }
+    if raw.contains("from it") || raw.contains("from them") {
+        return None;
+    }
 
     // Special constrained forms with exact rules semantics:
     // 1. "any number of creatures with different powers" (Sigarda's Vanguard, Sigardian Zealot)
@@ -1507,34 +1729,180 @@ fn parse_interactive_choose_objects(
         });
     }
 
-    // 4. Generic battlefield non-target object filter choices
-    let (min_val, max_val, body_phrase) = if let Some(rest) = raw.strip_prefix("any number of ") {
-        (0i64, 99i64, rest)
-    } else if let Some(rest) = raw.strip_prefix("up to one ") {
-        (0, 1, rest)
-    } else if let Some(rest) = raw.strip_prefix("up to two ") {
-        (0, 2, rest)
-    } else if let Some(rest) = raw.strip_prefix("two ") {
-        (2, 2, rest)
-    } else if let Some(rest) = raw.strip_prefix("one ") {
-        (1, 1, rest)
-    } else if let Some(rest) = raw.strip_prefix("an ") {
-        (1, 1, rest)
-    } else {
-        let rest = raw.strip_prefix("a ")?;
-        (1, 1, rest)
-    };
+    // 4. Generic non-target object filter choices across battlefield, hand, graveyard, exile,
+    //    command zone, linked exile, and recently moved objects.
+    let (min_val, max_val, body_phrase) = parse_choose_objects_count_prefix(&raw)?;
 
-    let (source_zone, filter_phrase) = if let Some(p) = body_phrase
-        .strip_suffix(" they control")
-        .or_else(|| body_phrase.strip_suffix(" you control"))
+    let mut req_target: Option<BodyTarget> = None;
+    let (source_zone, filter_phrase) = if let Some(p) =
+        body_phrase.strip_suffix(" exiled this way").filter(|_| {
+            has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Exile)
+        }) {
+        (SourceZoneFilter::LastMoved, p.trim())
+    } else if let Some(p) = body_phrase.strip_suffix(" milled this way").filter(|_| {
+        has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Mill)
+    }) {
+        (SourceZoneFilter::LastMoved, p.trim())
+    } else if let Some(p) = body_phrase.strip_suffix(" discarded this way").filter(|_| {
+        has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Discard)
+    }) {
+        (SourceZoneFilter::LastMoved, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" from among them")
+        .or_else(|| body_phrase.strip_suffix(" from among those cards"))
+        .filter(|_| {
+            has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Any)
+        })
     {
+        (SourceZoneFilter::LastMoved, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" exiled with ~")
+        .or_else(|| body_phrase.strip_suffix(" exiled with this creature"))
+        .or_else(|| body_phrase.strip_suffix(" exiled with this artifact"))
+        .or_else(|| body_phrase.strip_suffix(" exiled with this enchantment"))
+        .or_else(|| body_phrase.strip_suffix(" exiled with this permanent"))
+        .filter(|_| in_trigger || builder.has_source)
+    {
+        (SourceZoneFilter::LinkedExile, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in your graveyard")
+        .or_else(|| body_phrase.strip_suffix(" from your graveyard"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        (SourceZoneFilter::Graveyard, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in their graveyard")
+        .or_else(|| body_phrase.strip_suffix(" from their graveyard"))
+        .or_else(|| body_phrase.strip_suffix(" in that player's graveyard"))
+        .or_else(|| body_phrase.strip_suffix(" from that player's graveyard"))
+    {
+        if chooser == PlayerRefAst::You {
+            if matches!(
+                builder.target,
+                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+            ) {
+                (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
+            } else {
+                return None;
+            }
+        } else {
+            (SourceZoneFilter::Graveyard, p.trim())
+        }
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in target player's graveyard")
+        .or_else(|| body_phrase.strip_suffix(" from target player's graveyard"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        req_target = Some(BodyTarget::SinglePlayer);
+        (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in target opponent's graveyard")
+        .or_else(|| body_phrase.strip_suffix(" from target opponent's graveyard"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        req_target = Some(BodyTarget::SingleOpponent);
+        (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in an opponent's graveyard")
+        .or_else(|| body_phrase.strip_suffix(" from an opponent's graveyard"))
+        .or_else(|| body_phrase.strip_suffix(" in opponents' graveyards"))
+        .or_else(|| body_phrase.strip_suffix(" from opponents' graveyards"))
+    {
+        (SourceZoneFilter::OpponentGraveyard, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in a graveyard")
+        .or_else(|| body_phrase.strip_suffix(" in any graveyard"))
+        .or_else(|| body_phrase.strip_suffix(" from a graveyard"))
+        .or_else(|| body_phrase.strip_suffix(" from any graveyard"))
+    {
+        (SourceZoneFilter::AnyGraveyard, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in your hand")
+        .or_else(|| body_phrase.strip_suffix(" from your hand"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        (SourceZoneFilter::Hand, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in their hand")
+        .or_else(|| body_phrase.strip_suffix(" from their hand"))
+        .or_else(|| body_phrase.strip_suffix(" in that player's hand"))
+        .or_else(|| body_phrase.strip_suffix(" from that player's hand"))
+    {
+        if chooser == PlayerRefAst::You {
+            if matches!(
+                builder.target,
+                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+            ) {
+                (SourceZoneFilter::TargetPlayerHand, p.trim())
+            } else {
+                return None;
+            }
+        } else {
+            (SourceZoneFilter::Hand, p.trim())
+        }
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in target player's hand")
+        .or_else(|| body_phrase.strip_suffix(" from target player's hand"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        req_target = Some(BodyTarget::SinglePlayer);
+        (SourceZoneFilter::TargetPlayerHand, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in target opponent's hand")
+        .or_else(|| body_phrase.strip_suffix(" from target opponent's hand"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        req_target = Some(BodyTarget::SingleOpponent);
+        (SourceZoneFilter::TargetPlayerHand, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in an opponent's hand")
+        .or_else(|| body_phrase.strip_suffix(" from an opponent's hand"))
+    {
+        (SourceZoneFilter::OpponentHand, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in the command zone")
+        .or_else(|| body_phrase.strip_suffix(" from the command zone"))
+        .or_else(|| body_phrase.strip_suffix(" in your command zone"))
+        .or_else(|| body_phrase.strip_suffix(" from your command zone"))
+    {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
+        (SourceZoneFilter::CommandZone, p.trim())
+    } else if let Some(p) = body_phrase
+        .strip_suffix(" in exile")
+        .or_else(|| body_phrase.strip_suffix(" from exile"))
+    {
+        (SourceZoneFilter::Exile, p.trim())
+    } else if let Some(p) = body_phrase.strip_suffix(" on the battlefield") {
+        (SourceZoneFilter::AnyBattlefield, p.trim())
+    } else if let Some(p) = body_phrase.strip_suffix(" they control") {
+        if chooser == PlayerRefAst::You {
+            return None;
+        }
+        (SourceZoneFilter::Battlefield, p.trim())
+    } else if let Some(p) = body_phrase.strip_suffix(" you control") {
+        if chooser != PlayerRefAst::You {
+            return None;
+        }
         (SourceZoneFilter::Battlefield, p.trim())
     } else if body_phrase.ends_with(" that player controls") {
         // When controller chooses a creature "that player controls" inside ForEachPlayer,
         // `ThatPlayer` maps to LoopPlayer/ChosenPlayer in `lower_object_filter`.
         (SourceZoneFilter::AnyBattlefield, body_phrase.trim())
-    } else if body_phrase.contains(" in ") {
+    } else if body_phrase.contains(" in ") || body_phrase.contains(" from ") {
         return None;
     } else {
         (SourceZoneFilter::AnyBattlefield, body_phrase.trim())
@@ -1551,8 +1919,24 @@ fn parse_interactive_choose_objects(
     if source_zone == SourceZoneFilter::Battlefield {
         normalized.controller = None;
     }
+    if normalized.zone == Some(spellwake_oracle_compiler::ast::ZoneFilter::Battlefield)
+        && matches!(
+            source_zone,
+            SourceZoneFilter::Battlefield | SourceZoneFilter::AnyBattlefield
+        )
+    {
+        normalized.zone = None;
+    }
     if normalized.zone.is_some() {
         return None;
+    }
+    if chooser != PlayerRefAst::You
+        && normalized.controller == Some(spellwake_oracle_compiler::ast::ControllerRelation::You)
+    {
+        return None;
+    }
+    if let Some(bt) = req_target {
+        builder.bind_target(bt).ok()?;
     }
     let filter = super::filters::lower_object_filter(&normalized, vocabulary).ok()?;
     Some(ChooseObjectsSpec {
@@ -1564,6 +1948,221 @@ fn parse_interactive_choose_objects(
         distinct_powers: false,
         max_total_power: None,
     })
+}
+
+fn parse_choose_objects_count_prefix(raw: &str) -> Option<(i64, i64, &str)> {
+    if let Some(rest) = raw.strip_prefix("any number of ") {
+        Some((0, 99, rest))
+    } else if let Some(rest) = raw.strip_prefix("up to one ") {
+        Some((0, 1, rest))
+    } else if let Some(rest) = raw.strip_prefix("up to two ") {
+        Some((0, 2, rest))
+    } else if let Some(rest) = raw.strip_prefix("up to three ") {
+        Some((0, 3, rest))
+    } else if let Some(rest) = raw.strip_prefix("three ") {
+        Some((3, 3, rest))
+    } else if let Some(rest) = raw.strip_prefix("two ") {
+        Some((2, 2, rest))
+    } else if let Some(rest) = raw.strip_prefix("one ") {
+        Some((1, 1, rest))
+    } else if let Some(rest) = raw.strip_prefix("an ") {
+        Some((1, 1, rest))
+    } else {
+        raw.strip_prefix("a ").map(|rest| (1, 1, rest))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum InteractiveLastMovedKind {
+    Any,
+    Exile,
+    Mill,
+    Discard,
+}
+
+fn has_live_interactive_last_moved(
+    ops: &[Instruction],
+    expected: InteractiveLastMovedKind,
+) -> bool {
+    for op in ops.iter().rev() {
+        match op {
+            Instruction::Mill { .. } | Instruction::MillEachPlayer(_) => {
+                return matches!(
+                    expected,
+                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
+                );
+            }
+            Instruction::ExileLibraryTop { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::ExileTopPlay { .. }
+            | Instruction::ExileTopForPlay { .. }
+            | Instruction::ExileFromZone { .. }
+            | Instruction::ExileGroupFromZone { .. }
+            | Instruction::ExileChosenPermanents { .. }
+            | Instruction::ExileTarget
+            | Instruction::ExileGraveyardTarget
+            | Instruction::ExileSubjectUntilSourceLeaves { .. } => {
+                return matches!(
+                    expected,
+                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
+                );
+            }
+            Instruction::Discard { .. }
+            | Instruction::DiscardFiltered { .. }
+            | Instruction::DiscardOneAtRandom(_)
+            | Instruction::DiscardUpTo { .. }
+            | Instruction::DiscardUpToExt { .. } => {
+                return matches!(
+                    expected,
+                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Discard
+                );
+            }
+            Instruction::MoveSubject { destination, .. }
+            | Instruction::MoveLastMovedFiltered { destination, .. }
+            | Instruction::SelectZoneCardsToZone { destination, .. }
+            | Instruction::MoveGraveyardGroupOwned { destination, .. } => {
+                return match destination {
+                    SubjectDestination::Exile { .. } => matches!(
+                        expected,
+                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
+                    ),
+                    _ => matches!(expected, InteractiveLastMovedKind::Any),
+                };
+            }
+            Instruction::LookTopChooseExt { keep_dest, .. }
+            | Instruction::RevealUntilMatchExt {
+                match_dest: keep_dest,
+                ..
+            } => {
+                return match keep_dest {
+                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
+                    | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. } => matches!(
+                        expected,
+                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
+                    ),
+                    _ => matches!(expected, InteractiveLastMovedKind::Any),
+                };
+            }
+            Instruction::MoveGroup { destination, .. } => {
+                return match destination {
+                    PublicZoneDestination::Exile => matches!(
+                        expected,
+                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
+                    ),
+                    _ => matches!(expected, InteractiveLastMovedKind::Any),
+                };
+            }
+            Instruction::ChooseObjects { .. }
+            | Instruction::SearchLibrary { .. }
+            | Instruction::ManifestTop { .. }
+            | Instruction::ManifestDread => {
+                return matches!(expected, InteractiveLastMovedKind::Any);
+            }
+            Instruction::OptionalEffect { .. }
+            | Instruction::OptionalSequence { .. }
+            | Instruction::BranchIfFalse { .. }
+            | Instruction::Jump { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::AdjustControllerLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
+            | Instruction::GainControllerLife { .. }
+            | Instruction::AddMana(_)
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::RevealPlayerHand(_) => continue,
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn strip_interactive_last_moved_predicates(
+    filter: &mut spellwake_oracle_compiler::ast::ObjectFilterAst,
+    ops: &[Instruction],
+) -> bool {
+    use spellwake_oracle_compiler::ast::{FilterPredicateAst, PriorActionRefKind, ZoneFilter};
+    if matches!(
+        filter.zone,
+        Some(
+            ZoneFilter::OpponentHand
+                | ZoneFilter::OpponentsHands
+                | ZoneFilter::TargetOpponentHand
+                | ZoneFilter::TargetPlayerHand
+        )
+    ) {
+        return false;
+    }
+    let classify = |pred: &FilterPredicateAst| -> Option<InteractiveLastMovedKind> {
+        match pred {
+            FilterPredicateAst::PriorActionZoneRef { kind } => {
+                match kind.trim().to_ascii_lowercase().as_str() {
+                    "from_among_those"
+                    | "from_among_those_cards"
+                    | "among_them"
+                    | "among them"
+                    | "from_among_them"
+                    | "from among them"
+                    | "among_those"
+                    | "among those"
+                    | "among_those_cards"
+                    | "among those cards" => Some(InteractiveLastMovedKind::Any),
+                    "milled_this_way"
+                    | "cards_milled_this_way"
+                    | "among_the_cards_milled_this_way"
+                    | "among_cards_milled_this_way"
+                    | "from_among_the_cards_milled_this_way"
+                    | "from_among_cards_milled_this_way" => Some(InteractiveLastMovedKind::Mill),
+                    "exiled_this_way"
+                    | "cards_exiled_this_way"
+                    | "among_the_cards_exiled_this_way"
+                    | "among_cards_exiled_this_way"
+                    | "from_among_the_cards_exiled_this_way"
+                    | "from_among_cards_exiled_this_way"
+                    | "from_among_those_cards_exiled_this_way" => {
+                        Some(InteractiveLastMovedKind::Exile)
+                    }
+                    "discarded_this_way"
+                    | "among_the_cards_discarded_this_way"
+                    | "among_cards_discarded_this_way"
+                    | "from_among_the_cards_discarded_this_way"
+                    | "from_among_cards_discarded_this_way" => {
+                        Some(InteractiveLastMovedKind::Discard)
+                    }
+                    _ => None,
+                }
+            }
+            FilterPredicateAst::AffectedByPriorAction(PriorActionRefKind::ExiledThisWay) => {
+                Some(InteractiveLastMovedKind::Exile)
+            }
+            FilterPredicateAst::AffectedByPriorAction(PriorActionRefKind::DiscardedThisWay) => {
+                Some(InteractiveLastMovedKind::Discard)
+            }
+            FilterPredicateAst::StateQualification(raw) => {
+                match raw.trim().to_ascii_lowercase().as_str() {
+                    "exiled this way" => Some(InteractiveLastMovedKind::Exile),
+                    "milled this way" => Some(InteractiveLastMovedKind::Mill),
+                    "discarded this way" => Some(InteractiveLastMovedKind::Discard),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    };
+    let mut matched = false;
+    for pred in &filter.predicates {
+        if let Some(kind) = classify(pred) {
+            if !has_live_interactive_last_moved(ops, kind) {
+                return false;
+            }
+            matched = true;
+        }
+    }
+    if !matched {
+        return false;
+    }
+    filter.predicates.retain(|p| classify(p).is_none());
+    filter.zone = None;
+    true
 }
 
 /// Lower `InstructionAst::PlayerChooseOption { chooser, options }` into `ChooseValue` /

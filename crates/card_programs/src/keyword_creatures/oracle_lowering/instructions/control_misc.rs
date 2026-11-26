@@ -821,6 +821,16 @@ pub(super) fn lower_control_misc_instruction(
             if let Ok(kind) = parse_choice_kind(cleaned, false, vocabulary) {
                 return emit_choice_for_player_ref(*chooser, kind, builder, ids, in_trigger);
             }
+            if let Some(res) = try_lower_choose_objects_new_primitives(
+                *chooser,
+                cleaned,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            ) {
+                return res;
+            }
             interactive::try_lower_interactive_choose_from_group(
                 *chooser, cleaned, builder, vocabulary, ids, in_trigger,
             )
@@ -1065,6 +1075,16 @@ pub(super) fn lower_control_misc_instruction(
             if let Ok(kind) = parse_choice_kind(cleaned_choice, true, vocabulary) {
                 return emit_choice_for_player_ref(chooser_ref, kind, builder, ids, in_trigger);
             }
+            if let Some(res) = try_lower_choose_objects_new_primitives(
+                chooser_ref,
+                cleaned_choice,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            ) {
+                return res;
+            }
             interactive::try_lower_choose_option_ext(
                 chooser_ref,
                 cleaned_choice,
@@ -1124,6 +1144,45 @@ pub(super) fn lower_control_misc_instruction(
             Ok(())
         }
         InstructionAst::UnlockDoor { subject } => {
+            let eff_subject =
+                unwrap_in_zone_subject(subject).unwrap_or_else(|| (**subject).clone());
+            if let SubjectRefAst::Group(f) = &eff_subject
+                && matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                && !f.any_spell
+                && !f.is_ability
+            {
+                let mut inner = f.as_ref().clone();
+                inner.zone = None;
+                let source_zone = if inner.controller == Some(ControllerRelation::You) {
+                    inner.controller = None;
+                    SourceZoneFilter::Battlefield
+                } else {
+                    SourceZoneFilter::AnyBattlefield
+                };
+                let obj = if is_unrestricted_filter(&inner) {
+                    ObjectFilter::any()
+                } else {
+                    lower_object_filter_in_context(&inner, builder, in_trigger, vocabulary)?
+                };
+                if !obj.has_target_player() {
+                    builder.instructions.push(Instruction::ChooseObjects {
+                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                        source_zone,
+                        filter: Box::new(obj),
+                        min: ValueExpr::literal(1),
+                        max: ValueExpr::literal(1),
+                        distinct_powers: false,
+                        max_total_power: None,
+                        unchosen_action: None,
+                    });
+                    builder.instructions.push(Instruction::UnlockDoor {
+                        subject: MoveSubjectRef::LastMoved,
+                        door: None,
+                        allow_lock: false,
+                    });
+                    return Ok(());
+                }
+            }
             let subj = lower_move_subject_ref(
                 subject,
                 builder,
@@ -1915,6 +1974,373 @@ pub(super) enum LastMovedProducerKind {
     Graveyard,
     Sacrifice,
     Destroy,
+}
+
+fn try_lower_choose_objects_new_primitives(
+    chooser: PlayerRefAst,
+    cleaned: &str,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+) -> Option<Result<(), &'static str>> {
+    let raw = cleaned.trim().trim_end_matches('.');
+    if raw.is_empty()
+        || raw.contains("at random")
+        || raw.contains("with different")
+        || raw.contains("total power")
+        || raw.contains("total mana value")
+        || raw.contains("greatest")
+        || raw.contains("least")
+        || raw.contains("most")
+        || raw.contains("fewest")
+        || raw.contains("lesser")
+        || raw.contains("greater")
+        || raw.contains("equal")
+        || raw.contains("secretly")
+    {
+        return None;
+    }
+
+    // 1. Suspended card you own (Exile + ObjectFilterFlags::SUSPENDED).
+    if chooser == PlayerRefAst::You
+        && matches!(raw, "a suspended card you own" | "suspended card you own")
+    {
+        let clause = ObjectClause {
+            owner: ControllerFilter::You,
+            flags: ObjectFilterFlags::SUSPENDED,
+            ..ObjectClause::any()
+        };
+        builder.instructions.push(Instruction::ChooseObjects {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            source_zone: SourceZoneFilter::Exile,
+            filter: Box::new(ObjectFilter::Clause(clause)),
+            min: ValueExpr::literal(1),
+            max: ValueExpr::literal(1),
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        return Some(Ok(()));
+    }
+
+    let (min_val, max_val, body_raw) = if let Some(rest) = raw.strip_prefix("up to one ") {
+        (0i64, 1i64, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to two ") {
+        (0, 2, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("two ") {
+        (2, 2, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("one ") {
+        (1, 1, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("an ") {
+        (1, 1, rest.trim())
+    } else {
+        let rest = raw.strip_prefix("a ")?;
+        (1, 1, rest.trim())
+    };
+    if body_raw.is_empty() {
+        return None;
+    }
+
+    // 2. Card from a revealed target opponent/player's hand (SourceZoneFilter::TargetPlayerHand).
+    if chooser == PlayerRefAst::You
+        && !body_raw.contains("target")
+        && matches!(
+            builder.target,
+            BodyTarget::SingleOpponent | BodyTarget::SinglePlayer
+        )
+        && builder
+            .instructions
+            .iter()
+            .any(|op| matches!(op, Instruction::RevealPlayerHand(_)))
+        && let Some(card_phrase) = body_raw
+            .strip_suffix(" from it")
+            .or_else(|| body_raw.strip_suffix(" in it"))
+            .or_else(|| body_raw.strip_suffix(" from that hand"))
+    {
+        let card_phrase = card_phrase.trim();
+        let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            card_phrase,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if parsed.zone.is_some() {
+            return None;
+        }
+        let obj = if is_unrestricted_filter(&parsed) {
+            ObjectFilter::any()
+        } else {
+            lower_object_filter_in_context(&parsed, builder, in_trigger, vocabulary).ok()?
+        };
+        if obj.has_target_player() {
+            return None;
+        }
+        builder.instructions.push(Instruction::ChooseObjects {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            source_zone: SourceZoneFilter::TargetPlayerHand,
+            filter: Box::new(obj),
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        return Some(Ok(()));
+    }
+
+    // 3. Card from objects moved earlier in this resolution (SourceZoneFilter::LastMoved).
+    let prior_moved = last_instruction_moved_object(&builder.instructions)
+        || has_prior_moved_object(&builder.instructions)
+        || builder.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::ExileGroupFromZone { .. }
+                    | Instruction::ExileFromZone { .. }
+                    | Instruction::ExileTopPlay { .. }
+                    | Instruction::ExileLibraryTop { .. }
+                    | Instruction::ExileLibraryTopLinked { .. }
+                    | Instruction::MoveGroup { .. }
+                    | Instruction::MoveSubject { .. }
+                    | Instruction::SelectZoneCardsToZone { .. }
+                    | Instruction::Mill { .. }
+            )
+        });
+    if prior_moved
+        && !body_raw.contains("target")
+        && let Some(card_phrase) = body_raw
+            .strip_suffix(" exiled this way")
+            .or_else(|| body_raw.strip_suffix(" moved this way"))
+            .or_else(|| body_raw.strip_suffix(" milled this way"))
+            .or_else(|| body_raw.strip_suffix(" from among them"))
+            .or_else(|| body_raw.strip_suffix(" from among those cards"))
+            .or_else(|| body_raw.strip_suffix(" from among those"))
+    {
+        let card_phrase = card_phrase.trim();
+        let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            card_phrase,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if parsed.zone.is_some() {
+            return None;
+        }
+        let mut trial = builder.clone();
+        let players = lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
+        let obj = if is_unrestricted_filter(&parsed) {
+            ObjectFilter::any()
+        } else {
+            lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?
+        };
+        if obj.has_target_player() {
+            return None;
+        }
+        trial.instructions.push(Instruction::ChooseObjects {
+            players,
+            source_zone: SourceZoneFilter::LastMoved,
+            filter: Box::new(obj),
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        *builder = trial;
+        return Some(Ok(()));
+    }
+
+    // 4. Explicit "on the battlefield" non-target choice (e.g. Cytoshape).
+    if !body_raw.contains("target")
+        && !body_raw.contains(" from ")
+        && let Some(bf_phrase) = body_raw.strip_suffix(" on the battlefield")
+    {
+        let bf_phrase = bf_phrase.trim();
+        let mut parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            bf_phrase,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if !matches!(parsed.zone, None | Some(ZoneFilter::Battlefield)) {
+            return None;
+        }
+        parsed.zone = None;
+        let mut trial = builder.clone();
+        let players = lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
+        let obj = if is_unrestricted_filter(&parsed) {
+            ObjectFilter::any()
+        } else {
+            lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?
+        };
+        if obj.has_target_player() {
+            return None;
+        }
+        trial.instructions.push(Instruction::ChooseObjects {
+            players,
+            source_zone: SourceZoneFilter::AnyBattlefield,
+            filter: Box::new(obj),
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        *builder = trial;
+        return Some(Ok(()));
+    }
+
+    // 5. Permanent you control other than this permanent (chooser must be You so ControllerFilter::You binds to controller).
+    if chooser == PlayerRefAst::You
+        && !body_raw.contains("target")
+        && !body_raw.contains(" in ")
+        && !body_raw.contains(" from ")
+        && (self_pronoun_valid || in_trigger)
+        && let Some(before_other) = body_raw
+            .strip_suffix(" you control other than this creature")
+            .or_else(|| body_raw.strip_suffix(" you control other than this permanent"))
+            .or_else(|| body_raw.strip_suffix(" you control other than ~"))
+    {
+        let mut parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            before_other.trim(),
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if parsed.zone.is_some() {
+            return None;
+        }
+        parsed.controller = Some(ControllerRelation::You);
+        parsed.flags = parsed.flags.union(AstFilterFlags::EXCLUDE_SELF);
+        let mut trial = builder.clone();
+        let players = lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
+        let obj = lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?;
+        if obj.has_target_player() {
+            return None;
+        }
+        trial.instructions.push(Instruction::ChooseObjects {
+            players,
+            source_zone: SourceZoneFilter::AnyBattlefield,
+            filter: Box::new(obj),
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        *builder = trial;
+        return Some(Ok(()));
+    }
+
+    // 6. Non-target controlled battlefield object in ChooseOption (e.g. Season of Weaving: "an artifact or creature you control").
+    if chooser == PlayerRefAst::You
+        && !body_raw.contains("target")
+        && !body_raw.contains(" in ")
+        && !body_raw.contains(" from ")
+        && let Some(ctrl_phrase) = body_raw.strip_suffix(" you control")
+    {
+        let mut parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            ctrl_phrase.trim(),
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if parsed.zone.is_some() {
+            return None;
+        }
+        parsed.controller = None;
+        let obj = if is_unrestricted_filter(&parsed) {
+            ObjectFilter::any()
+        } else {
+            lower_object_filter_in_context(&parsed, builder, in_trigger, vocabulary).ok()?
+        };
+        if obj.has_target_player() {
+            return None;
+        }
+        builder.instructions.push(Instruction::ChooseObjects {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            source_zone: SourceZoneFilter::Battlefield,
+            filter: Box::new(obj),
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+            unchosen_action: None,
+        });
+        return Some(Ok(()));
+    }
+
+    // 7. Graveyard card choices using TargetPlayerGraveyard, OpponentGraveyard, AnyGraveyard, Graveyard.
+    if !body_raw.contains(" from ") {
+        let gy_match: Option<(&str, SourceZoneFilter, Option<BodyTarget>)> =
+            if let Some(p) = body_raw.strip_suffix(" in target opponent's graveyard") {
+                Some((
+                    p,
+                    SourceZoneFilter::TargetPlayerGraveyard,
+                    Some(BodyTarget::SingleOpponent),
+                ))
+            } else if let Some(p) = body_raw.strip_suffix(" in target player's graveyard") {
+                Some((
+                    p,
+                    SourceZoneFilter::TargetPlayerGraveyard,
+                    Some(BodyTarget::SinglePlayer),
+                ))
+            } else if let Some(p) = body_raw.strip_suffix(" in an opponent's graveyard")
+                && chooser == PlayerRefAst::You
+            {
+                Some((p, SourceZoneFilter::OpponentGraveyard, None))
+            } else if let Some(p) = body_raw
+                .strip_suffix(" in a graveyard")
+                .or_else(|| body_raw.strip_suffix(" in any graveyard"))
+            {
+                Some((p, SourceZoneFilter::AnyGraveyard, None))
+            } else if let Some(p) = body_raw.strip_suffix(" in your graveyard")
+                && chooser == PlayerRefAst::You
+            {
+                Some((p, SourceZoneFilter::Graveyard, None))
+            } else if let Some(p) = body_raw.strip_suffix(" in their graveyard") {
+                Some((p, SourceZoneFilter::Graveyard, None))
+            } else {
+                None
+            };
+        if let Some((card_phrase, source_zone, target_opt)) = gy_match
+            && !card_phrase.contains("target")
+        {
+            let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+                card_phrase.trim(),
+                &cached_compiler_vocab(vocabulary),
+            )
+            .ok()?;
+            if parsed.zone.is_some() {
+                return None;
+            }
+            let mut trial = builder.clone();
+            if let Some(bt) = target_opt
+                && trial.bind_target(bt).is_err()
+            {
+                return None;
+            }
+            let players =
+                lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
+            let obj = if is_unrestricted_filter(&parsed) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?
+            };
+            if obj.has_target_player() {
+                return None;
+            }
+            trial.instructions.push(Instruction::ChooseObjects {
+                players,
+                source_zone,
+                filter: Box::new(obj),
+                min: ValueExpr::literal(min_val),
+                max: ValueExpr::literal(max_val),
+                distinct_powers: false,
+                max_total_power: None,
+                unchosen_action: None,
+            });
+            *builder = trial;
+            return Some(Ok(()));
+        }
+    }
+
+    None
 }
 
 pub(super) fn parse_generic_cost_reduction_delta(raw: &str) -> Option<u16> {

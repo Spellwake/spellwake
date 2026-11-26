@@ -3474,6 +3474,16 @@ pub(super) fn parse_look_top_keep_dest_ext(
         let free = low.contains("without paying");
         let cast_only = low.contains("cast") && !low.contains("play");
         let any_color = low.contains("mana of any");
+        if low.contains("face down") {
+            return Some(spellwake_engine::program::LookTopKeepDest::ExileLinked {
+                face_down: true,
+                playable,
+                free,
+                cast_only,
+                any_color,
+                duration,
+            });
+        }
         return Some(spellwake_engine::program::LookTopKeepDest::Exile {
             playable,
             free,
@@ -6664,6 +6674,261 @@ pub(in super::super) fn lower_instruction_seq(
             GenericExpr(&'a ValueExprAst),
             ScaledTwiceX,
             BoundRaw(&'a ValueExprAst, &'a str),
+            ManaChoice(&'a [String]),
+            ManaOrLife(&'a str, &'a ValueExprAst),
+        }
+        fn expand_hybrid_mana_costs(raw: &str) -> Option<Vec<ManaCost>> {
+            let (base, x_cnt, hybrids) = parse_mana_cost_full(raw)?;
+            if x_cnt > 0 || hybrids.is_empty() {
+                return None;
+            }
+            let mut prices: std::collections::BTreeSet<(
+                RulesInteger,
+                std::collections::BTreeMap<ManaType, RulesInteger>,
+            )> = std::collections::BTreeSet::from([(base.generic, base.required)]);
+            for sym in &hybrids {
+                let mut next = prices.clone();
+                for (generic, required) in &prices {
+                    let mut req = required.clone();
+                    let first = req.get_mut(&sym.first)?;
+                    if !first.is_positive() {
+                        return None;
+                    }
+                    *first = first.minus(&1.into());
+                    if !first.is_positive() {
+                        req.remove(&sym.first);
+                    }
+                    let mut generic_amt = generic.clone();
+                    match sym.alternative {
+                        HybridAlternative::Mana(alt_color) => {
+                            let entry = req.entry(alt_color).or_insert_with(|| 0.into());
+                            *entry = entry.plus(&1.into());
+                        }
+                        HybridAlternative::TwoGeneric => {
+                            generic_amt = generic_amt.plus(&2.into());
+                        }
+                        HybridAlternative::TwoLife => return None,
+                    }
+                    next.insert((generic_amt, req));
+                }
+                prices = next;
+                if prices.len() > 16 {
+                    return None;
+                }
+            }
+            let out: Vec<ManaCost> = prices
+                .into_iter()
+                .map(|(generic, required)| ManaCost { generic, required })
+                .collect();
+            (2..=16).contains(&out.len()).then_some(out)
+        }
+        fn expand_mana_choice_costs(choices: &[String]) -> Option<Vec<ManaCost>> {
+            let mut prices: std::collections::BTreeSet<(
+                RulesInteger,
+                std::collections::BTreeMap<ManaType, RulesInteger>,
+            )> = std::collections::BTreeSet::new();
+            for raw in choices {
+                if let Some(fixed) = parse_fixed_mana_cost(raw) {
+                    prices.insert((fixed.generic, fixed.required));
+                } else {
+                    let expanded = expand_hybrid_mana_costs(raw)?;
+                    for c in expanded {
+                        prices.insert((c.generic, c.required));
+                    }
+                }
+                if prices.len() > 16 {
+                    return None;
+                }
+            }
+            let out: Vec<ManaCost> = prices
+                .into_iter()
+                .map(|(generic, required)| ManaCost { generic, required })
+                .collect();
+            (2..=16).contains(&out.len()).then_some(out)
+        }
+        fn format_mana_cost_label(cost: &ManaCost) -> String {
+            let mut out = String::new();
+            if cost.generic.is_positive()
+                && let Some(g) = cost.generic.to_usize()
+            {
+                out.push('{');
+                out.push_str(&g.to_string());
+                out.push('}');
+            }
+            for (mt, sym) in [
+                (ManaType::White, "{W}"),
+                (ManaType::Blue, "{U}"),
+                (ManaType::Black, "{B}"),
+                (ManaType::Red, "{R}"),
+                (ManaType::Green, "{G}"),
+                (ManaType::Colourless, "{C}"),
+            ] {
+                if let Some(n) = cost.required.get(&mt).and_then(|v| v.to_usize()) {
+                    for _ in 0..n {
+                        out.push_str(sym);
+                    }
+                }
+            }
+            if out.is_empty() {
+                "{0}".to_owned()
+            } else {
+                out
+            }
+        }
+        fn build_multi_option_offer_instruction(
+            payer: ResolvingPlayer,
+            mana_costs: Vec<ManaCost>,
+            life_opt: Option<ValueExpr>,
+            paid_ops: &[Instruction],
+            else_ops: &[Instruction],
+        ) -> Result<Instruction, &'static str> {
+            let mut options =
+                Vec::with_capacity(1 + mana_costs.len() + usize::from(life_opt.is_some()));
+            let decline_body = if else_ops.is_empty() {
+                vec![Instruction::Jump { destination: 1 }]
+            } else {
+                else_ops.to_vec()
+            };
+            options.push(ChooseOptionBranch {
+                label: "Decline".to_owned(),
+                body: ExecutableBody::new(BodyTarget::None, decline_body),
+            });
+            for cost in mana_costs {
+                let label = format!("Pay {}", format_mana_cost_label(&cost));
+                let mut branch_ops = Vec::new();
+                if paid_ops.is_empty() && else_ops.is_empty() {
+                    branch_ops.push(Instruction::OfferManaPayment {
+                        payer,
+                        cost,
+                        paid_destination: 1,
+                        declined_destination: 1,
+                    });
+                } else if else_ops.is_empty() {
+                    branch_ops.push(Instruction::OfferManaPayment {
+                        payer,
+                        cost,
+                        paid_destination: 1,
+                        declined_destination: 1 + paid_ops.len(),
+                    });
+                    for op in paid_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(1, 0);
+                        branch_ops.push(cloned);
+                    }
+                } else if paid_ops.is_empty() {
+                    branch_ops.push(Instruction::OfferManaPayment {
+                        payer,
+                        cost,
+                        paid_destination: 1 + else_ops.len(),
+                        declined_destination: 1,
+                    });
+                    for op in else_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(1, 0);
+                        branch_ops.push(cloned);
+                    }
+                } else {
+                    let else_start = 1 + paid_ops.len() + 1;
+                    let end_dest = else_start + else_ops.len();
+                    let else_shift =
+                        isize::try_from(else_start).map_err(|_| "oracle:unsupported-pay-cost")?;
+                    branch_ops.push(Instruction::OfferManaPayment {
+                        payer,
+                        cost,
+                        paid_destination: 1,
+                        declined_destination: else_start,
+                    });
+                    for op in paid_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(1, 0);
+                        branch_ops.push(cloned);
+                    }
+                    branch_ops.push(Instruction::Jump {
+                        destination: end_dest,
+                    });
+                    for op in else_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(else_shift, 0);
+                        branch_ops.push(cloned);
+                    }
+                }
+                options.push(ChooseOptionBranch {
+                    label,
+                    body: ExecutableBody::new(BodyTarget::None, branch_ops),
+                });
+            }
+            if let Some(life_amt) = life_opt {
+                let mut branch_ops = Vec::new();
+                branch_ops.push(Instruction::PayLife {
+                    player: payer,
+                    amount: life_amt,
+                });
+                if paid_ops.is_empty() && else_ops.is_empty() {
+                    // PayLife alone suffices when no follow-up branch exists.
+                } else if else_ops.is_empty() {
+                    branch_ops.push(Instruction::BranchIfFalse {
+                        condition: ResolutionCondition {
+                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        },
+                        destination: 2 + paid_ops.len(),
+                    });
+                    for op in paid_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(2, 0);
+                        branch_ops.push(cloned);
+                    }
+                } else if paid_ops.is_empty() {
+                    branch_ops.push(Instruction::BranchIfFalse {
+                        condition: ResolutionCondition {
+                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::Equal,
+                            right: ValueExpr::literal(0),
+                        },
+                        destination: 2 + else_ops.len(),
+                    });
+                    for op in else_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(2, 0);
+                        branch_ops.push(cloned);
+                    }
+                } else {
+                    let else_start = 2 + paid_ops.len() + 1;
+                    let end_dest = else_start + else_ops.len();
+                    let else_shift =
+                        isize::try_from(else_start).map_err(|_| "oracle:unsupported-pay-cost")?;
+                    branch_ops.push(Instruction::BranchIfFalse {
+                        condition: ResolutionCondition {
+                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        },
+                        destination: else_start,
+                    });
+                    for op in paid_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(2, 0);
+                        branch_ops.push(cloned);
+                    }
+                    branch_ops.push(Instruction::Jump {
+                        destination: end_dest,
+                    });
+                    for op in else_ops {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(else_shift, 0);
+                        branch_ops.push(cloned);
+                    }
+                }
+                options.push(ChooseOptionBranch {
+                    label: "Pay life".to_owned(),
+                    body: ExecutableBody::new(BodyTarget::None, branch_ops),
+                });
+            }
+            Ok(Instruction::ChooseOption {
+                chooser: payer,
+                options,
+            })
         }
         fn extract_opt_mana_spec<'a>(
             default_player: PlayerRefAst,
@@ -6675,6 +6940,26 @@ pub(in super::super) fn lower_instruction_seq(
                     OptManaSpec::Raw(raw.as_str()),
                     &opt_inner[1..],
                 )),
+                Some(InstructionAst::PayCost(CostAtomAst::PayManaChoice(choices)))
+                    if choices.len() >= 2 =>
+                {
+                    Some((
+                        default_player,
+                        OptManaSpec::ManaChoice(choices.as_slice()),
+                        &opt_inner[1..],
+                    ))
+                }
+                Some(InstructionAst::PayCost(CostAtomAst::Or(lhs, rhs))) => {
+                    match (lhs.as_ref(), rhs.as_ref()) {
+                        (CostAtomAst::PayMana(raw), CostAtomAst::PayLife(life))
+                        | (CostAtomAst::PayLife(life), CostAtomAst::PayMana(raw)) => Some((
+                            default_player,
+                            OptManaSpec::ManaOrLife(raw.as_str(), life.as_ref()),
+                            &opt_inner[1..],
+                        )),
+                        _ => None,
+                    }
+                }
                 Some(InstructionAst::PayCost(CostAtomAst::PayGenericManaExpr(expr))) => Some((
                     default_player,
                     OptManaSpec::GenericExpr(expr.as_ref()),
@@ -6689,6 +6974,26 @@ pub(in super::super) fn lower_instruction_seq(
                     player,
                     cost: CostAtomAst::PayMana(raw),
                 }) => Some((*player, OptManaSpec::Raw(raw.as_str()), &opt_inner[1..])),
+                Some(InstructionAst::PlayerPayCost {
+                    player,
+                    cost: CostAtomAst::PayManaChoice(choices),
+                }) if choices.len() >= 2 => Some((
+                    *player,
+                    OptManaSpec::ManaChoice(choices.as_slice()),
+                    &opt_inner[1..],
+                )),
+                Some(InstructionAst::PlayerPayCost {
+                    player,
+                    cost: CostAtomAst::Or(lhs, rhs),
+                }) => match (lhs.as_ref(), rhs.as_ref()) {
+                    (CostAtomAst::PayMana(raw), CostAtomAst::PayLife(life))
+                    | (CostAtomAst::PayLife(life), CostAtomAst::PayMana(raw)) => Some((
+                        *player,
+                        OptManaSpec::ManaOrLife(raw.as_str(), life.as_ref()),
+                        &opt_inner[1..],
+                    )),
+                    _ => None,
+                },
                 Some(InstructionAst::PlayerPayCost {
                     player,
                     cost: CostAtomAst::PayGenericManaExpr(expr),
@@ -6757,12 +7062,13 @@ pub(in super::super) fn lower_instruction_seq(
                 OptManaSpec::BoundRaw(xe, _) => Some(xe),
                 _ => bound_x,
             };
-            let offer_template = match mana_spec {
+            let mut multi_offer: Option<(Vec<ManaCost>, Option<ValueExpr>)> = None;
+            let offer_template: Option<Instruction> = match mana_spec {
                 OptManaSpec::Raw(raw_mana) | OptManaSpec::BoundRaw(_, raw_mana) => {
                     if let Some(op) =
                         try_build_offer_mana(payer, raw_mana, 0, 0, eff_bound_x, vocabulary)
                     {
-                        op
+                        Some(op)
                     } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw_mana)
                         && x_cnt > 0
                     {
@@ -6772,16 +7078,39 @@ pub(in super::super) fn lower_instruction_seq(
                             }
                             None => ValueExpr::chosen_x(),
                         };
-                        Instruction::OfferDynamicManaPayment {
+                        Some(Instruction::OfferDynamicManaPayment {
                             payer,
                             fixed,
                             extra_generic: scale_value_expr(x_val, i64::from(x_cnt)),
                             paid_destination: 0,
                             declined_destination: 0,
-                        }
+                        })
+                    } else if let Some(hybrid_prices) = expand_hybrid_mana_costs(raw_mana) {
+                        multi_offer = Some((hybrid_prices, None));
+                        None
                     } else {
                         return Err("oracle:unsupported-pay-cost");
                     }
+                }
+                OptManaSpec::ManaChoice(choices) => {
+                    let Some(choice_prices) = expand_mana_choice_costs(choices) else {
+                        return Err("oracle:unsupported-pay-cost");
+                    };
+                    multi_offer = Some((choice_prices, None));
+                    None
+                }
+                OptManaSpec::ManaOrLife(raw_mana, life_expr) => {
+                    let mana_costs = if let Some(fixed) = parse_fixed_mana_cost(raw_mana) {
+                        vec![fixed]
+                    } else if let Some(expanded) = expand_hybrid_mana_costs(raw_mana) {
+                        expanded
+                    } else {
+                        return Err("oracle:unsupported-pay-cost");
+                    };
+                    let life_val =
+                        lower_value_expr_in_context(life_expr, builder, in_trigger, vocabulary)?;
+                    multi_offer = Some((mana_costs, Some(life_val)));
+                    None
                 }
                 OptManaSpec::GenericExpr(expr) => {
                     let extra_generic = lower_value_expr_in_context(
@@ -6790,13 +7119,13 @@ pub(in super::super) fn lower_instruction_seq(
                         in_trigger,
                         vocabulary,
                     )?;
-                    Instruction::OfferDynamicManaPayment {
+                    Some(Instruction::OfferDynamicManaPayment {
                         payer,
                         fixed: ManaCost::free(),
                         extra_generic,
                         paid_destination: 0,
                         declined_destination: 0,
-                    }
+                    })
                 }
                 OptManaSpec::ScaledTwiceX => {
                     let x_val = match eff_bound_x {
@@ -6805,15 +7134,227 @@ pub(in super::super) fn lower_instruction_seq(
                         }
                         None => ValueExpr::chosen_x(),
                     };
-                    Instruction::OfferDynamicManaPayment {
+                    Some(Instruction::OfferDynamicManaPayment {
                         payer,
                         fixed: ManaCost::free(),
                         extra_generic: scale_value_expr(x_val, 2),
                         paid_destination: 0,
                         declined_destination: 0,
-                    }
+                    })
                 }
             };
+            if let Some((mana_costs, life_opt)) = multi_offer {
+                let bound_x = eff_bound_x;
+                if let Some(players) = group_players {
+                    if opt_rest.is_empty() {
+                        let sub_op = build_multi_option_offer_instruction(
+                            payer,
+                            mana_costs,
+                            life_opt,
+                            &[],
+                            &[],
+                        )?;
+                        builder.instructions.push(Instruction::ForEachPlayer {
+                            players,
+                            body: ExecutableBody::new(BodyTarget::None, vec![sub_op]),
+                        });
+                        i += 1;
+                        continue;
+                    }
+                    return Err("oracle:unsupported-pay-cost");
+                }
+                let lower_sub_branch = |sub_ins: &[InstructionAst],
+                                        outer: &mut BodyBuilder,
+                                        ids_ref: &mut LoweringIds|
+                 -> Result<Vec<Instruction>, &'static str> {
+                    let mut sub = BodyBuilder::with_trigger_hint(outer.trigger_hint);
+                    sub.target = outer.target;
+                    sub.has_source = outer.has_source;
+                    sub.last_group_filter = outer.last_group_filter;
+                    lower_instruction_seq(
+                        sub_ins,
+                        &mut sub,
+                        vocabulary,
+                        ids_ref,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )?;
+                    if sub.target != BodyTarget::None {
+                        outer.bind_target(sub.target)?;
+                    }
+                    if outer.graveyard_target_bounds.is_none() {
+                        outer.graveyard_target_bounds = sub.graveyard_target_bounds;
+                    }
+                    outer.x_target_count |= sub.x_target_count;
+                    outer.up_to_x_target_count |= sub.up_to_x_target_count;
+                    outer.up_to_one_target |= sub.up_to_one_target;
+                    Ok(sub.instructions)
+                };
+                if !opt_rest.is_empty() {
+                    let paid_ops = lower_sub_branch(opt_rest, builder, ids)?;
+                    let choice_op = build_multi_option_offer_instruction(
+                        payer,
+                        mana_costs,
+                        life_opt,
+                        &paid_ops,
+                        &[],
+                    )?;
+                    builder.instructions.push(choice_op);
+                    i += 1;
+                    continue;
+                }
+                if i + 1 < ins.len() {
+                    match &ins[i + 1] {
+                        InstructionAst::IfPreviousSucceeded(then_body) => {
+                            let tail_checks_top = matches!(
+                                then_body.last(),
+                                Some(
+                                    InstructionAst::LookTopLibrary {
+                                        reveal: true,
+                                        count,
+                                        ..
+                                    } | InstructionAst::ExileTopLibrary { count, .. }
+                                ) if matches!(count.as_ref(), ValueExprAst::Const(1))
+                            );
+                            if tail_checks_top
+                                && i + 2 < ins.len()
+                                && let InstructionAst::IfCondition { condition, .. } = &ins[i + 2]
+                                && condition_references_anaphora(condition)
+                            {
+                                let has_else = i + 3 < ins.len()
+                                    && matches!(&ins[i + 3], InstructionAst::Otherwise(_));
+                                let mut combined = Vec::with_capacity(
+                                    then_body.len() + if has_else { 2 } else { 1 },
+                                );
+                                combined.extend_from_slice(then_body);
+                                combined.push(ins[i + 2].clone());
+                                if has_else {
+                                    combined.push(ins[i + 3].clone());
+                                }
+                                let paid_ops = lower_sub_branch(&combined, builder, ids)?;
+                                let choice_op = build_multi_option_offer_instruction(
+                                    payer,
+                                    mana_costs,
+                                    life_opt,
+                                    &paid_ops,
+                                    &[],
+                                )?;
+                                builder.instructions.push(choice_op);
+                                i += if has_else { 4 } else { 3 };
+                                continue;
+                            }
+                            let paid_ops = lower_sub_branch(then_body, builder, ids)?;
+                            if i + 2 < ins.len()
+                                && let InstructionAst::Otherwise(else_body) = &ins[i + 2]
+                            {
+                                let else_ops = lower_sub_branch(else_body, builder, ids)?;
+                                let choice_op = build_multi_option_offer_instruction(
+                                    payer, mana_costs, life_opt, &paid_ops, &else_ops,
+                                )?;
+                                builder.instructions.push(choice_op);
+                                i += 3;
+                            } else {
+                                let choice_op = build_multi_option_offer_instruction(
+                                    payer,
+                                    mana_costs,
+                                    life_opt,
+                                    &paid_ops,
+                                    &[],
+                                )?;
+                                builder.instructions.push(choice_op);
+                                i += 2;
+                            }
+                            continue;
+                        }
+                        InstructionAst::IfPreviousFailed(else_body) => {
+                            let else_ops = lower_sub_branch(else_body, builder, ids)?;
+                            let choice_op = build_multi_option_offer_instruction(
+                                payer,
+                                mana_costs,
+                                life_opt,
+                                &[],
+                                &else_ops,
+                            )?;
+                            builder.instructions.push(choice_op);
+                            i += 2;
+                            continue;
+                        }
+                        InstructionAst::ReflexiveTrigger(ref_body) => {
+                            let bind_val = if let Some(bx) = bound_x
+                                && ref_body.iter().any(instruction_has_chosen_x)
+                            {
+                                Some(lower_bound_x_for_resolution(
+                                    bx, builder, vocabulary, in_trigger,
+                                )?)
+                            } else {
+                                None
+                            };
+                            let reflexive_body = lower_effect_body(
+                                ref_body,
+                                vocabulary,
+                                ids,
+                                true,
+                                self_pronoun_valid,
+                            )?;
+                            let mut paid_ops = Vec::new();
+                            if let Some(val) = bind_val {
+                                paid_ops.push(Instruction::BindResolutionX(val));
+                            }
+                            paid_ops.push(Instruction::EmitReflexiveTrigger {
+                                body: Box::new(reflexive_body),
+                            });
+                            let choice_op = build_multi_option_offer_instruction(
+                                payer,
+                                mana_costs,
+                                life_opt,
+                                &paid_ops,
+                                &[],
+                            )?;
+                            builder.instructions.push(choice_op);
+                            i += 2;
+                            continue;
+                        }
+                        InstructionAst::BindX { x_expr, body } => {
+                            if let [InstructionAst::ReflexiveTrigger(ref_body)] = body.as_slice() {
+                                let x_val = lower_bound_x_for_resolution(
+                                    x_expr, builder, vocabulary, in_trigger,
+                                )?;
+                                let reflexive_body = lower_effect_body(
+                                    ref_body,
+                                    vocabulary,
+                                    ids,
+                                    true,
+                                    self_pronoun_valid,
+                                )?;
+                                let paid_ops = vec![
+                                    Instruction::BindResolutionX(x_val),
+                                    Instruction::EmitReflexiveTrigger {
+                                        body: Box::new(reflexive_body),
+                                    },
+                                ];
+                                let choice_op = build_multi_option_offer_instruction(
+                                    payer,
+                                    mana_costs,
+                                    life_opt,
+                                    &paid_ops,
+                                    &[],
+                                )?;
+                                builder.instructions.push(choice_op);
+                                i += 2;
+                                continue;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let choice_op =
+                    build_multi_option_offer_instruction(payer, mana_costs, life_opt, &[], &[])?;
+                builder.instructions.push(choice_op);
+                i += 1;
+                continue;
+            }
+            let offer_template = offer_template.ok_or("oracle:unsupported-pay-cost")?;
             if let Some(players) = group_players {
                 if opt_rest.is_empty() {
                     let sub_op = with_offer_dests(offer_template, 1, 1);
@@ -8403,19 +8944,38 @@ pub(in super::super) fn lower_instruction_seq(
                         low.contains("graveyard"),
                         low.contains("exile"),
                         low.contains("random order"),
+                        false,
                     ))
+                }
+                InstructionAst::ShuffleLibrary {
+                    player: PlayerRefAst::You,
+                } => Some((false, false, false, false, true)),
+                InstructionAst::ShuffleIntoLibrary { subject }
+                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if {
+                        let l = a.to_ascii_lowercase();
+                        l.contains("rest") || l.contains("other")
+                    }) =>
+                {
+                    Some((false, false, false, false, true))
                 }
                 _ => None,
             };
             if let (
                 Some((to_battlefield, enters_tapped)),
-                Some((rest_bottom, rest_gy, rest_exile, random_rest)),
+                Some((rest_bottom, rest_gy, rest_exile, random_rest, do_shuffle)),
             ) = (keep_info, rest_info)
-                && (rest_bottom || rest_gy || rest_exile)
+                && (rest_bottom || rest_gy || rest_exile || do_shuffle)
             {
-                builder.instructions.push(Instruction::OptionalEffect {
-                    chooser: ResolvingPlayer::Controller,
-                });
+                if do_shuffle {
+                    builder.instructions.push(Instruction::OptionalSequence {
+                        chooser: ResolvingPlayer::Controller,
+                        instructions: 2,
+                    });
+                } else {
+                    builder.instructions.push(Instruction::OptionalEffect {
+                        chooser: ResolvingPlayer::Controller,
+                    });
+                }
                 builder.instructions.push(Instruction::RevealUntilMatch {
                     filter: Box::new(obj_filter),
                     count: count_u8,
@@ -8429,6 +8989,9 @@ pub(in super::super) fn lower_instruction_seq(
                     rest_to_bottom: rest_bottom,
                     random_rest_order: random_rest,
                 });
+                if do_shuffle {
+                    builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                }
                 i += 2;
                 continue;
             }
@@ -8569,13 +9132,25 @@ pub(in super::super) fn lower_instruction_seq(
                         subject: rest_subj,
                         to: rest_to,
                     } = op
-                        && matches!(
+                        && (matches!(
                             rest_subj.as_ref(),
                             SubjectRefAst::Anaphora(r) if {
                                 let rl = r.to_ascii_lowercase();
                                 rl.contains("rest") || rl.contains("other") || rl == "them" || rl.contains("exiled")
                             }
-                        )
+                        ) || matches!(
+                            rest_subj.as_ref(),
+                            SubjectRefAst::All(f) | SubjectRefAst::Group(f)
+                                if f.any_types.is_empty()
+                                    && f.forbidden_types.is_empty()
+                                    && f.predicates.iter().any(|p| matches!(
+                                        p,
+                                        spellwake_oracle_compiler::ast::FilterPredicateAst::AffectedByPriorAction(
+                                            spellwake_oracle_compiler::ast::PriorActionRefKind::RevealedThisWay
+                                                | spellwake_oracle_compiler::ast::PriorActionRefKind::ExiledThisWay
+                                        )
+                                    ))
+                        ))
                     {
                         let rest_low = rest_to.to_ascii_lowercase();
                         let rest_bottom = rest_low.contains("bottom");
@@ -8691,6 +9266,17 @@ pub(in super::super) fn lower_instruction_seq(
                             InstructionAst::ShuffleLibrary {
                                 player: PlayerRefAst::You,
                             }
+                        ) || matches!(
+                            &ins[i + 2],
+                            InstructionAst::ShuffleIntoLibrary { subject }
+                                if matches!(
+                                    subject.as_ref(),
+                                    SubjectRefAst::Anaphora(r)
+                                        if {
+                                            let rl = r.to_ascii_lowercase();
+                                            rl.contains("rest") || rl.contains("other")
+                                        }
+                                )
                         ) {
                             builder.instructions.push(Instruction::RevealUntilMatch {
                                 filter: Box::new(obj_filter),
@@ -8861,6 +9447,7 @@ pub(in super::super) fn lower_instruction_seq(
                             count: cnt_expr,
                             match_dest,
                             rest_dest,
+                            keep_all_revealed: true,
                         }],
                         builder,
                     );
@@ -8879,6 +9466,7 @@ pub(in super::super) fn lower_instruction_seq(
                         count: cnt_expr,
                         match_dest,
                         rest_dest,
+                        keep_all_revealed: true,
                     });
                     i += 2;
                     continue;
@@ -9101,6 +9689,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 count: cnt_expr,
                                 match_dest,
                                 rest_dest,
+                                keep_all_revealed: false,
                             });
                             if rest_shuffle_inline || trailing_shuffle {
                                 push_shuffle_for_owner(&mut builder.instructions, library_owner);
@@ -9125,6 +9714,7 @@ pub(in super::super) fn lower_instruction_seq(
                             count: cnt_expr,
                             match_dest,
                             rest_dest: r.to_engine_ext(),
+                            keep_all_revealed: false,
                         });
                         i += 3;
                         continue;
@@ -9196,6 +9786,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 count: cnt_expr,
                                 match_dest,
                                 rest_dest,
+                                keep_all_revealed: false,
                             });
                             if do_shuffle {
                                 push_shuffle_for_owner(&mut builder.instructions, library_owner);
@@ -9228,6 +9819,7 @@ pub(in super::super) fn lower_instruction_seq(
                             count: cnt_expr,
                             match_dest,
                             rest_dest: spellwake_engine::program::LookTopRestDest::Exile,
+                            keep_all_revealed: false,
                         });
                         i += step;
                         continue;
@@ -9889,6 +10481,7 @@ pub(in super::super) fn lower_instruction_seq(
                         "it" | "that card"
                             | "the card"
                             | "the revealed card"
+                            | "the revealed cards"
                             | "them"
                             | "those cards"
                     ) =>
@@ -9923,7 +10516,12 @@ pub(in super::super) fn lower_instruction_seq(
                         subject.as_ref(),
                         SubjectRefAst::Anaphora(a) if matches!(
                             a.to_ascii_lowercase().as_str(),
-                            "it" | "that card" | "the card" | "the revealed card" | "them" | "those cards"
+                            "it" | "that card"
+                                | "the card"
+                                | "the revealed card"
+                                | "the revealed cards"
+                                | "them"
+                                | "those cards"
                         )
                     )
                 {
@@ -10409,17 +11007,116 @@ pub(in super::super) fn lower_instruction_seq(
             i += consumed;
             continue;
         }
-        // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + ChooseAndKeep (e.g. Anticipate, Impulse, Worldly Counsel, Thassa's Oracle, Memory Deluge)
-        if i + 1 < ins.len()
-            && let Some((reveal_val, library, count, eff_bound_x)) =
+        // Fuse [Optional?]LookTopLibrary (or BindX-wrapped) + [IfPreviousSucceeded?]ChooseAndKeep
+        // (e.g. Anticipate, Impulse, Worldly Counsel, Thassa's Oracle, Memory Deluge, Cream of the Crop)
+        struct LookKeepPair<'a> {
+            is_optional_look: bool,
+            reveal_val: bool,
+            library: &'a str,
+            count: &'a ValueExprAst,
+            eff_bound_x: Option<&'a ValueExprAst>,
+            pick: &'a str,
+            keep_to: &'a str,
+            rest_to: &'a str,
+            inner_shuffle: bool,
+        }
+        let look_keep_pair: Option<LookKeepPair<'_>> = if i + 1 < ins.len() {
+            if let Some((reveal_val, library, count, eff_bound_x)) =
                 interactive::unwrap_look_top_with_bind_x(&ins[i], bound_x)
+                && let InstructionAst::ChooseAndKeep {
+                    pick,
+                    keep_to,
+                    rest_to,
+                } = &ins[i + 1]
+            {
+                Some(LookKeepPair {
+                    is_optional_look: false,
+                    reveal_val,
+                    library,
+                    count,
+                    eff_bound_x,
+                    pick: pick.as_str(),
+                    keep_to: keep_to.as_str(),
+                    rest_to: rest_to.as_str(),
+                    inner_shuffle: false,
+                })
+            } else {
+                let opt_look = match &ins[i] {
+                    InstructionAst::Optional(inner) if inner.len() == 1 => {
+                        interactive::unwrap_look_top_with_bind_x(&inner[0], bound_x)
+                    }
+                    InstructionAst::BindX { x_expr, body } => match body.as_slice() {
+                        [InstructionAst::Optional(inner)] if inner.len() == 1 => {
+                            interactive::unwrap_look_top_with_bind_x(
+                                &inner[0],
+                                Some(x_expr.as_ref()),
+                            )
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((reveal_val, library, count, eff_bound_x)) = opt_look
+                    && let InstructionAst::IfPreviousSucceeded(then_body) = &ins[i + 1]
+                {
+                    match then_body.as_slice() {
+                        [
+                            InstructionAst::ChooseAndKeep {
+                                pick,
+                                keep_to,
+                                rest_to,
+                            },
+                        ] => Some(LookKeepPair {
+                            is_optional_look: true,
+                            reveal_val,
+                            library,
+                            count,
+                            eff_bound_x,
+                            pick: pick.as_str(),
+                            keep_to: keep_to.as_str(),
+                            rest_to: rest_to.as_str(),
+                            inner_shuffle: false,
+                        }),
+                        [
+                            InstructionAst::ChooseAndKeep {
+                                pick,
+                                keep_to,
+                                rest_to,
+                            },
+                            InstructionAst::ShuffleLibrary { .. },
+                        ] => Some(LookKeepPair {
+                            is_optional_look: true,
+                            reveal_val,
+                            library,
+                            count,
+                            eff_bound_x,
+                            pick: pick.as_str(),
+                            keep_to: keep_to.as_str(),
+                            rest_to: rest_to.as_str(),
+                            inner_shuffle: true,
+                        }),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(LookKeepPair {
+            is_optional_look,
+            reveal_val,
+            library,
+            count,
+            eff_bound_x,
+            pick,
+            keep_to,
+            rest_to,
+            inner_shuffle,
+        }) = look_keep_pair
             && let Some((req_bt, library_owner)) =
                 parse_look_top_library_owner(library, builder, in_trigger)
-            && let InstructionAst::ChooseAndKeep {
-                pick,
-                keep_to,
-                rest_to,
-            } = &ins[i + 1]
         {
             let reveal = &reveal_val;
             let keep_low = keep_to.to_ascii_lowercase();
@@ -10440,8 +11137,9 @@ pub(in super::super) fn lower_instruction_seq(
             let rest_exile = rest_low.contains("exile");
             let rest_hand = rest_low.contains("hand");
             let rest_top = !rest_bottom && rest_low.contains("top") && rest_low.contains("library");
-            let rest_shuffle_inline = rest_low.contains("shuffle");
-            let trailing_shuffle = !rest_bottom
+            let rest_shuffle_inline = rest_low.contains("shuffle") || inner_shuffle;
+            let trailing_shuffle = !is_optional_look
+                && !rest_bottom
                 && !rest_gy
                 && !rest_exile
                 && !rest_top
@@ -10593,6 +11291,18 @@ pub(in super::super) fn lower_instruction_seq(
                                         ..
                                     }
                             );
+                        if is_optional_look {
+                            if rest_shuffle_inline || trailing_shuffle {
+                                builder.instructions.push(Instruction::OptionalSequence {
+                                    chooser: ResolvingPlayer::Controller,
+                                    instructions: 2,
+                                });
+                            } else {
+                                builder.instructions.push(Instruction::OptionalEffect {
+                                    chooser: ResolvingPlayer::Controller,
+                                });
+                            }
+                        }
                         if needs_ext {
                             let rest_dest = if rest_shuffle_inline || trailing_shuffle {
                                 spellwake_engine::program::LookTopRestDest::TopOrder
@@ -10626,7 +11336,8 @@ pub(in super::super) fn lower_instruction_seq(
                             i += if trailing_shuffle { 3 } else { 2 };
                             continue;
                         }
-                        if !*reveal
+                        if !is_optional_look
+                            && !*reveal
                             && !take_all_matching
                             && max_picks == 1
                             && maybe_filter.is_none()
@@ -10640,7 +11351,8 @@ pub(in super::super) fn lower_instruction_seq(
                             i += 2;
                             continue;
                         }
-                        if !*reveal
+                        if !is_optional_look
+                            && !*reveal
                             && !take_all_matching
                             && max_picks == 1
                             && maybe_filter.is_none()
@@ -10898,53 +11610,165 @@ pub(in super::super) fn lower_instruction_seq(
         if let Some(reveal_player) = hand_reveal_player {
             let mut fused_step = 0usize;
             let mut chosen_spec: Option<(u8, Option<ObjectFilterAst>, ChosenHandAction)> = None;
-            // 3-step pattern: RevealHand/LookAtHand + ChooseOption/InteractiveChoice("<count?> <filter> from it/them") + Discard/Exile(anaphora)
+            let mut optional_choose = false;
+            let mut trailing_target_draw: Option<ValueExpr> = None;
+            // 3-step library move: LookAtHand/RevealHand + ChooseOption/InteractiveChoice + MoveZone(anaphora -> top/bottom of that player's library)
+            // using SourceZoneFilter::TargetPlayerHand (e.g. Painful Memories, Agonizing Memories).
             if i + 2 < ins.len()
                 && let Some(core_desc) = interactive::extract_revealed_hand_choice_desc(&ins[i + 1])
+                && let InstructionAst::MoveZone { subject, to } = &ins[i + 2]
+                && matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
             {
-                let action_opt = match &ins[i + 2] {
-                    InstructionAst::Discard {
-                        player:
-                            PlayerRefAst::ThatPlayer
-                            | PlayerRefAst::TargetOpponent
-                            | PlayerRefAst::TargetPlayer,
-                        count,
-                        filter: None,
-                        anaphora: _,
-                        random: false,
-                    } if count.is_none()
-                        || matches!(count.as_deref(), Some(ValueExprAst::Const(1))) =>
-                    {
-                        Some(ChosenHandAction::Discard)
-                    }
-                    InstructionAst::Exile {
-                        actor: None | Some(PlayerRefAst::You),
-                        subject,
-                        random: false,
-                        face_down: false,
-                        into_pile: false,
-                    } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
-                        Some(ChosenHandAction::Exile)
-                    }
-                    _ => None,
+                let to_low = to.trim().to_ascii_lowercase();
+                let placement = if to_low.contains("library") && to_low.contains("top") {
+                    Some(LibraryPlacement::Top)
+                } else if to_low.contains("library") && to_low.contains("bottom") {
+                    Some(if to_low.contains("random") {
+                        LibraryPlacement::BottomRandom
+                    } else {
+                        LibraryPlacement::Bottom
+                    })
+                } else {
+                    None
                 };
-                if let Some(action) = action_opt {
+                if let Some(lib_place) = placement {
                     let core = core_desc.trim();
                     let (pick_n, flt_raw) = if let Some(r) = core.strip_prefix("two ") {
-                        (2u8, format!("a {r}"))
+                        (2i64, format!("a {r}"))
                     } else if let Some(r) = core.strip_prefix("2 ") {
-                        (2u8, format!("a {r}"))
+                        (2i64, format!("a {r}"))
                     } else if let Some(r) = core.strip_prefix("three ") {
-                        (3u8, format!("a {r}"))
+                        (3i64, format!("a {r}"))
                     } else {
-                        (1u8, core.to_string())
+                        (1i64, core.to_string())
                     };
-                    if let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
+                    if let Ok(mut ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
                         &flt_raw,
                         &cached_compiler_vocab(vocabulary),
-                    ) {
-                        chosen_spec = Some((pick_n, Some(ast_f), action));
-                        fused_step = 3;
+                    ) && matches!(ast_f.zone, None | Some(ZoneFilter::ThatPlayerHand))
+                        && ast_f.controller.is_none()
+                        && ast_f.named.is_none()
+                    {
+                        ast_f.zone = None;
+                        let obj_res = if is_unrestricted_filter(&ast_f) {
+                            Ok(ObjectFilter::any())
+                        } else {
+                            lower_object_filter(&ast_f, vocabulary)
+                        };
+                        if let Ok(obj_filter) = obj_res {
+                            builder.bind_target(
+                                if reveal_player == PlayerRefAst::TargetOpponent {
+                                    BodyTarget::SingleOpponent
+                                } else {
+                                    BodyTarget::SinglePlayer
+                                },
+                            )?;
+                            builder
+                                .instructions
+                                .push(Instruction::SelectZoneCardsToZone {
+                                    player: ResolvingPlayer::Controller,
+                                    source_zone: SourceZoneFilter::TargetPlayerHand,
+                                    filter: Box::new(obj_filter),
+                                    min: ValueExpr::literal(pick_n),
+                                    max: ValueExpr::literal(pick_n),
+                                    destination: SubjectDestination::Library(lib_place),
+                                    reveal: false,
+                                });
+                            i += 3;
+                            continue;
+                        }
+                    }
+                }
+            }
+            // 3-step pattern: RevealHand/LookAtHand + [Optional?]ChooseOption/InteractiveChoice("<count?> <filter> from it/them")
+            // + Discard/Exile(anaphora) or IfPreviousSucceeded([Discard(anaphora), Draw(that_player, N)])
+            if i + 2 < ins.len() {
+                let (opt_flag, core_desc_opt) = match &ins[i + 1] {
+                    InstructionAst::Optional(inner) if inner.len() == 1 => (
+                        true,
+                        interactive::extract_revealed_hand_choice_desc(&inner[0]),
+                    ),
+                    other => (false, interactive::extract_revealed_hand_choice_desc(other)),
+                };
+                if let Some(core_desc) = core_desc_opt {
+                    let match_single_discard = |op: &InstructionAst| -> bool {
+                        matches!(
+                            op,
+                            InstructionAst::Discard {
+                                player: PlayerRefAst::ThatPlayer
+                                    | PlayerRefAst::TargetOpponent
+                                    | PlayerRefAst::TargetPlayer,
+                                count,
+                                filter: None,
+                                anaphora: _,
+                                random: false,
+                            } if count.is_none()
+                                || matches!(count.as_deref(), Some(ValueExprAst::Const(1)))
+                        )
+                    };
+                    let (action_opt, draw_opt) = match &ins[i + 2] {
+                        op if match_single_discard(op) => (Some(ChosenHandAction::Discard), None),
+                        InstructionAst::Exile {
+                            actor: None | Some(PlayerRefAst::You),
+                            subject,
+                            random: false,
+                            face_down: false,
+                            into_pile: false,
+                        } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
+                            (Some(ChosenHandAction::Exile), None)
+                        }
+                        InstructionAst::IfPreviousSucceeded(then_body) if opt_flag => {
+                            match then_body.as_slice() {
+                                [op] if match_single_discard(op) => {
+                                    (Some(ChosenHandAction::Discard), None)
+                                }
+                                [
+                                    op,
+                                    InstructionAst::Draw {
+                                        player:
+                                            PlayerRefAst::ThatPlayer
+                                            | PlayerRefAst::TargetOpponent
+                                            | PlayerRefAst::TargetPlayer,
+                                        count,
+                                        up_to: false,
+                                    },
+                                ] if match_single_discard(op) => {
+                                    if let Ok(draw_amt) = lower_value_expr_in_context(
+                                        resolve_x(count, bound_x),
+                                        builder,
+                                        in_trigger,
+                                        vocabulary,
+                                    ) {
+                                        (Some(ChosenHandAction::Discard), Some(draw_amt))
+                                    } else {
+                                        (None, None)
+                                    }
+                                }
+                                _ => (None, None),
+                            }
+                        }
+                        _ => (None, None),
+                    };
+                    if let Some(action) = action_opt {
+                        let core = core_desc.trim();
+                        let (pick_n, flt_raw) = if let Some(r) = core.strip_prefix("two ") {
+                            (2u8, format!("a {r}"))
+                        } else if let Some(r) = core.strip_prefix("2 ") {
+                            (2u8, format!("a {r}"))
+                        } else if let Some(r) = core.strip_prefix("three ") {
+                            (3u8, format!("a {r}"))
+                        } else {
+                            (1u8, core.to_string())
+                        };
+                        if let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
+                            &flt_raw,
+                            &cached_compiler_vocab(vocabulary),
+                        ) {
+                            chosen_spec = Some((pick_n, Some(ast_f), action));
+                            optional_choose = opt_flag;
+                            trailing_target_draw = draw_opt;
+                            fused_step = 3;
+                        }
                     }
                 }
             }
@@ -11024,6 +11848,18 @@ pub(in super::super) fn lower_instruction_seq(
                     } else {
                         BodyTarget::SinglePlayer
                     })?;
+                    if optional_choose {
+                        if trailing_target_draw.is_some() {
+                            builder.instructions.push(Instruction::OptionalSequence {
+                                chooser: ResolvingPlayer::Controller,
+                                instructions: 2,
+                            });
+                        } else {
+                            builder.instructions.push(Instruction::OptionalEffect {
+                                chooser: ResolvingPlayer::Controller,
+                            });
+                        }
+                    }
                     builder
                         .instructions
                         .push(Instruction::ChooseRevealedHandCard {
@@ -11033,6 +11869,11 @@ pub(in super::super) fn lower_instruction_seq(
                             count: nz,
                             action,
                         });
+                    if let Some(draw_amt) = trailing_target_draw {
+                        builder
+                            .instructions
+                            .push(Instruction::DrawTargetPlayer { amount: draw_amt });
+                    }
                     i += fused_step;
                     continue;
                 }

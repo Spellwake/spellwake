@@ -518,6 +518,31 @@ pub(super) fn lower_counters_pt_instruction(
                 return Ok(());
             }
             if matches!(subject, SubjectRefAst::Anaphora(_))
+                && is_permanent_body_target(builder.target)
+                && let Some((minimum, maximum)) = builder.instructions.iter().rev().find_map(|op| {
+                    if let Instruction::AffectPermanentTargets {
+                        minimum, maximum, ..
+                    } = op
+                    {
+                        Some((*minimum, *maximum))
+                    } else {
+                        None
+                    }
+                })
+            {
+                builder
+                    .instructions
+                    .push(Instruction::AffectPermanentTargets {
+                        minimum,
+                        maximum,
+                        action: PermanentTargetAction::Modify {
+                            parts: ResolvedPartsSpec(vec![part]),
+                            duration: dur,
+                        },
+                    });
+                return Ok(());
+            }
+            if matches!(subject, SubjectRefAst::Anaphora(_))
                 && !is_permanent_body_target(builder.target)
                 && anaphora_moved
             {
@@ -587,6 +612,34 @@ pub(super) fn lower_counters_pt_instruction(
                         return Ok(());
                     }
                     if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && is_permanent_body_target(builder.target)
+                        && let Some((minimum, maximum)) =
+                            builder.instructions.iter().rev().find_map(|op| {
+                                if let Instruction::AffectPermanentTargets {
+                                    minimum,
+                                    maximum,
+                                    ..
+                                } = op
+                                {
+                                    Some((*minimum, *maximum))
+                                } else {
+                                    None
+                                }
+                            })
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::AffectPermanentTargets {
+                                minimum,
+                                maximum,
+                                action: PermanentTargetAction::Modify {
+                                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
+                                    duration: dur,
+                                },
+                            });
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
                         && !is_permanent_body_target(builder.target)
                         && anaphora_moved
                     {
@@ -635,6 +688,34 @@ pub(super) fn lower_counters_pt_instruction(
                             parts: ResolvedPartsSpec(vec![part]),
                             duration: dur,
                         });
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && is_permanent_body_target(builder.target)
+                        && let Some((minimum, maximum)) =
+                            builder.instructions.iter().rev().find_map(|op| {
+                                if let Instruction::AffectPermanentTargets {
+                                    minimum,
+                                    maximum,
+                                    ..
+                                } = op
+                                {
+                                    Some((*minimum, *maximum))
+                                } else {
+                                    None
+                                }
+                            })
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::AffectPermanentTargets {
+                                minimum,
+                                maximum,
+                                action: PermanentTargetAction::Modify {
+                                    parts: ResolvedPartsSpec(vec![part]),
+                                    duration: dur,
+                                },
+                            });
                         return Ok(());
                     }
                     if matches!(subject, SubjectRefAst::Anaphora(_))
@@ -4019,8 +4100,16 @@ pub(super) fn lower_counters_pt_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            let ValueExpr::Literal(lit_amt) = &amt else {
-                return Err("oracle:non-literal-endure");
+            let counter_op = match &amt {
+                ValueExpr::Literal(lit_amt) => Instruction::PutCountersOnSource {
+                    amount: lit_amt.clone(),
+                },
+                _ if self_pronoun_valid => Instruction::PutCountersOnSubject {
+                    subject: Box::new(EffectSubject::AbilitySource),
+                    kind: CounterKind::PlusOne,
+                    amount: amt.clone(),
+                },
+                _ => return Err("oracle:non-literal-endure"),
             };
             let spirit = vocabulary
                 .resolve_label("Spirit")
@@ -4038,12 +4127,7 @@ pub(super) fn lower_counters_pt_instruction(
             .map_err(|_| "oracle:token-def-invalid")?;
             let counter_branch = ChooseOptionBranch {
                 label: "Put +1/+1 counters on this creature".to_owned(),
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::PutCountersOnSource {
-                        amount: lit_amt.clone(),
-                    }],
-                ),
+                body: ExecutableBody::new(BodyTarget::None, vec![counter_op]),
             };
             let token_branch = ChooseOptionBranch {
                 label: "Create a white Spirit creature token".to_owned(),
@@ -4229,7 +4313,7 @@ pub(super) fn lower_counters_pt_instruction(
                     {
                         EffectSubject::TriggerSubject
                     }
-                    SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
+                    SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
                         EffectSubject::Matching(ObjectFilter::Clause(
                             ObjectClause::any().attached_to_self(),
                         ))
@@ -4367,7 +4451,7 @@ pub(super) fn lower_counters_pt_instruction(
                         });
                     Ok(())
                 }
-                SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
+                SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
                     builder
                         .instructions
                         .push(Instruction::DoublePowerToughnessSubject {
@@ -4426,97 +4510,25 @@ pub(super) fn lower_counters_pt_instruction(
                 suppressed_keywords: suppressed,
                 ..AbilityChange::default()
             };
-            match subject.as_ref() {
-                s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                    builder.instructions.push(Instruction::ChangeAbilitySource {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                        duration: dur,
-                    });
-                    Ok(())
+            let mut trial = builder.clone();
+            emit_resolved_parts_for_subject(
+                subject,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                dur,
+                &mut trial,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )
+            .map_err(|err| {
+                if err == "oracle:unsupported-temp-static" {
+                    "oracle:unsupported-remove-keywords"
+                } else {
+                    err
                 }
-                SubjectRefAst::TargetObject {
-                    filter,
-                    count: TargetCountAst::Exact(1),
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                    builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::CreateContinuousEffect {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
-                    Ok(())
-                }
-                SubjectRefAst::TargetObject {
-                    filter,
-                    count: TargetCountAst::UpTo(1),
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                    builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 1,
-                            action: PermanentTargetAction::Modify {
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                                    ab_change,
-                                )]),
-                                duration: dur,
-                            },
-                        });
-                    Ok(())
-                }
-                SubjectRefAst::TargetOneOf {
-                    options,
-                    count: TargetCountAst::Exact(1),
-                } => {
-                    let bt = lower_target_one_of_permanent_body_target(
-                        options, builder, in_trigger, vocabulary,
-                    )?;
-                    builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::CreateContinuousEffect {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
-                    Ok(())
-                }
-                SubjectRefAst::TargetOneOf {
-                    options,
-                    count: TargetCountAst::UpTo(1),
-                } => {
-                    let bt = lower_target_one_of_permanent_body_target(
-                        options, builder, in_trigger, vocabulary,
-                    )?;
-                    builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 1,
-                            action: PermanentTargetAction::Modify {
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                                    ab_change,
-                                )]),
-                                duration: dur,
-                            },
-                        });
-                    Ok(())
-                }
-                SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
-                    builder
-                        .instructions
-                        .push(Instruction::CreateContinuousEffect {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
-                    Ok(())
-                }
-                _ => Err("oracle:unsupported-remove-keywords"),
-            }
+            })?;
+            *builder = trial;
+            Ok(())
         }
         InstructionAst::AnimateOrSetBasePT {
             subject,
@@ -5289,12 +5301,34 @@ pub(super) fn emit_resolved_parts_for_subject(
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-            builder
-                .instructions
-                .push(Instruction::CreateContinuousEffect {
-                    parts,
-                    duration: dur,
-                });
+            if let Some((minimum, maximum)) = builder.instructions.iter().rev().find_map(|op| {
+                if let Instruction::AffectPermanentTargets {
+                    minimum, maximum, ..
+                } = op
+                {
+                    Some((*minimum, *maximum))
+                } else {
+                    None
+                }
+            }) {
+                builder
+                    .instructions
+                    .push(Instruction::AffectPermanentTargets {
+                        minimum,
+                        maximum,
+                        action: PermanentTargetAction::Modify {
+                            parts,
+                            duration: dur,
+                        },
+                    });
+            } else {
+                builder
+                    .instructions
+                    .push(Instruction::CreateContinuousEffect {
+                        parts,
+                        duration: dur,
+                    });
+            }
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if last_instruction_created_tokens(&builder.instructions) => {

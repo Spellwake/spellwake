@@ -352,6 +352,35 @@ pub(super) fn resolve_match_object_ref(
             }
             if matches!(
                 al.as_str(),
+                "the exiled card" | "exiled card" | "that exiled card" | "the card exiled this way"
+            ) {
+                if prev == Some(MatchObjectRef::RevealedTop) {
+                    return Some(MatchObjectRef::RevealedTop);
+                }
+                if last_moved_subject_safe(builder, MatchObjectRef::LastMovedToExile)
+                    && matches!(
+                        builder.instructions.last(),
+                        Some(
+                            Instruction::ExileTarget
+                                | Instruction::ExileGraveyardTarget
+                                | Instruction::ExileGroupFromZone { .. }
+                                | Instruction::SelectZoneCardsToZone {
+                                    destination: SubjectDestination::Exile { .. },
+                                    ..
+                                }
+                                | Instruction::MoveSubject {
+                                    destination: SubjectDestination::Exile { .. },
+                                    ..
+                                }
+                                | Instruction::ExileChosenPermanents { .. }
+                        )
+                    )
+                {
+                    return Some(MatchObjectRef::LastMovedToExile);
+                }
+            }
+            if matches!(
+                al.as_str(),
                 "the discarded card"
                     | "discarded card"
                     | "that discarded card"

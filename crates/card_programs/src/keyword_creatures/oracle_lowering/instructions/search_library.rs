@@ -3105,6 +3105,99 @@ pub(super) fn lower_search_library_group(
                         resolved_dur.ok_or("oracle:unsupported-grant-cast-duration")?;
                     let mut inner = f.as_ref().clone();
                     let is_linked_exile = (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0;
+                    let once = match count_limit {
+                        Some(spellwake_oracle_compiler::ast::CountLimitAst::AnyNumber) => false,
+                        Some(spellwake_oracle_compiler::ast::CountLimitAst::UpTo(_)) => true,
+                        None => matches!(subject.as_ref(), SubjectRefAst::Group(_)),
+                    };
+                    let revealed_target_hand_match = !is_linked_exile
+                        && once
+                        && group_players.is_none()
+                        && *player == PlayerRefAst::You
+                        && f.zone.is_none()
+                        && matches!(
+                            builder.instructions.last(),
+                            Some(Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer))
+                        )
+                        && strip_revealed_hand_ref_predicates(&mut inner);
+                    let target_zone_choose_one: Option<(Option<BodyTarget>, SourceZoneFilter)> =
+                        if revealed_target_hand_match {
+                            Some((None, SourceZoneFilter::TargetPlayerHand))
+                        } else if !is_linked_exile
+                            && once
+                            && group_players.is_none()
+                            && *player == PlayerRefAst::You
+                        {
+                            match f.zone {
+                                Some(ZoneFilter::TargetPlayerHand) => Some((
+                                    Some(BodyTarget::SinglePlayer),
+                                    SourceZoneFilter::TargetPlayerHand,
+                                )),
+                                Some(ZoneFilter::TargetOpponentHand) => Some((
+                                    Some(BodyTarget::SingleOpponent),
+                                    SourceZoneFilter::TargetPlayerHand,
+                                )),
+                                Some(ZoneFilter::ThatPlayerHand)
+                                    if matches!(
+                                        builder.target,
+                                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                                    ) =>
+                                {
+                                    Some((None, SourceZoneFilter::TargetPlayerHand))
+                                }
+                                Some(ZoneFilter::TargetPlayerGraveyard) => Some((
+                                    Some(BodyTarget::SinglePlayer),
+                                    SourceZoneFilter::TargetPlayerGraveyard,
+                                )),
+                                Some(ZoneFilter::TargetOpponentGraveyard) => Some((
+                                    Some(BodyTarget::SingleOpponent),
+                                    SourceZoneFilter::TargetPlayerGraveyard,
+                                )),
+                                Some(ZoneFilter::ThatPlayerGraveyard)
+                                    if matches!(
+                                        builder.target,
+                                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                                    ) =>
+                                {
+                                    Some((None, SourceZoneFilter::TargetPlayerGraveyard))
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                    if let Some((req_bt, src_zone)) = target_zone_choose_one {
+                        if let Some(bt) = req_bt {
+                            builder.bind_target(bt)?;
+                        }
+                        inner.zone = None;
+                        let obj_filter = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter(&inner, vocabulary)?
+                        };
+                        builder.instructions.push(Instruction::ChooseObjects {
+                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                            source_zone: src_zone,
+                            filter: Box::new(obj_filter),
+                            min: ValueExpr::literal(0),
+                            max: ValueExpr::literal(1),
+                            distinct_powers: false,
+                            max_total_power: None,
+                            unchosen_action: None,
+                        });
+                        builder
+                            .instructions
+                            .push(Instruction::GrantCardPlayPermission {
+                                player: rp,
+                                subject: MoveSubjectRef::LastMoved,
+                                duration: impulse_dur,
+                                cast_only: *cast_only,
+                                free: *free,
+                                any_color,
+                            });
+                        return Ok(());
+                    }
                     let last_moved_match = !is_linked_exile
                         && dur_core != "now"
                         && strip_last_moved_for_grant_play(&mut inner, &builder.instructions);
@@ -3120,6 +3213,9 @@ pub(super) fn lower_search_library_group(
                                 Some(ZoneFilter::YourHandOrGraveyard) => {
                                     SourceZoneFilter::HandOrGraveyard
                                 }
+                                Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
+                                    SourceZoneFilter::OpponentHand
+                                }
                                 Some(ZoneFilter::YourGraveyard) => SourceZoneFilter::Graveyard,
                                 Some(
                                     ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
@@ -3128,6 +3224,7 @@ pub(super) fn lower_search_library_group(
                                     SourceZoneFilter::AnyGraveyard
                                 }
                                 Some(ZoneFilter::YourLibrary) => SourceZoneFilter::YourLibrary,
+                                Some(ZoneFilter::CommandZone) => SourceZoneFilter::CommandZone,
                                 Some(ZoneFilter::Exile)
                                     if matches!(
                                         f.controller,
@@ -3151,11 +3248,6 @@ pub(super) fn lower_search_library_group(
                         None
                     } else {
                         Some(lower_object_filter(&inner, vocabulary)?)
-                    };
-                    let once = match count_limit {
-                        Some(spellwake_oracle_compiler::ast::CountLimitAst::AnyNumber) => false,
-                        Some(spellwake_oracle_compiler::ast::CountLimitAst::UpTo(_)) => true,
-                        None => matches!(subject.as_ref(), SubjectRefAst::Group(_)),
                     };
                     let use_last_moved_perm = last_moved_match
                         && dur_core != "now"
@@ -3820,8 +3912,10 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
                 || matches!(
                     keep_dest,
                     spellwake_engine::program::LookTopKeepDest::Exile { .. }
+                        | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. }
                 )
         }
+        Instruction::ChooseObjects { .. } => !expected_exile_only,
         Instruction::ForEachPlayer { body, .. } => body
             .instructions
             .iter()
@@ -3868,13 +3962,27 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
                         | "among_those"
                         | "among those"
                         | "among_those_cards"
-                        | "among those cards" => Some(false),
+                        | "among those cards"
+                        | "milled_this_way"
+                        | "cards_milled_this_way"
+                        | "among_the_cards_milled_this_way"
+                        | "among the cards milled this way"
+                        | "among_cards_milled_this_way"
+                        | "among cards milled this way"
+                        | "from_among_the_cards_milled_this_way"
+                        | "from among the cards milled this way"
+                        | "from_among_cards_milled_this_way"
+                        | "from among cards milled this way" => Some(false),
                         "exiled_this_way"
                         | "among_the_cards_exiled_this_way"
                         | "among the cards exiled this way"
+                        | "among_cards_exiled_this_way"
+                        | "among cards exiled this way"
                         | "cards_exiled_this_way"
                         | "from_among_the_cards_exiled_this_way"
                         | "from among the cards exiled this way"
+                        | "from_among_cards_exiled_this_way"
+                        | "from among cards exiled this way"
                         | "from_among_those_cards_exiled_this_way" => Some(true),
                         _ => None,
                     }
@@ -3940,6 +4048,42 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
         .predicates
         .retain(|pred| classify_exile_only(pred).is_none());
     filter.zone = None;
+    true
+}
+
+fn strip_revealed_hand_ref_predicates(filter: &mut ObjectFilterAst) -> bool {
+    use spellwake_oracle_compiler::ast::{FilterPredicateAst, PriorActionRefKind};
+    let is_ref = |pred: &FilterPredicateAst| -> bool {
+        match pred {
+            FilterPredicateAst::PriorActionZoneRef { kind } => matches!(
+                kind.trim().to_ascii_lowercase().as_str(),
+                "from_among_those"
+                    | "from_among_those_cards"
+                    | "among_them"
+                    | "among them"
+                    | "from_among_them"
+                    | "from among them"
+                    | "among_those"
+                    | "among those"
+                    | "among_those_cards"
+                    | "among those cards"
+                    | "revealed_this_way"
+                    | "among_the_cards_revealed_this_way"
+                    | "from_among_the_cards_revealed_this_way"
+                    | "from_among_cards_revealed_this_way"
+            ),
+            FilterPredicateAst::AffectedByPriorAction(PriorActionRefKind::RevealedThisWay) => true,
+            FilterPredicateAst::StateQualification(raw) => matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "revealed this way" | "from it" | "from them"
+            ),
+            _ => false,
+        }
+    };
+    if !filter.predicates.iter().any(is_ref) {
+        return false;
+    }
+    filter.predicates.retain(|p| !is_ref(p));
     true
 }
 

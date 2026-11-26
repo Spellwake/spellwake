@@ -278,6 +278,7 @@ pub(super) fn lower_zone_action_this_way_action(
     act_low: &str,
     builder: &BodyBuilder,
     vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
 ) -> Option<Result<ResolutionCondition, &'static str>> {
     let core = act_low.strip_suffix(" this way")?.trim();
     if core.contains("chosen")
@@ -290,6 +291,74 @@ pub(super) fn lower_zone_action_this_way_action(
         || core.contains(" from ")
     {
         return None;
+    }
+    if let Some(dmg_subj) = core
+        .strip_suffix(" is dealt damage")
+        .or_else(|| core.strip_suffix(" was dealt damage"))
+        .or_else(|| core.strip_suffix(" are dealt damage"))
+        .or_else(|| core.strip_suffix(" were dealt damage"))
+    {
+        let dmg_mref = match builder.instructions.last() {
+            Some(
+                Instruction::Damage { .. }
+                | Instruction::DamageAmount(_)
+                | Instruction::DamageAmountThenExileIfDies(_),
+            ) if is_object_body_target(builder.target, true) => Some(MatchObjectRef::TargetObject),
+            Some(Instruction::DealDamageFrom { recipients, .. }) => match recipients.as_ref() {
+                DamageRecipientsRef::Target if is_object_body_target(builder.target, true) => {
+                    Some(MatchObjectRef::TargetObject)
+                }
+                DamageRecipientsRef::TriggeringObject if in_trigger => {
+                    Some(MatchObjectRef::TriggerSubject)
+                }
+                _ => None,
+            },
+            _ => None,
+        }?;
+        let flt_raw = dmg_subj
+            .trim()
+            .strip_prefix("at least one ")
+            .or_else(|| dmg_subj.trim().strip_prefix("one or more "))
+            .or_else(|| dmg_subj.trim().strip_prefix("an "))
+            .or_else(|| dmg_subj.trim().strip_prefix("a "))?
+            .trim();
+        if flt_raw.is_empty() {
+            return None;
+        }
+        let obj_filter = if matches!(flt_raw, "permanent" | "permanents") {
+            ObjectFilter::permanent()
+        } else {
+            let compiler_vocab = cached_compiler_vocab(vocabulary);
+            let parsed =
+                spellwake_oracle_compiler::filter::parse_object_filter(flt_raw, &compiler_vocab)
+                    .ok()?;
+            if is_unrestricted_filter(&parsed)
+                || parsed.zone.is_some()
+                || !parsed.extra_zones.is_empty()
+                || parsed.controller.is_some()
+                || parsed.owner.is_some()
+                || parsed.named.is_some()
+                || !parsed.predicates.is_empty()
+                || !parsed.flags.is_empty()
+            {
+                return None;
+            }
+            match lower_object_filter(&parsed, vocabulary) {
+                Ok(f) => f,
+                Err(e) => return Some(Err(e)),
+            }
+        };
+        let dealt_cond = ResolutionCondition {
+            left: ValueExpr::event(EventValueKind::DealtDamageThisWay { combat_only: false }),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        };
+        let match_cond = ResolutionCondition {
+            left: ValueExpr::object_matches(dmg_mref, obj_filter),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        };
+        return combine_resolution_conditions_and(vec![dealt_cond, match_cond]).map(Ok);
     }
     let (subject_ref, subj_phrase) = if let Some(after_you) = core.strip_prefix("you ") {
         let after_you = after_you.trim();
@@ -495,17 +564,24 @@ pub(super) fn lower_zone_action_this_way_action(
         return None;
     }
 
-    let flt_raw = subj_phrase
-        .strip_prefix("at least one ")
-        .or_else(|| subj_phrase.strip_prefix("one or more "))
-        .or_else(|| subj_phrase.strip_prefix("an "))
-        .or_else(|| subj_phrase.strip_prefix("a "))?
-        .trim();
+    let (is_another, flt_raw) = if let Some(rest) = subj_phrase.strip_prefix("another ") {
+        (true, rest.trim())
+    } else {
+        (
+            false,
+            subj_phrase
+                .strip_prefix("at least one ")
+                .or_else(|| subj_phrase.strip_prefix("one or more "))
+                .or_else(|| subj_phrase.strip_prefix("an "))
+                .or_else(|| subj_phrase.strip_prefix("a "))?
+                .trim(),
+        )
+    };
     if flt_raw.is_empty() {
         return None;
     }
 
-    let obj_filter = if matches!(flt_raw, "card" | "cards") {
+    let mut obj_filter = if matches!(flt_raw, "card" | "cards") {
         if subject_ref == MatchObjectRef::LastMovedToGraveyard {
             ObjectFilter::Clause(ObjectClause {
                 token: Some(false),
@@ -543,6 +619,16 @@ pub(super) fn lower_zone_action_this_way_action(
             Err(e) => return Some(Err(e)),
         }
     };
+    if is_another {
+        let apply_other = |mut c: ObjectClause| {
+            c.source_relation = SourceRelation::OtherThanAbilitySource;
+            c
+        };
+        obj_filter = match obj_filter {
+            ObjectFilter::Clause(a) => ObjectFilter::Clause(apply_other(a)),
+            ObjectFilter::Either(a, b) => ObjectFilter::Either(apply_other(a), apply_other(b)),
+        };
+    }
 
     Some(Ok(ResolutionCondition {
         left: ValueExpr::object_matches(subject_ref, obj_filter),
@@ -2715,7 +2801,7 @@ pub(super) fn lower_marker_or_action_condition(
                     } else if let Some(res) = lower_graveyard_count_action(other, vocabulary) {
                         return res;
                     } else if let Some(res) =
-                        lower_zone_action_this_way_action(other, builder, vocabulary)
+                        lower_zone_action_this_way_action(other, builder, vocabulary, in_trigger)
                     {
                         return res;
                     } else if let Some(res) = lower_turn_history_player_action(
@@ -5335,6 +5421,154 @@ pub(super) fn lower_marker_or_action_condition(
                         right: ValueExpr::literal(1),
                     })
                 }
+                "excess damage was dealt to that creature this way"
+                | "excess damage was dealt to that permanent this way"
+                | "excess damage was dealt this way" => {
+                    let preceded_by_target_damage = matches!(
+                        builder.instructions.last(),
+                        Some(
+                            Instruction::Damage { .. }
+                                | Instruction::DamageAmount(_)
+                                | Instruction::DamageAmountThenExileIfDies(_)
+                                | Instruction::DamageFromPower(_)
+                                | Instruction::CreatureDealsPowerDamageToOther { .. }
+                        )
+                    ) || matches!(
+                        builder.instructions.last(),
+                        Some(Instruction::DealDamageFrom { recipients, .. })
+                            if matches!(recipients.as_ref(), DamageRecipientsRef::Target)
+                    );
+                    if !preceded_by_target_damage || !is_object_body_target(builder.target, true) {
+                        return Err("oracle:unsupported-if-condition");
+                    }
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::DamageReceivedThisTurn {
+                            subject: ValueObjectRef::TargetObject,
+                            excess_only: true,
+                        }),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "they control a commander" | "that player controls a commander" => {
+                    let rp = lower_resolving_player_in_context(
+                        PlayerRefAst::ThatPlayer,
+                        builder,
+                        in_trigger,
+                    )?;
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::count_player_battlefield(
+                            rp,
+                            ObjectFilter::Clause(ObjectClause::any().commander()),
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "they control two or more basic lands"
+                | "that player controls two or more basic lands" => {
+                    let rp = lower_resolving_player_in_context(
+                        PlayerRefAst::ThatPlayer,
+                        builder,
+                        in_trigger,
+                    )?;
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::count_player_battlefield(
+                            rp,
+                            ObjectFilter::Clause(ObjectClause {
+                                required_supertypes: SupertypeMask::BASIC,
+                                ..ObjectClause::land()
+                            }),
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(2),
+                    })
+                }
+                "another permanent with the same name is on the battlefield" => {
+                    if !matches!(
+                        builder.target,
+                        BodyTarget::SingleCreature
+                            | BodyTarget::SinglePermanent
+                            | BodyTarget::SinglePlaneswalker
+                            | BodyTarget::FilteredPermanent(_)
+                    ) {
+                        return Err("oracle:unsupported-if-condition");
+                    }
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::count_battlefield(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::SAME_NAME_AS_TARGET,
+                            ..ObjectClause::any()
+                        })),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(2),
+                    })
+                }
+                "its mana value is even"
+                | "that creature's mana value is even"
+                | "that card's mana value is even" => {
+                    let mref = resolve_match_object_ref(
+                        &SubjectRefAst::Anaphora("it".to_string()),
+                        builder,
+                        in_trigger,
+                        false,
+                    )
+                    .ok_or("oracle:unsupported-if-condition")?;
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::object_matches(
+                            mref,
+                            ObjectFilter::any().with_flags(ObjectFilterFlags::EVEN_MANA_VALUE),
+                        ),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "its mana value is odd"
+                | "that creature's mana value is odd"
+                | "that card's mana value is odd" => {
+                    let mref = resolve_match_object_ref(
+                        &SubjectRefAst::Anaphora("it".to_string()),
+                        builder,
+                        in_trigger,
+                        false,
+                    )
+                    .ok_or("oracle:unsupported-if-condition")?;
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::object_matches(
+                            mref,
+                            ObjectFilter::any().with_flags(ObjectFilterFlags::ODD_MANA_VALUE),
+                        ),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "it entered under your control" => {
+                    let returned_to_bf = matches!(
+                        builder.instructions.last(),
+                        Some(
+                            Instruction::ReturnDelayedExile(_)
+                                | Instruction::ReturnCardsExiledWithLink(_)
+                                | Instruction::ReturnCardsExiledWithLinkExt { .. }
+                                | Instruction::MoveSubject {
+                                    destination: SubjectDestination::Battlefield { .. },
+                                    ..
+                                }
+                        )
+                    );
+                    if !returned_to_bf {
+                        return Err("oracle:unsupported-if-condition");
+                    }
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::object_matches(
+                            MatchObjectRef::LastMovedToBattlefield,
+                            ObjectFilter::Clause(ObjectClause {
+                                controller: ControllerFilter::You,
+                                ..ObjectClause::any()
+                            }),
+                        ),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    })
+                }
                 "it dealt combat damage to a player this turn"
                 | "that creature dealt combat damage to a player this turn" => {
                     let vref = resolve_value_object_ref_for_stat(
@@ -5496,7 +5730,7 @@ pub(super) fn lower_marker_or_action_condition(
                     } else if let Some(res) = lower_graveyard_count_action(other, vocabulary) {
                         res
                     } else if let Some(res) =
-                        lower_zone_action_this_way_action(other, builder, vocabulary)
+                        lower_zone_action_this_way_action(other, builder, vocabulary, in_trigger)
                     {
                         res
                     } else if let Some(res) = lower_turn_history_player_action(

@@ -702,6 +702,20 @@ pub enum DynamicStatAnchor {
     TriggerSubjectManaValue,
     /// Power of the resolving spell or ability's targeted object (CR 608.2h).
     TargetPower,
+    /// Toughness of the resolving spell or ability's targeted object (CR 608.2h).
+    TargetToughness,
+    /// Mana value of the resolving spell or ability's targeted object (CR 608.2h).
+    TargetManaValue,
+    /// Toughness of the triggering object.
+    TriggerSubjectToughness,
+    /// Power of the most recently sacrificed creature in this resolution or cost.
+    LastSacrificedPower,
+    /// Toughness of the most recently sacrificed creature in this resolution or cost.
+    LastSacrificedToughness,
+    /// Mana value of the most recently sacrificed permanent in this resolution or cost.
+    LastSacrificedManaValue,
+    /// Number of objects moved by the immediately preceding instruction.
+    LastMovedCount,
 }
 
 impl DynamicStatAnchor {
@@ -928,6 +942,54 @@ impl ObjectFilterFlags {
     pub const HAS_TOXIC: Self = Self(1 << 38);
     /// Permanent or card with no abilities (CR 113.1).
     pub const NO_ABILITIES: Self = Self(1 << 39);
+    /// Permanent not owned by its controller (CR 108.3 / 110.2).
+    pub const NOT_OWNED_BY_CONTROLLER: Self = Self(1 << 40);
+    /// Object with an even mana value (0, 2, 4, ...).
+    pub const EVEN_MANA_VALUE: Self = Self(1 << 41);
+    /// Object with an odd mana value (1, 3, 5, ...).
+    pub const ODD_MANA_VALUE: Self = Self(1 << 42);
+    /// Land or card with at least one basic land type.
+    pub const HAS_BASIC_LAND_TYPE: Self = Self(1 << 43);
+    /// Creature whose current power equals its current toughness.
+    pub const SAME_TOTAL_PT: Self = Self(1 << 44);
+    /// Permanent or card with at least one activated ability.
+    pub const HAS_ACTIVATED_ABILITY: Self = Self(1 << 45);
+    /// Permanent or card with no activated abilities.
+    pub const NO_ACTIVATED_ABILITIES: Self = Self(1 << 46);
+    /// Shares at least one color with the ability source.
+    pub const SHARES_COLOR_WITH_SOURCE: Self = Self(1 << 47);
+    /// Shares at least one creature type with the ability source.
+    pub const SHARES_CREATURE_TYPE_WITH_SOURCE: Self = Self(1 << 48);
+    /// Shares at least one card type with the ability source.
+    pub const SHARES_CARD_TYPE_WITH_SOURCE: Self = Self(1 << 49);
+    /// Shares at least one color with the resolving spell or ability's target object.
+    pub const SHARES_COLOR_WITH_TARGET: Self = Self(1 << 50);
+    /// Shares at least one creature type with the resolving spell or ability's target object.
+    pub const SHARES_CREATURE_TYPE_WITH_TARGET: Self = Self(1 << 51);
+    /// Shares at least one card type with the resolving spell or ability's target object.
+    pub const SHARES_CARD_TYPE_WITH_TARGET: Self = Self(1 << 52);
+    /// Shares a name with the ability source (CR 201.2).
+    pub const SAME_NAME_AS_SOURCE: Self = Self(1 << 53);
+    /// Shares a name with the resolving spell or ability's target object (CR 201.2).
+    pub const SAME_NAME_AS_TARGET: Self = Self(1 << 54);
+    /// Does not share a name with the ability source.
+    pub const DIFFERENT_NAME_FROM_SOURCE: Self = Self(1 << 55);
+    /// Does not share a name with any other permanent controlled by the evaluating player.
+    pub const UNIQUE_NAME_AMONG_CONTROLLED: Self = Self(1 << 56);
+    /// Object is in `last_moved_objects` from the immediately preceding instruction.
+    pub const IN_LAST_MOVED: Self = Self(1 << 57);
+    /// Exiled card with at least one time counter on it (suspended, CR 702.62b).
+    pub const SUSPENDED: Self = Self(1 << 58);
+    /// Face-up object (not turned face down).
+    pub const FACE_UP: Self = Self(1 << 59);
+    /// Aura or Equipment currently attached to the resolving target object.
+    pub const ATTACHED_TO_TARGET: Self = Self(1 << 60);
+    /// Shares at least one color with the most recently sacrificed object (`last_action_lki`).
+    pub const SHARES_COLOR_WITH_LAST_SACRIFICED: Self = Self(1 << 61);
+    /// Creature whose toughness is strictly greater than its power.
+    pub const TOUGHNESS_GREATER_THAN_POWER: Self = Self(1 << 62);
+    /// Creature whose power is strictly greater than its toughness.
+    pub const POWER_GREATER_THAN_TOUGHNESS: Self = Self(1 << 63);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -2559,24 +2621,38 @@ impl ObjectFilter {
         const fn clause_uses(c: ObjectClause) -> bool {
             matches!(c.controller, ControllerFilter::FirstTargetController)
                 || matches!(c.owner, ControllerFilter::FirstTargetController)
+                || c.flags
+                    .contains(ObjectFilterFlags::SHARES_COLOR_WITH_TARGET)
+                || c.flags
+                    .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET)
+                || c.flags
+                    .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET)
+                || c.flags.contains(ObjectFilterFlags::SAME_NAME_AS_TARGET)
+                || c.flags.contains(ObjectFilterFlags::ATTACHED_TO_TARGET)
                 || matches!(
                     c.power,
                     PowerFilter::CompareAnchor {
-                        anchor: DynamicStatAnchor::TargetPower,
+                        anchor: DynamicStatAnchor::TargetPower
+                            | DynamicStatAnchor::TargetToughness
+                            | DynamicStatAnchor::TargetManaValue,
                         ..
                     }
                 )
                 || matches!(
                     c.toughness,
                     ToughnessFilter::CompareAnchor {
-                        anchor: DynamicStatAnchor::TargetPower,
+                        anchor: DynamicStatAnchor::TargetPower
+                            | DynamicStatAnchor::TargetToughness
+                            | DynamicStatAnchor::TargetManaValue,
                         ..
                     }
                 )
                 || matches!(
                     c.mana_value,
                     ManaValueFilter::CompareAnchor {
-                        anchor: DynamicStatAnchor::TargetPower,
+                        anchor: DynamicStatAnchor::TargetPower
+                            | DynamicStatAnchor::TargetToughness
+                            | DynamicStatAnchor::TargetManaValue,
                         ..
                     }
                 )

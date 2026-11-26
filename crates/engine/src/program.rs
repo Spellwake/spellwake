@@ -1498,6 +1498,14 @@ pub enum SourceZoneFilter {
     LinkedExile,
     /// Objects moved by the immediately preceding instruction in this resolution (for example milled cards).
     LastMoved,
+    /// The hand of the resolving spell or ability's target player/opponent.
+    TargetPlayerHand,
+    /// The graveyard of the resolving spell or ability's target player/opponent.
+    TargetPlayerGraveyard,
+    /// Any opponent's hand.
+    OpponentHand,
+    /// The command zone (e.g. commander cards).
+    CommandZone,
 }
 
 /// Optional keep-vs-rest action applied to every eligible unchosen object in `Instruction::ChooseObjects`.
@@ -2167,6 +2175,15 @@ pub enum LookTopKeepDest {
     LibraryTop,
     Graveyard,
     Exile {
+        playable: bool,
+        free: bool,
+        cast_only: bool,
+        any_color: bool,
+        duration: ResolvedDuration,
+    },
+    /// Exile kept cards linked to the ability source (optionally face down and/or playable).
+    ExileLinked {
+        face_down: bool,
         playable: bool,
         free: bool,
         cast_only: bool,
@@ -4041,6 +4058,7 @@ pub enum Instruction {
         count: ValueExpr,
         match_dest: LookTopKeepDest,
         rest_dest: LookTopRestDest,
+        keep_all_revealed: bool,
     },
     /// Generalized token copy with full CR 707.9 exception support.
     CreateTokenCopyExt {
@@ -5040,11 +5058,17 @@ impl Instruction {
             }
             Self::SelectZoneCardsToZone {
                 player,
+                source_zone,
                 filter,
                 destination,
                 ..
             } => {
                 is_target_player(*player)
+                    || matches!(
+                        source_zone,
+                        SourceZoneFilter::TargetPlayerHand
+                            | SourceZoneFilter::TargetPlayerGraveyard
+                    )
                     || filter_uses_target(filter)
                     || matches!(
                         destination,
@@ -5054,11 +5078,17 @@ impl Instruction {
                     )
             }
             Self::ChooseObjects {
-                players, filter, ..
+                players,
+                source_zone,
+                filter,
+                ..
             } => {
                 matches!(
                     players,
                     AffectedPlayers::One(p) if is_target_player(*p)
+                ) || matches!(
+                    source_zone,
+                    SourceZoneFilter::TargetPlayerHand | SourceZoneFilter::TargetPlayerGraveyard
                 ) || filter_uses_target(filter)
             }
             Self::DealDamageFrom {
@@ -5223,8 +5253,19 @@ impl Instruction {
                 ) || count.uses_target()
             }
             Self::ExileGroupFromZone {
-                players, filter, ..
-            } => is_target_affected(*players) || filter_uses_target(filter),
+                players,
+                zone,
+                filter,
+                ..
+            } => {
+                is_target_affected(*players)
+                    || matches!(
+                        zone,
+                        SourceZoneFilter::TargetPlayerHand
+                            | SourceZoneFilter::TargetPlayerGraveyard
+                    )
+                    || filter_uses_target(filter)
+            }
             Self::DestroyChosen {
                 chooser,
                 filter,
@@ -5302,11 +5343,13 @@ impl Instruction {
                 library_owner,
                 chooser,
                 count,
+                filter,
                 ..
             } => {
                 is_target_player(*library_owner)
                     || is_target_player(*chooser)
                     || count.uses_target()
+                    || filter.as_deref().is_some_and(filter_uses_target)
             }
             Self::RevealTopTwoPiles {
                 count,
@@ -5316,12 +5359,14 @@ impl Instruction {
             Self::RevealUntilMatchExt {
                 library_owner,
                 chooser,
+                filter,
                 count,
                 ..
             } => {
                 is_target_player(*library_owner)
                     || is_target_player(*chooser)
                     || count.uses_target()
+                    || filter_uses_target(filter)
             }
             Self::CreateTokenCopyExt {
                 source,
@@ -10961,6 +11006,7 @@ impl ExecutableBody {
                 }
                 Instruction::SelectZoneCardsToZone {
                     player,
+                    source_zone,
                     filter,
                     min,
                     max,
@@ -10980,13 +11026,20 @@ impl ExecutableBody {
                     max.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     let mut fam =
                         player.validate(context, self.target, facts.definitely_exiled_target)?;
-                    if filter.has_target_player() {
+                    if filter.has_target_player()
+                        || matches!(
+                            source_zone,
+                            SourceZoneFilter::TargetPlayerHand
+                                | SourceZoneFilter::TargetPlayerGraveyard
+                        )
+                    {
                         fam = merge_family(fam, Some(OperandFamily::Player))?;
                     }
                     fam
                 }
                 Instruction::ChooseObjects {
                     players,
+                    source_zone,
                     filter,
                     min,
                     max,
@@ -11003,7 +11056,13 @@ impl ExecutableBody {
                     }
                     let mut fam =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    if filter.has_target_player() {
+                    if filter.has_target_player()
+                        || matches!(
+                            source_zone,
+                            SourceZoneFilter::TargetPlayerHand
+                                | SourceZoneFilter::TargetPlayerGraveyard
+                        )
+                    {
                         fam = merge_family(fam, Some(OperandFamily::Player))?;
                     }
                     fam
@@ -11964,14 +12023,23 @@ impl ExecutableBody {
                     merge_family(tf, cf)?
                 }
                 Instruction::ExileGroupFromZone {
-                    players, filter, ..
+                    players,
+                    zone,
+                    filter,
+                    ..
                 } => {
                     filter
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                     let pf =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    let ff = filter.has_target_player().then_some(OperandFamily::Player);
+                    let ff = (filter.has_target_player()
+                        || matches!(
+                            zone,
+                            SourceZoneFilter::TargetPlayerHand
+                                | SourceZoneFilter::TargetPlayerGraveyard
+                        ))
+                    .then_some(OperandFamily::Player);
                     merge_family(pf, ff)?
                 }
                 Instruction::SacrificeSubject { subject } => {
