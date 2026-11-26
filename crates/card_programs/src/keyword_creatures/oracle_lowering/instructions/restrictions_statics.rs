@@ -175,6 +175,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     | "as though it had flash"
                                     | "as though they had flash"
                                     | "can be cast as though it had flash"
+                                    | "can be cast as though they had flash"
                                     | "cast_as_though_flash"
                             ) {
                                 builder.instructions.push(Instruction::CreateTemporaryRule {
@@ -190,7 +191,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                             if matches!(
                                 p_low.as_str(),
                                 "without paying its mana cost"
+                                    | "without paying their mana costs"
                                     | "can be cast without paying its mana cost"
+                                    | "can be cast without paying their mana costs"
+                                    | "you may cast it without paying its mana cost"
                             ) {
                                 builder.instructions.push(Instruction::CreateTemporaryRule {
                                     rule: Box::new(TemporaryRuleKind::NextSpellFree {
@@ -1443,6 +1447,53 @@ pub(super) fn lower_restrictions_statics_instruction(
                             });
                             return Ok(());
                         }
+                        if subject.is_none()
+                            && let Some((who_ref, rest_rule)) = [
+                                ("your opponents ", PlayerRefAst::EachOpponent),
+                                ("opponents ", PlayerRefAst::EachOpponent),
+                                ("each opponent ", PlayerRefAst::EachOpponent),
+                                ("players ", PlayerRefAst::EachPlayer),
+                                ("each player ", PlayerRefAst::EachPlayer),
+                                ("you ", PlayerRefAst::You),
+                                ("that player ", PlayerRefAst::ThatPlayer),
+                                ("they ", PlayerRefAst::ThatPlayer),
+                                ("target player ", PlayerRefAst::TargetPlayer),
+                                ("target opponent ", PlayerRefAst::TargetOpponent),
+                            ]
+                            .into_iter()
+                            .find_map(|(pref, p)| {
+                                rule_body.strip_prefix(pref).map(|r| (p, r.trim()))
+                            })
+                            && let Some(nonmana_only) = parse_player_cant_activate_rule(rest_rule)
+                                .or_else(|| {
+                                    matches!(
+                                        rest_rule,
+                                        "cant_activate_non:mana abilities"
+                                            | "cant_activate_non:mana"
+                                    )
+                                    .then_some(true)
+                                })
+                        {
+                            let players = match who_ref {
+                                PlayerRefAst::TargetPlayer => {
+                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                }
+                                PlayerRefAst::TargetOpponent => {
+                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                }
+                                p => lower_affected_players_in_context(p, builder, in_trigger)?,
+                            };
+                            builder.instructions.push(Instruction::CreateTemporaryRule {
+                                rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                                    players,
+                                    nonmana_only,
+                                }),
+                                duration: eff_dur,
+                            });
+                            return Ok(());
+                        }
                         if filter.is_none()
                             && let Some(subj) = subject.as_deref()
                             && let Some(lock_parts) = parse_temp_permanent_lock_parts(&rule_body)
@@ -1770,6 +1821,22 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
                             None => {
+                                let is_unrestricted_cast_tail = filter.is_some()
+                                    || rule_low.split_once("can't cast ").is_some_and(
+                                        |(_, tail)| {
+                                            matches!(
+                                                tail.trim().trim_end_matches('.'),
+                                                "spells"
+                                                    | "spells this turn"
+                                                    | "any spells"
+                                                    | "any spells this turn"
+                                                    | "additional spells"
+                                                    | "additional spells this turn"
+                                                    | "more spells"
+                                                    | "more spells this turn"
+                                            )
+                                        },
+                                    );
                                 if rule_low.starts_with("players ")
                                     || rule_low.starts_with("each player ")
                                 {
@@ -1782,6 +1849,25 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     || rule_low == "cant_cast_spells"
                                 {
                                     AffectedPlayers::EachOpponent
+                                } else if is_unrestricted_cast_tail
+                                    && (rule_low.starts_with("that player ")
+                                        || rule_low.starts_with("they "))
+                                {
+                                    lower_affected_players_in_context(
+                                        PlayerRefAst::ThatPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?
+                                } else if is_unrestricted_cast_tail
+                                    && rule_low.starts_with("target player ")
+                                {
+                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                } else if is_unrestricted_cast_tail
+                                    && rule_low.starts_with("target opponent ")
+                                {
+                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
                                     return Err("oracle:unsupported-temp-static");
                                 }
@@ -2726,7 +2812,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     }
                 }
             }
-            if dur == ResolvedDuration::UntilEndOfTurn
+            if (!dur.requires_ability_source() || in_trigger || self_pronoun_valid)
                 && let ReplacementEffectAst::EventInstead {
                     subject_or_event,
                     would,
@@ -2744,7 +2830,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                     .strip_prefix("would ")
                     .unwrap_or(&would_low)
                     .trim();
-                let ev_norm_owned = ev_no_would.trim_end_matches('.').replace(" this turn", "");
+                let ev_norm_owned = if dur == ResolvedDuration::UntilEndOfTurn {
+                    ev_no_would.trim_end_matches('.').replace(" this turn", "")
+                } else {
+                    ev_no_would.trim_end_matches('.').to_owned()
+                };
                 let ev_norm = ev_norm_owned.trim();
                 let rep_low = instead.trim().to_ascii_lowercase();
                 let rep_no_dot = rep_low.trim_end_matches('.').trim();
@@ -2752,7 +2842,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                     .strip_suffix(" instead")
                     .unwrap_or(rep_no_dot)
                     .trim();
-                let rep_norm_owned = rep_no_instead.replace(" this turn", "");
+                let rep_norm_owned = if dur == ResolvedDuration::UntilEndOfTurn {
+                    rep_no_instead.replace(" this turn", "")
+                } else {
+                    rep_no_instead.to_owned()
+                };
                 let rep_norm = rep_norm_owned.trim();
                 let parsed_dmg_rule = if let Some(rule) =
                     parse_modify_damage_event(&subj_low, ev_norm, rep_norm, vocabulary)
@@ -2848,12 +2942,176 @@ pub(super) fn lower_restrictions_statics_instruction(
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
-        } if restriction.eq_ignore_ascii_case("players can't gain life this turn")
-            || restriction.eq_ignore_ascii_case("players can't gain life") =>
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "sorcery"
+                    | "as a sorcery"
+                    | "only as a sorcery"
+                    | "cast only as a sorcery"
+                    | "play only as a sorcery"
+                    | "cast it only as a sorcery"
+                    | "play it only as a sorcery"
+            )
+        } && matches!(
+            builder.instructions.last(),
+            Some(Instruction::CreateTemporaryRule { rule, .. })
+                if matches!(rule.as_ref(), TemporaryRuleKind::ZoneCastPermission { .. })
+        ) =>
         {
+            if let Some(Instruction::CreateTemporaryRule { rule, .. }) =
+                builder.instructions.last_mut()
+                && let TemporaryRuleKind::ZoneCastPermission { sorcery_only, .. } = rule.as_mut()
+            {
+                *sorcery_only = true;
+                return Ok(());
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "players can't gain life this turn"
+                    | "players can't gain life"
+                    | "players can't gain life for the rest of the game"
+                    | "you can't gain life this turn"
+                    | "you can't gain life"
+                    | "you can't gain life for the rest of the game"
+                    | "opponents can't gain life this turn"
+                    | "opponents can't gain life"
+                    | "opponents can't gain life for the rest of the game"
+                    | "your opponents can't gain life this turn"
+                    | "your opponents can't gain life"
+                    | "your opponents can't gain life for the rest of the game"
+            )
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let players = if r_low.starts_with("players ") {
+                AffectedPlayers::EachPlayer
+            } else if r_low.starts_with("you ") {
+                AffectedPlayers::One(ResolvingPlayer::Controller)
+            } else {
+                AffectedPlayers::EachOpponent
+            };
+            let dur = if r_low.ends_with(" for the rest of the game") {
+                ResolvedDuration::NoStatedDuration
+            } else {
+                ResolvedDuration::UntilEndOfTurn
+            };
             builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::PlayerCantGainLife {
-                    players: AffectedPlayers::EachPlayer,
+                rule: Box::new(TemporaryRuleKind::PlayerCantGainLife { players }),
+                duration: dur,
+            });
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "players can't lose life"
+                    | "players can't lose life this turn"
+                    | "you can't lose life"
+                    | "you can't lose life this turn"
+                    | "that player can't lose life"
+                    | "that player can't lose life this turn"
+            )
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let player = if r_low.starts_with("players ") {
+                AffectedPlayers::EachPlayer
+            } else if r_low.starts_with("you ") {
+                AffectedPlayers::One(ResolvingPlayer::Controller)
+            } else {
+                let rp = lower_resolving_player_in_context(
+                    PlayerRefAst::ThatPlayer,
+                    builder,
+                    in_trigger,
+                )?;
+                AffectedPlayers::One(rp)
+            };
+            builder.instructions.push(Instruction::CreateTemporaryRule {
+                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    StaticContinuousAbility::EventReplacement {
+                        id: ids.static_id(),
+                        event: ReplaceableEvent::LifeLoss { player },
+                        condition: None,
+                        action: StaticReplacementAction::Skip,
+                    },
+                ))),
+                duration: ResolvedDuration::UntilEndOfTurn,
+            });
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "you can't cast spells this turn"
+                    | "you can't cast additional spells this turn"
+                    | "you can't cast spells for the rest of the turn"
+                    | "you can't cast additional spells for the rest of the turn"
+                    | "players can't cast spells this turn"
+                    | "opponents can't cast spells this turn"
+                    | "your opponents can't cast spells this turn"
+                    | "each opponent can't cast spells this turn"
+                    | "that player can't cast spells this turn"
+                    | "that player can't cast additional spells this turn"
+            )
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let players = if r_low.starts_with("you ") {
+                AffectedPlayers::One(ResolvingPlayer::Controller)
+            } else if r_low.starts_with("players ") {
+                AffectedPlayers::EachPlayer
+            } else if r_low.starts_with("that player ") {
+                let rp = lower_resolving_player_in_context(
+                    PlayerRefAst::ThatPlayer,
+                    builder,
+                    in_trigger,
+                )?;
+                AffectedPlayers::One(rp)
+            } else {
+                AffectedPlayers::EachOpponent
+            };
+            builder.instructions.push(Instruction::CreateTemporaryRule {
+                rule: Box::new(TemporaryRuleKind::CantCastSpells {
+                    players,
+                    filter: None,
                 }),
                 duration: ResolvedDuration::UntilEndOfTurn,
             });
@@ -2869,21 +3127,107 @@ pub(super) fn lower_restrictions_statics_instruction(
                 .to_ascii_lowercase();
             matches!(
                 r_low.as_str(),
-                "players can't lose life" | "players can't lose life this turn"
+                "players can't play lands this turn"
+                    | "opponents can't play lands this turn"
+                    | "your opponents can't play lands this turn"
+                    | "you can't play lands this turn"
+                    | "that player can't play lands this turn"
             )
         } =>
         {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let players = if r_low.starts_with("players ") {
+                AffectedPlayers::EachPlayer
+            } else if r_low.starts_with("you ") {
+                AffectedPlayers::One(ResolvingPlayer::Controller)
+            } else if r_low.starts_with("that player ") {
+                let rp = lower_resolving_player_in_context(
+                    PlayerRefAst::ThatPlayer,
+                    builder,
+                    in_trigger,
+                )?;
+                AffectedPlayers::One(rp)
+            } else {
+                AffectedPlayers::EachOpponent
+            };
             builder.instructions.push(Instruction::CreateTemporaryRule {
-                rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
-                    StaticContinuousAbility::EventReplacement {
-                        id: ids.static_id(),
-                        event: ReplaceableEvent::LifeLoss {
-                            player: AffectedPlayers::EachPlayer,
-                        },
-                        condition: None,
-                        action: StaticReplacementAction::Skip,
-                    },
-                ))),
+                rule: Box::new(TemporaryRuleKind::CantPlayLands { players }),
+                duration: ResolvedDuration::UntilEndOfTurn,
+            });
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let body = r_low.strip_suffix(" this turn").unwrap_or(&r_low);
+            [
+                "players ",
+                "opponents ",
+                "your opponents ",
+                "you ",
+                "that player ",
+            ]
+            .into_iter()
+            .any(|pref| {
+                body.strip_prefix(pref)
+                    .and_then(|rest| parse_player_cant_activate_rule(rest.trim()))
+                    .is_some()
+            })
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let body = r_low.strip_suffix(" this turn").unwrap_or(&r_low);
+            let (players, nonmana_only) = if let Some(rest) = body.strip_prefix("players ") {
+                (
+                    AffectedPlayers::EachPlayer,
+                    parse_player_cant_activate_rule(rest.trim())
+                        .ok_or("oracle:unsupported-instruction")?,
+                )
+            } else if let Some(rest) = body
+                .strip_prefix("your opponents ")
+                .or_else(|| body.strip_prefix("opponents "))
+            {
+                (
+                    AffectedPlayers::EachOpponent,
+                    parse_player_cant_activate_rule(rest.trim())
+                        .ok_or("oracle:unsupported-instruction")?,
+                )
+            } else if let Some(rest) = body.strip_prefix("you ") {
+                (
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    parse_player_cant_activate_rule(rest.trim())
+                        .ok_or("oracle:unsupported-instruction")?,
+                )
+            } else if let Some(rest) = body.strip_prefix("that player ") {
+                let rp = lower_resolving_player_in_context(
+                    PlayerRefAst::ThatPlayer,
+                    builder,
+                    in_trigger,
+                )?;
+                (
+                    AffectedPlayers::One(rp),
+                    parse_player_cant_activate_rule(rest.trim())
+                        .ok_or("oracle:unsupported-instruction")?,
+                )
+            } else {
+                return Err("oracle:unsupported-instruction");
+            };
+            builder.instructions.push(Instruction::CreateTemporaryRule {
+                rule: Box::new(TemporaryRuleKind::CantActivateAbilities {
+                    players,
+                    nonmana_only,
+                }),
                 duration: ResolvedDuration::UntilEndOfTurn,
             });
             Ok(())
@@ -3111,10 +3455,28 @@ pub(super) fn lower_restrictions_statics_instruction(
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
-        } if restriction
-            .trim()
-            .trim_end_matches('.')
-            .eq_ignore_ascii_case("it enters tapped") =>
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "it enters tapped"
+                    | "they enter tapped"
+                    | "the token enters tapped"
+                    | "the tokens enter tapped"
+                    | "those tokens enter tapped"
+                    | "that creature enters tapped"
+                    | "those creatures enter tapped"
+                    | "that permanent enters tapped"
+                    | "those permanents enter tapped"
+                    | "that land enters tapped"
+                    | "those lands enter tapped"
+                    | "that card enters tapped"
+                    | "those cards enter tapped"
+            )
+        } =>
         {
             match builder.instructions.last_mut() {
                 Some(Instruction::MoveSubject {
@@ -3133,13 +3495,34 @@ pub(super) fn lower_restrictions_statics_instruction(
                     destination: SubjectDestination::Battlefield { tapped, .. },
                     ..
                 })
+                | Some(Instruction::MoveGraveyardGroupOwned {
+                    destination: SubjectDestination::Battlefield { tapped, .. },
+                    ..
+                })
+                | Some(Instruction::MoveGraveyardGroup {
+                    to_battlefield: true,
+                    tapped,
+                    ..
+                })
+                | Some(Instruction::PutHandPermanentsOntoBattlefield { tapped, .. })
+                | Some(Instruction::PutHandPermanentFiltered { tapped, .. })
                 | Some(Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped })
                 | Some(Instruction::ReturnSourceGraveyardToBattlefield { tapped }) => {
                     *tapped = true;
                     Ok(())
                 }
-                Some(Instruction::CreateTokens { creations }) if creations.len() == 1 => {
-                    creations[0].enters_tapped = true;
+                Some(Instruction::SearchLibrary { filter }) => {
+                    if let SearchDestination::Battlefield { tapped, .. } = &mut filter.destination {
+                        *tapped = true;
+                        Ok(())
+                    } else {
+                        Err("oracle:unsupported-instruction")
+                    }
+                }
+                Some(Instruction::CreateTokens { creations }) if !creations.is_empty() => {
+                    for creation in creations {
+                        creation.enters_tapped = true;
+                    }
                     Ok(())
                 }
                 Some(Instruction::CreateTokenCopy { tapped, .. }) => {
@@ -3459,6 +3842,47 @@ pub(super) fn lower_restrictions_statics_instruction(
                         };
                         return Ok(());
                     }
+                    Instruction::MoveSubject {
+                        destination:
+                            SubjectDestination::Battlefield {
+                                tapped, attacking, ..
+                            },
+                        ..
+                    }
+                    | Instruction::SelectZoneCardsToZone {
+                        destination:
+                            SubjectDestination::Battlefield {
+                                tapped, attacking, ..
+                            },
+                        ..
+                    }
+                    | Instruction::MoveLastMovedFiltered {
+                        destination:
+                            SubjectDestination::Battlefield {
+                                tapped, attacking, ..
+                            },
+                        ..
+                    }
+                    | Instruction::ReturnLinkedExile {
+                        destination:
+                            SubjectDestination::Battlefield {
+                                tapped, attacking, ..
+                            },
+                        ..
+                    }
+                    | Instruction::MoveGraveyardGroupOwned {
+                        destination:
+                            SubjectDestination::Battlefield {
+                                tapped, attacking, ..
+                            },
+                        ..
+                    } if defender_scope
+                        == spellwake_engine::token::AttackingDefenderScope::AnyLegal =>
+                    {
+                        *tapped = true;
+                        *attacking = true;
+                        return Ok(());
+                    }
                     _ => {}
                 }
             }
@@ -3476,10 +3900,16 @@ pub(super) fn lower_restrictions_statics_instruction(
                 r_low.as_str(),
                 "it's still a land"
                     | "they're still lands"
+                    | "it's still a land in addition to its other types"
+                    | "they're still lands in addition to their other types"
                     | "it's still a creature"
                     | "they're still creatures"
+                    | "it's still a creature in addition to its other types"
+                    | "they're still creatures in addition to their other types"
                     | "it's still an artifact"
                     | "they're still artifacts"
+                    | "it's still an artifact creature"
+                    | "they're still artifact creatures"
                     | "it's still an enchantment"
                     | "they're still enchantments"
             )

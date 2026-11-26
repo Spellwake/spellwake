@@ -682,6 +682,19 @@ pub(super) fn lower_combat_damage_instruction(
                                 AffectedPlayers::One(ResolvingPlayer::RandomOpponent),
                             )))
                         }
+                        SubjectRefAst::Player(
+                            p @ (PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer),
+                        ) => {
+                            builder.instructions.push(Instruction::ChooseValue {
+                                chooser: ResolvingPlayer::Controller,
+                                domain: ResolutionChoiceDomain::Player {
+                                    opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
+                                },
+                            });
+                            Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
+                                AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
+                            )))
+                        }
                         SubjectRefAst::Player(PlayerRefAst::ActivePlayer) => {
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::ActivePlayer),
@@ -1916,6 +1929,31 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     Ok(())
                 }
+                SubjectRefAst::Player(
+                    p @ (PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer),
+                ) => {
+                    let amt_expr = lower_amt(builder)?;
+                    builder.instructions.push(Instruction::ChooseValue {
+                        chooser: ResolvingPlayer::Controller,
+                        domain: ResolutionChoiceDomain::Player {
+                            opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
+                        },
+                    });
+                    let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(
+                        ResolvingPlayer::ChosenPlayer,
+                    ));
+                    if let ValueExpr::Literal(n) = amt_expr {
+                        builder
+                            .instructions
+                            .push(Instruction::DamageGroup { group, amount: n });
+                    } else {
+                        builder.instructions.push(Instruction::DamageGroupAmount {
+                            group,
+                            amount: amt_expr,
+                        });
+                    }
+                    Ok(())
+                }
                 SubjectRefAst::Player(p)
                     if matches!(
                         p,
@@ -2608,7 +2646,7 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::Exact(1),
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                         let mut f_clean = filter.as_ref().clone();
                         f_clean.zone = None;
@@ -2616,6 +2654,9 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            builder.up_to_one_target = true;
+                        }
                         EffectSubject::TargetObject
                     }
                     SubjectRefAst::TargetOneOf {
@@ -2726,7 +2767,7 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::Exact(1),
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                         let mut f_clean = filter.as_ref().clone();
                         f_clean.zone = None;
@@ -2734,6 +2775,9 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            builder.up_to_one_target = true;
+                        }
                         EffectSubject::TargetObject
                     }
                     SubjectRefAst::TargetOneOf {
@@ -3520,6 +3564,58 @@ pub(super) fn lower_combat_damage_instruction(
                         duration: eff_dur,
                     });
                     return Ok(());
+                }
+                if let Some((subj_raw, nonmana_only)) = rule_body
+                    .strip_prefix("activated abilities of ")
+                    .and_then(|r| {
+                        r.strip_suffix(" can't be activated unless they're mana abilities")
+                            .map(|f| (f, true))
+                            .or_else(|| r.strip_suffix(" can't be activated").map(|f| (f, false)))
+                    })
+                    && matches!(
+                        subj_raw.trim(),
+                        "it" | "them"
+                            | "that permanent"
+                            | "that creature"
+                            | "that artifact"
+                            | "that land"
+                            | "that planeswalker"
+                            | "those permanents"
+                            | "those creatures"
+                    )
+                {
+                    let supp = if nonmana_only {
+                        ActivationSuppression::NonMana
+                    } else {
+                        ActivationSuppression::All
+                    };
+                    let ab = AbilityChange {
+                        suppressed_activations: Some(supp),
+                        ..AbilityChange::default()
+                    };
+                    let target_subj = if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                        && is_permanent_body_target(builder.target)
+                    {
+                        SubjectRefAst::Anaphora("it".to_string())
+                    } else {
+                        eff_subject.clone()
+                    };
+                    if !(matches!(target_subj, SubjectRefAst::SelfObject)
+                        && !self_pronoun_valid
+                        && !in_trigger)
+                        && emit_resolved_parts_for_subject(
+                            &target_subj,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
+                            eff_dur,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            self_pronoun_valid,
+                        )
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
                 }
             }
             if matches!(
@@ -7171,6 +7267,12 @@ pub(super) fn lower_extra_combat_mod_blocking_restriction(
         | "assign combat damage as though they weren't blocked"
         | "assign their combat damage as though they weren't blocked"
         | "assigns its combat damage as though it weren't blocked"
+        | "assign their combat damage this turn as though they weren't blocked"
+        | "assigns its combat damage this turn as though it weren't blocked"
+        | "may assign its combat damage as though it weren't blocked"
+        | "may assign their combat damage as though they weren't blocked"
+        | "may assign its combat damage this turn as though it weren't blocked"
+        | "may assign their combat damage this turn as though they weren't blocked"
         | "its combat damage as though it weren't blocked"
         | "their combat damage as though they weren't blocked"
         | "combat damage as though it weren't blocked"
@@ -7186,6 +7288,12 @@ pub(super) fn lower_extra_combat_mod_blocking_restriction(
         | "assignsnocombatdamage"
         | "assigns no combat damage"
         | "assign no combat damage"
+        | "it assigns no combat damage"
+        | "they assign no combat damage"
+        | "assigns no combat damage this turn"
+        | "assign no combat damage this turn"
+        | "assigns no combat damage this combat"
+        | "assign no combat damage this combat"
         | "no combat damage" => Some(BlockingRestriction::AssignNoCombatDamage),
         "cant_attack_you_or_your_planeswalkers"
         | "cant_attack:you or planeswalkers you control"

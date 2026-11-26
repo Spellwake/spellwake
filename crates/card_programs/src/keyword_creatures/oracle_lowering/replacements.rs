@@ -1216,10 +1216,47 @@ pub(super) fn lower_replacement(
                 && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
                 && !value_expr_contains_prior_result(count)
             {
+                let choice_low = choice
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim()
+                    .to_ascii_lowercase();
+                let normalized_choice = choice_low
+                    .strip_prefix("as ~ enters, choose ")
+                    .or_else(|| choice_low.strip_prefix("choose "))
+                    .unwrap_or(&choice_low)
+                    .trim();
+                let chooses_player = matches!(
+                    normalized_choice,
+                    "an opponent" | "opponent" | "a player" | "player"
+                );
                 let kind = parse_counter_kind(&counter_kind.to_ascii_lowercase())
                     .filter(|k| k.is_permanent())
                     .ok_or("oracle:unsupported-entry-counters")?;
-                let amount = lower_value_expr(count, vocabulary)?;
+                let amount = if chooses_player
+                    && let ValueExprAst::Count(f) = count.as_ref()
+                    && matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                    && f.extra_zones.is_empty()
+                    && matches!(
+                        f.controller,
+                        Some(ControllerRelation::ThatPlayer | ControllerRelation::ChosenPlayer)
+                    ) {
+                    let mut inner = f.as_ref().clone();
+                    inner.zone = None;
+                    inner.controller = None;
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter(&inner, vocabulary)?
+                    };
+                    ValueExpr::Count {
+                        zone: spellwake_engine::program::ValueZone::Battlefield,
+                        filter: Box::new(obj),
+                        controller_scope: Some(ResolvingPlayer::SourceChosenPlayer),
+                    }
+                } else {
+                    lower_value_expr(count, vocabulary)?
+                };
                 if !entry_counter_expr_supported(&amount) {
                     return Err("oracle:unsupported-entry-counters");
                 }
@@ -1235,7 +1272,7 @@ pub(super) fn lower_replacement(
                 }
                 lower_replacement(
                     &ReplacementEffectAst::AsEntersChoose {
-                        choice: choice.clone(),
+                        choice: normalized_choice.to_string(),
                     },
                     program,
                     vocabulary,
@@ -5176,7 +5213,39 @@ fn token_spec_has_replacement_unresolved_ref(spec: &TokenSpecAst) -> bool {
 }
 
 fn ast_has_unresolved_replacement_refs(ins: &[InstructionAst]) -> bool {
-    ins.iter().any(|instr| {
+    ins.iter().enumerate().any(|(idx, instr)| {
+        let paired_impulse_grant = idx > 0
+            && matches!(ins[idx - 1], InstructionAst::ExileTopLibrary { .. })
+            && matches!(
+                match instr {
+                    g @ InstructionAst::GrantCastPermission { .. } => Some(g),
+                    InstructionAst::Optional(inner) if inner.len() == 1 => Some(&inner[0]),
+                    _ => None,
+                },
+                Some(InstructionAst::GrantCastPermission {
+                    player: PlayerRefAst::You,
+                    subject,
+                    count_limit: None,
+                    alt_cost: None,
+                    ..
+                }) if matches!(
+                    subject.as_ref(),
+                    SubjectRefAst::Anaphora(a) if matches!(
+                        a.trim().to_ascii_lowercase().as_str(),
+                        "it"
+                            | "them"
+                            | "that card"
+                            | "those cards"
+                            | "the exiled card"
+                            | "the exiled cards"
+                            | "cards exiled this way"
+                            | "a card exiled this way"
+                    )
+                )
+            );
+        if paired_impulse_grant {
+            return false;
+        }
         if instruction_references_target_anaphora(instr) {
             return true;
         }
@@ -8545,6 +8614,32 @@ fn lower_filtered_or_steal_token_replacement(
 }
 
 fn split_if_would_instead(full: &str) -> Option<(Option<&str>, &str, &str, &str)> {
+    // Passive damage redirection form:
+    // "[as long as <cond>, ]<damage subj> that would <be dealt to ...> is dealt to <dest> instead"
+    // (e.g. Veteran Bodyguard, Weathered Bodyguards, Martyrs of Korlis)
+    {
+        let (cond_opt, body) = if let Some(rest) = full.strip_prefix("as long as ")
+            && let Some((c, after)) = rest.split_once(", ")
+            && !after.trim_start().starts_with("if ")
+        {
+            (Some(c.trim()), after.trim())
+        } else {
+            (None, full)
+        };
+        if !body.starts_with("if ")
+            && let Some((subj_part, after_would)) = body.split_once(" that would ")
+            && let Some((would_part, dest_part)) = after_would.split_once(" is dealt to ")
+        {
+            let i_start = body.len() - dest_part.len() - "is dealt to ".len();
+            return Some((
+                cond_opt,
+                subj_part.trim(),
+                would_part.trim(),
+                body[i_start..].trim(),
+            ));
+        }
+    }
+
     let (leading_cond, after_if) = if let Some(rest) = full.strip_prefix("as long as ")
         && let Some((cond, after_inner)) = rest.split_once(", if ")
     {
@@ -9152,6 +9247,36 @@ fn parse_prevent_followup(
             BodyTarget::None,
             vec![Instruction::DrawController {
                 amount: ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
+            }],
+        );
+        if validate_inline_followup_body(&body, vocabulary) {
+            return Some(DamagePreventFollowup::InlineBody(Box::new(body)));
+        }
+    }
+    if let Some(mill_factor) = match f_no_you {
+        "mill that many cards"
+        | "mill cards equal to the damage prevented this way"
+        | "mill a card for each 1 damage prevented this way"
+        | "for each 1 damage prevented this way, mill a card"
+        | "for each 1 damage prevented this way, you mill a card" => Some(1_i64),
+        "mill twice that many cards" | "mill double that many cards" => Some(2_i64),
+        "mill three times that many cards" | "mill triple that many cards" => Some(3_i64),
+        _ => None,
+    } {
+        let base = ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay);
+        let amount = if mill_factor == 1 {
+            base
+        } else {
+            ValueExpr::Scale {
+                expr: Box::new(base),
+                factor: mill_factor.into(),
+            }
+        };
+        let body = ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::Mill {
+                player: ResolvingPlayer::Controller,
+                amount,
             }],
         );
         if validate_inline_followup_body(&body, vocabulary) {

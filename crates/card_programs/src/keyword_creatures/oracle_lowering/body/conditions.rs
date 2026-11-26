@@ -1018,7 +1018,9 @@ pub(in super::super) fn lower_resolution_condition(
             let mut eff_val = i64::from(*value);
             let ck_trim = counter_kind.trim();
             let ck_low = ck_trim.to_ascii_lowercase();
-            let kind = if ck_low == "any" {
+            let kind = if ck_low.is_empty()
+                || matches!(ck_low.as_str(), "any" | "a" | "an" | "counter" | "counters")
+            {
                 None
             } else if *op == CompareOp::Ge
                 && *value == 1
@@ -3655,6 +3657,7 @@ pub(in super::super) fn lower_resolution_condition(
                 | "sacrificed_this_way"
                 | "discarded"
                 | "discarded_this_way"
+                | "discard_this_way"
                 | "destroyed"
                 | "destroyed_this_way"
                 | "milled"
@@ -3692,11 +3695,15 @@ pub(in super::super) fn lower_resolution_condition(
                 | "removed_this_way"
                 | "gained_control"
                 | "gained_control_this_way"
+                | "gain_control_this_way"
                 | "cast"
                 | "cast_this_way"
                 | "drawn"
                 | "drew"
                 | "drew_this_way"
+                | "draw_this_way"
+                | "exchanged_this_way"
+                | "put_on_top_of_library_this_way"
                 | "copied"
                 | "copied_this_way"
                 | "revealed"
@@ -3725,15 +3732,44 @@ pub(in super::super) fn lower_resolution_condition(
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(i64::from(*min_count)),
                 }),
-                Some(f) if is_unrestricted_filter(f) => Ok(ResolutionCondition {
-                    left: ValueExpr::event(if *min_count == 1 {
-                        EventValueKind::LastActionSucceeded
-                    } else {
-                        EventValueKind::LastActionCount
-                    }),
-                    comparison: Comparison::GreaterOrEqual,
-                    right: ValueExpr::literal(i64::from(*min_count)),
-                }),
+                Some(f)
+                    if is_unrestricted_filter(f)
+                        || (act_low == "exchanged_this_way"
+                            && f.any_permanent
+                            && f.any_types.is_empty()
+                            && f.forbidden_types.is_empty()
+                            && f.required_supertypes.is_empty()
+                            && f.forbidden_supertypes.is_empty()
+                            && f.subtypes.is_empty()
+                            && f.forbidden_subtypes.is_empty()
+                            && f.any_colors.is_empty()
+                            && f.forbidden_colors.is_empty()
+                            && f.color_arity.is_none()
+                            && f.zone.is_none()
+                            && f.extra_zones.is_empty()
+                            && f.controller.is_none()
+                            && f.owner.is_none()
+                            && f.combat.is_none()
+                            && f.tapped.is_none()
+                            && f.token.is_none()
+                            && f.required_keywords.is_empty()
+                            && f.forbidden_keywords.is_empty()
+                            && f.stat_bounds.is_empty()
+                            && f.counter_kind.is_none()
+                            && f.named.is_none()
+                            && f.flags.is_empty()
+                            && f.predicates.is_empty()) =>
+                {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::event(if *min_count == 1 {
+                            EventValueKind::LastActionSucceeded
+                        } else {
+                            EventValueKind::LastActionCount
+                        }),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(i64::from(*min_count)),
+                    })
+                }
                 Some(f) => {
                     let has_lki = matches!(
                         builder.instructions.last(),
@@ -3754,6 +3790,7 @@ pub(in super::super) fn lower_resolution_condition(
                         act_low.as_str(),
                         "discarded"
                             | "discarded_this_way"
+                            | "discard_this_way"
                             | "sacrificed"
                             | "sacrificed_this_way"
                             | "exiled"

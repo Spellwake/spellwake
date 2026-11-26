@@ -6655,44 +6655,178 @@ pub(in super::super) fn lower_instruction_seq(
                 }
             }
         }
-        // Unified Optional / OptionalPlayer starting with PayCost(PayMana) or PlayerPayCost(PayMana):
+        // Unified Optional / OptionalPlayer starting with PayCost/PlayerPayCost mana payment
+        // (PayMana, PayGenericManaExpr, PayScaledMana, or BindX wrapping PayMana):
         // Never wrap OfferManaPayment / OfferDynamicManaPayment in OptionalEffect (program.rs rejects it).
-        let opt_mana_head: Option<(PlayerRefAst, &str, &[InstructionAst])> = match &ins[i] {
-            InstructionAst::Optional(opt_inner) => match opt_inner.first() {
-                Some(InstructionAst::PayCost(CostAtomAst::PayMana(raw))) => {
-                    Some((PlayerRefAst::You, raw.as_str(), &opt_inner[1..]))
+        #[derive(Clone, Copy)]
+        enum OptManaSpec<'a> {
+            Raw(&'a str),
+            GenericExpr(&'a ValueExprAst),
+            ScaledTwiceX,
+            BoundRaw(&'a ValueExprAst, &'a str),
+        }
+        fn extract_opt_mana_spec<'a>(
+            default_player: PlayerRefAst,
+            opt_inner: &'a [InstructionAst],
+        ) -> Option<(PlayerRefAst, OptManaSpec<'a>, &'a [InstructionAst])> {
+            match opt_inner.first() {
+                Some(InstructionAst::PayCost(CostAtomAst::PayMana(raw))) => Some((
+                    default_player,
+                    OptManaSpec::Raw(raw.as_str()),
+                    &opt_inner[1..],
+                )),
+                Some(InstructionAst::PayCost(CostAtomAst::PayGenericManaExpr(expr))) => Some((
+                    default_player,
+                    OptManaSpec::GenericExpr(expr.as_ref()),
+                    &opt_inner[1..],
+                )),
+                Some(InstructionAst::PayCost(CostAtomAst::PayScaledMana { base, per }))
+                    if base.eq_ignore_ascii_case("{x}") && per.eq_ignore_ascii_case("twice") =>
+                {
+                    Some((default_player, OptManaSpec::ScaledTwiceX, &opt_inner[1..]))
                 }
                 Some(InstructionAst::PlayerPayCost {
                     player,
                     cost: CostAtomAst::PayMana(raw),
-                }) => Some((*player, raw.as_str(), &opt_inner[1..])),
-                _ => None,
-            },
-            InstructionAst::OptionalPlayer {
-                player: opt_player,
-                body: opt_inner,
-            } if !matches!(
-                opt_player,
-                PlayerRefAst::AnyPlayer | PlayerRefAst::AnyOpponent
-            ) =>
-            {
-                match opt_inner.first() {
-                    Some(InstructionAst::PayCost(CostAtomAst::PayMana(raw))) => {
-                        Some((*opt_player, raw.as_str(), &opt_inner[1..]))
-                    }
-                    Some(InstructionAst::PlayerPayCost {
-                        player,
-                        cost: CostAtomAst::PayMana(raw),
-                    }) => Some((*player, raw.as_str(), &opt_inner[1..])),
-                    _ => None,
+                }) => Some((*player, OptManaSpec::Raw(raw.as_str()), &opt_inner[1..])),
+                Some(InstructionAst::PlayerPayCost {
+                    player,
+                    cost: CostAtomAst::PayGenericManaExpr(expr),
+                }) => Some((
+                    *player,
+                    OptManaSpec::GenericExpr(expr.as_ref()),
+                    &opt_inner[1..],
+                )),
+                Some(InstructionAst::PlayerPayCost {
+                    player,
+                    cost: CostAtomAst::PayScaledMana { base, per },
+                }) if base.eq_ignore_ascii_case("{x}") && per.eq_ignore_ascii_case("twice") => {
+                    Some((*player, OptManaSpec::ScaledTwiceX, &opt_inner[1..]))
                 }
+                Some(InstructionAst::BindX { x_expr, body }) => match body.as_slice() {
+                    [InstructionAst::PayCost(CostAtomAst::PayMana(raw))] => Some((
+                        default_player,
+                        OptManaSpec::BoundRaw(x_expr.as_ref(), raw.as_str()),
+                        &opt_inner[1..],
+                    )),
+                    [
+                        InstructionAst::PlayerPayCost {
+                            player,
+                            cost: CostAtomAst::PayMana(raw),
+                        },
+                    ] => Some((
+                        *player,
+                        OptManaSpec::BoundRaw(x_expr.as_ref(), raw.as_str()),
+                        &opt_inner[1..],
+                    )),
+                    _ => None,
+                },
+                _ => None,
             }
-            _ => None,
-        };
-        if let Some((payer_ast, raw_mana, opt_rest)) = opt_mana_head {
-            let payer = lower_resolving_player_in_context(payer_ast, builder, in_trigger)?;
-            let offer_template = try_build_offer_mana(payer, raw_mana, 0, 0, bound_x, vocabulary)
-                .ok_or("oracle:unsupported-pay-cost")?;
+        }
+        let opt_mana_head: Option<(PlayerRefAst, OptManaSpec<'_>, &[InstructionAst])> =
+            match &ins[i] {
+                InstructionAst::Optional(opt_inner) => {
+                    extract_opt_mana_spec(PlayerRefAst::You, opt_inner)
+                }
+                InstructionAst::OptionalPlayer {
+                    player: opt_player,
+                    body: opt_inner,
+                } if !matches!(
+                    opt_player,
+                    PlayerRefAst::AnyPlayer | PlayerRefAst::AnyOpponent
+                ) =>
+                {
+                    extract_opt_mana_spec(*opt_player, opt_inner)
+                }
+                _ => None,
+            };
+        if let Some((payer_ast, mana_spec, opt_rest)) = opt_mana_head {
+            let group_players = match payer_ast {
+                PlayerRefAst::EachPlayer => Some(AffectedPlayers::EachPlayer),
+                PlayerRefAst::EachOpponent => Some(AffectedPlayers::EachOpponent),
+                PlayerRefAst::EachOtherPlayer => Some(AffectedPlayers::EachOtherPlayer),
+                _ => None,
+            };
+            let payer = if group_players.is_some() {
+                ResolvingPlayer::LoopPlayer
+            } else {
+                lower_resolving_player_in_context(payer_ast, builder, in_trigger)?
+            };
+            let eff_bound_x = match mana_spec {
+                OptManaSpec::BoundRaw(xe, _) => Some(xe),
+                _ => bound_x,
+            };
+            let offer_template = match mana_spec {
+                OptManaSpec::Raw(raw_mana) | OptManaSpec::BoundRaw(_, raw_mana) => {
+                    if let Some(op) =
+                        try_build_offer_mana(payer, raw_mana, 0, 0, eff_bound_x, vocabulary)
+                    {
+                        op
+                    } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw_mana)
+                        && x_cnt > 0
+                    {
+                        let x_val = match eff_bound_x {
+                            Some(expr) => {
+                                lower_value_expr_in_context(expr, builder, in_trigger, vocabulary)?
+                            }
+                            None => ValueExpr::chosen_x(),
+                        };
+                        Instruction::OfferDynamicManaPayment {
+                            payer,
+                            fixed,
+                            extra_generic: scale_value_expr(x_val, i64::from(x_cnt)),
+                            paid_destination: 0,
+                            declined_destination: 0,
+                        }
+                    } else {
+                        return Err("oracle:unsupported-pay-cost");
+                    }
+                }
+                OptManaSpec::GenericExpr(expr) => {
+                    let extra_generic = lower_value_expr_in_context(
+                        resolve_x(expr, eff_bound_x),
+                        builder,
+                        in_trigger,
+                        vocabulary,
+                    )?;
+                    Instruction::OfferDynamicManaPayment {
+                        payer,
+                        fixed: ManaCost::free(),
+                        extra_generic,
+                        paid_destination: 0,
+                        declined_destination: 0,
+                    }
+                }
+                OptManaSpec::ScaledTwiceX => {
+                    let x_val = match eff_bound_x {
+                        Some(expr) => {
+                            lower_value_expr_in_context(expr, builder, in_trigger, vocabulary)?
+                        }
+                        None => ValueExpr::chosen_x(),
+                    };
+                    Instruction::OfferDynamicManaPayment {
+                        payer,
+                        fixed: ManaCost::free(),
+                        extra_generic: scale_value_expr(x_val, 2),
+                        paid_destination: 0,
+                        declined_destination: 0,
+                    }
+                }
+            };
+            if let Some(players) = group_players {
+                if opt_rest.is_empty() {
+                    let sub_op = with_offer_dests(offer_template, 1, 1);
+                    builder.instructions.push(Instruction::ForEachPlayer {
+                        players,
+                        body: ExecutableBody::new(BodyTarget::None, vec![sub_op]),
+                    });
+                    i += 1;
+                    continue;
+                }
+                return Err("oracle:unsupported-pay-cost");
+            }
+            let bound_x = eff_bound_x;
             if !opt_rest.is_empty() {
                 let offer_idx = builder.instructions.len();
                 builder
