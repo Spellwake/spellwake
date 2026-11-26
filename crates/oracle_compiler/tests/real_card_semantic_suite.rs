@@ -1430,3 +1430,145 @@ fn e14_cost_and_counter_x_definitions_are_retained() {
         matches!(others, StaticOrReplacement::Replacement(ReplacementEffectAst::OthersEnterWithCounters { count, .. }) if matches!(count.as_ref(), ValueExprAst::Count(_)))
     );
 }
+
+#[test]
+fn independent_conditional_statements_preserve_exact_gates() {
+    use spellwake_oracle_compiler::ast::{CompareOp, PlayerStatKind};
+    let vocab = load_pinned_vocabulary();
+    let cards: Vec<FixtureCard> =
+        serde_json::from_str(include_str!("fixtures/condition_scope_cards.json")).unwrap();
+    for card in &cards {
+        let ast = compile_fixture(card, &vocab);
+        assert!(
+            ast.strictly_compiled,
+            "{}: {:?}",
+            card.name, ast.faces[0].failures
+        );
+        let [StaticAbilityAst::Compound(items)] = ast.faces[0].statics.as_slice() else {
+            panic!("{}: {:?}", card.name, ast.faces[0].statics)
+        };
+        if card.name == "Elenda, Saint of Dusk" {
+            assert_eq!(items.len(), 2);
+            for (index, item) in items.iter().enumerate() {
+                let StaticAbilityAst::ContinuousModifyPT {
+                    subject,
+                    dx,
+                    dy,
+                    grant_keywords,
+                    condition,
+                    ..
+                } = item
+                else {
+                    panic!("{item:?}")
+                };
+                assert_eq!(subject.as_ref(), &SubjectRefAst::SelfObject);
+                let (bonus, op, rhs) = if index == 0 {
+                    (
+                        "+1",
+                        CompareOp::Gt,
+                        ValueExprAst::StartingLifeTotal(PlayerRefAst::You),
+                    )
+                } else {
+                    (
+                        "+5",
+                        CompareOp::Ge,
+                        ValueExprAst::Add(
+                            Box::new(ValueExprAst::StartingLifeTotal(PlayerRefAst::You)),
+                            Box::new(ValueExprAst::Const(10)),
+                        ),
+                    )
+                };
+                assert_eq!((dx.as_str(), dy.as_str()), (bonus, bonus));
+                assert_eq!(
+                    *grant_keywords,
+                    if index == 0 {
+                        vec!["menace".to_string()]
+                    } else {
+                        vec![]
+                    }
+                );
+                // Exact equality rejects leaked conjunctions, Eq comparisons and ThatPlayer.
+                assert_eq!(
+                    condition.as_deref(),
+                    Some(&ConditionAst::Compare {
+                        lhs: Box::new(ValueExprAst::PlayerStat {
+                            player: PlayerRefAst::You,
+                            stat: PlayerStatKind::LifeTotal
+                        }),
+                        op,
+                        rhs: Box::new(rhs),
+                    })
+                );
+            }
+        } else {
+            assert_eq!(items.len(), 5);
+            for (item, land, bonus, keyword) in [
+                (&items[0], "Plains", Some(("+0", "+2")), None),
+                (&items[1], "Island", None, Some("flying")),
+                (&items[2], "Swamp", Some(("+2", "+0")), None),
+                (&items[3], "Mountain", None, Some("first strike")),
+                (&items[4], "Forest", None, Some("trample")),
+            ] {
+                let (subject, condition) = match item {
+                    StaticAbilityAst::ContinuousModifyPT {
+                        subject,
+                        dx,
+                        dy,
+                        condition,
+                        ..
+                    } => {
+                        assert_eq!(Some((dx.as_str(), dy.as_str())), bonus);
+                        (subject, condition)
+                    }
+                    StaticAbilityAst::GrantKeywords {
+                        subject,
+                        keywords,
+                        condition,
+                        ..
+                    } => {
+                        assert_eq!(keywords.as_slice(), &[keyword.unwrap().to_string()]);
+                        (subject, condition)
+                    }
+                    _ => panic!("{item:?}"),
+                };
+                assert_eq!(subject.as_ref(), &SubjectRefAst::SelfObject);
+                // A single gate is required: an And (or a gate from a later clause) fails.
+                let Some(ConditionAst::ControlsCount {
+                    player: PlayerRefAst::You,
+                    filter,
+                    op: CompareOp::Ge,
+                    value: 1,
+                }) = condition.as_deref()
+                else {
+                    panic!("{condition:?}")
+                };
+                assert_eq!(filter.subtypes, vec![land.to_string()]);
+            }
+        }
+    }
+}
+
+#[test]
+fn condition_scope_keeps_explicit_conjunctions_and_unconditional_siblings() {
+    use spellwake_oracle_compiler::clauses::{StaticOrReplacement, parse_static_or_replacement};
+    let vocab = load_pinned_vocabulary();
+    let node = parse_static_or_replacement(
+        "As long as it's your turn and you control a Plains, ~ gets +1/+1. ~ has flying",
+        &vocab,
+    )
+    .unwrap();
+    let StaticOrReplacement::Static(StaticAbilityAst::Compound(items)) = node else {
+        panic!("{node:?}")
+    };
+    assert_eq!(items.len(), 2);
+    assert!(
+        matches!(&items[0], StaticAbilityAst::ContinuousModifyPT { condition: Some(condition), .. } if matches!(condition.as_ref(), ConditionAst::And(_, _))),
+        "{:?}",
+        items[0]
+    );
+    assert!(
+        matches!(&items[1], StaticAbilityAst::GrantKeywords { condition: None, keywords, .. } if keywords == &["flying"]),
+        "{:?}",
+        items[1]
+    );
+}

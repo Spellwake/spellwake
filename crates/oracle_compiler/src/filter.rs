@@ -11984,6 +11984,24 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some((lhs_raw, rhs_raw)) = low.split_once(" is ").or_else(|| low.split_once(" was "))
         && let Ok(lhs) = parse_value_expr(lhs_raw, vocab)
     {
+        // An offset from a reference value is not an equality with an unknown
+        // possessive player (Elenda's second, independent starting-life threshold).
+        if let Some(offset_and_base) = rhs_raw.strip_prefix("at least ")
+            && let Some((offset, base)) = offset_and_base.split_once(" greater than ")
+        {
+            let amount = parse_number_word(offset)
+                .filter(|amount| *amount >= 0)
+                .ok_or_else(|| format!("unparsed_comparison_offset:{offset}"))?;
+            let base = parse_value_expr(base, vocab)?;
+            return Ok(ConditionAst::Compare {
+                lhs: Box::new(lhs),
+                op: CompareOp::Ge,
+                rhs: Box::new(ValueExprAst::Add(
+                    Box::new(base),
+                    Box::new(ValueExprAst::Const(amount)),
+                )),
+            });
+        }
         let parsed_cmp = if let Some(r) = rhs_raw.strip_prefix("greater than or equal to ") {
             Some((CompareOp::Ge, r))
         } else if let Some(r) = rhs_raw.strip_prefix("less than or equal to ") {
