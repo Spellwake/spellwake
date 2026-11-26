@@ -1358,6 +1358,7 @@ pub struct EffectWindow {
     resume_turn_order_at: Option<SeatId>,
     /// Turns remaining to be skipped per living player (CR 614.10).
     skip_turns_remaining: BTreeMap<SeatId, u16>,
+    skip_steps_remaining: BTreeMap<(SeatId, crate::turn::Step), u16>,
     /// Departed seats whose turn slots were passed before the upcoming untap.
     skipped_turns: BTreeSet<SeatId>,
     departed_damage_sources: BTreeMap<ObjectId, crate::damage::DepartedDamageSource>,
@@ -2045,6 +2046,7 @@ struct ResolutionResults {
     last_sacrifice: bool,
     last_action_succeeded: bool,
     last_action_count: Option<RulesInteger>,
+    last_action_lki: Vec<crate::characteristics::ObjectCharacteristics>,
     discarded_types: BTreeSet<CardType>,
     moved_library_types: BTreeSet<CardType>,
     milled_mana_values: Vec<RulesInteger>,
@@ -2102,6 +2104,7 @@ impl Default for ResolutionResults {
             last_sacrifice: false,
             last_action_succeeded: false,
             last_action_count: None,
+            last_action_lki: Vec::new(),
             discarded_types: BTreeSet::new(),
             moved_library_types: BTreeSet::new(),
             milled_mana_values: Vec::new(),
@@ -2655,6 +2658,7 @@ impl EffectWindow {
             additional_combats:0,
             resume_turn_order_at: None,
             skip_turns_remaining: BTreeMap::new(),
+            skip_steps_remaining: BTreeMap::new(),
             skipped_turns: BTreeSet::new(),
             departed_damage_sources: BTreeMap::new(),
             departed_reflexive_sources: BTreeMap::new(),
@@ -4584,6 +4588,7 @@ impl EffectWindow {
         next.characteristics
             .nonland_permanents_left_battlefield_this_turn
             .clear();
+        next.characteristics.any_spell_warped_this_turn = false;
         next.characteristics.creatures_died_this_turn_count = 0;
         next.characteristics
             .controlled_creatures_died_this_turn
@@ -9286,6 +9291,25 @@ impl EffectWindow {
         {
             return false;
         }
+        if clause.flags.contains(ObjectFilterFlags::HAS_X_IN_COST)
+            && !(p.defined.has_x_in_cost
+                || self
+                    .copiable_program(id)
+                    .is_some_and(|prog| prog.x_mana_symbols > 0))
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+            && !p
+                .toxic_value
+                .as_ref()
+                .is_some_and(RulesInteger::is_positive)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !p.has_no_abilities() {
+            return false;
+        }
         if clause
             .flags
             .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
@@ -10109,6 +10133,7 @@ impl EffectWindow {
             | Instruction::ReturnControlledPermanents { .. }
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
+            | Instruction::SacrificeUpTo { .. }
             | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
@@ -10178,6 +10203,7 @@ impl EffectWindow {
             }
             Instruction::RemoveTargetFromCombat => matches!(target, TargetRef::Object(id)
                 if self.combat.as_ref().is_some_and(|combat| combat.attacker(id).is_some() || combat.blocker(id).is_some())),
+            Instruction::RemoveSubjectFromCombat(_) => true,
             Instruction::GoadTarget | Instruction::RequireTargetAttack => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|p| p.zone == ObjectZone::Battlefield && p.is_creature()))
             }
@@ -10406,6 +10432,7 @@ impl EffectWindow {
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. }

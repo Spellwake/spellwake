@@ -2843,10 +2843,19 @@ impl GameState {
                     let skip_draw = turn.position().step == Step::Upkeep
                         && self.execution.should_skip_step(active_player, Step::Draw)?;
                     let mut skip_err: Option<crate::effects::EffectError> = None;
+                    let mut consumed_skips: Vec<Step> = Vec::new();
+                    if skip_draw {
+                        consumed_skips.push(Step::Draw);
+                    }
                     let mut next =
                         turn.complete_priority_with_step_skip(completed, skip_draw, |candidate| {
                             match self.execution.should_skip_step(active_player, candidate) {
-                                Ok(skip) => skip,
+                                Ok(skip) => {
+                                    if skip {
+                                        consumed_skips.push(candidate);
+                                    }
+                                    skip
+                                }
                                 Err(err) => {
                                     if skip_err.is_none() {
                                         skip_err = Some(err);
@@ -2857,6 +2866,10 @@ impl GameState {
                         })?;
                     if let Some(err) = skip_err {
                         return Err(err.into());
+                    }
+                    for skipped in consumed_skips {
+                        self.execution
+                            .consume_skipped_step(active_player, skipped)?;
                     }
                     if matches!(turn.position().step, Step::EndCombat | Step::PostcombatMain)
                         && self.execution.take_additional_combat()

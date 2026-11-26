@@ -720,6 +720,20 @@ fn matches_world_clause(
     if clause.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !p.defined.has_adventure {
         return false;
     }
+    if clause.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !p.defined.has_x_in_cost {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+        && !p
+            .toxic_value
+            .as_ref()
+            .is_some_and(RulesInteger::is_positive)
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !p.has_no_abilities() {
+        return false;
+    }
     if clause
         .flags
         .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
@@ -1159,6 +1173,7 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             });
             RulesInteger::from_usize(compute_party_size(creatures, **roles))
         }
+        ValueExpr::LastActionMatchingCount(_) => 0.into(),
         ValueExpr::DistinctColors { filter } => {
             let mut colors = BTreeSet::new();
             for o in ctx.objects.values() {
@@ -2167,6 +2182,17 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     .unwrap_or(0),
             )
             .into(),
+            PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn => ctx
+                .state
+                .nonland_permanents_left_battlefield_this_turn
+                .values()
+                .copied()
+                .map(i64::from)
+                .sum::<i64>()
+                .into(),
+            PlayerStatExpr::AnySpellWarpedThisTurn => {
+                i64::from(ctx.state.any_spell_warped_this_turn).into()
+            }
             PlayerStatExpr::EnteredPermanentThisTurn => i64::from(
                 ctx.state
                     .permanents_entered_this_turn

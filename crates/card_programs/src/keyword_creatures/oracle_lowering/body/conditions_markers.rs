@@ -2692,7 +2692,12 @@ pub(super) fn lower_marker_or_action_condition(
             right: ValueExpr::literal(1),
         }),
         ConditionAst::Marker(GameMarker::NonlandPermanentLeftThisTurn) => Ok(ResolutionCondition {
-            left: ValueExpr::PlayerStat(PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn),
+            left: ValueExpr::PlayerStat(PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        }),
+        ConditionAst::Marker(GameMarker::SpellWarpedThisTurn) => Ok(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::AnySpellWarpedThisTurn),
             comparison: Comparison::GreaterOrEqual,
             right: ValueExpr::literal(1),
         }),

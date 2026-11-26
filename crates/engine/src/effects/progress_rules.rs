@@ -1543,6 +1543,19 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
+        if let Instruction::SkipNextStep { player, step } = instruction {
+            let cursor_snap = self
+                .resolution_cursor()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .clone();
+            let seat = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
+            if self.window.participants().contains(&seat) {
+                let remaining = self.skip_steps_remaining.entry((seat, step)).or_insert(0);
+                *remaining = remaining.saturating_add(1);
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if let Instruction::SelectExtremeLifePlayer { highest, tie_mode } = instruction {
             let apnap: Vec<SeatId> = self.window.apnap_players()?.collect();
             let mut extreme: Option<RulesInteger> = None;
@@ -8293,6 +8306,14 @@ impl EffectWindow {
             };
             if let Some(combat) = &mut self.combat {
                 combat.reconcile(|combatant, _| combatant.object() != object);
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::RemoveSubjectFromCombat(subject) = &instruction {
+            let affected = self.effect_group(entry, *subject.as_ref())?;
+            if let Some(combat) = &mut self.combat {
+                combat.reconcile(|combatant, _| !affected.contains(&combatant.object()));
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);

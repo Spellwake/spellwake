@@ -487,8 +487,14 @@ fn wave14_charmed_stray_exact_name_buffs_only_named_other_creatures() {
         },
     );
     let game2 = pass_pair(cast2.state()).into_state();
-    assert_eq!(current(&game2, object(&game2, 1)).plus_one_counters, 1.into());
-    assert_eq!(current(&game2, object(&game2, 2)).plus_one_counters, 0.into());
+    assert_eq!(
+        current(&game2, object(&game2, 1)).plus_one_counters,
+        1.into()
+    );
+    assert_eq!(
+        current(&game2, object(&game2, 2)).plus_one_counters,
+        0.into()
+    );
 }
 
 #[test]

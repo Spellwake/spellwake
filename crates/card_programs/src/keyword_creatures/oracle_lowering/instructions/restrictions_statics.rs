@@ -3481,6 +3481,39 @@ pub(super) fn lower_restrictions_statics_instruction(
             });
             Ok(())
         }
+        InstructionAst::SkipNextStep { player, step } => {
+            use spellwake_engine::turn::Step;
+            use spellwake_oracle_compiler::ast::TurnStepAst;
+            let engine_step = match step {
+                TurnStepAst::UntapStep => Step::Untap,
+                TurnStepAst::Upkeep => Step::Upkeep,
+                TurnStepAst::DrawStep => Step::Draw,
+                TurnStepAst::PrecombatMain => Step::PrecombatMain,
+                TurnStepAst::PostcombatMain => Step::PostcombatMain,
+                TurnStepAst::BeginningOfCombat => Step::BeginningCombat,
+                TurnStepAst::EndStep => Step::End,
+                TurnStepAst::MainPhase | TurnStepAst::EndOfCombat | TurnStepAst::CleanupStep => {
+                    return Err("oracle:unsupported-instruction");
+                }
+            };
+            if let Some(players) = try_group_affected_players(*player) {
+                push_for_each_player(
+                    players,
+                    vec![Instruction::SkipNextStep {
+                        player: ResolvingPlayer::LoopPlayer,
+                        step: engine_step,
+                    }],
+                    builder,
+                );
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            builder.instructions.push(Instruction::SkipNextStep {
+                player: rp,
+                step: engine_step,
+            });
+            Ok(())
+        }
         InstructionAst::SkipNextTurns { player, count } => {
             if *count == 0 {
                 return Err("oracle:unsupported-skip-next-turns");

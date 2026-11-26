@@ -2111,6 +2111,21 @@ impl EffectWindow {
                     self.characteristics
                         .cast_summaries
                         .insert(cast.spell().object.id(), stack_entry.cast_summary().clone());
+                    if stack_entry.paid_conditional_cost()
+                        && self
+                            .copiable_program(cast.spell().object.id())
+                            .is_some_and(|prog| {
+                                matches!(
+                                    prog.conditional_cost,
+                                    Some(crate::program::ConditionalCastCost::EndStep {
+                                        kind: crate::program::EndStepCast::Warp,
+                                        ..
+                                    })
+                                )
+                            })
+                    {
+                        self.characteristics.any_spell_warped_this_turn = true;
+                    }
                 }
             }
         }

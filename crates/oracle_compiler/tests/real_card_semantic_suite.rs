@@ -2110,14 +2110,18 @@ fn compile_and_audit_w15_card(name: &str, vocab: &Vocabulary) -> CardAst {
 }
 
 #[test]
-fn disjunctive_subtype_and_lists_emit_subtypes_match_any_while_compound_subtypes_stay_conjunctive() {
+fn disjunctive_subtype_and_lists_emit_subtypes_match_any_while_compound_subtypes_stay_conjunctive()
+{
     use spellwake_oracle_compiler::filter::parse_object_filter;
     let vocab = load_pinned_vocabulary();
 
     // Positive: plural/collective "and" subtype lists MUST emit SubtypesMatchAny.
     for (name, expected_subtypes) in [
         ("Cloudspire Captain", vec!["Mount", "Vehicle"]),
-        ("Death-Priest of Myrkul", vec!["Skeleton", "Vampire", "Zombie"]),
+        (
+            "Death-Priest of Myrkul",
+            vec!["Skeleton", "Vampire", "Zombie"],
+        ),
         ("Nightpack Ambusher", vec!["Wolf", "Werewolf"]),
         ("Gisa, the Hellraiser", vec!["Skeleton", "Zombie"]),
         ("Bosk Banneret", vec!["Treefolk", "Shaman"]),
@@ -2135,7 +2139,10 @@ fn disjunctive_subtype_and_lists_emit_subtypes_match_any_while_compound_subtypes
             let SubjectRefAst::Group(flt) = subj else {
                 return false;
             };
-            flt.subtypes == expected && flt.predicates.contains(&FilterPredicateAst::SubtypesMatchAny)
+            flt.subtypes == expected
+                && flt
+                    .predicates
+                    .contains(&FilterPredicateAst::SubtypesMatchAny)
         });
         assert!(
             has_match_any,
@@ -2243,5 +2250,9 @@ fn conjoined_two_object_sacrifice_costs_split_into_independent_cost_atoms() {
     // Negative: single-object sacrifice with a "with ... and a ..." counter clause stays one atom.
     let single_sac = parse_cost_list("Sacrifice a creature with a +1/+1 counter on it", &vocab)
         .expect("single creature sacrifice");
-    assert_eq!(single_sac.len(), 1, "single sacrifice must stay 1 atom: {single_sac:?}");
+    assert_eq!(
+        single_sac.len(),
+        1,
+        "single sacrifice must stay 1 atom: {single_sac:?}"
+    );
 }

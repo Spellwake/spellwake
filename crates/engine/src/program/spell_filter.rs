@@ -378,6 +378,20 @@ impl SpellFilter {
             if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !spell.defined.has_adventure {
                 return false;
             }
+            if c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !spell.defined.has_x_in_cost {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+                && !spell
+                    .toxic_value
+                    .as_ref()
+                    .is_some_and(crate::RulesInteger::is_positive)
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !spell.has_no_abilities() {
+                return false;
+            }
             if c.flags.contains(ObjectFilterFlags::KICKED)
                 || c.flags.contains(ObjectFilterFlags::RENOWNED)
                 || c.flags.contains(ObjectFilterFlags::MONSTROUS)

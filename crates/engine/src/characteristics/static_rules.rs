@@ -556,6 +556,8 @@ pub enum StaticRestriction {
     ControllerOneSpellPerTurn,
     /// Opponents of source controller can't cast spells during combat (Marisi).
     OpponentsCantCastDuringCombat,
+    /// Opponents of source controller can cast spells only any time they could cast a sorcery (Teferi).
+    OpponentsSorceryOnly,
     /// Source controller's life total can't change (Platinum Emperion, Teferi's Protection, Flare of Fortitude).
     ControllerLifeTotalCantChange,
     /// Players matching this relation can't search libraries (Stranglehold, Ashiok, Shadow of Doubt).
@@ -1004,6 +1006,7 @@ impl StaticContinuousAbility {
                         | StaticRestriction::CantBeTargetedBy { .. }
                         | StaticRestriction::ControllerOneSpellPerTurn
                         | StaticRestriction::OpponentsCantCastDuringCombat
+                        | StaticRestriction::OpponentsSorceryOnly
                         | StaticRestriction::ControllerLifeTotalCantChange
                         | StaticRestriction::PlayersCantSearchLibraries(_)
                         | StaticRestriction::SkipStep { .. }

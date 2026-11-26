@@ -1425,10 +1425,15 @@ pub(in super::super) fn lower_resolution_condition(
                 resolve_match_object_ref(subject, builder, in_trigger, false)
                     .ok_or("oracle:unsupported-if-condition")?
             };
-            let kw =
-                lower_keyword_ability_name(keyword).ok_or("oracle:unsupported-if-condition")?;
+            let filter = if keyword.trim().eq_ignore_ascii_case("toxic") {
+                ObjectFilter::any().with_flags(ObjectFilterFlags::HAS_TOXIC)
+            } else {
+                let kw =
+                    lower_keyword_ability_name(keyword).ok_or("oracle:unsupported-if-condition")?;
+                ObjectFilter::any().with_keyword(kw)
+            };
             Ok(ResolutionCondition {
-                left: ValueExpr::object_matches(mref, ObjectFilter::any().with_keyword(kw)),
+                left: ValueExpr::object_matches(mref, filter),
                 comparison: Comparison::Equal,
                 right: ValueExpr::literal(1),
             })
@@ -2188,7 +2193,7 @@ pub(in super::super) fn lower_resolution_condition(
                 && filter.stat_bounds.is_empty()
                 && filter.counter_kind.is_none()
                 && filter.named.is_none()
-                && filter.flags.is_empty()
+                && (filter.flags.0 & !AstFilterFlags::LKI_PAST_TENSE.0) == 0
                 && filter.predicates.is_empty();
             if *from_zone == Some(ZoneFilter::Battlefield)
                 && matches!(

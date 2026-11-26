@@ -751,6 +751,41 @@ impl EffectWindow {
         {
             return Err(EffectError::OpponentActionProhibited);
         }
+        let step_now = turn.map(|t| t.position().step).or(self.current_step);
+        let actor_has_sorcery_timing = self.window.active_player() == actor
+            && self.window.entries().is_empty()
+            && matches!(
+                step_now,
+                Some(crate::turn::Step::PrecombatMain | crate::turn::Step::PostcombatMain)
+            );
+        if !actor_has_sorcery_timing
+            && (current.objects.values().any(|object| {
+                object.zone == ObjectZone::Battlefield
+                    && object.controller.is_some_and(|ctrl| ctrl != actor)
+                    && Self::permanent_has_restriction(object, |rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticRestriction::OpponentsSorceryOnly
+                        )
+                    })
+            }) || self.temporary_rules.iter().any(|active| {
+                active.controller != actor
+                    && self
+                        .active_temporary_static(active, &current)
+                        .is_some_and(|ab| {
+                            matches!(
+                            ab,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule:
+                                    crate::characteristics::StaticRestriction::OpponentsSorceryOnly,
+                                ..
+                            }
+                        )
+                        })
+            }))
+        {
+            return Err(EffectError::OpponentActionProhibited);
+        }
         let current_spell = current.get(spell).ok_or(EffectError::InconsistentProgram)?;
         let aura_or_equipment = ((cast_bestowed
             || matches!(
@@ -3849,12 +3884,12 @@ impl EffectWindow {
                         return false;
                     }
                 }
-                crate::program::SubtypeFilter::NoneOfList(list) => {
+                crate::program::SubtypeFilter::NoneOfList(list)
                     if !list.iter().all(|item| {
                         matches!(item, crate::program::SingleSubtype::Creature(k) if !rec.subtypes.contains(k))
-                    }) {
-                        return false;
-                    }
+                    }) =>
+                {
+                    return false;
                 }
                 _ => {}
             }

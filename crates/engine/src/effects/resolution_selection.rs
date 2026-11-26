@@ -1008,6 +1008,7 @@ impl ResolutionSelectionWork {
                                     .map(|optional| if optional { 0 } else { requirement.required })
                             }
                             ResolutionSelectionOperation::TapOrUntapControlled { .. }
+                            | ResolutionSelectionOperation::Sacrifice { .. }
                                 if up_to_tap_select =>
                             {
                                 Some(0)
@@ -1260,7 +1261,10 @@ impl EffectWindow {
                 .get(&work.cursor.entry)
                 .and_then(StackPayload::instructions)
                 .and_then(|ops| ops.get(work.cursor.instruction)),
-            Some(Instruction::UntapOrTapSelect { up_to: true, .. })
+            Some(
+                Instruction::UntapOrTapSelect { up_to: true, .. }
+                    | Instruction::SacrificeUpTo { .. }
+            )
         )
     }
 
@@ -2660,6 +2664,11 @@ impl EffectWindow {
                 players,
                 amount,
                 filter,
+            }
+            | Instruction::SacrificeUpTo {
+                players,
+                amount,
+                filter,
             } => (
                 *players,
                 amount,
@@ -3413,6 +3422,7 @@ impl EffectWindow {
             | Instruction::GoadTarget
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
+            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::ReturnSourceGraveyardToBattlefield { .. }
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ReturnSourceGraveyardToHand
@@ -3510,6 +3520,7 @@ impl EffectWindow {
             | Instruction::RegenerateSubject { .. }
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. } => return Ok(false),
@@ -4466,10 +4477,16 @@ impl EffectWindow {
                                 append,
                                 |_, _, _| Ok(occurrences),
                             )?;
+                            let eval_lki = self.evaluated_characteristics()?;
+                            cursor.results.last_action_lki = changed
+                                .iter()
+                                .filter_map(|id| eval_lki.get(*id).cloned())
+                                .collect();
                             cursor.results.last_action_succeeded = true;
                             cursor.results.last_action_count =
                                 Some(RulesInteger::from_usize(changed.len()));
                         } else {
+                            cursor.results.last_action_lki.clear();
                             cursor.results.last_action_succeeded = false;
                             cursor.results.last_action_count = Some(0.into());
                         }
@@ -4637,6 +4654,11 @@ impl EffectWindow {
                             .collect();
                         let chosen_set: BTreeSet<ObjectId> = chosen_ids.iter().copied().collect();
                         cursor.vowed_creatures.extend(chosen_ids.iter().copied());
+                        let eval_lki = self.evaluated_characteristics()?;
+                        cursor.results.last_action_lki = chosen_ids
+                            .iter()
+                            .filter_map(|id| eval_lki.get(*id).cloned())
+                            .collect();
                         cursor.results.last_moved_objects = chosen_ids.clone();
                         cursor.results.last_action_succeeded = !chosen_ids.is_empty();
                         cursor.results.last_action_count =
@@ -4993,6 +5015,12 @@ impl EffectWindow {
                     ) {
                         cursor.results.selected_graveyard_exile_creatures = 0;
                     }
+                    let eval_lki = self.evaluated_characteristics()?;
+                    cursor.results.last_action_lki = batch
+                        .logical
+                        .iter()
+                        .filter_map(|row| eval_lki.get(row.object).cloned())
+                        .collect();
                     cursor.results.last_action_succeeded = !batch.logical.is_empty();
                     cursor.results.last_action_count =
                         Some(RulesInteger::from_usize(batch.logical.len()));
@@ -5137,7 +5165,10 @@ impl EffectWindow {
                         .get(&work.cursor.entry)
                         .and_then(StackPayload::instructions)
                         .and_then(|ops| ops.get(work.cursor.instruction)),
-                    Some(Instruction::UntapOrTapSelect { up_to: true, .. })
+                    Some(
+                        Instruction::UntapOrTapSelect { up_to: true, .. }
+                            | Instruction::SacrificeUpTo { .. }
+                    )
                 );
                 let discard_up_to_ext = self.is_discard_up_to_ext(&work.cursor);
                 match &work.operation {
@@ -5161,6 +5192,7 @@ impl EffectWindow {
                         }
                     }
                     ResolutionSelectionOperation::TapOrUntapControlled { .. }
+                    | ResolutionSelectionOperation::Sacrifice { .. }
                         if up_to_tap_select => {}
                     ResolutionSelectionOperation::DiscardFiltered { .. } if discard_up_to_ext => {}
                     ResolutionSelectionOperation::PayLifeToSaveCreatures { .. }
@@ -5933,6 +5965,11 @@ impl EffectWindow {
             (
                 ResolutionSelectionOperation::Sacrifice { filter },
                 Instruction::Sacrifice {
+                    players,
+                    filter: actual,
+                    ..
+                }
+                | Instruction::SacrificeUpTo {
                     players,
                     filter: actual,
                     ..

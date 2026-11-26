@@ -303,7 +303,7 @@ impl ObjectColorFilter {
 }
 
 /// Maximum number of subtypes stored inline in a [`SubtypeList`].
-pub const MAX_INLINE_SUBTYPES: usize = 16;
+pub const MAX_INLINE_SUBTYPES: usize = 6;
 
 /// Single typed subtype atom across creature, land, artifact, enchantment, planeswalker, spell, and Aura subtypes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -444,7 +444,9 @@ impl ExactNameKey {
     #[must_use]
     pub fn matches_exact_names(self, names: &spellwake_contracts::names::ObjectNames) -> bool {
         let target = self.as_str();
-        names.iter().any(|n| n.as_str().eq_ignore_ascii_case(target))
+        names
+            .iter()
+            .any(|n| n.as_str().eq_ignore_ascii_case(target))
     }
 }
 
@@ -467,11 +469,11 @@ pub enum SubtypeFilter {
     AnyOf([CreatureTypeId; 3]),
     /// Object has none of these three creature subtypes.
     NoneOf([CreatureTypeId; 3]),
-    /// Object has at least one subtype in this cross-category list (up to 16).
+    /// Object has at least one subtype in this cross-category list (up to 6).
     AnyOfList(SubtypeList),
     /// Object has every subtype in this conjunctive list (for example, Eldrazi Scion).
     AllOfList(SubtypeList),
-    /// Object lacks every subtype in this cross-category list (up to 16).
+    /// Object lacks every subtype in this cross-category list (up to 6).
     NoneOfList(SubtypeList),
     /// Object lacks the creature subtype chosen into this resolution slot.
     ExceptChosenSlot(CreatureTypeSlot),
@@ -910,6 +912,12 @@ impl ObjectFilterFlags {
     pub const WITH_MINUS_ONE_COUNTER: Self = Self(1 << 35);
     /// Object that has an Adventure alternative face (CR 715).
     pub const HAS_ADVENTURE: Self = Self(1 << 36);
+    /// Spell or card with `{X}` in its mana cost (CR 107.3).
+    pub const HAS_X_IN_COST: Self = Self(1 << 37);
+    /// Permanent or card with toxic (CR 702.164).
+    pub const HAS_TOXIC: Self = Self(1 << 38);
+    /// Permanent or card with no abilities (CR 113.1).
+    pub const NO_ABILITIES: Self = Self(1 << 39);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -1539,6 +1547,20 @@ impl ObjectClause {
             return false;
         }
         if self.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !p.defined.has_adventure {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !p.defined.has_x_in_cost {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::HAS_TOXIC)
+            && !p
+                .toxic_value
+                .as_ref()
+                .is_some_and(crate::RulesInteger::is_positive)
+        {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !p.has_no_abilities() {
             return false;
         }
         if self.flags.contains(ObjectFilterFlags::COMMANDER_ONLY) && p.commander_owner.is_none() {
@@ -2895,6 +2917,7 @@ impl ObjectFilter {
                 || c.flags.contains(ObjectFilterFlags::HISTORIC)
                 || c.flags.contains(ObjectFilterFlags::NON_HISTORIC)
                 || c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE)
+                || c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST)
                 || c.required_counter_kind.is_some()
                 || c.forbidden_counter_kind.is_some()
                 || c.exact_name.is_some()
@@ -2975,6 +2998,15 @@ impl ObjectFilter {
                 return false;
             }
             if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !spell.has_adventure {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !spell.has_x_in_cost {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_TOXIC) && !spell.has_toxic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !spell.has_no_abilities {
                 return false;
             }
             if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
@@ -3208,6 +3240,15 @@ impl ObjectFilter {
                 return false;
             }
             if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !object.has_adventure {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_X_IN_COST) && !object.has_x_in_cost {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_TOXIC) && !object.has_toxic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NO_ABILITIES) && !object.has_no_abilities {
                 return false;
             }
             if let Some(exact) = c.exact_name

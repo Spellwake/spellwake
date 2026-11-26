@@ -460,6 +460,7 @@ native!(ExecutableBody, self, {
         | Instruction::GoadTarget
         | Instruction::RequireTargetAttack
         | Instruction::RemoveTargetFromCombat
+        | Instruction::RemoveSubjectFromCombat(_)
         | Instruction::GoadOtherPlayersCreatures
         | Instruction::SetControlledCreatureSizeToHand
         | Instruction::ModifyGroupByAmount { .. }
@@ -720,6 +721,7 @@ native!(ExecutableBody, self, {
         | Instruction::ReturnControlledPermanents { .. }
         | Instruction::ChooseOtherControlledCreature { .. }
         | Instruction::Sacrifice { .. }
+        | Instruction::SacrificeUpTo { .. }
         | Instruction::DiscardOneAtRandom(_)
         | Instruction::SacrificeRandomUntilLand
         | Instruction::DiscardUpTo { .. }
@@ -869,6 +871,7 @@ native!(ExecutableBody, self, {
         | Instruction::RegenerateSubject { .. }
         | Instruction::AddManaForPlayer { .. }
         | Instruction::SkipNextTurns { .. }
+        | Instruction::SkipNextStep { .. }
         | Instruction::SelectExtremeLifePlayer { .. }
         | Instruction::AttachFixedTargets
         | Instruction::AttachPermanentToPlayer { .. }

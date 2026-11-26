@@ -1528,7 +1528,8 @@ fn strip_activated_restrictions_inner(
             }
             InstructionAst::TemporaryStatic {
                 static_ability,
-                duration: DurationAst::Instant,
+                duration:
+                    DurationAst::Instant | DurationAst::Permanent | DurationAst::UntilEndOfTurn,
             } if matches!(
                 static_ability.as_ref(),
                 StaticAbilityAst::CostModifier {
@@ -1552,26 +1553,35 @@ fn strip_activated_restrictions_inner(
                 else {
                     return Err("oracle:unsupported-cost-reduction");
                 };
-                let mc = parse_fixed_mana_cost(delta).ok_or("oracle:unsupported-cost-reduction")?;
-                if !mc.required.is_empty() || !mc.generic.is_positive() {
-                    return Err("oracle:unsupported-cost-reduction");
-                }
-                let amount = match (per.as_deref(), scale_expr.as_deref()) {
-                    (None, None) => ValueExpr::Literal(mc.generic),
-                    (Some(pf), None) => {
-                        let base = lower_value_expr(
-                            &ValueExprAst::Count(Box::new(pf.clone())),
-                            vocabulary,
-                        )
-                        .map_err(|_| "oracle:unsupported-cost-reduction")?;
-                        scale_world_reduction(delta, base)?
+                let amount = if delta.trim().eq_ignore_ascii_case("{x}")
+                    && per.is_none()
+                    && let Some(se) = scale_expr.as_deref()
+                {
+                    lower_value_expr(se, vocabulary)
+                        .map_err(|_| "oracle:unsupported-cost-reduction")?
+                } else {
+                    let mc =
+                        parse_fixed_mana_cost(delta).ok_or("oracle:unsupported-cost-reduction")?;
+                    if !mc.required.is_empty() || !mc.generic.is_positive() {
+                        return Err("oracle:unsupported-cost-reduction");
                     }
-                    (None, Some(se)) => {
-                        let base = lower_value_expr(se, vocabulary)
+                    match (per.as_deref(), scale_expr.as_deref()) {
+                        (None, None) => ValueExpr::Literal(mc.generic),
+                        (Some(pf), None) => {
+                            let base = lower_value_expr(
+                                &ValueExprAst::Count(Box::new(pf.clone())),
+                                vocabulary,
+                            )
                             .map_err(|_| "oracle:unsupported-cost-reduction")?;
-                        scale_world_reduction(delta, base)?
+                            scale_world_reduction(delta, base)?
+                        }
+                        (None, Some(se)) => {
+                            let base = lower_value_expr(se, vocabulary)
+                                .map_err(|_| "oracle:unsupported-cost-reduction")?;
+                            scale_world_reduction(delta, base)?
+                        }
+                        (Some(_), Some(_)) => return Err("oracle:unsupported-cost-reduction"),
                     }
-                    (Some(_), Some(_)) => return Err("oracle:unsupported-cost-reduction"),
                 };
                 let final_expr = if let Some(cond) = condition.as_deref() {
                     let mut tmp_builder = BodyBuilder::new();
@@ -8475,6 +8485,25 @@ pub(super) fn lower_trigger_subject_filter(
         SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) => {
             lower_object_filter(f, vocabulary)
         }
+        SubjectRefAst::Anaphora(raw) if raw.trim().eq_ignore_ascii_case("your commander") => {
+            Ok(ObjectFilter::Clause(ObjectClause {
+                owner: ControllerFilter::You,
+                flags: ObjectFilterFlags::COMMANDER_ONLY,
+                ..ObjectClause::any()
+            }))
+        }
+        SubjectRefAst::Anaphora(raw)
+            if raw.trim().eq_ignore_ascii_case("a commander you control")
+                || raw
+                    .trim()
+                    .eq_ignore_ascii_case("your commander you control") =>
+        {
+            Ok(ObjectFilter::Clause(ObjectClause {
+                controller: ControllerFilter::You,
+                flags: ObjectFilterFlags::COMMANDER_ONLY,
+                ..ObjectClause::any()
+            }))
+        }
         SubjectRefAst::InZone {
             subject: inner,
             zone: ZoneFilter::Battlefield,
@@ -9350,7 +9379,7 @@ fn try_lower_specialized_trigger_condition(
                 && filter.stat_bounds.is_empty()
                 && filter.counter_kind.is_none()
                 && filter.named.is_none()
-                && filter.flags.is_empty()
+                && (filter.flags.0 & !AstFilterFlags::LKI_PAST_TENSE.0) == 0
                 && filter.predicates.is_empty();
             if *from_zone == Some(ZoneFilter::Battlefield)
                 && matches!(

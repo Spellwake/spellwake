@@ -2177,6 +2177,7 @@ pub struct DefinedCharacteristics {
     pub printed_pt: Option<PrintedPowerToughness>,
     /// Whether this object's copiable definition has an Adventure alternative face (CR 715).
     pub has_adventure: bool,
+    pub has_x_in_cost: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PrintedAbilityKind {
@@ -2547,6 +2548,43 @@ pub struct ObjectCharacteristics {
     pub power_toughness: Option<PowerToughnessEvaluation>,
 }
 impl ObjectCharacteristics {
+    /// True when this object has no surviving abilities after layers (CR 113.1 / CR 613.1f).
+    #[must_use]
+    pub fn has_no_abilities(&self) -> bool {
+        self.keywords.is_empty()
+            && self.intrinsic_mana.is_empty()
+            && !self
+                .toxic_value
+                .as_ref()
+                .is_some_and(RulesInteger::is_positive)
+            && self.abilities.attack_requirement.is_none()
+            && self.abilities.additional_attack_requirements.is_empty()
+            && self.abilities.combat_limits == crate::program::CombatDeclarationLimits::default()
+            && self.abilities.entry_tap.is_none()
+            && !self.abilities.entry_counter_abilities
+            && self.abilities.face_up.is_empty()
+            && self.abilities.zone_replacements.is_empty()
+            && self.abilities.mana.is_empty()
+            && self.abilities.activated.is_empty()
+            && self.abilities.triggered.is_empty()
+            && self.abilities.continuous.is_none()
+            && self.abilities.additional_battlefield_abilities.is_empty()
+            && self.granted_exalted.is_empty()
+            && self.granted_triggers.is_empty()
+            && self.inherited_activation_terms.is_empty()
+            && self.inherited_mana.is_empty()
+            && self.granted_activated.is_empty()
+            && self.granted_any_color_mana.is_empty()
+            && self.granted_fixed_mana.is_empty()
+            && self.granted_combat_keywords.is_empty()
+            && self.blocking_restrictions.is_empty()
+            && self.granted_restrictions.is_empty()
+            && !self.granted_unblockable
+            && !self.doesnt_untap_during_untap_step
+            && self.printed_text.conditional_cost.is_none()
+            && !self.defined.has_adventure
+    }
+
     /// Highest chapter number among this Saga's current chapter abilities.
     pub(crate) fn final_saga_chapter(&self) -> Option<u8> {
         if !self

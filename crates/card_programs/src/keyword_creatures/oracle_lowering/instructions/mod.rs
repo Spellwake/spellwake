@@ -820,6 +820,7 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
         | Instruction::ExileChosenPermanents { .. }
         | Instruction::DestroyChosen { .. }
         | Instruction::Sacrifice { .. }
+        | Instruction::SacrificeUpTo { .. }
         | Instruction::SacrificeSubject { .. }
         | Instruction::SearchLibrary { .. }
         | Instruction::LookTopChoose { .. }
@@ -1141,6 +1142,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::Scry { amount, .. }
         | Instruction::Surveil { amount, .. }
         | Instruction::Sacrifice { amount, .. }
+        | Instruction::SacrificeUpTo { amount, .. }
         | Instruction::ExileFromZone { amount, .. }
         | Instruction::ExileChosenPermanents { amount, .. }
         | Instruction::DestroyChosen { count: amount, .. }
@@ -1374,6 +1376,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::RevealCards { .. }
         | InstructionAst::RevealHand { .. }
         | InstructionAst::Sacrifice { .. }
+        | InstructionAst::SacrificeAnyNumber { .. }
         | InstructionAst::SacrificeUnlessPay { .. }
         | InstructionAst::ShuffleGraveyardIntoLibrary { .. }
         | InstructionAst::ShuffleIntoLibrary { .. }
@@ -1495,6 +1498,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::ScopedDurationText { .. }
         | InstructionAst::SkipNextTurn { .. }
         | InstructionAst::SkipNextTurns { .. }
+        | InstructionAst::SkipNextStep { .. }
         | InstructionAst::TemporaryPlayerRestriction { .. }
         | InstructionAst::TemporaryReplacement { .. }
         | InstructionAst::TemporaryStatic { .. }

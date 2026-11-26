@@ -534,6 +534,18 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
     for pred in &f.predicates {
         match pred {
             FilterPredicateAst::SubtypesMatchAny => {}
+            FilterPredicateAst::HasBasicLandType => {
+                if sel.land_subtype.is_some() || !sel.any_land_subtypes.is_empty() {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+                sel.any_land_subtypes.extend([
+                    LandType::Plains,
+                    LandType::Island,
+                    LandType::Swamp,
+                    LandType::Mountain,
+                    LandType::Forest,
+                ]);
+            }
             FilterPredicateAst::ManaValueIn(vals) => {
                 if sel.min_mana_value.is_some() || sel.max_mana_value.is_some() {
                     return Err("oracle:unsupported-selector-predicate");
@@ -584,7 +596,23 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                         sel.minus_one_counter = true;
                     }
                     other => {
-                        if let Some(ck_raw) = extract_state_qual_counter_kind(other) {
+                        if let Some(pt_raw) = other.strip_prefix("pt:")
+                            && let Some((p_s, t_s)) = pt_raw.split_once('/')
+                            && let (Ok(p), Ok(t)) =
+                                (p_s.trim().parse::<i64>(), t_s.trim().parse::<i64>())
+                        {
+                            if sel.min_power.is_some()
+                                || sel.max_power.is_some()
+                                || sel.min_toughness.is_some()
+                                || sel.max_toughness.is_some()
+                            {
+                                return Err("oracle:unsupported-selector-predicate");
+                            }
+                            sel.min_power = Some(p);
+                            sel.max_power = Some(p);
+                            sel.min_toughness = Some(t);
+                            sel.max_toughness = Some(t);
+                        } else if let Some(ck_raw) = extract_state_qual_counter_kind(other) {
                             apply_selector_counter_kind(&mut sel, ck_raw)?;
                         } else if let Some(rest) = other.strip_prefix("with ") {
                             apply_selector_required_keyword(&mut sel, rest, vocabulary)?;
@@ -2047,6 +2075,14 @@ fn try_specialized_static_source_condition(
                 "untapped" => Some(StaticSourceCondition::SourceIsUntapped),
                 "equipped" => Some(StaticSourceCondition::SourceIsEquipped),
                 "enchanted" => Some(StaticSourceCondition::SourceIsEnchanted),
+                "modified" => Some(StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::object_matches(
+                        MatchObjectRef::AbilitySource,
+                        ObjectFilter::any().with_flags(ObjectFilterFlags::MODIFIED),
+                    ),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1_i64),
+                }))),
                 "attached:a creature" => Some(StaticSourceCondition::AttachedHostMatches(
                     Box::new(PermanentSelector {
                         required_types: BTreeSet::from([CardType::Creature]),
@@ -2088,6 +2124,30 @@ fn try_specialized_static_source_condition(
             let obj = lower_object_filter(filter, vocabulary).ok()?;
             let rc = ResolutionCondition {
                 left: ValueExpr::object_matches(MatchObjectRef::AbilitySource, obj),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1_i64),
+            };
+            rc.is_world_evaluable()
+                .then(|| StaticSourceCondition::Eval(Box::new(rc)))
+        }
+        ConditionAst::MatchesFilter { subject, filter }
+            if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(a)
+                    if matches!(
+                        a.trim().to_ascii_lowercase().as_str(),
+                        "the top card of your library" | "top card of your library"
+                    )
+            ) && filter.zone.is_none()
+                && filter.extra_zones.is_empty()
+                && !filter.any_spell =>
+        {
+            let obj = lower_object_filter(filter, vocabulary).ok()?;
+            let rc = ResolutionCondition {
+                left: ValueExpr::object_matches(
+                    MatchObjectRef::LibraryTop(ResolvingPlayer::Controller),
+                    obj,
+                ),
                 comparison: Comparison::Equal,
                 right: ValueExpr::literal(1_i64),
             };
@@ -3561,7 +3621,11 @@ pub(super) fn lower_object_filter(
     } else if f.required_keywords.len() > 1 {
         return Err("oracle:multi-keyword-filter");
     } else if let Some(k) = f.required_keywords.first() {
-        clause.keyword = Some(lower_keyword_ability_name(k).ok_or("oracle:filter-unknown-kw")?);
+        if k.trim().eq_ignore_ascii_case("toxic") {
+            clause.flags = clause.flags.union(ObjectFilterFlags::HAS_TOXIC);
+        } else {
+            clause.keyword = Some(lower_keyword_ability_name(k).ok_or("oracle:filter-unknown-kw")?);
+        }
     }
     if let Some(k) = f.forbidden_keywords.first() {
         clause.forbidden_keyword =
@@ -4010,6 +4074,51 @@ pub(super) fn lower_object_filter(
             FilterPredicateAst::SubtypesMatchAny => {
                 subtypes_match_any = true;
             }
+            FilterPredicateAst::HasBasicLandType => {
+                if clause.subtypes != SubtypeFilter::Any {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                use spellwake_engine::program::{SingleSubtype, SubtypeList};
+                let list = SubtypeList::from_slice(&[
+                    SingleSubtype::Land(LandType::Plains),
+                    SingleSubtype::Land(LandType::Island),
+                    SingleSubtype::Land(LandType::Swamp),
+                    SingleSubtype::Land(LandType::Mountain),
+                    SingleSubtype::Land(LandType::Forest),
+                ])
+                .ok_or("oracle:unsupported-filter-predicate")?;
+                clause.subtypes = SubtypeFilter::AnyOfList(list);
+            }
+            FilterPredicateAst::HasManaSymbolInCost(sym)
+                if sym.trim().to_ascii_lowercase().contains("{x}")
+                    || sym.trim().eq_ignore_ascii_case("x") =>
+            {
+                clause.flags = clause.flags.union(ObjectFilterFlags::HAS_X_IN_COST);
+            }
+            FilterPredicateAst::HasAbilities {
+                has_abilities: false,
+            } => {
+                clause.flags = clause.flags.union(ObjectFilterFlags::NO_ABILITIES);
+            }
+            FilterPredicateAst::StateQualification(raw)
+                if raw.trim().to_ascii_lowercase().starts_with("pt:") =>
+            {
+                let norm = raw.trim().to_ascii_lowercase();
+                let Some((p_s, t_s)) = norm
+                    .strip_prefix("pt:")
+                    .and_then(|rest| rest.split_once('/'))
+                else {
+                    return Err("oracle:unsupported-filter-predicate");
+                };
+                let (Ok(p), Ok(t)) = (p_s.trim().parse::<i16>(), t_s.trim().parse::<i16>()) else {
+                    return Err("oracle:unsupported-filter-predicate");
+                };
+                if clause.power != PowerFilter::Any || clause.toughness != ToughnessFilter::Any {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                clause.power = PowerFilter::Equal(p);
+                clause.toughness = ToughnessFilter::Equal(t);
+            }
             FilterPredicateAst::PutIntoZoneThisTurn => {
                 if !in_graveyard_context {
                     return Err("oracle:unsupported-filter-predicate");
@@ -4135,8 +4244,9 @@ pub(super) fn lower_object_filter(
                         return Err("oracle:unsupported-filter-predicate");
                     }
                     for st in supertype_mask_to_set(excl.required_supertypes)? {
-                        clause.forbidden_supertypes =
-                            clause.forbidden_supertypes.union(SupertypeMask::from_supertype(st));
+                        clause.forbidden_supertypes = clause
+                            .forbidden_supertypes
+                            .union(SupertypeMask::from_supertype(st));
                     }
                 } else if dim_colors {
                     let cm = lower_color_mask(excl.any_colors);
@@ -6356,6 +6466,87 @@ fn lower_value_expr_inner(
         ValueExprAst::Const(n) => Ok(ValueExpr::literal(i64::from(*n))),
         ValueExprAst::ChosenX => Ok(ValueExpr::chosen_x()),
         ValueExprAst::Count(f) => {
+            // Party count ("for each creature in your party")
+            if let [FilterPredicateAst::StateQualification(q)] = f.predicates.as_slice()
+                && q.trim().eq_ignore_ascii_case("in_your_party")
+                && (f.any_types.is_empty() || f.any_types == AstCardTypeMask::CREATURE)
+                && matches!(f.controller, None | Some(ControllerRelation::You))
+                && f.zone.is_none()
+                && f.extra_zones.is_empty()
+                && f.owner.is_none()
+                && f.subtypes.is_empty()
+                && f.forbidden_types.is_empty()
+                && f.forbidden_subtypes.is_empty()
+                && f.required_supertypes.is_empty()
+                && f.forbidden_supertypes.is_empty()
+                && f.any_colors.is_empty()
+                && f.forbidden_colors.is_empty()
+                && f.color_arity.is_none()
+                && f.combat.is_none()
+                && f.tapped.is_none()
+                && f.token.is_none()
+                && f.required_keywords.is_empty()
+                && f.forbidden_keywords.is_empty()
+                && f.stat_bounds.is_empty()
+                && f.counter_kind.is_none()
+                && f.named.is_none()
+                && f.flags.is_empty()
+            {
+                let roles =
+                    resolve_party_roles(vocabulary).ok_or("oracle:unsupported-value-expr")?;
+                return Ok(ValueExpr::PartyCount(Box::new(roles)));
+            }
+            // Exact prior-action count using LastActionMatchingCount (LKI snapshot of affected objects)
+            if let Some((builder, _)) = context
+                && f.zone.is_none()
+                && f.extra_zones.is_empty()
+                && let Some(pos) = f
+                    .predicates
+                    .iter()
+                    .position(|p| matches!(p, FilterPredicateAst::AffectedByPriorAction(_)))
+                && let Some(last_ins) = builder.instructions.last()
+            {
+                use spellwake_oracle_compiler::ast::PriorActionRefKind;
+                let FilterPredicateAst::AffectedByPriorAction(kind) = &f.predicates[pos] else {
+                    unreachable!();
+                };
+                let action_matches = matches!(
+                    (kind, last_ins),
+                    (
+                        PriorActionRefKind::DestroyedThisWay,
+                        Instruction::DestroyGroup(_)
+                            | Instruction::DestroyGroupWithoutRegeneration(_),
+                    ) | (
+                        PriorActionRefKind::ExiledThisWay,
+                        Instruction::MoveGroup {
+                            destination: PublicZoneDestination::Exile,
+                            ..
+                        } | Instruction::ExileGroupFromZone { .. }
+                            | Instruction::ExileChosenPermanents { .. },
+                    ) | (
+                        PriorActionRefKind::TappedThisWay,
+                        Instruction::SetGroupTapped { tapped: true, .. }
+                            | Instruction::UntapOrTapSelect { tap: true, .. },
+                    ) | (
+                        PriorActionRefKind::SacrificedThisWay,
+                        Instruction::Sacrifice { .. }
+                            | Instruction::SacrificeUpTo { .. }
+                            | Instruction::SacrificeMatching(_)
+                            | Instruction::SacrificeSubject { .. },
+                    )
+                );
+                if action_matches {
+                    let mut clean = f.as_ref().clone();
+                    clean.predicates.remove(pos);
+                    if is_unrestricted_filter(&clean) {
+                        return Ok(ValueExpr::EventValue(EventValueKind::LastActionCount));
+                    }
+                    let obj = lower_object_filter(&clean, vocabulary)?;
+                    if !obj.has_target_player() {
+                        return Ok(ValueExpr::LastActionMatchingCount(Box::new(obj)));
+                    }
+                }
+            }
             if f.any_spell {
                 if f.zone.is_none()
                     && !f.any_permanent

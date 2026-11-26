@@ -3383,7 +3383,7 @@ enum Controller {
     SourcePair,
     Any,
     Source,
-    OwnerIsSourceController,
+    OwnerMatchesSource,
     OwnerIsOpponent,
 }
 impl TryFrom<String> for Controller {
@@ -3396,7 +3396,7 @@ impl TryFrom<String> for Controller {
             "SelfAtMaxSpeed" => Ok(Self::SelfAtMaxSpeed),
             "SourcePair" => Ok(Self::SourcePair),
             "SourceController" => Ok(Self::Source),
-            "OwnerIsSourceController" => Ok(Self::OwnerIsSourceController),
+            "OwnerIsSourceController" => Ok(Self::OwnerMatchesSource),
             "OwnerIsOpponent" => Ok(Self::OwnerIsOpponent),
             _ => Err(format!("unknown selector controller {value}")),
         }
@@ -3488,7 +3488,7 @@ impl Selector {
                 Controller::SelfAtMaxSpeed => ControllerSelector::SelfAtMaxSpeed,
                 Controller::SourcePair => ControllerSelector::SourcePair,
                 Controller::Source => ControllerSelector::SourceController,
-                Controller::OwnerIsSourceController => ControllerSelector::OwnerIsSourceController,
+                Controller::OwnerMatchesSource => ControllerSelector::OwnerIsSourceController,
                 Controller::OwnerIsOpponent => ControllerSelector::OwnerIsOpponent,
             },
             combat_role: match self.combat_role.as_deref() {
@@ -9804,6 +9804,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticRestriction::OpponentsCantCastDuringCombat => {
                     json!({"tag":"OpponentsCantCastDuringCombat","id":id.0})
                 }
+                StaticRestriction::OpponentsSorceryOnly => {
+                    json!({"tag":"OpponentsSorceryOnly","id":id.0})
+                }
                 StaticRestriction::SkipStep { player, step } => {
                     json!({"tag":"SkipStep","id":id.0,"player":format!("{player:?}"),"step":format!("{step:?}")})
                 }
@@ -11412,6 +11415,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ClearSourceCounters(kind) => json!({"op":"ClearSourceCounters","kind":format!("{kind:?}")}),
             Instruction::RegenerateSource => json!({"op":"RegenerateSource"}),
             Instruction::RemoveTargetFromCombat => json!({"op":"RemoveTargetFromCombat"}),
+            Instruction::RemoveSubjectFromCombat(_) => json!({"op":"RemoveSubjectFromCombat"}),
             Instruction::RegenerateControlledSubtype(subtype) => json!({"op":"RegenerateControlledSubtype","subtype":projection::creature_type_id(*subtype)}),
             Instruction::RequireTargetAttack => json!({"op":"RequireTargetAttack"}),
             Instruction::GoadTarget => json!({"op":"GoadTarget"}),
@@ -11823,6 +11827,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::RegenerateSubject { subject } => json!({"op":"RegenerateSubject","subject":effect_group_wire(**subject)}),
             Instruction::AddManaForPlayer { player, yield_kind } => json!({"op":"AddManaForPlayer","player":format!("{player:?}"),"yield_kind":format!("{yield_kind:?}")}),
             Instruction::SkipNextTurns { player, count } => json!({"op":"SkipNextTurns","player":format!("{player:?}"),"count":count}),
+            Instruction::SkipNextStep { player, step } => json!({"op":"SkipNextStep","player":format!("{player:?}"),"step":format!("{step:?}")}),
+            Instruction::SacrificeUpTo { players, amount, filter } => json!({"op":"SacrificeUpTo","players":format!("{players:?}"),"amount":format!("{amount:?}"),"filter":format!("{filter:?}")}),
             Instruction::SelectExtremeLifePlayer { highest, tie_mode } => json!({"op":"SelectExtremeLifePlayer","highest":highest,"tie_mode":format!("{tie_mode:?}")}),
             Instruction::AttachFixedTargets => json!({"op":"AttachFixedTargets"}),
             Instruction::AttachPermanentToPlayer { attachment, player } => json!({"op":"AttachPermanentToPlayer","attachment":format!("{attachment:?}"),"player":format!("{player:?}")}),

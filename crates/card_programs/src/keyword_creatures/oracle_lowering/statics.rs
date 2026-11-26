@@ -700,6 +700,21 @@ pub(super) fn lower_static(
                         }
                         return Ok(());
                     }
+                    if let Ok(base_expr) =
+                        lower_value_expr(&ValueExprAst::Count(per_filter.clone()), vocabulary)
+                    {
+                        let scaled = if generic_n == 1 {
+                            base_expr
+                        } else {
+                            scale_value_expr(base_expr, i64::from(generic_n))
+                        };
+                        if scaled.is_world_evaluable() {
+                            program
+                                .cast_reductions
+                                .push(CastReduction::Dynamic(Box::new(scaled)));
+                            return Ok(());
+                        }
+                    }
                     let mut inner = per_filter.as_ref().clone();
                     let zone = match inner.zone.take() {
                         None => spellwake_engine::program::ValueZone::Battlefield,
@@ -2196,6 +2211,15 @@ pub(super) fn lower_static(
             }
             if let Some(br) = lower_rule_blocking_restriction(rule, filter.as_deref(), vocabulary) {
                 let selectors = match subject.as_deref() {
+                    Some(SubjectRefAst::Anaphora(pron))
+                        if pron.eq_ignore_ascii_case("it")
+                            && matches!(br, BlockingRestriction::BlockerPowerAtLeastSource) =>
+                    {
+                        vec![PermanentSelector {
+                            controller: ControllerSelector::SourceItself,
+                            ..PermanentSelector::default()
+                        }]
+                    }
                     Some(s) => lower_static_permanent_selectors_with_context(
                         s,
                         condition.as_deref(),
@@ -3537,6 +3561,21 @@ pub(super) fn lower_static(
                     StaticContinuousAbility::Restriction {
                         id: ids.static_id(),
                         rule: StaticRestriction::OpponentsCantCastDuringCombat,
+                    },
+                );
+            }
+            if matches!(
+                r_low.as_str(),
+                "each opponent can cast spells only any time they could cast a sorcery"
+                    | "your opponents can cast spells only any time they could cast a sorcery"
+                    | "opponents can cast spells only any time they could cast a sorcery"
+            ) && subject.is_none()
+            {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::OpponentsSorceryOnly,
                     },
                 );
             }
@@ -5346,6 +5385,7 @@ fn value_expr_has_pt_dependency(ve: &ValueExpr) -> bool {
         | ValueExpr::OpponentMaxCount { filter, .. }
         | ValueExpr::OpponentMinCount { filter, .. }
         | ValueExpr::DistinctColors { filter }
+        | ValueExpr::LastActionMatchingCount(filter)
         | ValueExpr::Aggregate { filter, .. }
         | ValueExpr::ObjectMatches { filter, .. } => object_filter_has_pt_dependency(filter),
         ValueExpr::Scale { expr, .. } | ValueExpr::DivConst { expr, .. } => {
@@ -9598,6 +9638,30 @@ pub(super) fn lower_rule_blocking_restriction(
             let types_creature_or_empty =
                 flt.any_types.is_empty() || flt.any_types == AstCardTypeMask::CREATURE;
             if types_creature_or_empty {
+                if let [
+                    spellwake_oracle_compiler::ast::StatBoundAst {
+                        stat: StatKind::Power,
+                        op: CompareOp::Lt,
+                        value,
+                    },
+                ] = flt.stat_bounds.as_slice()
+                    && matches!(
+                        value.as_ref(),
+                        ValueExprAst::ObjectStat {
+                            subject: stat_subj,
+                            stat: StatKind::Power,
+                        } if matches!(stat_subj.as_ref(), SubjectRefAst::SelfObject)
+                    )
+                    && filter_only_has(
+                        flt,
+                        FilterAllow {
+                            stat_bounds: true,
+                            ..allow_base
+                        },
+                    )
+                {
+                    return Some(BlockingRestriction::BlockerPowerAtLeastSource);
+                }
                 if flt.required_keywords == ["flying"]
                     && filter_only_has(
                         flt,

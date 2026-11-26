@@ -7417,15 +7417,22 @@ pub fn parse_atomic_effect(
     }
 
     // CR 701.16 Reveal-Until Loop: "[<player>] reveal(s) cards from the top of <whose> library until <who> reveal(s) [<cnt>] <flt>"
+    // Also passive voice: "... until [<cnt>] <flt> are revealed" / "is revealed" (e.g. Mind Funeral).
     if let Some((who, after)) = split_leading_player_verb(&low, "reveal", "reveals")
         && let Some((top_part, until_part)) = after.split_once(" until ")
         && top_part.starts_with("cards from the top of ")
         && top_part.ends_with(" library")
-        && let Some((_, flt_side)) = until_part
+        && let Some(flt_side) = until_part
             .split_once(" reveals ")
             .or_else(|| until_part.split_once(" reveal "))
+            .map(|(_, rhs)| rhs)
+            .or_else(|| {
+                until_part
+                    .strip_suffix(" are revealed")
+                    .or_else(|| until_part.strip_suffix(" is revealed"))
+            })
     {
-        let (cnt, flt_raw) = peel_leading_count(flt_side, vocab);
+        let (cnt, flt_raw) = peel_leading_count(flt_side.trim(), vocab);
         if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
             return Ok(vec![InstructionAst::RevealUntil {
                 player: who,

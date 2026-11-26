@@ -156,6 +156,9 @@ pub struct SupportedAppearance {
     pub exerted: bool,
     /// This object's copiable definition has an Adventure alternative face (CR 715).
     pub has_adventure: bool,
+    pub has_x_in_cost: bool,
+    pub has_toxic: bool,
+    pub has_no_abilities: bool,
     pub toxic_value: Option<RulesInteger>,
     /// Whether the creature had the granted evasion ability at this cut.
     pub granted_unblockable: bool,
@@ -234,6 +237,9 @@ impl SupportedAppearance {
             prepared: false,
             exerted: false,
             has_adventure: false,
+            has_x_in_cost: false,
+            has_toxic: false,
+            has_no_abilities: false,
             toxic_value: None,
             granted_unblockable: false,
             granted_exalted: BTreeMap::new(),
@@ -2082,6 +2088,12 @@ impl RulesView<'_> {
                 .exerted_objects_this_turn
                 .contains(&object),
             has_adventure: current.defined.has_adventure,
+            has_x_in_cost: current.defined.has_x_in_cost,
+            has_toxic: current
+                .toxic_value
+                .as_ref()
+                .is_some_and(crate::RulesInteger::is_positive),
+            has_no_abilities: current.has_no_abilities(),
             toxic_value: current.toxic_value.clone(),
             granted_triggers: current.granted_triggers.clone(),
             granted_unblockable: current.granted_unblockable,

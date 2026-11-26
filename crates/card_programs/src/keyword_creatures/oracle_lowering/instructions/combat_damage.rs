@@ -3810,14 +3810,67 @@ pub(super) fn lower_combat_damage_instruction(
             *builder = trial;
             Ok(())
         }
-        InstructionAst::RemoveFromCombat { subject } => {
-            let bt = lower_target_subject(subject, vocabulary)?;
-            builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::RemoveTargetFromCombat);
-            Ok(())
-        }
+        InstructionAst::RemoveFromCombat { subject } => match subject.as_ref() {
+            SubjectRefAst::SelfObject => {
+                builder
+                    .instructions
+                    .push(Instruction::RemoveSubjectFromCombat(Box::new(
+                        EffectSubject::AbilitySource,
+                    )));
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
+                if matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "it" | "this creature" | "that creature"
+                ) =>
+            {
+                if builder.target.guarantees_creature() {
+                    builder
+                        .instructions
+                        .push(Instruction::RemoveTargetFromCombat);
+                    Ok(())
+                } else if self_pronoun_valid
+                    && matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "it" | "this creature"
+                    )
+                {
+                    builder
+                        .instructions
+                        .push(Instruction::RemoveSubjectFromCombat(Box::new(
+                            EffectSubject::AbilitySource,
+                        )));
+                    Ok(())
+                } else if in_trigger && builder.target == BodyTarget::None {
+                    builder
+                        .instructions
+                        .push(Instruction::RemoveSubjectFromCombat(Box::new(
+                            EffectSubject::TriggerSubject,
+                        )));
+                    Ok(())
+                } else {
+                    Err("oracle:unsupported-target-subject")
+                }
+            }
+            SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                let obj = lower_object_filter(f, vocabulary)?;
+                builder
+                    .instructions
+                    .push(Instruction::RemoveSubjectFromCombat(Box::new(
+                        EffectSubject::Matching(obj),
+                    )));
+                Ok(())
+            }
+            _ => {
+                let bt = lower_target_subject(subject, vocabulary)?;
+                builder.bind_target(bt)?;
+                builder
+                    .instructions
+                    .push(Instruction::RemoveTargetFromCombat);
+                Ok(())
+            }
+        },
         InstructionAst::DealDamageDivided {
             source,
             amount,

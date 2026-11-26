@@ -85,6 +85,7 @@ fn defined(program: &Program) -> DefinedCharacteristics {
             .permanent()
             .and_then(|value| value.printed_pt.clone()),
         has_adventure: program.adventure.is_some(),
+        has_x_in_cost: program.x_mana_symbols > 0,
     }
 }
 fn initial_pt(object: ObjectId, defined: &DefinedCharacteristics) -> PowerToughnessEvaluation {

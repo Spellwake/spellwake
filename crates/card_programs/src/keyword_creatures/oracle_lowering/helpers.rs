@@ -3023,7 +3023,8 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
         ValueExpr::OpponentMaxCount { filter, .. }
         | ValueExpr::OpponentMinCount { filter, .. }
         | ValueExpr::Aggregate { filter, .. }
-        | ValueExpr::DistinctColors { filter } => {
+        | ValueExpr::DistinctColors { filter }
+        | ValueExpr::LastActionMatchingCount(filter) => {
             !filter.has_target_player() && !filter.has_related_player()
         }
         ValueExpr::DistinctManaValuesInGraveyard(r) => search_count_role_supported(*r),

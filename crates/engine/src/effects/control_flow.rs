@@ -275,6 +275,7 @@ impl EffectWindow {
             | Instruction::ReturnControlledPermanents { .. }
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
+            | Instruction::SacrificeUpTo { .. }
             | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
@@ -540,6 +541,7 @@ impl EffectWindow {
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. }
@@ -614,6 +616,7 @@ impl EffectWindow {
             | Instruction::GoadTarget
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
+            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ReturnUpToOneRecentGraveyardCard

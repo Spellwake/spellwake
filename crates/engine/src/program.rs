@@ -2625,6 +2625,8 @@ pub enum Instruction {
     RequireTargetAttack,
     /// Remove an attacking or blocking creature from combat, preserving its zone and status.
     RemoveTargetFromCombat,
+    /// Remove every battlefield object resolved from this subject from combat (CR 506.4).
+    RemoveSubjectFromCombat(Box<EffectSubject>),
     /// Reveal your top card, remove the captured attacker if it's a Forest, then bottom it.
     RevealTopAndRemoveAttackerIfForest,
     RegenerateTarget,
@@ -3708,6 +3710,12 @@ pub enum Instruction {
         /// Evaluated types are distinct from physical Battlefield/control checks.
         filter: PermanentTypeFilter,
     },
+    /// Each affected player chooses up to `amount` eligible controlled permanents matching `filter` and sacrifices them.
+    SacrificeUpTo {
+        players: AffectedPlayers,
+        amount: ValueExpr,
+        filter: PermanentTypeFilter,
+    },
     /// Each affected player chooses as many eligible cards from their own hand
     /// as possible matching `filter`, then discards the complete selection simultaneously.
     DiscardFiltered {
@@ -4061,6 +4069,11 @@ pub enum Instruction {
         player: ResolvingPlayer,
         count: u8,
     },
+    /// Schedule skipping `player`'s next occurrence of `step` (CR 614.10).
+    SkipNextStep {
+        player: ResolvingPlayer,
+        step: crate::turn::Step,
+    },
     /// Select the player with the highest or lowest life total as `ResolvingPlayer::ChosenPlayer`.
     SelectExtremeLifePlayer {
         highest: bool,
@@ -4216,6 +4229,7 @@ impl Instruction {
             | Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
+            | Self::RemoveSubjectFromCombat(_)
             | Self::RevealTopAndRemoveAttackerIfForest
             | Self::RegenerateTarget
             | Self::RegenerateSource
@@ -4639,6 +4653,7 @@ impl Instruction {
             | Self::AffectPermanentTargets { .. }
             | Self::ModifyAnyNumberOfPermanents { .. }
             | Self::Sacrifice { .. }
+            | Self::SacrificeUpTo { .. }
             | Self::DiscardFiltered { .. }
             | Self::DiscardUpTo { .. }
             | Self::DiscardUpToExt { .. }
@@ -4647,6 +4662,7 @@ impl Instruction {
             | Self::RegenerateSubject { .. }
             | Self::AddManaForPlayer { .. }
             | Self::SkipNextTurns { .. }
+            | Self::SkipNextStep { .. }
             | Self::SelectExtremeLifePlayer { .. }
             | Self::AttachFixedTargets
             | Self::AttachPermanentToPlayer { .. }
@@ -4824,7 +4840,8 @@ impl Instruction {
             | Self::ExileChosenPermanents { players, .. }
             | Self::Discard { players, .. }
             | Self::DiscardFiltered { players, .. }
-            | Self::Sacrifice { players, .. } => is_target_affected(*players),
+            | Self::Sacrifice { players, .. }
+            | Self::SacrificeUpTo { players, .. } => is_target_affected(*players),
             Self::DrawPlayer { players, amount } => {
                 is_target_affected(*players) || amount.uses_target()
             }
@@ -4881,7 +4898,9 @@ impl Instruction {
             }
             Self::Earthbend { .. } => true,
             Self::RegenerateSubject { subject } => subject_uses_target(subject),
-            Self::SkipNextTurns { player, .. } => is_target_player(*player),
+            Self::SkipNextTurns { player, .. } | Self::SkipNextStep { player, .. } => {
+                is_target_player(*player)
+            }
             Self::AttachPermanentToPlayer { attachment, player } => {
                 matches!(attachment, MoveSubjectRef::TargetObject) || is_target_player(*player)
             }
@@ -5405,6 +5424,7 @@ impl Instruction {
             Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
+            | Self::RemoveSubjectFromCombat(_)
             | Self::RegenerateTarget
             | Self::TapTargetWhileControllingSource
             | Self::TransformSourceAndAttachToTarget
@@ -6083,6 +6103,7 @@ impl Instruction {
             | Self::RegenerateSubject { .. }
             | Self::AddManaForPlayer { .. }
             | Self::SkipNextTurns { .. }
+            | Self::SkipNextStep { .. }
             | Self::SelectExtremeLifePlayer { .. }
             | Self::AttachPermanentToPlayer { .. }
             | Self::AttachChoosingPermanent { .. }
@@ -6091,6 +6112,10 @@ impl Instruction {
                 ..
             }
             | Self::Sacrifice {
+                players: AffectedPlayers::One(_),
+                ..
+            }
+            | Self::SacrificeUpTo {
                 players: AffectedPlayers::One(_),
                 ..
             }
@@ -6144,6 +6169,7 @@ impl Instruction {
             | Self::ReturnControlledPermanents { .. }
             | Self::ChooseOtherControlledCreature { .. }
             | Self::Sacrifice { .. }
+            | Self::SacrificeUpTo { .. }
             | Self::SacrificeRandomUntilLand
             | Self::SacrificeToContinue { .. }
             | Self::Discard { .. }
@@ -6316,6 +6342,7 @@ impl Instruction {
             | Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
+            | Self::RemoveSubjectFromCombat(_)
             | Self::DestroyTarget
             | Self::DestroyTargetWithoutRegeneration
             | Self::ExileCreatureAtMostRevealedPower
@@ -6433,6 +6460,7 @@ impl Instruction {
                 | Self::RegenerateSubject { .. }
                 | Self::AddManaForPlayer { .. }
                 | Self::SkipNextTurns { .. }
+                | Self::SkipNextStep { .. }
                 | Self::SelectExtremeLifePlayer { .. }
                 | Self::AttachPermanentToPlayer { .. }
                 | Self::AttachChoosingPermanent { .. }
@@ -11468,6 +11496,9 @@ impl ExecutableBody {
                     facts.chose_player = true;
                     None
                 }
+                Instruction::SkipNextStep { player, .. } => {
+                    player.validate(context, self.target, facts.definitely_exiled_target)?
+                }
                 Instruction::SkipNextTurns { player, count } => {
                     if *count == 0 {
                         return Err(DefinitionError::InvalidInstruction);
@@ -13889,12 +13920,20 @@ impl ExecutableBody {
                     players,
                     amount,
                     filter,
+                }
+                | Instruction::SacrificeUpTo {
+                    players,
+                    amount,
+                    filter,
                 } => {
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     filter.validate(vocabulary)?;
-                    if matches!(instruction, Instruction::Sacrifice { .. }) {
+                    if matches!(
+                        instruction,
+                        Instruction::Sacrifice { .. } | Instruction::SacrificeUpTo { .. }
+                    ) {
                         let single_sac = matches!(players, AffectedPlayers::One(_))
                             && matches!(amount, ValueExpr::Literal(value) if *value == 1.into());
                         facts.definitely_sacrificed |= single_sac;
@@ -14285,7 +14324,8 @@ impl ExecutableBody {
                     }
                     fam
                 }
-                Instruction::SetSubjectTapped { subject, .. } => {
+                Instruction::SetSubjectTapped { subject, .. }
+                | Instruction::RemoveSubjectFromCombat(subject) => {
                     subject
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -16265,6 +16305,7 @@ impl ExecutableBody {
                     | Instruction::UntapControlledCreatures
                     | Instruction::SetGroupTapped { .. }
                     | Instruction::SetSubjectTapped { .. }
+                    | Instruction::RemoveSubjectFromCombat(_)
                     | Instruction::TapAttackersAndSkipNextUntap
                     | Instruction::AttachOnEntry { .. }
                     | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -16695,6 +16736,7 @@ impl ExecutableBody {
                     | Instruction::ReturnControlledPermanents { .. }
                     | Instruction::ChooseOtherControlledCreature { .. }
                     | Instruction::Sacrifice { .. }
+                    | Instruction::SacrificeUpTo { .. }
                     | Instruction::DiscardOneAtRandom(_)
                     | Instruction::SacrificeRandomUntilLand
                     | Instruction::DiscardUpTo { .. }
@@ -16713,6 +16755,7 @@ impl ExecutableBody {
                     | Instruction::RegenerateSubject { .. }
                     | Instruction::AddManaForPlayer { .. }
                     | Instruction::SkipNextTurns { .. }
+                    | Instruction::SkipNextStep { .. }
                     | Instruction::SelectExtremeLifePlayer { .. }
                     | Instruction::AttachFixedTargets
                     | Instruction::AttachPermanentToPlayer { .. }
@@ -19146,6 +19189,7 @@ impl Program {
                         Instruction::ModifyGroupByAmount { group, .. }
                         | Instruction::ModifyGroupUntilEndOfTurn { group, .. }
                         | Instruction::PutCountersOnSubject { subject: group, .. }
+                        | Instruction::RemoveSubjectFromCombat(group)
                         | Instruction::ChangeGroup { group, .. }
                             if matches!(group.as_ref(), EffectSubject::AbilitySource) =>
                         {
@@ -19723,6 +19767,7 @@ impl Program {
                             }
                             | Instruction::Earthbend { amount }
                             | Instruction::Sacrifice { amount, .. }
+                            | Instruction::SacrificeUpTo { amount, .. }
                             | Instruction::AddPlayerCounter { amount, .. }
                             | Instruction::PutNamedCounterOnTarget { amount, .. }
                             | Instruction::PutCountersOnSubject { amount, .. }
@@ -20224,6 +20269,7 @@ impl Program {
                             | Instruction::UntapControlledCreatures
                             | Instruction::SetGroupTapped { .. }
                             | Instruction::SetSubjectTapped { .. }
+                            | Instruction::RemoveSubjectFromCombat(_)
                             | Instruction::PutCountersOnSubject { .. }
                             | Instruction::PutHandPermanentsOntoBattlefield { .. }
                             | Instruction::TapAttackersAndSkipNextUntap
@@ -20422,6 +20468,7 @@ impl Program {
                             | Instruction::Mill { player, .. }
                             | Instruction::ManifestTop { player, .. }
                             | Instruction::SkipNextTurns { player, .. }
+                            | Instruction::SkipNextStep { player, .. }
                             | Instruction::ExileLibraryTop { player, .. } => {
                                 targetless_player(*player)
                             }
@@ -20440,6 +20487,7 @@ impl Program {
                             | Instruction::ReturnControlledPermanents { players, .. }
                             | Instruction::ExileChosenPermanents { players, .. }
                             | Instruction::Sacrifice { players, .. }
+                            | Instruction::SacrificeUpTo { players, .. }
                             | Instruction::Discard { players, .. }
                             | Instruction::DiscardFiltered { players, .. }
                             | Instruction::AddPlayerCounter { players, .. } => {

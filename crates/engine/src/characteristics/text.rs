@@ -381,6 +381,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::Sacrifice { amount, .. }
+            | Instruction::SacrificeUpTo { amount, .. }
             | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
             | Instruction::DrainOpponents(amount)
@@ -403,6 +404,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 filter.rewrite_creature_type(change.from, change.to);
             }
             Instruction::Sacrifice { filter, .. }
+            | Instruction::SacrificeUpTo { filter, .. }
             | Instruction::ReturnControlledPermanents { filter, .. }
             | Instruction::ExileChosenPermanents { filter, .. }
             | Instruction::SacrificeToContinue { filter } => {
@@ -1171,6 +1173,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::AddManaForPlayer { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::SkipNextTurns { .. }
+            | Instruction::SkipNextStep { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
             | Instruction::AttachPermanentToPlayer { .. }
@@ -1296,6 +1299,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::GoadTarget
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
+            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ReturnToOwnersHand

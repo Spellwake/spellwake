@@ -682,6 +682,34 @@ impl EffectWindow {
                     crate::characteristics::compute_party_size(creatures, **roles),
                 ))
             }
+            ValueExpr::LastActionMatchingCount(filter) => {
+                let ability_source = if filter.excludes_ability_source() {
+                    Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
+                } else {
+                    None
+                };
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                let Some(cursor) = self.resolution_cursor() else {
+                    return Ok(0.into());
+                };
+                let count = cursor
+                    .results
+                    .last_action_lki
+                    .iter()
+                    .filter(|o| {
+                        self.matches_object_filter(
+                            **filter,
+                            o,
+                            controller,
+                            ability_source,
+                            &excluded,
+                            &evaluated,
+                        )
+                    })
+                    .count();
+                Ok(RulesInteger::from_usize(count))
+            }
             ValueExpr::DistinctColors { filter } => {
                 let ability_source = if filter.excludes_ability_source() {
                     Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
@@ -2299,6 +2327,17 @@ impl EffectWindow {
                         .unwrap_or(0),
                 )
                 .into()),
+                PlayerStatExpr::AnyNonlandPermanentLeftBattlefieldThisTurn => Ok(self
+                    .characteristics
+                    .nonland_permanents_left_battlefield_this_turn
+                    .values()
+                    .copied()
+                    .map(i64::from)
+                    .sum::<i64>()
+                    .into()),
+                PlayerStatExpr::AnySpellWarpedThisTurn => {
+                    Ok(i64::from(self.characteristics.any_spell_warped_this_turn).into())
+                }
                 PlayerStatExpr::EnteredPermanentThisTurn => Ok(i64::from(
                     self.characteristics
                         .permanents_entered_this_turn

@@ -2263,7 +2263,25 @@ pub(super) fn is_search_found_anaphora(subj: &SubjectRefAst) -> bool {
         SubjectRefAst::Anaphora(a)
             if {
                 let low = a.trim().to_ascii_lowercase();
-                !low.contains("rest") && !low.contains("other")
+                !low.contains("rest")
+                    && !low.contains("other")
+                    && !low.contains("unrelated")
+                    && (matches!(
+                        low.as_str(),
+                        "it" | "them"
+                            | "that card"
+                            | "those cards"
+                            | "the card"
+                            | "the cards"
+                            | "one of them"
+                            | "the chosen card"
+                            | "the chosen cards"
+                            | "the revealed card"
+                            | "the revealed cards"
+                    ) || low.starts_with("that ")
+                        || low.starts_with("those ")
+                        || low.contains("found this way")
+                        || low.contains("searched"))
             }
     )
 }
@@ -2277,6 +2295,7 @@ pub(super) fn is_search_placeholder_dest(dest: &str) -> bool {
 
 pub(super) fn apply_search_continuation_step(
     step: &InstructionAst,
+    library: &str,
     eff_reveal: &mut bool,
     eff_dest: &mut String,
     saw_shuffle: &mut bool,
@@ -2346,15 +2365,29 @@ pub(super) fn apply_search_continuation_step(
             *eff_dest = "exile".to_string();
             true
         }
-        InstructionAst::ShuffleLibrary {
-            player:
-                PlayerRefAst::You
-                | PlayerRefAst::ThatPlayer
-                | PlayerRefAst::TargetPlayer
-                | PlayerRefAst::TargetOpponent
-                | PlayerRefAst::EachPlayer
-                | PlayerRefAst::EachOpponent,
-        } => {
+        InstructionAst::ShuffleLibrary { player } => {
+            let lib_low = library.trim().to_ascii_lowercase();
+            let owner_ok = match lib_low.as_str() {
+                "" | "your" | "own" | "you" => *player == PlayerRefAst::You,
+                "each player" | "each_player" => {
+                    matches!(player, PlayerRefAst::EachPlayer | PlayerRefAst::ThatPlayer)
+                }
+                "each opponent" | "each_opponent" => {
+                    matches!(
+                        player,
+                        PlayerRefAst::EachOpponent | PlayerRefAst::ThatPlayer
+                    )
+                }
+                _ => matches!(
+                    player,
+                    PlayerRefAst::ThatPlayer
+                        | PlayerRefAst::TargetPlayer
+                        | PlayerRefAst::TargetOpponent
+                ),
+            };
+            if !owner_ok {
+                return false;
+            }
             let dest_low = eff_dest.to_ascii_lowercase();
             if dest_low.contains("top") && !dest_low.contains("after_shuffle") {
                 return false;
@@ -2377,20 +2410,27 @@ pub(super) fn try_fuse_search_library(
     self_pronoun_valid: bool,
     bound_x: Option<&ValueExprAst>,
 ) -> Option<usize> {
-    let (opt_chooser, search_ast, inner_rest) = match &ins[i] {
-        s @ InstructionAst::SearchLibrary { .. } => (None, s, &[][..]),
+    let (opt_chooser, search_ast, inner_rest, effective_bound_x) = match &ins[i] {
+        s @ InstructionAst::SearchLibrary { .. } => (None, s, &[][..], bound_x),
+        InstructionAst::BindX { x_expr, body } => match body.as_slice() {
+            [s @ InstructionAst::SearchLibrary { .. }] => (None, s, &[][..], Some(x_expr.as_ref())),
+            _ => return None,
+        },
         InstructionAst::Optional(inner) => match inner.split_first() {
             Some((s @ InstructionAst::SearchLibrary { .. }, rest)) => {
-                (Some(PlayerRefAst::You), s, rest)
+                (Some(PlayerRefAst::You), s, rest, bound_x)
             }
             _ => return None,
         },
         InstructionAst::OptionalPlayer { player, body } => match body.split_first() {
-            Some((s @ InstructionAst::SearchLibrary { .. }, rest)) => (Some(*player), s, rest),
+            Some((s @ InstructionAst::SearchLibrary { .. }, rest)) => {
+                (Some(*player), s, rest, bound_x)
+            }
             _ => return None,
         },
         _ => return None,
     };
+    let bound_x = effective_bound_x;
     let InstructionAst::SearchLibrary {
         library,
         count,
@@ -2443,6 +2483,7 @@ pub(super) fn try_fuse_search_library(
             }
             if apply_search_continuation_step(
                 step,
+                library,
                 &mut eff_reveal,
                 &mut eff_dest,
                 &mut saw_shuffle,
@@ -2527,14 +2568,39 @@ pub(super) fn try_fuse_search_library(
     }
     // Strictly consume every instruction inside Optional / OptionalPlayer (fail-closed if any is unhandled).
     for step in inner_rest {
-        if !apply_search_continuation_step(step, &mut eff_reveal, &mut eff_dest, &mut saw_shuffle) {
+        if !apply_search_continuation_step(
+            step,
+            library,
+            &mut eff_reveal,
+            &mut eff_dest,
+            &mut saw_shuffle,
+        ) {
             return None;
         }
     }
     let mut cursor = i + 1;
     while cursor < ins.len() {
+        if let InstructionAst::ChooseAndKeep {
+            pick,
+            keep_to,
+            rest_to,
+        } = &ins[cursor]
+            && is_search_placeholder_dest(&eff_dest)
+            && matches!(
+                pick.trim().to_ascii_lowercase().as_str(),
+                "one" | "1" | "one of them" | "up to one" | "up to one of them"
+            )
+        {
+            eff_dest = keep_to.clone();
+            if eff_rest_to_zone.is_none() && !rest_to.trim().is_empty() {
+                eff_rest_to_zone = Some(rest_to.clone());
+            }
+            cursor += 1;
+            continue;
+        }
         if apply_search_continuation_step(
             &ins[cursor],
+            library,
             &mut eff_reveal,
             &mut eff_dest,
             &mut saw_shuffle,
@@ -2554,7 +2620,7 @@ pub(super) fn try_fuse_search_library(
             let mut s = saw_shuffle;
             if then_body
                 .iter()
-                .all(|st| apply_search_continuation_step(st, &mut r, &mut d, &mut s))
+                .all(|st| apply_search_continuation_step(st, library, &mut r, &mut d, &mut s))
             {
                 eff_reveal = r;
                 eff_dest = d;
@@ -2574,7 +2640,7 @@ pub(super) fn try_fuse_search_library(
             let mut s = saw_shuffle;
             if then_body
                 .iter()
-                .all(|st| apply_search_continuation_step(st, &mut r, &mut d, &mut s))
+                .all(|st| apply_search_continuation_step(st, library, &mut r, &mut d, &mut s))
             {
                 eff_reveal = r;
                 eff_dest = d;
@@ -2584,6 +2650,11 @@ pub(super) fn try_fuse_search_library(
             }
         }
         break;
+    }
+    if matches!(&ins[i], InstructionAst::BindX { .. })
+        && ins[cursor..].iter().any(instruction_has_chosen_x)
+    {
+        return None;
     }
     let is_optional_player = opt_chooser.is_some_and(|p| p != PlayerRefAst::You);
     let fused_something =
@@ -6481,6 +6552,154 @@ pub(in super::super) fn lower_instruction_seq(
                 _ => {}
             }
         }
+        // Fuse Optional([RevealUntil(You, filter, n)]) + ChooseAndKeep -> OptionalEffect + RevealUntilMatch (e.g. Spinner of Souls)
+        if i + 1 < ins.len()
+            && let InstructionAst::Optional(opt_body) = &ins[i]
+            && let [
+                InstructionAst::RevealUntil {
+                    player: PlayerRefAst::You,
+                    filter: until_filter,
+                    count,
+                },
+            ] = opt_body.as_slice()
+            && let ValueExprAst::Const(n_cnt) = count.as_ref()
+            && let Ok(count_u8) = u8::try_from(*n_cnt)
+            && count_u8 >= 1
+            && let InstructionAst::ChooseAndKeep {
+                pick,
+                keep_to,
+                rest_to,
+            } = &ins[i + 1]
+            && let Ok(obj_filter) = lower_object_filter(until_filter, vocabulary)
+        {
+            let pick_low = pick.trim().to_ascii_lowercase();
+            let keep_low = keep_to.to_ascii_lowercase();
+            let rest_low = rest_to.to_ascii_lowercase();
+            let to_hand = keep_low.contains("hand");
+            let to_battlefield = keep_low.contains("battlefield");
+            let enters_tapped = to_battlefield && keep_low.contains("tapped");
+            let keep_all = pick_low.contains("all cards revealed")
+                || pick_low.contains("all cards exiled")
+                || pick_low == "all of them"
+                || pick_low == "them";
+            let rest_bottom = rest_low.contains("bottom");
+            let rest_gy = rest_low.contains("graveyard");
+            let rest_exile = rest_low.contains("exile");
+            let random_rest = rest_low.contains("random order");
+            if (to_hand || to_battlefield) && (rest_bottom || rest_gy || rest_exile || keep_all) {
+                builder.instructions.push(Instruction::OptionalEffect {
+                    chooser: ResolvingPlayer::Controller,
+                });
+                builder.instructions.push(Instruction::RevealUntilMatch {
+                    filter: Box::new(obj_filter),
+                    count: count_u8,
+                    to_battlefield,
+                    enters_tapped,
+                    keep_all_revealed: keep_all,
+                    optional_keep: false,
+                    exile_instead_of_reveal: false,
+                    rest_to_graveyard: rest_gy,
+                    rest_to_exile: rest_exile,
+                    rest_to_bottom: rest_bottom,
+                    random_rest_order: random_rest,
+                });
+                i += 2;
+                continue;
+            }
+        }
+        // Fuse Optional([RevealUntil(You, filter, n)]) + IfPreviousSucceeded([keep, rest]) -> OptionalEffect + RevealUntilMatch (e.g. Avenging Druid)
+        if i + 1 < ins.len()
+            && let InstructionAst::Optional(opt_body) = &ins[i]
+            && let [
+                InstructionAst::RevealUntil {
+                    player: PlayerRefAst::You,
+                    filter: until_filter,
+                    count,
+                },
+            ] = opt_body.as_slice()
+            && let ValueExprAst::Const(n_cnt) = count.as_ref()
+            && let Ok(count_u8) = u8::try_from(*n_cnt)
+            && count_u8 >= 1
+            && let InstructionAst::IfPreviousSucceeded(then_body) = &ins[i + 1]
+            && then_body.len() == 2
+            && let Ok(obj_filter) = lower_object_filter(until_filter, vocabulary)
+        {
+            let keep_info = match &then_body[0] {
+                InstructionAst::MoveZone { subject, to }
+                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
+                {
+                    let low = to.to_ascii_lowercase();
+                    if low.contains("battlefield") {
+                        Some((true, low.contains("tapped")))
+                    } else if low.contains("hand") {
+                        Some((false, false))
+                    } else {
+                        None
+                    }
+                }
+                InstructionAst::ReturnZone {
+                    subject,
+                    to,
+                    tapped,
+                    transformed: false,
+                    with_counter: None,
+                    attached_to: None,
+                    ..
+                } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
+                    let low = to.to_ascii_lowercase();
+                    if low.contains("battlefield") {
+                        Some((true, *tapped || low.contains("tapped")))
+                    } else if low.contains("hand") {
+                        Some((false, false))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            let rest_info = match &then_body[1] {
+                InstructionAst::MoveZone { subject, to }
+                    if matches!(subject.as_ref(), SubjectRefAst::Anaphora(a) if {
+                        let l = a.to_ascii_lowercase();
+                        l.contains("rest") || l.contains("other")
+                    }) =>
+                {
+                    let low = to.to_ascii_lowercase();
+                    Some((
+                        low.contains("bottom"),
+                        low.contains("graveyard"),
+                        low.contains("exile"),
+                        low.contains("random order"),
+                    ))
+                }
+                _ => None,
+            };
+            if let (
+                Some((to_battlefield, enters_tapped)),
+                Some((rest_bottom, rest_gy, rest_exile, random_rest)),
+            ) = (keep_info, rest_info)
+                && (rest_bottom || rest_gy || rest_exile)
+            {
+                builder.instructions.push(Instruction::OptionalEffect {
+                    chooser: ResolvingPlayer::Controller,
+                });
+                builder.instructions.push(Instruction::RevealUntilMatch {
+                    filter: Box::new(obj_filter),
+                    count: count_u8,
+                    to_battlefield,
+                    enters_tapped,
+                    keep_all_revealed: false,
+                    optional_keep: false,
+                    exile_instead_of_reveal: false,
+                    rest_to_graveyard: rest_gy,
+                    rest_to_exile: rest_exile,
+                    rest_to_bottom: rest_bottom,
+                    random_rest_order: random_rest,
+                });
+                i += 2;
+                continue;
+            }
+        }
         // Fuse RevealUntil / ExileOrRevealTopUntil(You, filter, n) + ChooseAndKeep / MoveZone (+ rest MoveZone or Shuffle) -> RevealUntilMatch
         let until_header: Option<(&ObjectFilterAst, u8, bool)> = match &ins[i] {
             InstructionAst::RevealUntil {
@@ -6830,6 +7049,106 @@ pub(in super::super) fn lower_instruction_seq(
                 }
             }
         }
+        // Fuse RevealUntil(single or EachOpponent/EachPlayer, filter, count) + single MoveZone(all revealed / those cards -> graveyard/hand/exile)
+        // e.g. Balustrade Spy, Undercity Informer, Mind Grind, Consuming Aberration
+        if i + 1 < ins.len()
+            && let InstructionAst::RevealUntil {
+                player: rev_player,
+                filter: rev_filter,
+                count: rev_count,
+            } = &ins[i]
+            && let InstructionAst::MoveZone { subject, to } = &ins[i + 1]
+            && {
+                match subject.as_ref() {
+                    SubjectRefAst::Anaphora(a) => matches!(
+                        a.trim().to_ascii_lowercase().as_str(),
+                        "those cards"
+                            | "all cards revealed this way"
+                            | "all of those cards"
+                            | "all of them"
+                            | "them"
+                            | "the revealed cards"
+                    ),
+                    SubjectRefAst::All(f) | SubjectRefAst::Group(f) => f
+                        .predicates
+                        .iter()
+                        .any(|p| matches!(p, spellwake_oracle_compiler::ast::FilterPredicateAst::AffectedByPriorAction(spellwake_oracle_compiler::ast::PriorActionRefKind::RevealedThisWay)))
+                        && f.any_types.is_empty()
+                        && f.forbidden_types.is_empty(),
+                    _ => false,
+                }
+            }
+            && let Ok(obj_filter) = lower_object_filter(rev_filter, vocabulary)
+            && let Ok(cnt_expr) = lower_value_expr_in_context(
+                resolve_x(rev_count, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )
+        {
+            let to_low = to.trim().to_ascii_lowercase();
+            let dest_pair = if to_low.contains("graveyard") {
+                Some((
+                    spellwake_engine::program::LookTopKeepDest::Graveyard,
+                    spellwake_engine::program::LookTopRestDest::Graveyard,
+                ))
+            } else if to_low.contains("hand") {
+                Some((
+                    spellwake_engine::program::LookTopKeepDest::Hand,
+                    spellwake_engine::program::LookTopRestDest::Hand,
+                ))
+            } else if to_low.contains("exile") {
+                Some((
+                    spellwake_engine::program::LookTopKeepDest::Exile {
+                        playable: false,
+                        duration: ResolvedDuration::NoStatedDuration,
+                    },
+                    spellwake_engine::program::LookTopRestDest::Exile,
+                ))
+            } else {
+                None
+            };
+            if let Some((match_dest, rest_dest)) = dest_pair {
+                let group_opt = match *rev_player {
+                    PlayerRefAst::EachOpponent => Some(AffectedPlayers::EachOpponent),
+                    PlayerRefAst::EachPlayer => Some(AffectedPlayers::EachPlayer),
+                    PlayerRefAst::EachOtherPlayer => Some(AffectedPlayers::EachOtherPlayer),
+                    _ => None,
+                };
+                if let Some(group_players) = group_opt {
+                    push_for_each_player(
+                        group_players,
+                        vec![Instruction::RevealUntilMatchExt {
+                            library_owner: ResolvingPlayer::LoopPlayer,
+                            chooser: ResolvingPlayer::Controller,
+                            filter: Box::new(obj_filter),
+                            count: cnt_expr,
+                            match_dest,
+                            rest_dest,
+                        }],
+                        builder,
+                    );
+                    i += 2;
+                    continue;
+                }
+                let mut p_probe = builder.clone();
+                if let Ok(library_owner) =
+                    lower_resolving_player_in_context(*rev_player, &mut p_probe, in_trigger)
+                {
+                    *builder = p_probe;
+                    builder.instructions.push(Instruction::RevealUntilMatchExt {
+                        library_owner,
+                        chooser: ResolvingPlayer::Controller,
+                        filter: Box::new(obj_filter),
+                        count: cnt_expr,
+                        match_dest,
+                        rest_dest,
+                    });
+                    i += 2;
+                    continue;
+                }
+            }
+        }
         // Generalized RevealUntil / ExileOrRevealTopUntil -> RevealUntilMatchExt
         // (supports arbitrary library_owner, dynamic count, and extended match_dest / rest_dest).
         if i + 1 < ins.len() {
@@ -6881,7 +7200,17 @@ pub(in super::super) fn lower_instruction_seq(
                     |op: &InstructionAst| -> Option<spellwake_engine::program::LookTopKeepDest> {
                         match op {
                             InstructionAst::MoveZone { subject, to }
-                                if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) =>
+                                if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                                    || matches!(
+                                        subject.as_ref(),
+                                        SubjectRefAst::All(f) | SubjectRefAst::Group(f)
+                                            if f.predicates.iter().any(|p| matches!(
+                                                p,
+                                                spellwake_oracle_compiler::ast::FilterPredicateAst::AffectedByPriorAction(
+                                                    spellwake_oracle_compiler::ast::PriorActionRefKind::RevealedThisWay
+                                                )
+                                            ))
+                                    ) =>
                             {
                                 parse_look_top_keep_dest_ext(to, false)
                             }
@@ -6974,7 +7303,20 @@ pub(in super::super) fn lower_instruction_seq(
                     let ext_rest: Option<(spellwake_engine::program::LookTopRestDest, bool)> =
                         if let Some(r) = extract_look_top_rest_dest(&ins[i + 2]) {
                             Some((r.to_engine_ext(), false))
-                        } else if matches!(&ins[i + 2], InstructionAst::ShuffleLibrary { .. }) {
+                        } else if matches!(&ins[i + 2], InstructionAst::ShuffleLibrary { .. })
+                            || matches!(
+                                &ins[i + 2],
+                                InstructionAst::ShuffleIntoLibrary { subject }
+                                    if matches!(
+                                        subject.as_ref(),
+                                        SubjectRefAst::Anaphora(a)
+                                            if {
+                                                let l = a.to_ascii_lowercase();
+                                                l.contains("rest") || l.contains("other")
+                                            }
+                                    )
+                            )
+                        {
                             Some((
                                 spellwake_engine::program::LookTopRestDest::BottomOrder,
                                 true,
