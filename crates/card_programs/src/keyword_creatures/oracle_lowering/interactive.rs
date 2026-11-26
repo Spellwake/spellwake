@@ -1508,10 +1508,9 @@ fn parse_interactive_choose_objects(
         (1, 1, rest)
     } else if let Some(rest) = raw.strip_prefix("an ") {
         (1, 1, rest)
-    } else if let Some(rest) = raw.strip_prefix("a ") {
-        (1, 1, rest)
     } else {
-        return None;
+        let rest = raw.strip_prefix("a ")?;
+        (1, 1, rest)
     };
 
     let (source_zone, filter_phrase) = if let Some(p) = body_phrase
