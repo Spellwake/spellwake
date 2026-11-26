@@ -322,7 +322,9 @@ pub(super) fn lower_zone_moves_instruction(
                             }
                             Ok(())
                         }
-                        ZoneFilter::YourGraveyard | ZoneFilter::YourHand
+                        ZoneFilter::YourGraveyard
+                        | ZoneFilter::YourHand
+                        | ZoneFilter::AnyGraveyard
                             if in_trigger || self_pronoun_valid =>
                         {
                             builder.instructions.push(Instruction::MoveSubject {
@@ -337,7 +339,16 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                 }
                 SubjectRefAst::TriggerSubject
-                    if in_trigger && *zone == ZoneFilter::YourGraveyard =>
+                    if in_trigger
+                        && matches!(
+                            zone,
+                            ZoneFilter::YourGraveyard
+                                | ZoneFilter::ThatPlayerGraveyard
+                                | ZoneFilter::AnyGraveyard
+                                | ZoneFilter::OpponentGraveyard
+                                | ZoneFilter::OpponentsGraveyards
+                                | ZoneFilter::AllGraveyards
+                        ) =>
                 {
                     builder.instructions.push(Instruction::MoveSubject {
                         subject: MoveSubjectRef::TriggeringObject,
@@ -347,7 +358,17 @@ pub(super) fn lower_zone_moves_instruction(
                     });
                     Ok(())
                 }
-                SubjectRefAst::Anaphora(raw) if *zone == ZoneFilter::YourGraveyard => {
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        zone,
+                        ZoneFilter::YourGraveyard
+                            | ZoneFilter::ThatPlayerGraveyard
+                            | ZoneFilter::AnyGraveyard
+                            | ZoneFilter::OpponentGraveyard
+                            | ZoneFilter::OpponentsGraveyards
+                            | ZoneFilter::AllGraveyards
+                    ) =>
+                {
                     let low = raw.trim().to_ascii_lowercase();
                     let is_singular = !matches!(
                         low.as_str(),
@@ -6731,7 +6752,34 @@ pub(super) fn lower_zone_moves_instruction(
                             library_owner: p, ..
                         }
                         | Instruction::SelectZoneCardsToZone { player: p, .. }
-                            if *p != ResolvingPlayer::Controller =>
+                        | Instruction::ShufflePlayerLibrary(p)
+                        | Instruction::DiscardOneAtRandom(p)
+                        | Instruction::ExileTopPlay {
+                            library_owner: AffectedPlayers::One(p),
+                            ..
+                        }
+                        | Instruction::ExileGroupFromZone {
+                            players: AffectedPlayers::One(p),
+                            ..
+                        }
+                        | Instruction::ExileFromZone {
+                            players: AffectedPlayers::One(p),
+                            ..
+                        }
+                        | Instruction::ExilePlayerGraveyards(AffectedPlayers::One(p))
+                        | Instruction::MoveGraveyardGroupOwned {
+                            players: AffectedPlayers::One(p),
+                            ..
+                        }
+                        | Instruction::DiscardUpToExt {
+                            players: AffectedPlayers::One(p),
+                            ..
+                        }
+                        | Instruction::DrawPlayer {
+                            players: AffectedPlayers::One(p),
+                            ..
+                        } if *p != ResolvingPlayer::Controller
+                            && (*p != ResolvingPlayer::UniqueRelatedPlayer || in_trigger) =>
                         {
                             Some(*p)
                         }
@@ -6739,6 +6787,45 @@ pub(super) fn lower_zone_moves_instruction(
                     })
                 {
                     prior_p
+                } else if let Some(loop_players) =
+                    builder.instructions.iter().rev().find_map(|op| match op {
+                        Instruction::ForEachPlayer { players, body }
+                            if body.instructions.iter().any(|inner| {
+                                matches!(
+                                    inner,
+                                    Instruction::SearchLibrary { .. }
+                                        | Instruction::LookTopChoose { .. }
+                                        | Instruction::LookTopChooseExt { .. }
+                                        | Instruction::RevealUntilMatchExt { .. }
+                                        | Instruction::RevealPlayerHand(_)
+                                        | Instruction::MoveGroupToLibrary { .. }
+                                        | Instruction::SelectZoneCardsToZone { .. }
+                                        | Instruction::MoveGraveyardGroupOwned { .. }
+                                        | Instruction::ExileLibraryTop { .. }
+                                        | Instruction::ExileLibraryTopLinked { .. }
+                                        | Instruction::ExileTopPlay { .. }
+                                        | Instruction::ExileGroupFromZone { .. }
+                                        | Instruction::ExileFromZone { .. }
+                                        | Instruction::ExilePlayerGraveyards(_)
+                                        | Instruction::Mill { .. }
+                                        | Instruction::MoveSubject { .. }
+                                        | Instruction::PutGroupOnLibraryBottom(_)
+                                )
+                            }) =>
+                        {
+                            Some(*players)
+                        }
+                        _ => None,
+                    })
+                {
+                    push_for_each_player(
+                        loop_players,
+                        vec![Instruction::ShufflePlayerLibrary(
+                            ResolvingPlayer::LoopPlayer,
+                        )],
+                        builder,
+                    );
+                    return Ok(());
                 } else {
                     return Err("oracle:unbound-that-player");
                 }
@@ -9228,6 +9315,16 @@ pub(super) fn lower_search_library_instruction<'a>(
                 };
                 idx += 1;
             }
+            Some(InstructionAst::Exile {
+                actor: None | Some(PlayerRefAst::You),
+                subject,
+                random: false,
+                face_down: false,
+                into_pile: false,
+            }) if subject_is_anaphora(subject) => {
+                eff_to_zone = "exile".to_owned();
+                idx += 1;
+            }
             _ => return Err("oracle:unsupported-search-follow-up"),
         }
         let remaining: Vec<&InstructionAst> = follow_up[idx..]
@@ -9238,6 +9335,32 @@ pub(super) fn lower_search_library_instruction<'a>(
                     InstructionAst::ShuffleLibrary {
                         player: PlayerRefAst::You | PlayerRefAst::ThatPlayer
                     }
+                ) && !matches!(
+                    ins,
+                    InstructionAst::IfCondition {
+                        condition,
+                        then_body,
+                    } if matches!(
+                        condition.as_ref(),
+                        ConditionAst::PriorActionOccurred {
+                            action,
+                            subject_filter: None,
+                            min_count: 1,
+                        } if matches!(
+                            action.trim().to_ascii_lowercase().as_str(),
+                            "search"
+                                | "searched"
+                                | "search_library"
+                                | "searched_library"
+                                | "searched_your_library"
+                                | "searched_a_library"
+                        )
+                    ) && matches!(
+                        then_body.as_slice(),
+                        [InstructionAst::ShuffleLibrary {
+                            player: PlayerRefAst::You | PlayerRefAst::ThatPlayer
+                        }]
+                    )
                 )
             })
             .collect();

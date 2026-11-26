@@ -726,6 +726,7 @@ pub(super) fn lower_counters_pt_instruction(
                 ProtectionColorControllerChoice,
                 ProtectionArtifactsOrColor,
                 ProtectionColorlessOrColor,
+                ProtectionCardType,
                 HexproofFromChosenColor,
             }
             let classify_chosen_quality = |k: &str| -> Option<ChosenQualityGrant> {
@@ -736,6 +737,12 @@ pub(super) fn lower_counters_pt_instruction(
                     | "protection from a color of your choice"
                     | "protection from one color of your choice" => {
                         Some(ChosenQualityGrant::ProtectionColor)
+                    }
+                    "protection from the card type of your choice"
+                    | "protection from a card type of your choice"
+                    | "protection from the chosen card type"
+                    | "protection from that card type" => {
+                        Some(ChosenQualityGrant::ProtectionCardType)
                     }
                     "protection from the color of its controller's choice"
                     | "protection from the color of that creature's controller's choice"
@@ -973,6 +980,72 @@ pub(super) fn lower_counters_pt_instruction(
                             ("red", KeywordAbility::ProtectionFromRed),
                             ("green", KeywordAbility::ProtectionFromGreen),
                         ],
+                        ChosenQualityGrant::ProtectionCardType => vec![
+                            (
+                                "artifact",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Artifact,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "battle",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Battle,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "creature",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Creature,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "enchantment",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Enchantment,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "instant",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Instant,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "land",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Land,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "planeswalker",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Planeswalker,
+                                    ),
+                                ),
+                            ),
+                            (
+                                "sorcery",
+                                KeywordAbility::ProtectionFrom(
+                                    spellwake_engine::characteristics::ProtectionFromQuality::CardType(
+                                        CardType::Sorcery,
+                                    ),
+                                ),
+                            ),
+                        ],
                         ChosenQualityGrant::HexproofFromChosenColor => vec![
                             ("white", KeywordAbility::HexproofFrom(HexproofQuality::Color(Color::White))),
                             ("blue", KeywordAbility::HexproofFrom(HexproofQuality::Color(Color::Blue))),
@@ -983,9 +1056,11 @@ pub(super) fn lower_counters_pt_instruction(
                     };
                     enum ChoiceTargetKind {
                         TargetExact,
+                        TargetExactN(u16),
                         TargetUpTo(u16),
                         AbilitySource,
                         Group(Box<EffectSubject>),
+                        Players(AffectedPlayers),
                         ControllerAndPermanents,
                     }
                     let mut trial = builder.clone();
@@ -1003,6 +1078,21 @@ pub(super) fn lower_counters_pt_instruction(
                             trial.bind_target(bt)?;
                             trial_bound = true;
                             Some(ChoiceTargetKind::TargetExact)
+                        }
+                        SubjectRefAst::TargetObject {
+                            filter,
+                            count: TargetCountAst::Exact(n),
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                            && *n >= 2 =>
+                        {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
+                            let bt = lower_battlefield_body_target_in_context(
+                                &f_clean, &trial, in_trigger, vocabulary,
+                            )?;
+                            trial.bind_target(bt)?;
+                            trial_bound = true;
+                            Some(ChoiceTargetKind::TargetExactN(*n))
                         }
                         SubjectRefAst::TargetObject {
                             filter,
@@ -1127,6 +1217,39 @@ pub(super) fn lower_counters_pt_instruction(
                         {
                             Some(ChoiceTargetKind::ControllerAndPermanents)
                         }
+                        SubjectRefAst::TargetPlayer {
+                            opponent_only,
+                            count: TargetCountAst::Exact(1),
+                        } => {
+                            trial.bind_target(if *opponent_only {
+                                BodyTarget::SingleOpponent
+                            } else {
+                                BodyTarget::SinglePlayer
+                            })?;
+                            trial_bound = true;
+                            Some(ChoiceTargetKind::Players(AffectedPlayers::One(
+                                ResolvingPlayer::TargetPlayer,
+                            )))
+                        }
+                        SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
+                            trial.bind_target(BodyTarget::SinglePlayer)?;
+                            trial_bound = true;
+                            Some(ChoiceTargetKind::Players(AffectedPlayers::One(
+                                ResolvingPlayer::TargetPlayer,
+                            )))
+                        }
+                        SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
+                            trial.bind_target(BodyTarget::SingleOpponent)?;
+                            trial_bound = true;
+                            Some(ChoiceTargetKind::Players(AffectedPlayers::One(
+                                ResolvingPlayer::TargetPlayer,
+                            )))
+                        }
+                        SubjectRefAst::Player(p) => {
+                            lower_affected_players_in_context(*p, &mut trial, in_trigger)
+                                .ok()
+                                .map(ChoiceTargetKind::Players)
+                        }
                         _ => None,
                     };
                     if let Some(tk) = target_kind {
@@ -1152,6 +1275,16 @@ pub(super) fn lower_counters_pt_instruction(
                                         duration: dur,
                                     }]
                                 }
+                                ChoiceTargetKind::TargetExactN(n) => {
+                                    vec![Instruction::AffectPermanentTargets {
+                                        minimum: *n,
+                                        maximum: *n,
+                                        action: PermanentTargetAction::Modify {
+                                            parts,
+                                            duration: dur,
+                                        },
+                                    }]
+                                }
                                 ChoiceTargetKind::TargetUpTo(max) => {
                                     vec![Instruction::AffectPermanentTargets {
                                         minimum: 0,
@@ -1172,6 +1305,15 @@ pub(super) fn lower_counters_pt_instruction(
                                     vec![Instruction::ChangeGroup {
                                         group: subj.clone(),
                                         parts,
+                                        duration: dur,
+                                    }]
+                                }
+                                ChoiceTargetKind::Players(players) => {
+                                    vec![Instruction::CreateTemporaryRule {
+                                        rule: Box::new(TemporaryRuleKind::PlayerGrantKeyword {
+                                            players: *players,
+                                            keywords: BTreeSet::from([kw]),
+                                        }),
                                         duration: dur,
                                     }]
                                 }
@@ -1240,10 +1382,71 @@ pub(super) fn lower_counters_pt_instruction(
                 .map_err(|_| "oracle:unsupported-grant-kw");
             }
             let mut expanded_keywords: Vec<String> = Vec::with_capacity(remaining_keywords.len());
+            let mut extra_type_parts: Vec<ResolvedPartSpec> = Vec::new();
+            let mut extra_combat_kws: Vec<spellwake_engine::program::CombatTriggerKeyword> =
+                Vec::new();
+            fn normalize_prot_item(item: &str) -> &str {
+                match item {
+                    "instant spells" => "instants",
+                    "sorcery spells" => "sorceries",
+                    other => other,
+                }
+            }
             for kw in &remaining_keywords {
                 let low = kw.trim().trim_end_matches('.').to_ascii_lowercase();
+                if matches!(
+                    low.as_str(),
+                    "all basic land types" | "every basic land type"
+                ) {
+                    extra_type_parts.push(ResolvedPartSpec::Type(TypeChangeSpec {
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Keep,
+                        subtypes: SubtypeOperation::Keep,
+                        land_subtypes: SubtypeOperation::Add(BTreeSet::from([
+                            LandType::Plains,
+                            LandType::Island,
+                            LandType::Swamp,
+                            LandType::Mountain,
+                            LandType::Forest,
+                        ])),
+                    }));
+                    continue;
+                }
+                if let Some((kw_head, num_raw)) = low.split_once(' ')
+                    && let Ok(n) = num_raw.trim().parse::<i64>()
+                    && n > 0
+                {
+                    let ckw = match kw_head {
+                        "bushido" => Some(
+                            spellwake_engine::program::CombatTriggerKeyword::Bushido(n.into()),
+                        ),
+                        "afflict" => Some(
+                            spellwake_engine::program::CombatTriggerKeyword::Afflict(n.into()),
+                        ),
+                        "frenzy" => Some(spellwake_engine::program::CombatTriggerKeyword::Frenzy(
+                            n.into(),
+                        )),
+                        "rampage" => Some(
+                            spellwake_engine::program::CombatTriggerKeyword::Rampage(n.into()),
+                        ),
+                        "poisonous" => Some(
+                            spellwake_engine::program::CombatTriggerKeyword::Poisonous(n.into()),
+                        ),
+                        "renown" => Some(spellwake_engine::program::CombatTriggerKeyword::Renown(
+                            n.into(),
+                        )),
+                        "mobilize" => Some(
+                            spellwake_engine::program::CombatTriggerKeyword::Mobilize(n.into()),
+                        ),
+                        _ => None,
+                    };
+                    if let Some(ckw) = ckw {
+                        extra_combat_kws.push(ckw);
+                        continue;
+                    }
+                }
                 if let Some(rest) = low.strip_prefix("protection from ")
-                    && rest.contains(',')
+                    && (rest.contains(',') || rest.contains(" and from "))
                 {
                     let mut parts = Vec::new();
                     let mut ok = true;
@@ -1261,7 +1464,8 @@ pub(super) fn lower_counters_pt_instruction(
                                 ok = false;
                                 break;
                             }
-                            parts.push(format!("protection from {item}"));
+                            let norm_item = normalize_prot_item(item);
+                            parts.push(format!("protection from {norm_item}"));
                         }
                         if !ok {
                             break;
@@ -1272,19 +1476,35 @@ pub(super) fn lower_counters_pt_instruction(
                         continue;
                     }
                 }
+                if let Some(rest) = low.strip_prefix("protection from ") {
+                    let norm_item = normalize_prot_item(rest.trim());
+                    if norm_item != rest.trim() {
+                        expanded_keywords.push(format!("protection from {norm_item}"));
+                        continue;
+                    }
+                }
                 expanded_keywords.push(kw.clone());
             }
             let (mut extra_parts, kw_remaining) = partition_temp_keyword_grants(&expanded_keywords);
+            extra_parts.extend(extra_type_parts);
             let anaphora_after_chosen = SubjectRefAst::Anaphora("it".to_string());
             let grant_subject = if bound_subject_already {
                 &anaphora_after_chosen
             } else {
                 eff_subject
             };
-            if !extra_parts.is_empty() {
-                if !kw_remaining.is_empty() {
-                    let ab_change = lower_ability_change(&kw_remaining, vocabulary)?;
-                    extra_parts.push(ResolvedPartSpec::Abilities(ab_change));
+            if !extra_parts.is_empty() || !extra_combat_kws.is_empty() {
+                let mut ab_change = if !kw_remaining.is_empty() {
+                    Some(lower_ability_change(&kw_remaining, vocabulary)?)
+                } else {
+                    None
+                };
+                if !extra_combat_kws.is_empty() {
+                    let ab = ab_change.get_or_insert_with(AbilityChange::default);
+                    ab.granted_combat_keywords.extend(extra_combat_kws);
+                }
+                if let Some(ab) = ab_change {
+                    extra_parts.push(ResolvedPartSpec::Abilities(ab));
                 }
                 return emit_resolved_parts_for_subject(
                     grant_subject,

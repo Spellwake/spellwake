@@ -2744,27 +2744,119 @@ pub(super) fn lower_marker_or_action_condition(
         ConditionAst::PlayerActionThisTurn {
             player: PlayerRefAst::AnyPlayer,
             action,
-        } if matches!(
-            action
-                .trim()
-                .trim_end_matches('.')
-                .to_ascii_lowercase()
-                .as_str(),
-            "discard" | "discarded" | "discarded_card"
-        ) =>
-        {
-            Ok(ResolutionCondition {
-                left: ValueExpr::Add(
-                    Box::new(ValueExpr::PlayerStat(
-                        PlayerStatExpr::ControllerDiscardedThisTurn,
-                    )),
-                    Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
-                        spellwake_engine::program::OpponentTurnStat::Discarded,
-                    ))),
-                ),
-                comparison: Comparison::GreaterOrEqual,
-                right: ValueExpr::literal(1),
-            })
+        } => {
+            use spellwake_engine::program::OpponentTurnStat;
+            let act_low = action.trim().trim_end_matches('.').to_ascii_lowercase();
+            let pair = match act_low.as_str() {
+                "discard"
+                | "discarded"
+                | "discarded_card"
+                | "a player discarded a card this turn" => Some((
+                    PlayerStatExpr::ControllerDiscardedThisTurn,
+                    OpponentTurnStat::Discarded,
+                )),
+                "gain_life" | "gained_life" | "a player gained life this turn" => Some((
+                    PlayerStatExpr::ControllerLifeGainedThisTurn,
+                    OpponentTurnStat::GainedLife,
+                )),
+                "lose_life" | "lost_life" | "a player lost life this turn" => Some((
+                    PlayerStatExpr::ControllerLifeLostThisTurn,
+                    OpponentTurnStat::LostLife,
+                )),
+                "sacrifice"
+                | "sacrificed"
+                | "sacrificed_permanent"
+                | "a player sacrificed a permanent this turn" => Some((
+                    PlayerStatExpr::ControllerSacrificedThisTurn,
+                    OpponentTurnStat::Sacrificed,
+                )),
+                "attack" | "attacked" | "a player attacked this turn" => Some((
+                    PlayerStatExpr::ControllerAttackedThisTurn,
+                    OpponentTurnStat::Attacked,
+                )),
+                "drew" | "drew_card" | "a player drew a card this turn" => Some((
+                    PlayerStatExpr::CardsDrawnThisTurn,
+                    OpponentTurnStat::DrewCards,
+                )),
+                "cast" | "cast_spell" | "cast_spells" | "a player cast a spell this turn" => {
+                    Some((
+                        PlayerStatExpr::ControllerSpellsCastThisTurn,
+                        OpponentTurnStat::CastSpells,
+                    ))
+                }
+                "play_land" | "played_land" | "a player played a land this turn" => Some((
+                    PlayerStatExpr::PlayedLandThisTurn,
+                    OpponentTurnStat::PlayedLand,
+                )),
+                "permanent_left"
+                | "permanent_left_battlefield"
+                | "a permanent left the battlefield this turn" => Some((
+                    PlayerStatExpr::PermanentLeftBattlefieldThisTurn,
+                    OpponentTurnStat::PermanentLeft,
+                )),
+                "creature_entered"
+                | "a creature entered this turn"
+                | "a creature entered the battlefield this turn" => Some((
+                    PlayerStatExpr::CreatureEnteredUnderControlThisTurn,
+                    OpponentTurnStat::CreatureEntered,
+                )),
+                _ => None,
+            };
+            if let Some((ctrl_stat, opp_stat)) = pair {
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::Add(
+                        Box::new(ValueExpr::PlayerStat(ctrl_stat)),
+                        Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            opp_stat,
+                        ))),
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                });
+            }
+            match act_low.as_str() {
+                "the player does"
+                | "a player does"
+                | "they do"
+                | "that player does"
+                | "that spell is countered this way"
+                | "the spell is countered this way"
+                | "a spell is countered this way" => {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    });
+                }
+                "the player doesn't"
+                | "no player does"
+                | "they don't"
+                | "that player doesn't"
+                | "they can't"
+                | "that player can't" => {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    });
+                }
+                _ => {}
+            }
+            if let Some(res) = lower_turn_history_player_action(
+                PlayerRefAst::AnyPlayer,
+                act_low.as_str(),
+                builder,
+                vocabulary,
+                in_trigger,
+            ) {
+                return res;
+            }
+            if let Some(res) =
+                lower_comparative_controls_action(act_low.as_str(), builder, vocabulary, in_trigger)
+            {
+                return res;
+            }
+            Err("oracle:unsupported-if-condition")
         }
         ConditionAst::PlayerActionThisTurn { player, action } => {
             let act_low = action.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -4538,6 +4630,202 @@ pub(super) fn lower_marker_or_action_condition(
                     },
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(5),
+                }),
+                "you control a creature of each color" => Ok(ResolutionCondition {
+                    left: ValueExpr::DistinctColors {
+                        filter: Box::new(ObjectFilter::creature().controlled()),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(5),
+                }),
+                "you control a land of each basic land type" => Ok(ResolutionCondition {
+                    left: ValueExpr::DomainCount,
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(5),
+                }),
+                "you control a land of each basic land type and a creature of each color" => {
+                    combine_resolution_conditions_and(vec![
+                        ResolutionCondition {
+                            left: ValueExpr::DomainCount,
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(5),
+                        },
+                        ResolutionCondition {
+                            left: ValueExpr::DistinctColors {
+                                filter: Box::new(ObjectFilter::creature().controlled()),
+                            },
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(5),
+                        },
+                    ])
+                    .ok_or("oracle:unsupported-if-condition")
+                }
+                "you have more life than an opponent" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife),
+                }),
+                "you have less life than an opponent" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                    comparison: Comparison::Less,
+                    right: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMaxLife),
+                }),
+                "a player discarded a card this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::Add(
+                        Box::new(ValueExpr::PlayerStat(
+                            PlayerStatExpr::ControllerDiscardedThisTurn,
+                        )),
+                        Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            spellwake_engine::program::OpponentTurnStat::Discarded,
+                        ))),
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "a permanent left the battlefield this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::Add(
+                        Box::new(ValueExpr::PlayerStat(
+                            PlayerStatExpr::PermanentLeftBattlefieldThisTurn,
+                        )),
+                        Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            spellwake_engine::program::OpponentTurnStat::PermanentLeft,
+                        ))),
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "no spells were cast this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::Add(
+                        Box::new(ValueExpr::PlayerStat(
+                            PlayerStatExpr::ControllerSpellsCastThisTurn,
+                        )),
+                        Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            spellwake_engine::program::OpponentTurnStat::CastSpells,
+                        ))),
+                    ),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                }),
+                "no creatures died this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CreaturesDiedThisTurn),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                }),
+                "a creature died this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CreaturesDiedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "a creature you control died this turn"
+                | "a creature you controlled died this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControlledCreatureDiedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "you played a land this turn" | "you've played a land this turn" => {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "you didn't play a land this turn" | "you haven't played a land this turn" => {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    })
+                }
+                "you created a token this turn"
+                | "you created one or more tokens this turn"
+                | "you've created a token this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CreatedTokensThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "you sacrificed a permanent this turn"
+                | "you've sacrificed a permanent this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerSacrificedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "you discarded a card this turn" | "you've discarded a card this turn" => {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerDiscardedThisTurn),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "you gained life this turn" | "you've gained life this turn" => {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLifeGainedThisTurn),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "you attacked this turn" | "you've attacked this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerAttackedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent lost life this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentsLifeLostThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent gained life this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::GainedLife,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent discarded a card this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::Discarded,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent sacrificed a permanent this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::Sacrificed,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent drew a card this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::DrewCards,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent cast a spell this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::CastSpells,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "an opponent attacked this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::Attacked,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }),
+                "a card was put into your graveyard from anywhere this turn" => {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::CardsEnteredGraveyardThisTurn),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "a card left your graveyard this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CardsLeftGraveyardThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
                 }),
                 "you have no land cards in hand" => Ok(ResolutionCondition {
                     left: ValueExpr::Count {

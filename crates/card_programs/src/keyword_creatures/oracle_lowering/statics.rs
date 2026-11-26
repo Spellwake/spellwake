@@ -47,7 +47,7 @@ pub(super) fn lower_static(
             let expr_ctx = StaticExprContext::from_subject_and_program(subject.as_ref(), program);
             let pt_part = lower_modify_pt_part(dx, dy, scale.as_deref(), expr_ctx, vocabulary)?;
             let (extra_prot_parts, remaining_grant_kws) =
-                partition_static_keyword_grants(grant_keywords, ids);
+                partition_static_keyword_grants(grant_keywords, vocabulary, ids);
             let ab_change = if !remaining_grant_kws.is_empty() {
                 Some(lower_ability_change_with_ids(
                     &remaining_grant_kws,
@@ -227,7 +227,8 @@ pub(super) fn lower_static(
                     apply_static_selector_condition(sel, cond, vocabulary)?;
                 }
             }
-            let (mut parts_vec, remaining_kws) = partition_static_keyword_grants(keywords, ids);
+            let (mut parts_vec, remaining_kws) =
+                partition_static_keyword_grants(keywords, vocabulary, ids);
             if !remaining_kws.is_empty() {
                 let ab_change = lower_ability_change_with_ids(&remaining_kws, vocabulary, ids)?;
                 parts_vec.push(StaticPart::Abilities(ab_change));
@@ -416,7 +417,8 @@ pub(super) fn lower_static(
                 )));
             }
             if *lose_all_abilities || !grant_keywords.is_empty() || !lose_keywords.is_empty() {
-                let (special_parts, rem_kws) = partition_static_keyword_grants(grant_keywords, ids);
+                let (special_parts, rem_kws) =
+                    partition_static_keyword_grants(grant_keywords, vocabulary, ids);
                 parts.extend(special_parts);
                 if *lose_all_abilities || !rem_kws.is_empty() || !lose_keywords.is_empty() {
                     let mut change = if !rem_kws.is_empty() {
@@ -473,7 +475,20 @@ pub(super) fn lower_static(
         StaticAbilityAst::Compound(items) => {
             let mut idx = 0usize;
             let mut prev_subject: Option<SubjectRefAst> = None;
+            let mut prev_looked_exiled = false;
             while idx < items.len() {
+                if !is_spell
+                    && let StaticAbilityAst::FollowUp(first_ins) = &items[idx]
+                    && let Some(StaticAbilityAst::FollowUp(next_ins)) = items.get(idx + 1)
+                    && let Some(res) = try_lower_compound_exile_play_replacement(
+                        first_ins, next_ins, program, vocabulary, ids,
+                    )
+                {
+                    res?;
+                    prev_looked_exiled = false;
+                    idx += 2;
+                    continue;
+                }
                 if let StaticAbilityAst::RuleOrCombatRestriction {
                     subject: None,
                     rule,
@@ -487,6 +502,7 @@ pub(super) fn lower_static(
                     && let Some(StaticAbilityAst::FollowUp(ins)) = items.get(idx + 1)
                 {
                     lower_exert_attack_followup(ins, program, vocabulary, ids, is_spell)?;
+                    prev_looked_exiled = false;
                     idx += 2;
                     continue;
                 }
@@ -512,6 +528,7 @@ pub(super) fn lower_static(
                     )
                 {
                     res?;
+                    prev_looked_exiled = false;
                     idx += 2;
                     continue;
                 }
@@ -536,10 +553,22 @@ pub(super) fn lower_static(
                     )
                 {
                     res?;
+                    prev_looked_exiled = false;
                     idx += 2;
                     continue;
                 }
                 let mut cur = items[idx].clone();
+                if prev_looked_exiled
+                    && let StaticAbilityAst::PlayOrCastPermission {
+                        ref mut permission, ..
+                    } = cur
+                {
+                    let p_low = permission.to_ascii_lowercase();
+                    if p_low.contains("from among those cards") {
+                        *permission = p_low
+                            .replace("from among those cards", "from among cards exiled with ~");
+                    }
+                }
                 if let Some(prev) = prev_subject.as_ref() {
                     resolve_static_anaphora_subject(&mut cur, prev);
                 }
@@ -556,6 +585,7 @@ pub(super) fn lower_static(
                     // Inside a Compound static not preceded by an exert lead-in,
                     // keep FollowUp strictly limited to replacement follow-ups.
                     lower_followup_instructions(ins, program, vocabulary, ids)?;
+                    prev_looked_exiled = false;
                     idx += 1;
                     continue;
                 }
@@ -570,10 +600,13 @@ pub(super) fn lower_static(
                     }
                     attach_ast_condition(&mut wrapped, neg);
                     lower_static(&wrapped, program, vocabulary, ids, is_spell)?;
+                    prev_looked_exiled = false;
                     idx += 2;
                     continue;
                 }
+                let cur_is_look_exiled = is_look_at_source_exiled_static(&cur);
                 lower_static(&cur, program, vocabulary, ids, is_spell)?;
+                prev_looked_exiled = cur_is_look_exiled;
                 idx += 1;
             }
             Ok(())
@@ -1942,6 +1975,33 @@ pub(super) fn lower_static(
             filter,
             condition,
         } => {
+            if !is_spell
+                && subject.is_none()
+                && filter.is_none()
+                && rule
+                    .trim()
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case("all lands lose all abilities except mana abilities")
+            {
+                let mut sel = PermanentSelector {
+                    required_types: BTreeSet::from([CardType::Land]),
+                    controller: ControllerSelector::Any,
+                    ..PermanentSelector::default()
+                };
+                if let Some(cond) = condition {
+                    apply_static_selector_condition(&mut sel, cond, vocabulary)?;
+                }
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector: sel,
+                        parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::remove(
+                            AbilityRemoval::NonMana,
+                        ))]),
+                    },
+                );
+            }
             if rule == "CaseToSolve" {
                 let cond = condition
                     .as_deref()
@@ -4672,7 +4732,9 @@ pub(super) fn lower_static(
                 },
                 (
                     "you may look at cards exiled with ~"
-                    | "you may look at face-down cards exiled with ~",
+                    | "you may look at face-down cards exiled with ~"
+                    | "you may look at the cards exiled with ~"
+                    | "you may look at the face-down cards exiled with ~",
                     None,
                 ) => CastPermissionRule::LookAtSourceExiledCards,
                 ("look_any_time", Some(flt)) if is_exiled_with_self(flt) => {
@@ -6349,6 +6411,233 @@ fn lower_alternative_cast_cost(
     lower_general_self_alternative_cast_cost(cost, None, program, vocabulary)
 }
 
+fn is_look_at_source_exiled_static(st: &StaticAbilityAst) -> bool {
+    match st {
+        StaticAbilityAst::LookOrRevealRule {
+            rule,
+            filter,
+            follow_up,
+            ..
+        } if follow_up.is_empty() => {
+            let r_low = rule
+                .trim()
+                .trim_end_matches('.')
+                .trim()
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "you may look at cards exiled with ~"
+                    | "you may look at face-down cards exiled with ~"
+                    | "you may look at the cards exiled with ~"
+                    | "you may look at the face-down cards exiled with ~"
+            ) || (r_low == "look_any_time"
+                && filter.as_deref().is_some_and(|flt| {
+                    flt.zone == Some(ZoneFilter::Exile)
+                        && (flt.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                }))
+        }
+        StaticAbilityAst::RuleOrCombatRestriction {
+            subject: None,
+            rule,
+            filter: None,
+            ..
+        } => {
+            let r_low = rule
+                .trim()
+                .trim_end_matches('.')
+                .trim()
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "you may look at cards exiled with ~"
+                    | "you may look at face-down cards exiled with ~"
+                    | "you may look at the cards exiled with ~"
+                    | "you may look at the face-down cards exiled with ~"
+            )
+        }
+        _ => false,
+    }
+}
+
+fn try_lower_compound_exile_play_replacement(
+    first_ins: &[InstructionAst],
+    next_ins: &[InstructionAst],
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<Result<(), &'static str>> {
+    use spellwake_engine::characteristics::{ReplaceableEvent, StaticReplacementAction};
+    use spellwake_engine::program::ImpulsePlayDuration;
+
+    let [
+        InstructionAst::TemporaryReplacement {
+            duration: DurationAst::Instant | DurationAst::Permanent,
+            replacement,
+        },
+    ] = first_ins
+    else {
+        return None;
+    };
+    let ReplacementEffectAst::EventInstead {
+        subject_or_event,
+        would,
+        instead,
+        instead_body,
+    } = replacement.as_ref()
+    else {
+        return None;
+    };
+    if !subject_or_event.trim().eq_ignore_ascii_case("you") {
+        return None;
+    }
+    let would_raw = would
+        .trim()
+        .trim_end_matches(',')
+        .trim()
+        .to_ascii_lowercase();
+    let would_norm = would_raw
+        .strip_prefix("would ")
+        .unwrap_or(&would_raw)
+        .trim();
+    if would_norm != "draw a card" {
+        return None;
+    }
+
+    let grant_ast = match next_ins {
+        [g @ InstructionAst::GrantCastPermission { .. }] => g,
+        [InstructionAst::Optional(inner)] if inner.len() == 1 => &inner[0],
+        _ => return None,
+    };
+    let InstructionAst::GrantCastPermission {
+        player: PlayerRefAst::You,
+        cast_only,
+        subject,
+        free,
+        duration,
+        count_limit: None,
+        alt_cost: None,
+    } = grant_ast
+    else {
+        return None;
+    };
+    let SubjectRefAst::Anaphora(anaph) = subject.as_ref() else {
+        return None;
+    };
+    if !matches!(
+        anaph.trim().to_ascii_lowercase().as_str(),
+        "it" | "them"
+            | "that card"
+            | "those cards"
+            | "the exiled card"
+            | "the exiled cards"
+            | "cards exiled this way"
+            | "a card exiled this way"
+    ) {
+        return None;
+    }
+    let dur_low = duration.trim().to_ascii_lowercase();
+    let impulse_dur = if dur_low == "until_end_of_next_turn"
+        || dur_low.contains("end of your next turn")
+        || dur_low.contains("untilendofnextturn")
+        || dur_low.contains("untilyournextturn")
+    {
+        ImpulsePlayDuration::UntilEndOfNextTurn
+    } else if dur_low == "this_turn"
+        || dur_low == "until_end_of_turn"
+        || dur_low.contains("this turn")
+        || dur_low.contains("end of turn")
+        || dur_low.contains("untilendofturn")
+    {
+        ImpulsePlayDuration::ThisTurn
+    } else if dur_low == "while_exiled"
+        || dur_low.contains("remains exiled")
+        || dur_low.contains("remain exiled")
+        || dur_low == "permanent"
+    {
+        ImpulsePlayDuration::WhileExiled
+    } else {
+        return None;
+    };
+
+    let parsed_instead_owned;
+    let exile_slice: &[InstructionAst] = if let Some(body_ins) = instead_body.as_deref() {
+        match body_ins {
+            [InstructionAst::ReplaceEffect(inner)] => inner.as_slice(),
+            other => other,
+        }
+    } else {
+        let cleaned = instead
+            .trim()
+            .trim_end_matches('.')
+            .trim()
+            .to_ascii_lowercase();
+        let cleaned = cleaned
+            .strip_prefix("instead, ")
+            .or_else(|| cleaned.strip_prefix("instead "))
+            .unwrap_or(&cleaned)
+            .trim_end_matches(" instead")
+            .trim();
+        let (ins, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
+            cleaned,
+            &cached_compiler_vocab(vocabulary),
+        );
+        if !fails.is_empty() || ins.is_empty() {
+            return None;
+        }
+        parsed_instead_owned = ins;
+        &parsed_instead_owned
+    };
+    let [
+        InstructionAst::ExileTopLibrary {
+            actor: None | Some(PlayerRefAst::You),
+            whose,
+            count,
+            face_down,
+        },
+    ] = exile_slice
+    else {
+        return None;
+    };
+    if !matches!(
+        whose.trim().to_ascii_lowercase().as_str(),
+        "your" | "own" | "" | "your library"
+    ) {
+        return None;
+    }
+    let cnt = lower_value_expr(count, vocabulary).ok()?;
+    if !cnt.is_world_evaluable() {
+        return None;
+    }
+    let body = ExecutableBody::new(
+        BodyTarget::None,
+        vec![Instruction::ExileTopPlay {
+            count: cnt,
+            library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
+            duration: impulse_dur,
+            cast_only: *cast_only,
+            free: *free,
+            any_color: false,
+            face_down: *face_down,
+            grant_play: true,
+        }],
+    );
+    let ability = StaticContinuousAbility::EventReplacement {
+        id: ids.static_id(),
+        event: ReplaceableEvent::Draw {
+            player: AffectedPlayers::One(ResolvingPlayer::Controller),
+        },
+        condition: None,
+        action: StaticReplacementAction::ReplaceWithBody {
+            optional: false,
+            body: Box::new(body),
+        },
+    };
+    if ability.validate(vocabulary).is_err() {
+        return None;
+    }
+    Some(push_static_ability(program, ability))
+}
+
 fn lower_followup_instructions(
     ins: &[InstructionAst],
     program: &mut Program,
@@ -7055,11 +7344,61 @@ fn try_apply_extended_selector_status(
             sel.commander = Some(true);
             true
         }
+        "attacking" => {
+            if sel.combat_role.is_some() && sel.combat_role != Some(CombatSelector::Attacking) {
+                return false;
+            }
+            sel.combat_role = Some(CombatSelector::Attacking);
+            true
+        }
+        "blocking" => {
+            if sel.combat_role.is_some() && sel.combat_role != Some(CombatSelector::Blocking) {
+                return false;
+            }
+            sel.combat_role = Some(CombatSelector::Blocking);
+            true
+        }
+        "blocked" => {
+            if sel.combat_role.is_some() && sel.combat_role != Some(CombatSelector::Blocked) {
+                return false;
+            }
+            sel.combat_role = Some(CombatSelector::Blocked);
+            true
+        }
+        "unblocked" => {
+            if sel.combat_role.is_some() && sel.combat_role != Some(CombatSelector::Unblocked) {
+                return false;
+            }
+            sel.combat_role = Some(CombatSelector::Unblocked);
+            true
+        }
+        "tapped" => {
+            if sel.requires_untapped {
+                return false;
+            }
+            sel.requires_tapped = true;
+            true
+        }
+        "untapped" => {
+            if sel.requires_tapped {
+                return false;
+            }
+            sel.requires_untapped = true;
+            true
+        }
         "not attacking" => {
+            if sel.combat_role.is_some() && sel.combat_role != Some(CombatSelector::NotAttacking) {
+                return false;
+            }
             sel.combat_role = Some(CombatSelector::NotAttacking);
             true
         }
         "attacking or blocking" => {
+            if sel.combat_role.is_some()
+                && sel.combat_role != Some(CombatSelector::AttackingOrBlocking)
+            {
+                return false;
+            }
             sel.combat_role = Some(CombatSelector::AttackingOrBlocking);
             true
         }
@@ -7816,7 +8155,7 @@ fn lower_grant_keyword_with_cost(
             apply_static_selector_condition(sel, cond, vocabulary)?;
         }
     }
-    let (mut parts_vec, rem_kws) = partition_static_keyword_grants(&[combined], ids);
+    let (mut parts_vec, rem_kws) = partition_static_keyword_grants(&[combined], vocabulary, ids);
     if !rem_kws.is_empty() {
         let ab_change = lower_ability_change_with_ids(&rem_kws, vocabulary, ids)?;
         parts_vec.push(StaticPart::Abilities(ab_change));
@@ -10289,7 +10628,8 @@ fn lower_paired_static(
             paired_rule,
             ..
         } => {
-            let (mut parts_vec, rem_kws) = partition_static_keyword_grants(keywords, ids);
+            let (mut parts_vec, rem_kws) =
+                partition_static_keyword_grants(keywords, vocabulary, ids);
             if !rem_kws.is_empty() {
                 let ab_change = lower_ability_change_with_ids(&rem_kws, vocabulary, ids)?;
                 parts_vec.push(StaticPart::Abilities(ab_change));
@@ -10425,7 +10765,8 @@ fn lower_paired_static(
                 )));
             }
             if *lose_all_abilities || !grant_keywords.is_empty() || !lose_keywords.is_empty() {
-                let (special_parts, rem_kws) = partition_static_keyword_grants(grant_keywords, ids);
+                let (special_parts, rem_kws) =
+                    partition_static_keyword_grants(grant_keywords, vocabulary, ids);
                 parts.extend(special_parts);
                 if *lose_all_abilities || !rem_kws.is_empty() || !lose_keywords.is_empty() {
                     let mut change = if !rem_kws.is_empty() {
@@ -11279,7 +11620,7 @@ fn push_granted_keyword_strings(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Result<(), &'static str> {
-    let (special_parts, remaining) = partition_static_keyword_grants(keywords, ids);
+    let (special_parts, remaining) = partition_static_keyword_grants(keywords, vocabulary, ids);
     parts.extend(special_parts);
     if !remaining.is_empty() {
         let ab_change = lower_ability_change_with_ids(&remaining, vocabulary, ids)?;
@@ -11432,7 +11773,7 @@ fn lower_granted_static_parts(
             condition: None,
         } if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
             let combined = format!("{} {}", keyword.trim(), cost_rule.trim());
-            if let Some(part) = parse_granted_equip_or_crew_part(&combined) {
+            if let Some(part) = parse_granted_equip_or_crew_part(&combined, vocabulary) {
                 parts.push(part);
                 return Ok(());
             }
@@ -11557,7 +11898,8 @@ fn lower_granted_static_parts(
                 )));
             }
             if *lose_all_abilities || !grant_keywords.is_empty() || !lose_keywords.is_empty() {
-                let (special_parts, rem_kws) = partition_static_keyword_grants(grant_keywords, ids);
+                let (special_parts, rem_kws) =
+                    partition_static_keyword_grants(grant_keywords, vocabulary, ids);
                 parts.extend(special_parts);
                 if *lose_all_abilities || !rem_kws.is_empty() || !lose_keywords.is_empty() {
                     let mut change = if !rem_kws.is_empty() {
@@ -13809,7 +14151,10 @@ fn strip_protection_doesnt_remove_suffix(low: &str) -> &str {
     trimmed
 }
 
-fn parse_granted_equip_or_crew_part(raw: &str) -> Option<StaticPart> {
+fn parse_granted_equip_or_crew_part(
+    raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<StaticPart> {
     let trimmed = raw.trim().trim_end_matches('.').trim();
     let low = trimmed.to_ascii_lowercase();
     if let Some(rest) = low.strip_prefix("equip ") {
@@ -13819,16 +14164,63 @@ fn parse_granted_equip_or_crew_part(raw: &str) -> Option<StaticPart> {
             .trim()
             .trim_end_matches('.')
             .trim();
-        let mana_cost = parse_fixed_mana_cost(&cost_raw.to_ascii_uppercase())?;
-        return Some(StaticPart::GrantActivated(Box::new(ActivatedAbility {
-            id: ActivatedAbilityId(0),
-            mana_cost,
-            source_cost: SourceCost::None,
-            body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![Instruction::Attach(AttachAbility::Equip)],
-            ),
-        })));
+        if let Some(mana_cost) = parse_fixed_mana_cost(&cost_raw.to_ascii_uppercase()) {
+            return Some(StaticPart::GrantActivated(Box::new(ActivatedAbility {
+                id: ActivatedAbilityId(0),
+                mana_cost,
+                source_cost: SourceCost::None,
+                body: ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::Attach(AttachAbility::Equip)],
+                ),
+            })));
+        }
+        // Quality-restricted equip, e.g. "equip Knight {0}" or "equip legendary creature {1}" (CR 702.6a).
+        if let Some(brace_pos) = cost_raw.find('{') {
+            let quality_raw = cost_raw[..brace_pos]
+                .trim()
+                .trim_end_matches(['\u{2014}', '-', ':'])
+                .trim();
+            let mana_raw = cost_raw[brace_pos..].trim();
+            if !quality_raw.is_empty()
+                && let Some(mana_cost) = parse_fixed_mana_cost(&mana_raw.to_ascii_uppercase())
+            {
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                let mut parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+                    quality_raw,
+                    &compiler_vocab,
+                )
+                .ok()?;
+                if parsed.zone.is_some()
+                    || parsed.owner.is_some()
+                    || !parsed.extra_zones.is_empty()
+                    || parsed
+                        .controller
+                        .is_some_and(|c| c != ControllerRelation::You)
+                    || parsed.any_spell
+                    || parsed.any_card
+                    || parsed.is_ability
+                    || (!parsed.any_types.is_empty()
+                        && parsed.any_types != AstCardTypeMask::CREATURE)
+                    || is_unrestricted_filter(&parsed)
+                {
+                    return None;
+                }
+                parsed.any_types = AstCardTypeMask::CREATURE;
+                parsed.controller = Some(ControllerRelation::You);
+                let obj = lower_object_filter(&parsed, vocabulary).ok()?;
+                return Some(StaticPart::GrantActivated(Box::new(ActivatedAbility {
+                    id: ActivatedAbilityId(0),
+                    mana_cost,
+                    source_cost: SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::FilteredPermanent(obj),
+                        vec![Instruction::Attach(AttachAbility::Equip)],
+                    ),
+                })));
+            }
+        }
+        return None;
     }
     if let Some(rest) = low.strip_prefix("crew ") {
         let n_raw = rest.trim().trim_end_matches('.').trim();
@@ -13870,6 +14262,7 @@ fn parse_granted_equip_or_crew_part(raw: &str) -> Option<StaticPart> {
 
 fn partition_static_keyword_grants(
     keywords: &[String],
+    vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> (Vec<StaticPart>, Vec<String>) {
     let mut special_parts = Vec::new();
@@ -13903,11 +14296,12 @@ fn partition_static_keyword_grants(
             special_parts.push(StaticPart::GrantTrigger(Box::new(
                 CounterKeyword::VanishingLastCounter.ability(ids.triggered()),
             )));
-        } else if let Some(part) = parse_granted_equip_or_crew_part(kw) {
+        } else if let Some(part) = parse_granted_equip_or_crew_part(kw, vocabulary) {
             special_parts.push(part);
         } else if let Some(br) = match clean.trim_end_matches('.') {
             "can't attack" => Some(BlockingRestriction::CannotAttack),
             "can't block" => Some(BlockingRestriction::CannotBlock),
+            "can't be blocked" => Some(BlockingRestriction::CannotBeBlocked),
             "can't attack or block" => Some(BlockingRestriction::CannotAttackOrBlock),
             "blocks each combat if able" | "block each combat if able" => {
                 Some(BlockingRestriction::MustBlockEachCombatIfAble)
@@ -16402,11 +16796,19 @@ fn lower_loses_all_other_abilities(
             apply_static_selector_condition(sel, cond, vocabulary)?;
         }
     }
+    #[derive(Clone, Copy)]
+    enum MergeMode {
+        AppendNew,
+        MergeAbilitiesPart,
+        PrependRemovalToGrant,
+    }
     // Verify before mutating so any rejected selector leaves `program` untouched.
-    let mut merge_flags: Vec<bool> = Vec::with_capacity(selectors.len());
+    let mut merge_modes: Vec<MergeMode> = Vec::with_capacity(selectors.len());
     for sel in &selectors {
         let mut abilities_part_count = 0usize;
         let mut can_merge_in_place = false;
+        let mut grant_ability_count = 0usize;
+        let mut can_prepend_to_grant = false;
         for ab in program
             .continuous
             .iter()
@@ -16419,6 +16821,9 @@ fn lower_loses_all_other_abilities(
             } = ab
                 && existing_sel == sel
             {
+                let mut ab_has_grant = false;
+                let mut ab_has_abilities = false;
+                let mut ab_has_inherit = false;
                 for part in &parts.0 {
                     match part {
                         StaticPart::GrantTrigger(_)
@@ -16429,13 +16834,16 @@ fn lower_loses_all_other_abilities(
                         | StaticPart::GrantMana(_)
                         | StaticPart::GrantSubtypeProtection { .. }
                         | StaticPart::GrantProtectionChosenColor
-                        | StaticPart::GrantProtectionChosenPlayer
-                        | StaticPart::InheritCounteredCreatureAbilities
+                        | StaticPart::GrantProtectionChosenPlayer => {
+                            ab_has_grant = true;
+                        }
+                        StaticPart::InheritCounteredCreatureAbilities
                         | StaticPart::InheritExiledCreatureAbilities => {
-                            return Err("oracle:unsupported-rule-restriction");
+                            ab_has_inherit = true;
                         }
                         StaticPart::Abilities(change) => {
                             abilities_part_count += 1;
+                            ab_has_abilities = true;
                             if condition.is_none()
                                 && !program.static_conditions.contains_key(id)
                                 && matches!(change.removal, None | Some(AbilityRemoval::All))
@@ -16448,45 +16856,107 @@ fn lower_loses_all_other_abilities(
                         _ => {}
                     }
                 }
+                if ab_has_inherit {
+                    return Err("oracle:unsupported-rule-restriction");
+                }
+                if ab_has_grant {
+                    grant_ability_count += 1;
+                    if !ab_has_abilities
+                        && condition.is_none()
+                        && !program.static_conditions.contains_key(id)
+                    {
+                        can_prepend_to_grant = true;
+                    } else {
+                        return Err("oracle:unsupported-rule-restriction");
+                    }
+                }
             }
         }
-        if abilities_part_count > 1 {
+        if abilities_part_count > 1
+            || grant_ability_count > 1
+            || (abilities_part_count > 0 && grant_ability_count > 0)
+        {
             return Err("oracle:unsupported-rule-restriction");
         }
-        merge_flags.push(abilities_part_count == 1 && can_merge_in_place);
+        let mode = if abilities_part_count == 1 && can_merge_in_place {
+            MergeMode::MergeAbilitiesPart
+        } else if grant_ability_count == 1 && can_prepend_to_grant {
+            MergeMode::PrependRemovalToGrant
+        } else {
+            MergeMode::AppendNew
+        };
+        merge_modes.push(mode);
     }
-    for (sel, merge_in_place) in selectors.into_iter().zip(merge_flags) {
-        if merge_in_place {
-            for ab in program
-                .continuous
-                .iter_mut()
-                .chain(program.additional_battlefield_abilities.iter_mut())
-            {
-                if let StaticContinuousAbility::Battlefield {
-                    selector: existing_sel,
-                    parts,
-                    ..
-                } = ab
-                    && existing_sel == &sel
+    for (sel, mode) in selectors.into_iter().zip(merge_modes) {
+        match mode {
+            MergeMode::MergeAbilitiesPart => {
+                for ab in program
+                    .continuous
+                    .iter_mut()
+                    .chain(program.additional_battlefield_abilities.iter_mut())
                 {
-                    for part in &mut parts.0 {
-                        if let StaticPart::Abilities(change) = part {
-                            change.removal = Some(AbilityRemoval::All);
+                    if let StaticContinuousAbility::Battlefield {
+                        selector: existing_sel,
+                        parts,
+                        ..
+                    } = ab
+                        && existing_sel == &sel
+                    {
+                        for part in &mut parts.0 {
+                            if let StaticPart::Abilities(change) = part {
+                                change.removal = Some(AbilityRemoval::All);
+                            }
                         }
                     }
                 }
             }
-        } else {
-            push_static_ability(
-                program,
-                StaticContinuousAbility::Battlefield {
-                    id: ids.static_id(),
-                    selector: sel,
-                    parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::remove(
-                        AbilityRemoval::All,
-                    ))]),
-                },
-            )?;
+            MergeMode::PrependRemovalToGrant => {
+                for ab in program
+                    .continuous
+                    .iter_mut()
+                    .chain(program.additional_battlefield_abilities.iter_mut())
+                {
+                    if let StaticContinuousAbility::Battlefield {
+                        selector: existing_sel,
+                        parts,
+                        ..
+                    } = ab
+                        && existing_sel == &sel
+                        && parts.0.iter().any(|part| {
+                            matches!(
+                                part,
+                                StaticPart::GrantTrigger(_)
+                                    | StaticPart::GrantActivated(_)
+                                    | StaticPart::GrantActivatedRestricted { .. }
+                                    | StaticPart::GrantAnyColorMana
+                                    | StaticPart::GrantFixedColorMana(_)
+                                    | StaticPart::GrantMana(_)
+                                    | StaticPart::GrantSubtypeProtection { .. }
+                                    | StaticPart::GrantProtectionChosenColor
+                                    | StaticPart::GrantProtectionChosenPlayer
+                            )
+                        })
+                    {
+                        parts.0.insert(
+                            0,
+                            StaticPart::Abilities(AbilityChange::remove(AbilityRemoval::All)),
+                        );
+                        break;
+                    }
+                }
+            }
+            MergeMode::AppendNew => {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector: sel,
+                        parts: StaticParts(vec![StaticPart::Abilities(AbilityChange::remove(
+                            AbilityRemoval::All,
+                        ))]),
+                    },
+                )?;
+            }
         }
     }
     Ok(())

@@ -587,8 +587,25 @@ pub(super) fn lower_control_misc_instruction(
                             declined_destination: idx + 1,
                         });
                     return Ok(());
+                } else if let Some(op) =
+                    lower_hybrid_mana_payment_instruction(ResolvingPlayer::Controller, raw)
+                {
+                    builder.instructions.push(op);
+                    return Ok(());
                 }
                 return Err("oracle:unsupported-pay-cost");
+            }
+            if let Some(op) = lower_extra_pay_cost_instruction(
+                ResolvingPlayer::Controller,
+                cost,
+                builder.instructions.len(),
+                builder,
+                in_trigger,
+                vocabulary,
+                bound_x,
+            )? {
+                builder.instructions.push(op);
+                return Ok(());
             }
             let ops = lower_resolution_pay_cost_ops(
                 ResolvingPlayer::Controller,
@@ -636,9 +653,26 @@ pub(super) fn lower_control_misc_instruction(
                         paid_destination: base_idx + 1,
                         declined_destination: base_idx + 1,
                     }
+                } else if let Some(hyb_op) = lower_hybrid_mana_payment_instruction(rp, raw) {
+                    hyb_op
                 } else {
                     return Err("oracle:unsupported-pay-cost");
                 };
+                if let Some(players) = group_players {
+                    push_for_each_player(players, vec![op], builder);
+                } else {
+                    builder.instructions.push(op);
+                }
+                return Ok(());
+            }
+            let base_idx = if group_players.is_some() {
+                0
+            } else {
+                builder.instructions.len()
+            };
+            if let Some(op) = lower_extra_pay_cost_instruction(
+                rp, cost, base_idx, builder, in_trigger, vocabulary, bound_x,
+            )? {
                 if let Some(players) = group_players {
                     push_for_each_player(players, vec![op], builder);
                 } else {
@@ -948,26 +982,46 @@ pub(super) fn lower_control_misc_instruction(
                 .trim()
                 .trim_end_matches('.');
             if chooser_ref == PlayerRefAst::You
-                && (cleaned_choice == "any target" || cleaned_choice.starts_with("target "))
+                && (cleaned_choice == "any target"
+                    || cleaned_choice.starts_with("target ")
+                    || cleaned_choice.starts_with("up to one target "))
             {
-                if cleaned_choice == "any target" {
+                let (is_up_to_one, target_text) =
+                    if let Some(rest) = cleaned_choice.strip_prefix("up to one ") {
+                        (true, rest)
+                    } else {
+                        (false, cleaned_choice)
+                    };
+                if target_text == "any target" {
                     builder.bind_target(BodyTarget::SingleAnyTarget)?;
+                    if is_up_to_one {
+                        builder.up_to_one_target = true;
+                    }
                     return Ok(());
                 }
-                if cleaned_choice == "target player" {
+                if target_text == "target player" {
                     builder.bind_target(BodyTarget::SinglePlayer)?;
+                    if is_up_to_one {
+                        builder.up_to_one_target = true;
+                    }
                     return Ok(());
                 }
-                if cleaned_choice == "target opponent" {
+                if target_text == "target opponent" {
                     builder.bind_target(BodyTarget::SingleOpponent)?;
+                    if is_up_to_one {
+                        builder.up_to_one_target = true;
+                    }
                     return Ok(());
                 }
                 if let Ok(subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
-                    cleaned_choice,
+                    target_text,
                     &cached_compiler_vocab(vocabulary),
                 ) {
                     let bt = lower_target_subject(&subj, vocabulary)?;
                     builder.bind_target(bt)?;
+                    if is_up_to_one {
+                        builder.up_to_one_target = true;
+                    }
                     return Ok(());
                 }
             }
@@ -976,10 +1030,30 @@ pub(super) fn lower_control_misc_instruction(
                 "one of them"
                     | "one of those"
                     | "one of those cards"
+                    | "one of the cards"
                     | "a card from among them"
                     | "a card from among those"
                     | "one of the exiled cards"
-            ) && last_instruction_moved_object(&builder.instructions)
+            ) && (last_instruction_moved_object(&builder.instructions)
+                || matches!(
+                    builder.instructions.last(),
+                    Some(
+                        Instruction::ExileTopPlay { .. }
+                            | Instruction::ExileLibraryTop { .. }
+                            | Instruction::ExileLibraryTopLinked { .. }
+                            | Instruction::ExileTopFaceDown
+                            | Instruction::LookTopChooseExt { .. }
+                            | Instruction::RevealUntilMatchExt { .. }
+                            | Instruction::MoveLastMovedFiltered { .. }
+                            | Instruction::MoveSubject { .. }
+                            | Instruction::MoveGroup { .. }
+                            | Instruction::SelectZoneCardsToZone { .. }
+                            | Instruction::ChooseObjects { .. }
+                            | Instruction::ExileGroupFromZone { .. }
+                            | Instruction::ExileFromZone { .. }
+                            | Instruction::Mill { .. }
+                    )
+                ))
                 && let Ok(chooser_rp) =
                     lower_resolving_player_in_context(chooser_ref, builder, in_trigger)
             {
@@ -2479,6 +2553,197 @@ pub(super) fn choice_domain_to_player_option_branches(
             })
             .collect(),
     )
+}
+
+fn format_mana_payment_label(cost: &ManaCost, life: u16) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(g) = cost.generic.to_usize()
+        && g > 0
+    {
+        parts.push(format!("{{{g}}}"));
+    }
+    for (mt, qty) in &cost.required {
+        let sym = match mt {
+            ManaType::White => "W",
+            ManaType::Blue => "U",
+            ManaType::Black => "B",
+            ManaType::Red => "R",
+            ManaType::Green => "G",
+            ManaType::Colourless => "C",
+        };
+        if let Some(n) = qty.to_usize() {
+            for _ in 0..n {
+                parts.push(format!("{{{sym}}}"));
+            }
+        }
+    }
+    if life > 0 {
+        parts.push(format!("{life} life"));
+    }
+    if parts.is_empty() {
+        "Pay {0}".to_string()
+    } else {
+        format!("Pay {}", parts.join(""))
+    }
+}
+
+fn lower_hybrid_mana_payment_instruction(payer: ResolvingPlayer, raw: &str) -> Option<Instruction> {
+    let (mut base_cost, x_cnt, hybs) = parse_mana_cost_full(raw)?;
+    if x_cnt != 0 || hybs.is_empty() || hybs.len() > 4 {
+        return None;
+    }
+    base_cost.required.retain(|_, v| v.is_positive());
+    let mut variants: Vec<(ManaCost, u16)> = vec![(base_cost, 0)];
+    for sym in &hybs {
+        let mut next: Vec<(ManaCost, u16)> = Vec::with_capacity(variants.len() * 2);
+        for (c, life) in variants {
+            let mut alt = c.clone();
+            let mut alt_life = life;
+            let first = alt.required.get_mut(&sym.first)?;
+            if !first.is_positive() {
+                return None;
+            }
+            *first = first.minus(&1.into());
+            if !first.is_positive() {
+                alt.required.remove(&sym.first);
+            }
+            match sym.alternative {
+                spellwake_engine::mana::HybridAlternative::Mana(other) => {
+                    let entry = alt.required.entry(other).or_insert_with(|| 0.into());
+                    *entry = entry.plus(&1.into());
+                }
+                spellwake_engine::mana::HybridAlternative::TwoGeneric => {
+                    alt.generic = alt.generic.plus(&2.into());
+                }
+                spellwake_engine::mana::HybridAlternative::TwoLife => {
+                    alt_life = alt_life.saturating_add(2);
+                }
+            }
+            alt.required.retain(|_, v| v.is_positive());
+            next.push((c, life));
+            next.push((alt, alt_life));
+        }
+        variants = next;
+    }
+    let mut dedup: Vec<(ManaCost, u16)> = Vec::new();
+    for item in variants {
+        if !dedup.contains(&item) {
+            dedup.push(item);
+        }
+    }
+    if dedup.len() < 2 {
+        return None;
+    }
+    let options: Vec<ChooseOptionBranch> = dedup
+        .into_iter()
+        .map(|(cost, life)| {
+            let label = format_mana_payment_label(&cost, life);
+            let ops = if life == 0 {
+                vec![Instruction::OfferManaPayment {
+                    payer,
+                    cost,
+                    paid_destination: 1,
+                    declined_destination: 1,
+                }]
+            } else if cost == ManaCost::free() {
+                vec![Instruction::PayLife {
+                    player: payer,
+                    amount: ValueExpr::literal(i64::from(life)),
+                }]
+            } else {
+                vec![
+                    Instruction::OfferManaPayment {
+                        payer,
+                        cost,
+                        paid_destination: 1,
+                        declined_destination: 2,
+                    },
+                    Instruction::PayLife {
+                        player: payer,
+                        amount: ValueExpr::literal(i64::from(life)),
+                    },
+                ]
+            };
+            ChooseOptionBranch {
+                label,
+                body: ExecutableBody::new(BodyTarget::None, ops),
+            }
+        })
+        .collect();
+    Some(Instruction::ChooseOption {
+        chooser: payer,
+        options,
+    })
+}
+
+fn lower_extra_pay_cost_instruction(
+    payer: ResolvingPlayer,
+    cost: &CostAtomAst,
+    base_idx: usize,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<Option<Instruction>, &'static str> {
+    match cost {
+        CostAtomAst::PayManaChoice(opts) if opts.len() >= 2 && opts.len() <= 8 => {
+            let mut branches = Vec::with_capacity(opts.len());
+            for opt_raw in opts {
+                let Some(mc) = parse_fixed_mana_cost(opt_raw) else {
+                    return Ok(None);
+                };
+                let label = format_mana_payment_label(&mc, 0);
+                branches.push(ChooseOptionBranch {
+                    label,
+                    body: ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::OfferManaPayment {
+                            payer,
+                            cost: mc,
+                            paid_destination: 1,
+                            declined_destination: 1,
+                        }],
+                    ),
+                });
+            }
+            Ok(Some(Instruction::ChooseOption {
+                chooser: payer,
+                options: branches,
+            }))
+        }
+        CostAtomAst::PayGenericManaExpr(expr) => {
+            let extra_generic = lower_value_expr_in_context(
+                resolve_x(expr, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            Ok(Some(Instruction::OfferDynamicManaPayment {
+                payer,
+                fixed: ManaCost::free(),
+                extra_generic,
+                paid_destination: base_idx + 1,
+                declined_destination: base_idx + 1,
+            }))
+        }
+        CostAtomAst::PayEnergy(n) if *n > 0 => Ok(Some(Instruction::PayEnergy {
+            player: payer,
+            amount: ValueExpr::literal(i64::from(*n)),
+        })),
+        CostAtomAst::PayEnergyExpr(expr) => {
+            let amount = lower_value_expr_in_context(
+                resolve_x(expr, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            Ok(Some(Instruction::PayEnergy {
+                player: payer,
+                amount,
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 pub(in super::super) fn emit_choice_for_player_ref(

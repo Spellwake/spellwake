@@ -2758,7 +2758,47 @@ pub(super) fn lower_search_library_group(
             library,
             count,
         } => {
+            let has_source = in_trigger || self_pronoun_valid || builder.has_source;
             let lib_low = library.trim().to_ascii_lowercase();
+            let group_players = match lib_low.as_str() {
+                "each player" | "each player's" | "eachplayer" => Some(AffectedPlayers::EachPlayer),
+                "each opponent" | "each opponent's" | "eachopponent" => {
+                    Some(AffectedPlayers::EachOpponent)
+                }
+                "each other player" | "each other player's" | "eachotherplayer" => {
+                    Some(AffectedPlayers::EachOtherPlayer)
+                }
+                _ => None,
+            };
+            if let Some(players) = group_players {
+                let cnt = lower_value_expr_in_context(
+                    resolve_x(count, bound_x),
+                    builder,
+                    in_trigger,
+                    vocabulary,
+                )?;
+                push_for_each_player(
+                    players,
+                    vec![Instruction::LookTopChoose {
+                        count: cnt,
+                        library_owner: ResolvingPlayer::LoopPlayer,
+                        filter: None,
+                        reveal: *reveal,
+                        reveal_only: true,
+                        to_battlefield: false,
+                        enters_tapped: false,
+                        take_all_matching: false,
+                        max_picks: 0,
+                        rest_to_graveyard: false,
+                        rest_to_exile: false,
+                        rest_to_top: false,
+                        random_rest_order: false,
+                        secondary: None,
+                    }],
+                    builder,
+                );
+                return Ok(());
+            }
             let owner_opt = match lib_low.as_str() {
                 "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" => {
                     Some((None, ResolvingPlayer::Controller))
@@ -2771,27 +2811,65 @@ pub(super) fn lower_search_library_group(
                     Some(BodyTarget::SingleOpponent),
                     ResolvingPlayer::TargetPlayer,
                 )),
-                "that player" | "that player's" | "thatplayer" | "their" | "their library" => {
-                    Some((
-                        None,
-                        lower_resolving_player_in_context(
-                            PlayerRefAst::ThatPlayer,
-                            builder,
-                            in_trigger,
-                        )?,
-                    ))
-                }
-                "defending player" | "defending player's" | "defendingplayer" => {
-                    Some((None, ResolvingPlayer::DefendingPlayer))
-                }
-                "enchanted player" | "enchanted player's" | "enchantedplayer"
-                    if in_trigger || self_pronoun_valid || builder.has_source =>
+                "that player" | "that player's" | "thatplayer" | "that opponent"
+                | "that opponent's" | "thatopponent" | "that library" | "their"
+                | "their library" => Some((
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ThatPlayer,
+                        builder,
+                        in_trigger,
+                    )?,
+                )),
+                "its controller"
+                | "its controller's"
+                | "that creature's controller"
+                | "that permanent's controller" => Some((
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ItsController,
+                        builder,
+                        in_trigger,
+                    )?,
+                )),
+                "its owner"
+                | "its owner's"
+                | "that card's owner"
+                | "that creature's owner"
+                | "that permanent's owner" => Some((
+                    None,
+                    lower_resolving_player_in_context(PlayerRefAst::ItsOwner, builder, in_trigger)?,
+                )),
+                "chosen player"
+                | "chosen player's"
+                | "the chosen player"
+                | "the chosen player's" => Some((
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ChosenPlayer,
+                        builder,
+                        in_trigger,
+                    )?,
+                )),
+                "defending player"
+                | "defending player's"
+                | "defendingplayer"
+                | "the defending player"
+                | "the defending player's" => Some((None, ResolvingPlayer::DefendingPlayer)),
+                "enchanted player"
+                | "enchanted player's"
+                | "enchantedplayer"
+                | "the enchanted player"
+                | "the enchanted player's"
+                    if has_source =>
                 {
                     Some((None, ResolvingPlayer::EnchantedPlayer))
                 }
-                "active player" | "active player's" | "activeplayer" => {
-                    Some((None, ResolvingPlayer::ActivePlayer))
-                }
+                "active player"
+                | "active player's"
+                | "activeplayer"
+                | "the active player"
+                | "the active player's" => Some((None, ResolvingPlayer::ActivePlayer)),
                 _ => None,
             };
             let (req_bt, library_owner) = owner_opt.ok_or("oracle:unsupported-instruction")?;
@@ -3493,10 +3571,46 @@ pub(super) fn lower_search_library_group(
                     (None, ResolvingPlayer::Controller)
                 }
                 "their" | "their library" if actor != ResolvingPlayer::Controller => (None, actor),
-                "that player" | "that player's" | "thatplayer" | "their" | "their library" => (
+                "that player" | "that player's" | "thatplayer" | "that opponent"
+                | "that opponent's" | "thatopponent" | "that library" | "their"
+                | "their library" => (
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ThatPlayer,
+                        &mut trial,
+                        in_trigger,
+                    )?,
+                ),
+                "its controller"
+                | "its controller's"
+                | "that creature's controller"
+                | "that permanent's controller" => (
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ItsController,
+                        &mut trial,
+                        in_trigger,
+                    )?,
+                ),
+                "its owner"
+                | "its owner's"
+                | "that card's owner"
+                | "that creature's owner"
+                | "that permanent's owner" => (
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ItsOwner,
+                        &mut trial,
+                        in_trigger,
+                    )?,
+                ),
+                "chosen player"
+                | "chosen player's"
+                | "the chosen player"
+                | "the chosen player's" => (
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ChosenPlayer,
                         &mut trial,
                         in_trigger,
                     )?,
@@ -3509,15 +3623,25 @@ pub(super) fn lower_search_library_group(
                     Some(BodyTarget::SingleOpponent),
                     ResolvingPlayer::TargetPlayer,
                 ),
-                "defending player" | "defending player's" | "defendingplayer" => {
-                    (None, ResolvingPlayer::DefendingPlayer)
-                }
-                "enchanted player" | "enchanted player's" | "enchantedplayer" if has_source => {
+                "defending player"
+                | "defending player's"
+                | "defendingplayer"
+                | "the defending player"
+                | "the defending player's" => (None, ResolvingPlayer::DefendingPlayer),
+                "enchanted player"
+                | "enchanted player's"
+                | "enchantedplayer"
+                | "the enchanted player"
+                | "the enchanted player's"
+                    if has_source =>
+                {
                     (None, ResolvingPlayer::EnchantedPlayer)
                 }
-                "active player" | "active player's" | "activeplayer" => {
-                    (None, ResolvingPlayer::ActivePlayer)
-                }
+                "active player"
+                | "active player's"
+                | "activeplayer"
+                | "the active player"
+                | "the active player's" => (None, ResolvingPlayer::ActivePlayer),
                 _ => return Err("oracle:unsupported-player-look-top"),
             };
             if let Some(bt) = req_bt {

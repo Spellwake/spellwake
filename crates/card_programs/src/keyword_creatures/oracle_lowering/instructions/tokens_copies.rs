@@ -103,6 +103,15 @@ pub(super) fn lower_tokens_copies_instruction(
                         Some(MoveSubjectRef::LastMoved)
                     }
                     SubjectRefAst::Anaphora(raw)
+                        if (self_pronoun_valid || in_trigger)
+                            && raw.trim().eq_ignore_ascii_case("them")
+                            && trial.target == BodyTarget::None
+                            && !last_instruction_created_tokens(&trial.instructions)
+                            && !last_instruction_moved_object(&trial.instructions) =>
+                    {
+                        Some(MoveSubjectRef::AbilitySource)
+                    }
+                    SubjectRefAst::Anaphora(raw)
                         if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                     {
                         Some(MoveSubjectRef::TriggeringObject)
@@ -183,6 +192,18 @@ pub(super) fn lower_tokens_copies_instruction(
                     PlayerRefAst::You => Some(TokenRecipients::Controller),
                     PlayerRefAst::EachOpponent => Some(TokenRecipients::EachOpponent),
                     PlayerRefAst::EachPlayer => Some(TokenRecipients::EachPlayer),
+                    PlayerRefAst::TargetPlayer if trial.target == BodyTarget::None => {
+                        match trial.bind_target(BodyTarget::SinglePlayer) {
+                            Ok(()) => Some(TokenRecipients::Player(ResolvingPlayer::TargetPlayer)),
+                            Err(_) => None,
+                        }
+                    }
+                    PlayerRefAst::TargetOpponent if trial.target == BodyTarget::None => {
+                        match trial.bind_target(BodyTarget::SingleOpponent) {
+                            Ok(()) => Some(TokenRecipients::Player(ResolvingPlayer::TargetPlayer)),
+                            Err(_) => None,
+                        }
+                    }
                     other => lower_resolving_player_in_context(*other, &mut trial, in_trigger)
                         .ok()
                         .map(TokenRecipients::Player),
@@ -612,6 +633,20 @@ pub(super) fn lower_tokens_copies_instruction(
                         toughness: Box::new(t_expr),
                     });
                     (creation, is_attacking)
+                } else if compiled_abilities.is_none()
+                    && let Some((clean_tok, compiled_face)) =
+                        try_precompile_token_quoted_abilities(token, vocabulary)
+                    && let Ok(res) = lower_token_spec_with_abilities(
+                        &clean_tok,
+                        recipients,
+                        vocabulary,
+                        ids,
+                        bound_x,
+                        Some((builder, in_trigger)),
+                        Some(&compiled_face),
+                    )
+                {
+                    res
                 } else {
                     lower_token_spec_with_abilities(
                         token,
@@ -2520,6 +2555,14 @@ pub(super) fn parse_token_copy_exceptions(
         ", have ",
         ", gains ",
         ", gain ",
+        "and it's an",
+        "and it's a",
+        "and it's",
+        "and they're",
+        "that's an",
+        "that's a",
+        "the token is",
+        "the tokens are",
         "is also",
         "are also",
         "it's an",
@@ -2866,6 +2909,264 @@ pub(super) fn build_emblem_definition(
         continuous,
         triggered,
     })
+}
+
+fn normalize_nested_single_quotes_for_token(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut in_single = false;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let ch = raw[i..].chars().next().unwrap_or('\0');
+        let clen = ch.len_utf8();
+        if ch == '\'' {
+            let prev_is_word = i > 0 && bytes[i - 1].is_ascii_alphanumeric();
+            let next_byte = bytes.get(i + 1).copied();
+            if !in_single
+                && !prev_is_word
+                && next_byte.is_some_and(|b| b.is_ascii_alphabetic() || b == b'{' || b == b'~')
+            {
+                in_single = true;
+                out.push('"');
+                i += clen;
+                continue;
+            }
+            if in_single
+                && next_byte
+                    .is_none_or(|b| b.is_ascii_whitespace() || matches!(b, b',' | b'.' | b';'))
+            {
+                in_single = false;
+                out.push('"');
+                i += clen;
+                continue;
+            }
+        }
+        out.push(ch);
+        i += clen;
+    }
+    out
+}
+
+fn fix_token_ability_capitalization(text: &str) -> String {
+    // 1. Capitalize after em-dash + space (e.g. "Landfall <em-dash> Whenever ...").
+    let mut after_dash = String::with_capacity(text.len());
+    let mut cap_after_dash = false;
+    let mut saw_dash = false;
+    for ch in text.chars() {
+        if cap_after_dash && ch.is_ascii_alphabetic() {
+            after_dash.push(ch.to_ascii_uppercase());
+            cap_after_dash = false;
+            saw_dash = false;
+        } else {
+            after_dash.push(ch);
+            if ch == '\u{2014}' {
+                saw_dash = true;
+            } else if saw_dash && ch == ' ' {
+                cap_after_dash = true;
+                saw_dash = false;
+            } else {
+                saw_dash = false;
+            }
+        }
+    }
+    // 2. Before the first colon in an activated ability cost, capitalize cost-atom verbs
+    //    following ", " so oracle_compiler::clauses::parse_cost_list does not merge them
+    //    into the preceding cost atom as lowercase English continuations.
+    let Some((cost_part, effect_part)) = after_dash.split_once(':') else {
+        return after_dash;
+    };
+    let mut fixed_cost = String::with_capacity(cost_part.len());
+    let mut first_atom = true;
+    for seg in cost_part.split(", ") {
+        if !first_atom {
+            fixed_cost.push_str(", ");
+        }
+        let seg_low = seg.trim_start().to_ascii_lowercase();
+        let is_cost_verb = [
+            "sacrifice ",
+            "exile ",
+            "discard ",
+            "pay ",
+            "tap ",
+            "untap ",
+            "return ",
+            "remove ",
+            "put ",
+            "reveal ",
+            "mill ",
+            "forage",
+            "collect ",
+            "waterbend ",
+            "behold ",
+            "exert ",
+            "flip ",
+            "roll ",
+            "choose ",
+        ]
+        .iter()
+        .any(|verb| seg_low.starts_with(verb));
+        if !first_atom && is_cost_verb {
+            let mut chars = seg.chars();
+            if let Some(first_ch) = chars.next() {
+                fixed_cost.push(first_ch.to_ascii_uppercase());
+                fixed_cost.push_str(chars.as_str());
+            }
+        } else {
+            fixed_cost.push_str(seg);
+        }
+        first_atom = false;
+    }
+    format!("{fixed_cost}:{effect_part}")
+}
+
+fn try_precompile_token_quoted_abilities(
+    token: &TokenSpecAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<(TokenSpecAst, FaceAst)> {
+    let TokenSpecAst::Creature {
+        count,
+        power,
+        toughness,
+        colors,
+        supertypes,
+        card_types,
+        subtypes,
+        keywords,
+        tapped,
+        attacking,
+        named,
+    } = token
+    else {
+        return None;
+    };
+    if !keywords.iter().any(|k| k.contains('"')) {
+        return None;
+    }
+    let mut bare_keywords: Vec<String> = Vec::new();
+    let mut quoted_texts: Vec<String> = Vec::new();
+    for kw_raw in keywords {
+        if !kw_raw.contains('"') {
+            let trimmed = kw_raw.trim();
+            if !trimmed.is_empty() {
+                bare_keywords.push(trimmed.to_string());
+            }
+            continue;
+        }
+        let mut rest = kw_raw.as_str();
+        let mut outside = String::new();
+        while let Some(open) = rest.find('"') {
+            outside.push_str(&rest[..open]);
+            let after_open = &rest[open + 1..];
+            let close = after_open.find('"')?;
+            let cleaned = after_open[..close]
+                .trim()
+                .trim_end_matches([',', ';'])
+                .trim();
+            if !cleaned.is_empty() {
+                quoted_texts.push(cleaned.to_string());
+            }
+            rest = &after_open[close + 1..];
+        }
+        outside.push_str(rest);
+        let outside_trim = outside.trim().trim_matches([',', ';', '.']).trim();
+        if !outside_trim.is_empty() {
+            for seg in outside_trim.split(',') {
+                for piece in seg.split(" and ") {
+                    let clean = piece
+                        .trim()
+                        .trim_start_matches("with ")
+                        .trim_start_matches("With ")
+                        .trim_matches([',', ';', '.'])
+                        .trim();
+                    if !clean.is_empty() && !clean.eq_ignore_ascii_case("and") {
+                        bare_keywords.push(clean.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if quoted_texts.is_empty() {
+        return None;
+    }
+    let tok_name = named.as_deref().unwrap_or("Token");
+    let mut type_words: Vec<&str> = Vec::new();
+    if (supertypes.0 & spellwake_oracle_compiler::ast::SupertypeMask::LEGENDARY.0) != 0 {
+        type_words.push("Legendary");
+    }
+    for (mask, label) in [
+        (AstCardTypeMask::ARTIFACT, "Artifact"),
+        (AstCardTypeMask::BATTLE, "Battle"),
+        (AstCardTypeMask::CREATURE, "Creature"),
+        (AstCardTypeMask::ENCHANTMENT, "Enchantment"),
+        (AstCardTypeMask::KINDRED, "Kindred"),
+        (AstCardTypeMask::LAND, "Land"),
+        (AstCardTypeMask::PLANESWALKER, "Planeswalker"),
+    ] {
+        if (card_types.0 & mask.0) != 0 {
+            type_words.push(label);
+        }
+    }
+    if subtypes.iter().any(|s| s.eq_ignore_ascii_case("aura")) {
+        type_words.push("Aura");
+    }
+    if subtypes.iter().any(|s| s.eq_ignore_ascii_case("equipment")) {
+        type_words.push("Equipment");
+    }
+    let tok_type_line = if type_words.is_empty() {
+        "Creature".to_string()
+    } else {
+        type_words.join(" ")
+    };
+    let normalized_lines: Vec<String> = quoted_texts
+        .iter()
+        .map(|q| {
+            let unnested = normalize_nested_single_quotes_for_token(q);
+            let base = normalize_token_ability_text(&unnested, tok_name);
+            fix_token_ability_capitalization(&base)
+        })
+        .collect();
+    let oracle_text = normalized_lines.join("\n");
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let parsed = spellwake_oracle_compiler::compile_card(
+        &spellwake_oracle_compiler::CardInput {
+            oracle_id: "",
+            name: tok_name,
+            layout: "normal",
+            faces: vec![spellwake_oracle_compiler::FaceInput {
+                name: tok_name,
+                type_line: &tok_type_line,
+                oracle_text: &oracle_text,
+            }],
+        },
+        &compiler_vocab,
+    );
+    if !parsed.strictly_compiled {
+        return None;
+    }
+    let face = parsed.faces.into_iter().next()?;
+    if !face.spell_effects.is_empty()
+        || !face.failures.is_empty()
+        || (face.keywords.is_empty()
+            && face.statics.is_empty()
+            && face.replacements.is_empty()
+            && face.abilities.is_empty())
+    {
+        return None;
+    }
+    let cleaned_token = TokenSpecAst::Creature {
+        count: count.clone(),
+        power: power.clone(),
+        toughness: toughness.clone(),
+        colors: *colors,
+        supertypes: *supertypes,
+        card_types: *card_types,
+        subtypes: subtypes.clone(),
+        keywords: bare_keywords,
+        tapped: *tapped,
+        attacking: *attacking,
+        named: named.clone(),
+    };
+    Some((cleaned_token, face))
 }
 
 #[cfg(test)]

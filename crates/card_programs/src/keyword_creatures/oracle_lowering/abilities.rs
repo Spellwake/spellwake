@@ -1302,11 +1302,17 @@ fn build_single_triggered_ability(
     };
     apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, self_pronoun);
     if grouping == TriggerGrouping::OneOrMoreTogether
-        && is_player_attacks_one_or_more_opponents_trigger(&unwrapped_for_self)
+        && (is_player_attacks_one_or_more_opponents_trigger(&unwrapped_for_self)
+            || matches!(
+                spec.event,
+                TriggerEvent::Attacks {
+                    mode: AttackTriggerMode::OpponentsAtController { .. },
+                    ..
+                }
+            ))
     {
-        // CR 508.1: in a declare-attackers trigger "Whenever a player attacks one or more
-        // of your opponents, that attacking player ...", the attacking player is always the
-        // active player while grouping remains OneOrMoreTogether (once per combat declaration).
+        // CR 508.1: in a declare-attackers trigger where an opponent or another player attacks,
+        // the attacking player is always the active player while grouping remains OneOrMoreTogether.
         rewrite_body_unique_related_player(&mut exec_body, ResolvingPlayer::ActivePlayer);
     }
     Ok(TriggeredAbility {
@@ -1367,19 +1373,55 @@ fn rewrite_instructions_unique_related_player(
             | Instruction::AdjustPlayersLife { players, .. }
             | Instruction::Discard { players, .. }
             | Instruction::DiscardFiltered { players, .. }
+            | Instruction::DiscardUpToExt { players, .. }
             | Instruction::Sacrifice { players, .. }
             | Instruction::SacrificeUpTo { players, .. }
-            | Instruction::AddPlayerCounter { players, .. } => {
+            | Instruction::AddPlayerCounter { players, .. }
+            | Instruction::ExileFromZone { players, .. }
+            | Instruction::ExileGroupFromZone { players, .. }
+            | Instruction::ReturnControlledPermanents { players, .. }
+            | Instruction::TapOrUntapControlled { players, .. } => {
                 rewrite_affected_players_if_unique(players, replacement);
             }
             Instruction::Mill { player, .. }
             | Instruction::Scry { player, .. }
             | Instruction::Surveil { player, .. }
-            | Instruction::AddManaForPlayer { player, .. } => {
+            | Instruction::AddManaForPlayer { player, .. }
+            | Instruction::PayLife { player, .. }
+            | Instruction::PayEnergy { player, .. }
+            | Instruction::Blight { player, .. }
+            | Instruction::CollectEvidence { player, .. }
+            | Instruction::RevealPlayerHand(player)
+            | Instruction::ShufflePlayerLibrary(player)
+            | Instruction::DiscardOneAtRandom(player)
+            | Instruction::ExileLibraryTop { player, .. }
+            | Instruction::ExileLibraryTopLinked { player, .. }
+            | Instruction::PutHandPermanentFiltered { player, .. }
+            | Instruction::SelectZoneCardsToZone { player, .. }
+            | Instruction::LookTopChoose {
+                library_owner: player,
+                ..
+            } => {
                 rewrite_resolving_player_if_unique(player, replacement);
             }
-            Instruction::OptionalSequence { chooser, .. } => {
+            Instruction::LookTopChooseExt {
+                library_owner,
+                chooser,
+                ..
+            } => {
+                rewrite_resolving_player_if_unique(library_owner, replacement);
                 rewrite_resolving_player_if_unique(chooser, replacement);
+            }
+            Instruction::OfferManaPayment { payer, .. }
+            | Instruction::OfferDynamicManaPayment { payer, .. } => {
+                rewrite_resolving_player_if_unique(payer, replacement);
+            }
+            Instruction::OptionalEffect { chooser }
+            | Instruction::OptionalSequence { chooser, .. } => {
+                rewrite_resolving_player_if_unique(chooser, replacement);
+            }
+            Instruction::EmitReflexiveTrigger { body } => {
+                rewrite_instructions_unique_related_player(&mut body.instructions, replacement);
             }
             _ => {}
         }
@@ -3976,35 +4018,44 @@ pub(super) fn lower_extra_cost_atom(
                 exclude_source: filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
             })
         }
-        CostAtomAst::BounceToHand(subject) => match subject.as_ref() {
-            SubjectRefAst::SelfObject => Ok(ExtraActivationCost::ReturnSourceToHand),
-            SubjectRefAst::Anaphora(a)
-                if a.trim().eq_ignore_ascii_case("it") || is_self_anaphora_label(a) =>
-            {
-                Ok(ExtraActivationCost::ReturnSourceToHand)
-            }
-            SubjectRefAst::AttachedHost(_) => Ok(ExtraActivationCost::BouncePermanent {
-                filter: ObjectFilter::any().attached_to_self(),
-                count: NonZeroU8::MIN,
-                exclude_source: false,
-            }),
-            SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
-                Ok(ExtraActivationCost::BouncePermanent {
-                    filter: lower_filter_any(f)?,
+        CostAtomAst::BounceToHand(subject) => {
+            let inner = match subject.as_ref() {
+                SubjectRefAst::InZone {
+                    subject: inner,
+                    zone: ZoneFilter::Battlefield,
+                } => inner.as_ref(),
+                other => other,
+            };
+            match inner {
+                SubjectRefAst::SelfObject => Ok(ExtraActivationCost::ReturnSourceToHand),
+                SubjectRefAst::Anaphora(a)
+                    if a.trim().eq_ignore_ascii_case("it") || is_self_anaphora_label(a) =>
+                {
+                    Ok(ExtraActivationCost::ReturnSourceToHand)
+                }
+                SubjectRefAst::AttachedHost(_) => Ok(ExtraActivationCost::BouncePermanent {
+                    filter: ObjectFilter::any().attached_to_self(),
                     count: NonZeroU8::MIN,
-                    exclude_source: f.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
-                })
+                    exclude_source: false,
+                }),
+                SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                    Ok(ExtraActivationCost::BouncePermanent {
+                        filter: lower_filter_any(f)?,
+                        count: NonZeroU8::MIN,
+                        exclude_source: f.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
+                    })
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(n),
+                } => Ok(ExtraActivationCost::BouncePermanent {
+                    filter: lower_filter_any(filter)?,
+                    count: nz_u8(i32::from(*n))?,
+                    exclude_source: filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
+                }),
+                _ => Err("oracle:unsupported-activation-cost"),
             }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::Exact(n),
-            } => Ok(ExtraActivationCost::BouncePermanent {
-                filter: lower_filter_any(filter)?,
-                count: nz_u8(i32::from(*n))?,
-                exclude_source: filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
-            }),
-            _ => Err("oracle:unsupported-activation-cost"),
-        },
+        }
         CostAtomAst::DiscardHand => Ok(ExtraActivationCost::DiscardCards {
             filter: ObjectFilter::any(),
             count: None,
@@ -4027,12 +4078,15 @@ pub(super) fn lower_extra_cost_atom(
             let inner = match subject.as_ref() {
                 SubjectRefAst::InZone {
                     subject: inner,
-                    zone: ZoneFilter::YourHand,
+                    zone: ZoneFilter::YourHand | ZoneFilter::AnyHand,
                 } => inner.as_ref(),
                 other => other,
             };
             match inner {
                 SubjectRefAst::SelfObject => Ok(ExtraActivationCost::RevealSource),
+                SubjectRefAst::Anaphora(a) if is_self_anaphora_label(a) => {
+                    Ok(ExtraActivationCost::RevealSource)
+                }
                 SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                     Ok(ExtraActivationCost::RevealHand {
                         filter: lower_filter_any(f)?,
@@ -4124,6 +4178,18 @@ pub(super) fn lower_extra_cost_atom(
             _ => Err("oracle:unsupported-activation-cost"),
         },
         CostAtomAst::ProcessExiledCard => Ok(ExtraActivationCost::ProcessExiledCard),
+        CostAtomAst::PayManaChoice(choices) if choices.len() >= 2 => {
+            let mut iter = choices.iter();
+            let first_raw = iter.next().ok_or("oracle:unsupported-activation-cost")?;
+            let mut acc =
+                lower_extra_cost_atom(&CostAtomAst::PayMana(first_raw.clone()), vocabulary)?;
+            for raw in iter {
+                let next_cost =
+                    lower_extra_cost_atom(&CostAtomAst::PayMana(raw.clone()), vocabulary)?;
+                acc = ExtraActivationCost::Either(Box::new(acc), Box::new(next_cost));
+            }
+            Ok(acc)
+        }
         CostAtomAst::PayMana(raw) => {
             let (mc, 0, hybs, snow) =
                 parse_mana_cost_with_snow(raw).ok_or("oracle:unsupported-activation-cost")?
@@ -9697,7 +9763,12 @@ pub(super) fn lower_trigger_event(
                 "finish_voting" | "players finish voting" => PlayerTriggerAction::FinishedVoting,
                 "own_spell_countered"
                 | "a spell you've cast is countered"
-                | "a spell you cast is countered" => PlayerTriggerAction::OwnSpellCountered,
+                | "a spell you cast is countered"
+                | "a spell you control is countered" => PlayerTriggerAction::OwnSpellCountered,
+                "play a land" | "plays a land" | "you play a land" | "you play another land" => {
+                    PlayerTriggerAction::LandPlayed
+                }
+                "you cycle" => PlayerTriggerAction::Cycled { self_only: false },
                 _ => return Err("oracle:unsupported-trigger-event"),
             };
             Ok((
@@ -11584,6 +11655,29 @@ fn try_lower_specialized_trigger_condition(
             }
         }
         ConditionAst::ControlsCount {
+            player: PlayerRefAst::AnyPlayer,
+            filter,
+            op,
+            value,
+        } => {
+            let obj = lower_object_filter(filter, vocabulary).ok()?;
+            match (op, *value) {
+                (CompareOp::Eq, 0) => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(obj),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                }))),
+                (CompareOp::Ge, 1) | (CompareOp::Gt, 0) => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::count_battlefield(obj),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })))
+                }
+                _ => None,
+            }
+        }
+        ConditionAst::ControlsCount {
             player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
             filter,
             op,
@@ -11864,7 +11958,12 @@ fn try_lower_specialized_trigger_condition(
         ConditionAst::PlayerActionThisTurn {
             player: PlayerRefAst::You,
             action,
-        } => match action.as_str() {
+        } => match action
+            .trim()
+            .trim_end_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "gained_life" | "gain_life" | "you gained life this turn" => {
                 Some(TriggerCondition::ControllerGainedLifeThisTurn)
             }
@@ -12210,6 +12309,242 @@ fn try_lower_specialized_trigger_condition(
                     right: ValueExpr::literal(2),
                 }))),
             )),
+            "a player discarded a card this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Or(
+                    Box::new(TriggerCondition::ControllerDiscardedThisTurn),
+                    Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            OpponentTurnStat::Discarded,
+                        )),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    }))),
+                ))
+            }
+            "a permanent left the battlefield this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Or(
+                    Box::new(TriggerCondition::PermanentLeftBattlefieldThisTurn),
+                    Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            OpponentTurnStat::PermanentLeft,
+                        )),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    }))),
+                ))
+            }
+            "no spells were cast this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Not(Box::new(TriggerCondition::Or(
+                    Box::new(TriggerCondition::ControllerCastSpellsThisTurn(1)),
+                    Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            OpponentTurnStat::CastSpells,
+                        )),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    }))),
+                ))))
+            }
+            "you have more life than an opponent" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::PlayerStat(PlayerStatExpr::OpponentMinLife),
+                })))
+            }
+            "you created a token this turn"
+            | "you created one or more tokens this turn"
+            | "you've created a token this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CreatedTokensThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a creature you control died this turn"
+            | "a creature you controlled died this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControlledCreatureDiedThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a creature died this turn" => Some(TriggerCondition::Morbid),
+            "a land entered the battlefield under your control this turn"
+            | "a land entered under your control this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::LandsEnteredThisTurn(
+                        ResolvingPlayer::Controller,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a creature entered the battlefield under your control this turn"
+            | "a creature entered under your control this turn" => {
+                Some(TriggerCondition::CreatureEnteredUnderControlThisTurn)
+            }
+            "you played a land this turn" | "you've played a land this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you've cast a spell this turn" | "you cast a spell this turn" => {
+                Some(TriggerCondition::ControllerCastSpellsThisTurn(1))
+            }
+            "you haven't cast a spell this turn" | "you didn't cast a spell this turn" => Some(
+                TriggerCondition::Not(Box::new(TriggerCondition::ControllerCastSpellsThisTurn(1))),
+            ),
+            "you've gained life this turn" => Some(TriggerCondition::ControllerGainedLifeThisTurn),
+            "you've lost life this turn" => Some(TriggerCondition::ControllerLostLifeThisTurn),
+            "you've discarded a card this turn" => {
+                Some(TriggerCondition::ControllerDiscardedThisTurn)
+            }
+            "you've sacrificed a permanent this turn" => {
+                Some(TriggerCondition::ControllerSacrificedThisTurn)
+            }
+            "you've attacked this turn" => Some(TriggerCondition::ControllerAttackedThisTurn),
+            "a card left your graveyard this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CardsLeftGraveyardThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a card was put into your graveyard from anywhere this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CardsEnteredGraveyardThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "you control no other creatures" => Some(TriggerCondition::NoOtherControlledCreatures),
+            "~ is saddled" => Some(TriggerCondition::SourceSaddled),
+            "~ is prepared" => Some(TriggerCondition::SourceIsPrepared),
+            "~ didn't attack this turn" => Some(TriggerCondition::SourceDidNotAttackThisTurn),
+            "~ is untapped" => Some(TriggerCondition::SourceIsUntapped),
+            "~ is tapped" => Some(TriggerCondition::SourceIsTapped),
+            "~ is attacking" => Some(TriggerCondition::SourceIsAttacking),
+            "you control a land of each basic land type" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::DomainCount,
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(5),
+                })))
+            }
+            "you control a creature of each color" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::DistinctColors {
+                        filter: Box::new(ObjectFilter::creature().controlled()),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(5),
+                })))
+            }
+            "it's the first combat phase of the turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::CombatPhasesThisTurn),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent gained life this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::GainedLife,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent lost life this turn" => Some(TriggerCondition::OpponentLostLifeAtLeast(1)),
+            "an opponent discarded a card this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::Discarded,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent sacrificed a permanent this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::Sacrificed,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent cast a spell this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::CastSpells,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent drew a card this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::DrewCards,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent attacked this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::Attacked,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "an opponent played a land this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::PlayedLand,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a permanent an opponent controlled left the battlefield this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::PermanentLeft,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "a creature entered under an opponent's control this turn"
+            | "a creature entered the battlefield under an opponent's control this turn" => {
+                use spellwake_engine::program::OpponentTurnStat;
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        OpponentTurnStat::CreatureEntered,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
             _ => None,
         },
         ConditionAst::PlayerActionThisTurn {
@@ -12217,15 +12552,47 @@ fn try_lower_specialized_trigger_condition(
             action,
         } => {
             use spellwake_engine::program::OpponentTurnStat;
-            let stat = match action.as_str() {
-                "discarded_card" | "discarded" | "discard" => Some(OpponentTurnStat::Discarded),
-                "drew_card" | "drew" => Some(OpponentTurnStat::DrewCards),
-                "gained_life" | "gain_life" => Some(OpponentTurnStat::GainedLife),
-                "lost_life" | "lose_life" => Some(OpponentTurnStat::LostLife),
-                "sacrificed_permanent" | "sacrificed" | "sacrifice" => {
+            let act_low = action.trim().trim_end_matches('.').to_ascii_lowercase();
+            let stat = match act_low.as_str() {
+                "discarded_card"
+                | "discarded"
+                | "discard"
+                | "an opponent discarded a card this turn" => Some(OpponentTurnStat::Discarded),
+                "drew_card" | "drew" | "an opponent drew a card this turn" => {
+                    Some(OpponentTurnStat::DrewCards)
+                }
+                "gained_life" | "gain_life" | "an opponent gained life this turn" => {
+                    Some(OpponentTurnStat::GainedLife)
+                }
+                "lost_life" | "lose_life" | "an opponent lost life this turn" => {
+                    Some(OpponentTurnStat::LostLife)
+                }
+                "sacrificed_permanent"
+                | "sacrificed"
+                | "sacrifice"
+                | "an opponent sacrificed a permanent this turn" => {
                     Some(OpponentTurnStat::Sacrificed)
                 }
-                "attacked" | "attack" => Some(OpponentTurnStat::Attacked),
+                "attacked" | "attack" | "an opponent attacked this turn" => {
+                    Some(OpponentTurnStat::Attacked)
+                }
+                "cast" | "cast_spell" | "cast_spells" | "an opponent cast a spell this turn" => {
+                    Some(OpponentTurnStat::CastSpells)
+                }
+                "play_land" | "played_land" | "an opponent played a land this turn" => {
+                    Some(OpponentTurnStat::PlayedLand)
+                }
+                "creature_entered"
+                | "a creature entered under an opponent's control this turn"
+                | "a creature entered the battlefield under an opponent's control this turn" => {
+                    Some(OpponentTurnStat::CreatureEntered)
+                }
+                "permanent_left"
+                | "permanent_left_battlefield"
+                | "revolt"
+                | "a permanent an opponent controlled left the battlefield this turn" => {
+                    Some(OpponentTurnStat::PermanentLeft)
+                }
                 _ => None,
             }?;
             Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
@@ -12239,26 +12606,61 @@ fn try_lower_specialized_trigger_condition(
             action,
         } => {
             use spellwake_engine::program::OpponentTurnStat;
-            let (ctrl_cond, opp_stat) = match action.as_str() {
-                "discarded_card" | "discarded" | "discard" => (
+            let act_low = action.trim().trim_end_matches('.').to_ascii_lowercase();
+            let (ctrl_cond, opp_stat) = match act_low.as_str() {
+                "discarded_card"
+                | "discarded"
+                | "discard"
+                | "a player discarded a card this turn" => (
                     TriggerCondition::ControllerDiscardedThisTurn,
                     OpponentTurnStat::Discarded,
                 ),
-                "gained_life" | "gain_life" => (
+                "gained_life" | "gain_life" | "a player gained life this turn" => (
                     TriggerCondition::ControllerGainedLifeThisTurn,
                     OpponentTurnStat::GainedLife,
                 ),
-                "lost_life" | "lose_life" => (
+                "lost_life" | "lose_life" | "a player lost life this turn" => (
                     TriggerCondition::ControllerLostLifeThisTurn,
                     OpponentTurnStat::LostLife,
                 ),
-                "sacrificed_permanent" | "sacrificed" | "sacrifice" => (
+                "sacrificed_permanent"
+                | "sacrificed"
+                | "sacrifice"
+                | "a player sacrificed a permanent this turn" => (
                     TriggerCondition::ControllerSacrificedThisTurn,
                     OpponentTurnStat::Sacrificed,
                 ),
-                "attacked" | "attack" => (
+                "attacked" | "attack" | "a player attacked this turn" => (
                     TriggerCondition::ControllerAttackedThisTurn,
                     OpponentTurnStat::Attacked,
+                ),
+                "drew_card" | "drew" | "a player drew a card this turn" => (
+                    TriggerCondition::ControllerDrewCardsThisTurn(1),
+                    OpponentTurnStat::DrewCards,
+                ),
+                "cast" | "cast_spell" | "cast_spells" | "a player cast a spell this turn" => (
+                    TriggerCondition::ControllerCastSpellsThisTurn(1),
+                    OpponentTurnStat::CastSpells,
+                ),
+                "play_land" | "played_land" | "a player played a land this turn" => (
+                    TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })),
+                    OpponentTurnStat::PlayedLand,
+                ),
+                "creature_entered"
+                | "a creature entered this turn"
+                | "a creature entered the battlefield this turn" => (
+                    TriggerCondition::CreatureEnteredUnderControlThisTurn,
+                    OpponentTurnStat::CreatureEntered,
+                ),
+                "permanent_left"
+                | "permanent_left_battlefield"
+                | "a permanent left the battlefield this turn" => (
+                    TriggerCondition::PermanentLeftBattlefieldThisTurn,
+                    OpponentTurnStat::PermanentLeft,
                 ),
                 _ => return None,
             };
@@ -12319,21 +12721,23 @@ fn try_lower_specialized_trigger_condition(
             Some(TriggerCondition::SourceMatches(Box::new(obj)))
         }
         ConditionAst::MatchesFilter { subject, filter }
-            if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_))
-                || matches!(
-                    subject.as_ref(),
-                    SubjectRefAst::Anaphora(a)
-                        if matches!(
-                            a.trim().to_ascii_lowercase().as_str(),
-                            "that creature"
-                                | "that permanent"
-                                | "that artifact"
-                                | "that enchantment"
-                                | "that land"
-                                | "that card"
-                                | "that spell"
-                        )
-                ) =>
+            if matches!(
+                subject.as_ref(),
+                SubjectRefAst::AttachedHost(_) | SubjectRefAst::TriggerSubject
+            ) || matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(a)
+                    if matches!(
+                        a.trim().to_ascii_lowercase().as_str(),
+                        "that creature"
+                            | "that permanent"
+                            | "that artifact"
+                            | "that enchantment"
+                            | "that land"
+                            | "that card"
+                            | "that spell"
+                    )
+            ) =>
         {
             let match_ref = if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_)) {
                 MatchObjectRef::AttachedHost
