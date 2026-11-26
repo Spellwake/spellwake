@@ -822,13 +822,22 @@ impl EffectWindow {
                 }
                 let src_zone = self.window.cards().get(spell).map(GameObject::zone);
                 let zone_matches = match (zone, src_zone) {
-                    (crate::program::SourceZoneFilter::Hand, Some(ObjectZone::Hand(_))) => true,
+                    (
+                        crate::program::SourceZoneFilter::Hand
+                        | crate::program::SourceZoneFilter::TargetPlayerHand
+                        | crate::program::SourceZoneFilter::OpponentHand,
+                        Some(ObjectZone::Hand(_)),
+                    ) => true,
+                    (crate::program::SourceZoneFilter::CommandZone, Some(ObjectZone::Command)) => {
+                        true
+                    }
                     (
                         crate::program::SourceZoneFilter::Graveyard,
                         Some(ObjectZone::Graveyard(s)),
                     ) => s == actor,
                     (
-                        crate::program::SourceZoneFilter::OpponentGraveyard,
+                        crate::program::SourceZoneFilter::OpponentGraveyard
+                        | crate::program::SourceZoneFilter::TargetPlayerGraveyard,
                         Some(ObjectZone::Graveyard(s)),
                     ) => s != actor,
                     (

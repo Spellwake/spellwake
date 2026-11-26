@@ -1314,6 +1314,7 @@ pub(crate) struct ActiveTemporaryRule {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct ReflexiveTriggerContext {
     last_sacrificed_creature: Option<crate::characteristics::PowerToughness>,
+    last_sacrificed_mv: Option<RulesInteger>,
     resolution_x: Option<RulesInteger>,
     discarded_types: BTreeSet<CardType>,
     exiled_target: Option<DepartedTarget>,
@@ -2058,6 +2059,7 @@ struct ResolutionResults {
     milled_mana_values: Vec<RulesInteger>,
     selected_graveyard_exile_creatures: usize,
     last_sacrificed_creature: Option<crate::characteristics::PowerToughness>,
+    last_sacrificed_mv: Option<RulesInteger>,
     returned_target_permanent: Option<ObjectId>,
     last_die_roll: Option<RulesInteger>,
     last_die_rolls: Vec<u16>,
@@ -2116,6 +2118,7 @@ impl Default for ResolutionResults {
             milled_mana_values: Vec::new(),
             selected_graveyard_exile_creatures: 0,
             last_sacrificed_creature: None,
+            last_sacrificed_mv: None,
             returned_target_permanent: None,
             last_die_roll: None,
             last_die_rolls: Vec::new(),
@@ -3961,6 +3964,18 @@ impl EffectWindow {
                                     | ObjectZone::Hand(_)
                                     | ObjectZone::Library(_)
                             )
+                    }
+                    crate::program::SourceZoneFilter::TargetPlayerHand => self
+                        .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                        .is_ok_and(|seat| card.zone() == ObjectZone::Hand(seat)),
+                    crate::program::SourceZoneFilter::TargetPlayerGraveyard => self
+                        .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                        .is_ok_and(|seat| card.zone() == ObjectZone::Graveyard(seat)),
+                    crate::program::SourceZoneFilter::OpponentHand => {
+                        matches!(card.zone(), ObjectZone::Hand(owner) if owner != player)
+                    }
+                    crate::program::SourceZoneFilter::CommandZone => {
+                        card.zone() == ObjectZone::Command && card.owner() == player
                     }
                 };
                 if !zone_ok {
@@ -7363,6 +7378,7 @@ impl EffectWindow {
                     && let Some(ctx) = &payload.reflexive_context
                 {
                     results.last_sacrificed_creature = ctx.last_sacrificed_creature.clone();
+                    results.last_sacrificed_mv = ctx.last_sacrificed_mv.clone();
                     results.discarded_types = ctx.discarded_types.clone();
                     results.last_moved_objects = ctx.last_moved_objects.clone();
                     results.last_moved_controllers = ctx.last_moved_controllers.clone();
@@ -7502,6 +7518,7 @@ impl EffectWindow {
             && let Some(ctx) = &payload.reflexive_context
         {
             results.last_sacrificed_creature = ctx.last_sacrificed_creature.clone();
+            results.last_sacrificed_mv = ctx.last_sacrificed_mv.clone();
             results.discarded_types = ctx.discarded_types.clone();
             results.last_moved_objects = ctx.last_moved_objects.clone();
             results.last_moved_controllers = ctx.last_moved_controllers.clone();
@@ -9432,6 +9449,266 @@ impl EffectWindow {
         }
         if clause
             .flags
+            .contains(ObjectFilterFlags::NOT_OWNED_BY_CONTROLLER)
+            && !self
+                .window
+                .cards()
+                .get(id)
+                .is_some_and(|obj| p.controller.is_some_and(|ctrl| obj.owner() != ctrl))
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::EVEN_MANA_VALUE) {
+            let Some(mv) = self
+                .permanent_mana_value(id)
+                .or_else(|| self.copiable_program(id).map(Program::mana_value))
+            else {
+                return false;
+            };
+            if !mv.to_usize().is_some_and(|n| n.is_multiple_of(2)) {
+                return false;
+            }
+        }
+        if clause.flags.contains(ObjectFilterFlags::ODD_MANA_VALUE) {
+            let Some(mv) = self
+                .permanent_mana_value(id)
+                .or_else(|| self.copiable_program(id).map(Program::mana_value))
+            else {
+                return false;
+            };
+            if !mv.to_usize().is_some_and(|n| !n.is_multiple_of(2)) {
+                return false;
+            }
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::HAS_BASIC_LAND_TYPE)
+            && p.current_land_subtypes.is_empty()
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::SAME_TOTAL_PT)
+            && !p
+                .power_toughness
+                .as_ref()
+                .is_some_and(|pt| pt.derived.power == pt.derived.toughness)
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER)
+            && !p
+                .power_toughness
+                .as_ref()
+                .is_some_and(|pt| pt.derived.toughness > pt.derived.power)
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::POWER_GREATER_THAN_TOUGHNESS)
+            && !p
+                .power_toughness
+                .as_ref()
+                .is_some_and(|pt| pt.derived.power > pt.derived.toughness)
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::HAS_ACTIVATED_ABILITY)
+            && !p.has_activated_ability()
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::NO_ACTIVATED_ABILITIES)
+            && p.has_activated_ability()
+        {
+            return false;
+        }
+        let resolving_target_id = || -> Option<ObjectId> {
+            self.window
+                .resolving()
+                .and_then(|e| self.instruction_target(e).ok())
+                .and_then(|t| match t.choice().target {
+                    TargetRef::Object(tid) => Some(tid),
+                    _ => None,
+                })
+        };
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE)
+            && !ability_source
+                .and_then(|src| evaluated.get(src))
+                .is_some_and(|src_view| {
+                    p.current_colors
+                        .iter()
+                        .any(|c| src_view.current_colors.contains(c))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE)
+            && !ability_source
+                .and_then(|src| evaluated.get(src))
+                .is_some_and(|src_view| {
+                    p.current_creature_subtypes
+                        .iter()
+                        .any(|st| src_view.current_creature_subtypes.contains(st))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE)
+            && !ability_source
+                .and_then(|src| evaluated.get(src))
+                .is_some_and(|src_view| {
+                    p.current_types
+                        .iter()
+                        .any(|t| src_view.current_types.contains(t))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_COLOR_WITH_TARGET)
+            && !resolving_target_id()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| {
+                    p.current_colors
+                        .iter()
+                        .any(|c| tv.current_colors.contains(c))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET)
+            && !resolving_target_id()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| {
+                    p.current_creature_subtypes
+                        .iter()
+                        .any(|st| tv.current_creature_subtypes.contains(st))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET)
+            && !resolving_target_id()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| p.current_types.iter().any(|t| tv.current_types.contains(t)))
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+            && !ability_source
+                .and_then(|src| evaluated.get(src))
+                .is_some_and(|src_view| {
+                    self.name_rules
+                        .shares_name(&p.current_names, &src_view.current_names)
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SAME_NAME_AS_TARGET)
+            && !resolving_target_id()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| {
+                    self.name_rules
+                        .shares_name(&p.current_names, &tv.current_names)
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE)
+            && ability_source
+                .and_then(|src| evaluated.get(src))
+                .is_some_and(|src_view| {
+                    self.name_rules
+                        .shares_name(&p.current_names, &src_view.current_names)
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::UNIQUE_NAME_AMONG_CONTROLLED)
+            && evaluated.objects.values().any(|other| {
+                other.object != id
+                    && other.zone == ObjectZone::Battlefield
+                    && other.controller == Some(controller)
+                    && self
+                        .name_rules
+                        .shares_name(&p.current_names, &other.current_names)
+            })
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::IN_LAST_MOVED)
+            && !self
+                .resolution_cursor()
+                .is_some_and(|cursor| cursor.results.last_moved_objects.contains(&id))
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::SUSPENDED)
+            && !(p.zone == ObjectZone::Exile
+                && self
+                    .characteristics
+                    .permanent_counter_count(id, CounterKind::Time)
+                    .is_positive())
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::FACE_UP)
+            && (self.face_down_exile.contains_key(&id)
+                || !self
+                    .window
+                    .cards()
+                    .get(id)
+                    .is_some_and(|obj| obj.face_down().is_none()))
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::ATTACHED_TO_TARGET)
+            && !resolving_target_id()
+                .is_some_and(|tid| p.attached_to == Some(TargetRef::Object(tid)))
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED)
+            && !self.resolution_cursor().is_some_and(|cursor| {
+                cursor.results.last_action_lki.iter().any(|lki| {
+                    p.current_colors
+                        .iter()
+                        .any(|c| lki.current_colors.contains(c))
+                })
+            })
+        {
+            return false;
+        }
+        if clause
+            .flags
             .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
             && !ability_source.is_some_and(|src| {
                 self.characteristics
@@ -9564,6 +9841,61 @@ impl EffectWindow {
                             }),
                         _ => None,
                     }),
+                A::TargetToughness => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.instruction_target(e).ok())
+                    .and_then(|t| match t.choice().target {
+                        TargetRef::Object(tid) => evaluated
+                            .get(tid)
+                            .and_then(|o| o.power_toughness.as_ref())
+                            .map(|pt| pt.derived.toughness.clone())
+                            .or_else(|| {
+                                self.resolution_cursor()
+                                    .and_then(|c| c.results.target_lki.get(&tid))
+                                    .and_then(|lki| lki.toughness.clone())
+                            }),
+                        _ => None,
+                    }),
+                A::TargetManaValue => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.instruction_target(e).ok())
+                    .and_then(|t| match t.choice().target {
+                        TargetRef::Object(tid) => self.permanent_mana_value(tid).or_else(|| {
+                            self.resolution_cursor()
+                                .and_then(|c| c.results.target_lki.get(&tid))
+                                .map(|lki| lki.mana_value.clone())
+                        }),
+                        _ => None,
+                    }),
+                A::TriggerSubjectToughness => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.execution_bindings(e.id()))
+                    .and_then(|b| b.trigger.as_ref())
+                    .and_then(|t| t.causes.members().first())
+                    .and_then(|c| c.subject_object_id())
+                    .and_then(|tid| evaluated.get(tid))
+                    .and_then(|o| {
+                        o.power_toughness
+                            .as_ref()
+                            .map(|pt| pt.derived.toughness.clone())
+                    }),
+                A::LastSacrificedPower => self
+                    .resolution_cursor()
+                    .and_then(|c| c.results.last_sacrificed_creature.as_ref())
+                    .map(|pt| pt.power.clone()),
+                A::LastSacrificedToughness => self
+                    .resolution_cursor()
+                    .and_then(|c| c.results.last_sacrificed_creature.as_ref())
+                    .map(|pt| pt.toughness.clone()),
+                A::LastSacrificedManaValue => self
+                    .resolution_cursor()
+                    .and_then(|c| c.results.last_sacrificed_mv.clone()),
+                A::LastMovedCount => self
+                    .resolution_cursor()
+                    .map(|c| RulesInteger::from_usize(c.results.last_moved_objects.len())),
             }
         };
         if let PowerFilter::CompareAnchor { op, anchor } = clause.power

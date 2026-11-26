@@ -5021,6 +5021,10 @@ impl EffectWindow {
                             .filter(|permanent| permanent.is_creature())
                             .and_then(|permanent| permanent.power_toughness.as_ref())
                             .map(|stats| stats.derived.clone());
+                        cursor.results.last_sacrificed_mv = batch
+                            .logical
+                            .first()
+                            .and_then(|row| self.permanent_mana_value(row.object));
                     }
                     if matches!(
                         operation,
@@ -6958,6 +6962,27 @@ impl EffectWindow {
                     }
                     crate::program::SourceZoneFilter::LastMoved => {
                         last_moved.contains(&object.id())
+                    }
+                    crate::program::SourceZoneFilter::TargetPlayerHand => {
+                        object.card_id().is_some()
+                            && self
+                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                                .is_ok_and(|seat| object.zone() == ObjectZone::Hand(seat))
+                    }
+                    crate::program::SourceZoneFilter::TargetPlayerGraveyard => {
+                        object.card_id().is_some()
+                            && self
+                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                                .is_ok_and(|seat| object.zone() == ObjectZone::Graveyard(seat))
+                    }
+                    crate::program::SourceZoneFilter::OpponentHand => {
+                        object.card_id().is_some()
+                            && matches!(object.zone(), ObjectZone::Hand(owner) if owner != player)
+                    }
+                    crate::program::SourceZoneFilter::CommandZone => {
+                        object.card_id().is_some()
+                            && object.zone() == ObjectZone::Command
+                            && object.owner() == player
                     }
                 };
                 zone_ok

@@ -928,38 +928,10 @@ pub(super) fn lower_tokens_copies_instruction(
             }
         }
         InstructionAst::MayChooseNewTargetsForCopy => {
-            match builder.instructions.iter_mut().rev().find(|op| {
-                matches!(
-                    op,
-                    Instruction::CopyStackObject { .. }
-                        | Instruction::CopySpell
-                        | Instruction::CopyAbility
-                )
-            }) {
-                Some(Instruction::CopyStackObject {
-                    may_choose_new_targets,
-                    ..
-                }) => {
-                    *may_choose_new_targets = true;
-                    Ok(())
-                }
-                Some(last @ Instruction::CopySpell) => {
-                    *last = Instruction::CopyStackObject {
-                        target: StackCopyTarget::TargetSpell,
-                        count: ValueExpr::literal(1),
-                        may_choose_new_targets: true,
-                    };
-                    Ok(())
-                }
-                Some(last @ Instruction::CopyAbility) => {
-                    *last = Instruction::CopyStackObject {
-                        target: StackCopyTarget::TargetAbility,
-                        count: ValueExpr::literal(1),
-                        may_choose_new_targets: true,
-                    };
-                    Ok(())
-                }
-                _ => Err("oracle:unsupported-choose-new-targets-for-copy"),
+            if set_last_copy_may_choose_new_targets(&mut builder.instructions) {
+                Ok(())
+            } else {
+                Err("oracle:unsupported-choose-new-targets-for-copy")
             }
         }
         InstructionAst::Incubate { count } => {
@@ -1234,6 +1206,40 @@ pub(super) fn lower_tokens_copies_instruction(
                     builder.instructions.push(Instruction::ChooseObjects {
                         players: AffectedPlayers::One(ResolvingPlayer::Controller),
                         source_zone: SourceZoneFilter::LinkedExile,
+                        filter: Box::new(obj),
+                        min: ValueExpr::literal(1),
+                        max: ValueExpr::literal(1),
+                        distinct_powers: false,
+                        max_total_power: None,
+                        unchosen_action: None,
+                    });
+                    MoveSubjectRef::LastMoved
+                }
+                SubjectRefAst::Group(f)
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                        && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
+                        && !f.any_spell
+                        && !f.is_ability =>
+                {
+                    let mut inner = f.as_ref().clone();
+                    inner.zone = None;
+                    let source_zone = if inner.controller == Some(ControllerRelation::You) {
+                        inner.controller = None;
+                        SourceZoneFilter::Battlefield
+                    } else {
+                        SourceZoneFilter::AnyBattlefield
+                    };
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter_in_context(&inner, builder, in_trigger, vocabulary)?
+                    };
+                    if obj.has_target_player() {
+                        return Err("oracle:unsupported-become-copy");
+                    }
+                    builder.instructions.push(Instruction::ChooseObjects {
+                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                        source_zone,
                         filter: Box::new(obj),
                         min: ValueExpr::literal(1),
                         max: ValueExpr::literal(1),
@@ -1758,6 +1764,182 @@ fn try_lower_extra_predefined_token_def(
     }
 }
 
+fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
+    for op in ops.iter_mut().rev() {
+        match op {
+            Instruction::CopyStackObject {
+                may_choose_new_targets,
+                ..
+            } => {
+                *may_choose_new_targets = true;
+                return true;
+            }
+            Instruction::CopySpell => {
+                *op = Instruction::CopyStackObject {
+                    target: StackCopyTarget::TargetSpell,
+                    count: ValueExpr::literal(1),
+                    may_choose_new_targets: true,
+                };
+                return true;
+            }
+            Instruction::CopyAbility => {
+                *op = Instruction::CopyStackObject {
+                    target: StackCopyTarget::TargetAbility,
+                    count: ValueExpr::literal(1),
+                    may_choose_new_targets: true,
+                };
+                return true;
+            }
+            Instruction::FlipCoins {
+                win_body,
+                lose_body,
+                ..
+            } => {
+                if let Some(body) = lose_body
+                    && set_last_copy_may_choose_new_targets(&mut body.instructions)
+                {
+                    return true;
+                }
+                if let Some(body) = win_body
+                    && set_last_copy_may_choose_new_targets(&mut body.instructions)
+                {
+                    return true;
+                }
+            }
+            Instruction::ScheduleDelayedEventTrigger { body, .. }
+            | Instruction::ScheduleDelayedStepTrigger { body, .. }
+            | Instruction::EmitReflexiveTrigger { body, .. }
+            | Instruction::RepeatLoop { body, .. }
+            | Instruction::FixedTargetClause(body) => {
+                if set_last_copy_may_choose_new_targets(&mut body.instructions) {
+                    return true;
+                }
+            }
+            Instruction::ForEachPlayer { body, .. } => {
+                if set_last_copy_may_choose_new_targets(&mut body.instructions) {
+                    return true;
+                }
+            }
+            Instruction::ChooseOption { options, .. }
+            | Instruction::ChooseOptionForPlayers { options, .. } => {
+                for opt in options.iter_mut().rev() {
+                    if set_last_copy_may_choose_new_targets(&mut opt.body.instructions) {
+                        return true;
+                    }
+                }
+            }
+            Instruction::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+                ..
+            } => {
+                if let Some(body) = declined_body
+                    && set_last_copy_may_choose_new_targets(&mut body.instructions)
+                {
+                    return true;
+                }
+                if set_last_copy_may_choose_new_targets(&mut paid_body.instructions) {
+                    return true;
+                }
+                if set_last_copy_may_choose_new_targets(&mut cost_body.instructions) {
+                    return true;
+                }
+            }
+            Instruction::RollDie { bands, .. } => {
+                for band in bands.iter_mut().rev() {
+                    if set_last_copy_may_choose_new_targets(&mut band.body.instructions) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn strip_self_name_clause_for_copy(low: &str, keep_name: bool) -> String {
+    if !keep_name {
+        return low.to_owned();
+    }
+    let mut out = low.to_owned();
+    for prefix in [
+        "except its name is still ",
+        "except his name is still ",
+        "except her name is still ",
+        "except its name is ",
+        "except his name is ",
+        "except her name is ",
+        "its name is still ",
+        "his name is still ",
+        "her name is still ",
+        "its name is ",
+        "his name is ",
+        "her name is ",
+    ] {
+        let Some(start) = out.find(prefix) else {
+            continue;
+        };
+        let after = &out[start + prefix.len()..];
+        if after.starts_with('~') {
+            continue;
+        }
+        let end_rel = [
+            " and it ",
+            " and it's ",
+            " and he ",
+            " and he's ",
+            " and she ",
+            " and she's ",
+            " and they ",
+            ", it's ",
+            ", it ",
+            ", he's ",
+            ", he ",
+            ", she's ",
+            ", she ",
+            ", they ",
+            ", and ",
+            ".",
+        ]
+        .iter()
+        .filter_map(|delim| after.find(delim))
+        .min()
+        .unwrap_or(after.len());
+        let name_seg = after[..end_rel].trim();
+        let forbidden = [
+            "legendary",
+            "copy",
+            "ability",
+            "abilities",
+            "type",
+            "types",
+            "creature",
+            "artifact",
+            "enchantment",
+            "land",
+            "planeswalker",
+            "token",
+            "counter",
+            "color",
+            "except",
+            "gains",
+            "has",
+            "becomes",
+            "/",
+        ];
+        if !name_seg.is_empty()
+            && name_seg.len() <= 48
+            && !forbidden.iter().any(|w| name_seg.contains(w))
+        {
+            out.replace_range(start..start + prefix.len() + end_rel, " ");
+            break;
+        }
+    }
+    out
+}
+
 pub(super) fn parse_copy_exceptions(
     exception: Option<&str>,
     vocabulary: &CreatureTypeVocabulary,
@@ -1833,6 +2015,8 @@ pub(super) fn parse_copy_exceptions(
     if low.contains("its name is still")
         || low.contains("their names are still")
         || low.contains("except its name is")
+        || low.contains("except his name is")
+        || low.contains("except her name is")
         || low.contains("its name is ~")
         || low.contains("his name is ~")
         || low.contains("her name is ~")
@@ -1850,6 +2034,11 @@ pub(super) fn parse_copy_exceptions(
     {
         out.keep_types = true;
     }
+    let grants_this_ability = low.contains("this ability")
+        && (low.contains(" has ")
+            || low.contains(" gains ")
+            || low.starts_with("has ")
+            || low.starts_with("gains "));
     if low.contains("in addition to its other abilities")
         || low.contains("in addition to their other abilities")
         || low.contains("except it has this ability")
@@ -1857,6 +2046,7 @@ pub(super) fn parse_copy_exceptions(
         || low.contains("has this ability")
         || low.contains("it gains this ability")
         || low.contains("gains this ability")
+        || grants_this_ability
         || low.contains("except it keeps its abilities")
         || low.contains("except it keeps its other abilities")
         || low.contains("except it keeps all its abilities")
@@ -1866,7 +2056,7 @@ pub(super) fn parse_copy_exceptions(
     {
         out.keep_abilities = true;
     }
-    let mut remainder = low.clone();
+    let mut remainder = strip_self_name_clause_for_copy(&low, out.keep_name);
     for (phrase, kw) in [
         ("first strike", KeywordAbility::FirstStrike),
         ("double strike", KeywordAbility::DoubleStrike),
@@ -1956,6 +2146,8 @@ pub(super) fn parse_copy_exceptions(
         "she gains this ability",
         "has this ability",
         "gains this ability",
+        "and this ability",
+        "this ability",
         "except it keeps its other abilities",
         "except it keeps all its abilities",
         "except it keeps its abilities",

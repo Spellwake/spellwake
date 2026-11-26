@@ -642,6 +642,26 @@ pub(super) fn lower_combat_damage_instruction(
                         {
                             Some(DamageRecipientsRef::EachSourceController)
                         }
+                        SubjectRefAst::Anaphora(raw)
+                            if matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "its controller"
+                                    | "their controller"
+                                    | "that creature's controller"
+                                    | "that permanent's controller"
+                            ) && matches!(
+                                src,
+                                DamageSourceRef::Matching(_)
+                                    | DamageSourceRef::AllPermanentTargets
+                                    | DamageSourceRef::CreatedTokens
+                                    | DamageSourceRef::LastMoved
+                                    | DamageSourceRef::TargetObject
+                                    | DamageSourceRef::TriggeringObject
+                                    | DamageSourceRef::AttachedHost
+                            ) =>
+                        {
+                            Some(DamageRecipientsRef::EachSourceController)
+                        }
                         SubjectRefAst::Player(
                             PlayerRefAst::ItsController | PlayerRefAst::ThatObjectController,
                         ) if builder.target != BodyTarget::None => {
@@ -2246,6 +2266,112 @@ pub(super) fn lower_combat_damage_instruction(
             }
         }
         InstructionAst::Fight { a, b } => {
+            let lower_exact_creature_bt =
+                |subj: &SubjectRefAst, bld: &BodyBuilder| -> Option<(BodyTarget, bool)> {
+                    let eff = match subj {
+                        SubjectRefAst::InZone {
+                            subject: inner,
+                            zone: ZoneFilter::Battlefield,
+                        } => inner.as_ref(),
+                        other => other,
+                    };
+                    match eff {
+                        SubjectRefAst::TargetObject {
+                            filter,
+                            count: TargetCountAst::Exact(1),
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
+                            let bt = lower_battlefield_body_target_in_context(
+                                &f_clean, bld, in_trigger, vocabulary,
+                            )
+                            .ok()?;
+                            bt.guarantees_creature().then_some((
+                                bt,
+                                f_clean.controller == Some(ControllerRelation::ThatPlayer),
+                            ))
+                        }
+                        SubjectRefAst::TargetOneOf {
+                            options,
+                            count: TargetCountAst::Exact(1),
+                        } => {
+                            let bt = lower_target_one_of_permanent_body_target(
+                                options, bld, in_trigger, vocabulary,
+                            )
+                            .ok()?;
+                            let has_that_player = options.iter().any(|o| {
+                                matches!(
+                                    o,
+                                    SubjectRefAst::TargetObject { filter, .. }
+                                        if filter.controller == Some(ControllerRelation::ThatPlayer)
+                                )
+                            });
+                            bt.guarantees_creature().then_some((bt, has_that_player))
+                        }
+                        _ => None,
+                    }
+                };
+            if builder.target == BodyTarget::None
+                && builder.instructions.is_empty()
+                && let Some((bt_a, _)) = lower_exact_creature_bt(a, builder)
+                && let Some((mut bt_b, b_has_that_player)) = lower_exact_creature_bt(b, builder)
+            {
+                if !in_trigger && b_has_that_player {
+                    rewrite_bt_related_to_first_target_controller(&mut bt_b);
+                }
+                builder
+                    .instructions
+                    .push(Instruction::FixedTargetClause(Box::new(
+                        ExecutableBody::new(bt_a, vec![Instruction::RememberPermanentTarget]),
+                    )));
+                builder
+                    .instructions
+                    .push(Instruction::FixedTargetClause(Box::new(
+                        ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                    )));
+                builder.instructions.push(Instruction::FightFixedTargets);
+                return Ok(());
+            }
+            let second_fight_target = match (a.as_ref(), b.as_ref()) {
+                (SubjectRefAst::Anaphora(_), rhs) => lower_exact_creature_bt(rhs, builder),
+                (lhs, SubjectRefAst::Anaphora(_)) => lower_exact_creature_bt(lhs, builder),
+                _ => None,
+            };
+            if let Some((mut bt_b, b_has_that_player)) = second_fight_target
+                && builder.target.guarantees_creature()
+                && !builder.instructions.is_empty()
+                && builder.graveyard_target_bounds.is_none()
+                && !builder.x_target_count
+                && !builder.up_to_x_target_count
+                && !builder.up_to_one_target
+                && !builder.instructions.iter().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::FixedTargetClause(_)
+                            | Instruction::AffectPermanentTargets { .. }
+                            | Instruction::RememberPermanentTarget
+                    )
+                })
+            {
+                if !in_trigger && b_has_that_player {
+                    rewrite_bt_related_to_first_target_controller(&mut bt_b);
+                }
+                let mut first_ops = std::mem::take(&mut builder.instructions);
+                prepend_instruction_at(&mut first_ops, 0, Instruction::RememberPermanentTarget);
+                let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
+                builder
+                    .instructions
+                    .push(Instruction::FixedTargetClause(Box::new(
+                        ExecutableBody::new(first_bt, first_ops),
+                    )));
+                builder
+                    .instructions
+                    .push(Instruction::FixedTargetClause(Box::new(
+                        ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                    )));
+                builder.instructions.push(Instruction::FightFixedTargets);
+                return Ok(());
+            }
             let had_perm_target = matches!(
                 builder.target,
                 BodyTarget::SingleCreature
@@ -5316,6 +5442,16 @@ pub(super) fn lower_combat_damage_instruction(
                     Err("oracle:unsupported-target-subject")
                 }
             }
+            SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
+                builder
+                    .instructions
+                    .push(Instruction::RemoveSubjectFromCombat(Box::new(
+                        EffectSubject::Matching(ObjectFilter::Clause(
+                            ObjectClause::any().attached_to_self(),
+                        )),
+                    )));
+                Ok(())
+            }
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                 let obj = lower_object_filter(f, vocabulary)?;
                 builder
@@ -5791,8 +5927,10 @@ pub(super) fn lower_fight_or_exchange_subject(
         SubjectRefAst::TargetObject {
             filter,
             count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
-        } if filter.zone.is_none() => {
-            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let bt = lower_battlefield_body_target(&f_clean, vocabulary)?;
             let valid_bt = matches!(
                 bt,
                 BodyTarget::SingleCreature

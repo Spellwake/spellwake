@@ -6038,6 +6038,7 @@ impl EffectWindow {
                 self.resolution_cursor()
                     .map(|cursor| super::ReflexiveTriggerContext {
                         last_sacrificed_creature: cursor.results.last_sacrificed_creature.clone(),
+                        last_sacrificed_mv: cursor.results.last_sacrificed_mv.clone(),
                         resolution_x: entry.chosen_x().cloned(),
                         discarded_types: cursor.results.discarded_types.clone(),
                         exiled_target: cursor.exiled_target.clone(),

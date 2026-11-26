@@ -1697,6 +1697,7 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
                         attacking: false,
                     },
                     rest_dest: LookTopRestDest::BottomRandom,
+                    keep_all_revealed: false,
                 }],
             ),
         ),

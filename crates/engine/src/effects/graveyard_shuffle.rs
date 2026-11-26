@@ -119,6 +119,18 @@ impl EffectWindow {
                                 .is_some_and(|cursor| {
                                     cursor.results.last_moved_objects.contains(&obj.id())
                                 }),
+                            crate::program::SourceZoneFilter::TargetPlayerHand => self
+                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                                .is_ok_and(|seat| obj.zone() == ObjectZone::Hand(seat)),
+                            crate::program::SourceZoneFilter::TargetPlayerGraveyard => self
+                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                                .is_ok_and(|seat| obj.zone() == ObjectZone::Graveyard(seat)),
+                            crate::program::SourceZoneFilter::OpponentHand => {
+                                matches!(obj.zone(), ObjectZone::Hand(p) if opponents.contains(&p))
+                            }
+                            crate::program::SourceZoneFilter::CommandZone => {
+                                obj.zone() == ObjectZone::Command && obj.owner() == controller
+                            }
                         };
                         zone_ok
                             && evaluated.get(obj.id()).is_some_and(|view| {

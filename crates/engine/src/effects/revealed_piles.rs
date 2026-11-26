@@ -312,6 +312,7 @@ impl EffectWindow {
                 count,
                 match_dest,
                 rest_dest,
+                keep_all_revealed,
                 ..
             } => Some((
                 *chooser,
@@ -319,6 +320,7 @@ impl EffectWindow {
                 count.clone(),
                 *match_dest,
                 *rest_dest,
+                *keep_all_revealed,
             )),
             _ => None,
         };
@@ -343,7 +345,7 @@ impl EffectWindow {
             .or_else(|| {
                 reveal_until_ext
                     .as_ref()
-                    .map(|(_, _, _, match_dest, _)| *match_dest)
+                    .map(|(_, _, _, match_dest, _, _)| *match_dest)
             })
             .or_else(|| reveal_two_piles.map(|(_, _, chosen_dest, _)| chosen_dest));
         let ext_rest_dest = look_top_choose_ext
@@ -352,7 +354,7 @@ impl EffectWindow {
             .or_else(|| {
                 reveal_until_ext
                     .as_ref()
-                    .map(|(_, _, _, _, rest_dest)| *rest_dest)
+                    .map(|(_, _, _, _, rest_dest, _)| *rest_dest)
             })
             .or_else(|| reveal_two_piles.map(|(_, _, _, other_dest)| other_dest));
         let (count, private, take_all, other_pile_to_bottom) = match self.current_instruction()? {
@@ -527,11 +529,19 @@ impl EffectWindow {
             } else if let Some((_, filter, target_count_expr, ..)) = &reveal_until_ext {
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
+                let resolving_ctrl = self.window.resolving().map_or(player, |e| e.controller());
+                let resolving_src = self.window.resolving().and_then(|e| match e.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(id) => Some(*id),
+                    StackKind::SpellCopy { .. }
+                    | StackKind::Speed
+                    | StackKind::Monarch
+                    | StackKind::DelayedCopy { .. }
+                    | StackKind::Emblem { .. } => None,
+                });
                 let need = self
-                    .resolve_value_expr(
-                        self.window.resolving().map_or(player, |e| e.controller()),
-                        target_count_expr,
-                    )?
+                    .resolve_value_expr(resolving_ctrl, target_count_expr)?
                     .max(0.into())
                     .to_usize()
                     .unwrap_or(0);
@@ -539,9 +549,14 @@ impl EffectWindow {
                 if need > 0 {
                     for (idx, id) in library.iter().enumerate() {
                         if evaluated.get(*id).is_some_and(|card| {
-                            filter.matches_static_characteristics(card, &excluded, || {
-                                self.copiable_program(*id).map(Program::mana_value)
-                            })
+                            self.matches_object_filter(
+                                **filter,
+                                card,
+                                resolving_ctrl,
+                                resolving_src,
+                                &excluded,
+                                &evaluated,
+                            )
                         }) {
                             reveal_until_matches.push(*id);
                             if reveal_until_matches.len() >= need {
@@ -621,8 +636,12 @@ impl EffectWindow {
                 } else if !*optional_keep || reveal_until_matches.is_empty() {
                     work.hand = Some(reveal_until_matches);
                 }
-            } else if reveal_until_ext.is_some() {
-                work.hand = Some(reveal_until_matches);
+            } else if let Some((_, _, _, _, _, keep_all)) = &reveal_until_ext {
+                if *keep_all {
+                    work.hand = Some(work.cards.clone());
+                } else {
+                    work.hand = Some(reveal_until_matches);
+                }
             }
             Box::new(work)
         };
@@ -697,15 +716,30 @@ impl EffectWindow {
             } else if let Some(filter) = filter {
                 let current = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
+                let resolving_src = self.window.resolving().and_then(|e| match e.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(id) => Some(*id),
+                    StackKind::SpellCopy { .. }
+                    | StackKind::Speed
+                    | StackKind::Monarch
+                    | StackKind::DelayedCopy { .. }
+                    | StackKind::Emblem { .. } => None,
+                });
                 let eligible: Vec<_> = work
                     .cards
                     .iter()
                     .copied()
                     .filter(|id| {
                         current.get(*id).is_some_and(|card| {
-                            filter.matches_static_characteristics(card, &excluded, || {
-                                self.copiable_program(*id).map(Program::mana_value)
-                            })
+                            self.matches_object_filter(
+                                **filter,
+                                card,
+                                chooser,
+                                resolving_src,
+                                &excluded,
+                                &current,
+                            )
                         })
                     })
                     .collect();
@@ -859,15 +893,30 @@ impl EffectWindow {
             } else if let Some(filter) = filter {
                 let current = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
+                let resolving_src = self.window.resolving().and_then(|e| match e.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(id) => Some(*id),
+                    StackKind::SpellCopy { .. }
+                    | StackKind::Speed
+                    | StackKind::Monarch
+                    | StackKind::DelayedCopy { .. }
+                    | StackKind::Emblem { .. } => None,
+                });
                 let eligible: Vec<_> = work
                     .cards
                     .iter()
                     .copied()
                     .filter(|id| {
                         current.get(*id).is_some_and(|card| {
-                            filter.matches_static_characteristics(card, &excluded, || {
-                                self.copiable_program(*id).map(Program::mana_value)
-                            })
+                            self.matches_object_filter(
+                                **filter,
+                                card,
+                                chooser,
+                                resolving_src,
+                                &excluded,
+                                &current,
+                            )
                         })
                     })
                     .collect();
@@ -1095,7 +1144,8 @@ impl EffectWindow {
                     | crate::program::LookTopKeepDest::LibraryTop => Zone::Hand,
                     crate::program::LookTopKeepDest::Battlefield { .. } => Zone::Battlefield,
                     crate::program::LookTopKeepDest::Graveyard => Zone::Graveyard,
-                    crate::program::LookTopKeepDest::Exile { .. } => Zone::Exile,
+                    crate::program::LookTopKeepDest::Exile { .. }
+                    | crate::program::LookTopKeepDest::ExileLinked { .. } => Zone::Exile,
                 };
                 (
                     zone,
@@ -1509,6 +1559,78 @@ impl EffectWindow {
                 .ok_or(EffectError::InconsistentProgram)?;
             if added.valid_placement() {
                 counters.push((movement.before.id(), id, added));
+            }
+        }
+        if let Some(crate::program::LookTopKeepDest::ExileLinked {
+            face_down,
+            playable,
+            free,
+            cast_only,
+            any_color,
+            duration,
+        }) = ext_keep_dest
+        {
+            let kept_before: BTreeSet<ObjectId> = work
+                .hand
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .collect();
+            let source_obj = self.window.resolving().and_then(|e| match e.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                StackKind::CardSpell(id) => Some(*id),
+                StackKind::SpellCopy { .. }
+                | StackKind::Speed
+                | StackKind::Monarch
+                | StackKind::DelayedCopy { .. }
+                | StackKind::Emblem { .. } => None,
+            });
+            let play_duration = match duration {
+                crate::characteristics::ResolvedDuration::UntilEndOfTurn
+                | crate::characteristics::ResolvedDuration::UntilEndOfCombat => {
+                    CardPlayDuration::ThroughTurn
+                }
+                crate::characteristics::ResolvedDuration::ThroughControllerNextTurn
+                | crate::characteristics::ResolvedDuration::UntilControllerNextTurn
+                | crate::characteristics::ResolvedDuration::ThroughNextTurn { .. }
+                | crate::characteristics::ResolvedDuration::UntilPlayerNextTurn { .. } => {
+                    if self.window.active_player() == chooser {
+                        CardPlayDuration::ThroughNextOwnTurnSkipCurrent(chooser)
+                    } else {
+                        CardPlayDuration::ThroughNextOwnTurn(chooser)
+                    }
+                }
+                _ => CardPlayDuration::WhileInZone,
+            };
+            for movement in &movements {
+                if kept_before.contains(&movement.before.id())
+                    && movement.after.zone() == ObjectZone::Exile
+                    && movement.after.card_id().is_some()
+                {
+                    if face_down {
+                        self.face_down_exile.insert(movement.after.id(), chooser);
+                    }
+                    if let Some(src_id) = source_obj {
+                        self.linked_exiles
+                            .entry(src_id)
+                            .or_default()
+                            .push(movement.after.id());
+                    }
+                    if playable {
+                        self.card_play_permissions.insert(CardPlayPermission {
+                            zone: CardPlayZone::Exile,
+                            object: movement.after.id(),
+                            player: chooser,
+                            duration: play_duration,
+                            any_color,
+                            free,
+                            cast_only,
+                        });
+                    }
+                }
             }
         }
         if let Some(crate::program::LookTopKeepDest::Exile {

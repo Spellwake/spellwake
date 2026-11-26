@@ -1,5 +1,116 @@
 use super::*;
-use spellwake_oracle_compiler::ast::FilterPredicateAst;
+use spellwake_oracle_compiler::ast::{FilterPredicateAst, PriorActionRefKind};
+
+fn resolve_outlaw_creature_types(
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<[CreatureTypeId; 5]> {
+    Some([
+        vocabulary.resolve_label("Assassin")?,
+        vocabulary.resolve_label("Mercenary")?,
+        vocabulary.resolve_label("Pirate")?,
+        vocabulary.resolve_label("Rogue")?,
+        vocabulary.resolve_label("Warlock")?,
+    ])
+}
+
+fn try_union_any_types_clauses(a: ObjectClause, b: ObjectClause) -> Option<ObjectClause> {
+    if a.any_types.is_empty()
+        || b.any_types.is_empty()
+        || !a.required_types.is_empty()
+        || !b.required_types.is_empty()
+        || !a.forbidden_types.is_empty()
+        || !b.forbidden_types.is_empty()
+    {
+        return None;
+    }
+    let mut a_norm = a;
+    let mut b_norm = b;
+    a_norm.any_types = CardTypeMask::EMPTY;
+    b_norm.any_types = CardTypeMask::EMPTY;
+    if a_norm == b_norm {
+        a_norm.any_types = a.any_types.union(b.any_types);
+        Some(a_norm)
+    } else {
+        None
+    }
+}
+
+fn prior_action_moved_count_zone(f: &ObjectFilterAst) -> Option<ValueZone> {
+    let mut inferred: Option<ValueZone> = None;
+    for pred in &f.predicates {
+        let next = match pred {
+            FilterPredicateAst::AffectedByPriorAction(kind) => match kind {
+                PriorActionRefKind::ExiledThisWay => Some(ValueZone::Exile(None)),
+                PriorActionRefKind::DiscardedThisWay
+                | PriorActionRefKind::DestroyedThisWay
+                | PriorActionRefKind::SacrificedThisWay
+                | PriorActionRefKind::PutIntoGraveyardThisWay => Some(ValueZone::AllGraveyards),
+                PriorActionRefKind::ReturnedToHandThisWay => Some(ValueZone::AllHands),
+                _ => None,
+            },
+            FilterPredicateAst::PriorActionZoneRef { kind } => match kind.as_str() {
+                "milled_this_way" => Some(ValueZone::AllGraveyards),
+                _ => None,
+            },
+            FilterPredicateAst::StateQualification(raw) => {
+                match raw.trim().to_ascii_lowercase().as_str() {
+                    "exiled this way"
+                    | "that was exiled this way"
+                    | "that were exiled this way" => Some(ValueZone::Exile(None)),
+                    "discarded this way"
+                    | "you discarded this way"
+                    | "destroyed this way"
+                    | "that were destroyed this way"
+                    | "put into a graveyard this way"
+                    | "that was put into a graveyard this way"
+                    | "that were put into a graveyard this way"
+                    | "put into graveyards this way"
+                    | "you put into your graveyard this way"
+                    | "milled this way"
+                    | "they milled this way" => Some(ValueZone::AllGraveyards),
+                    "returned this way" => Some(ValueZone::AllHands),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(z) = next {
+            if inferred.is_some_and(|prev| prev != z) {
+                return None;
+            }
+            inferred = Some(z);
+        }
+    }
+    inferred
+}
+
+fn is_unrestricted_last_moved_count_filter(inner: &ObjectFilterAst) -> bool {
+    let single_moved_pred = match inner.predicates.as_slice() {
+        [FilterPredicateAst::AffectedByPriorAction(kind)] => matches!(
+            kind,
+            PriorActionRefKind::ExiledThisWay
+                | PriorActionRefKind::DiscardedThisWay
+                | PriorActionRefKind::DestroyedThisWay
+                | PriorActionRefKind::SacrificedThisWay
+                | PriorActionRefKind::PutIntoGraveyardThisWay
+                | PriorActionRefKind::ReturnedToHandThisWay
+        ),
+        [FilterPredicateAst::PriorActionZoneRef { kind }] => {
+            matches!(
+                kind.as_str(),
+                "milled_this_way" | "put_onto_battlefield_this_way"
+            )
+        }
+        _ => false,
+    };
+    if !single_moved_pred {
+        return false;
+    }
+    let mut stripped = inner.clone();
+    stripped.predicates.clear();
+    stripped.zone = None;
+    filter_only_has(&stripped, FilterAllow::NONE)
+}
 
 pub(super) fn lower_permanent_selectors(
     subject: &SubjectRefAst,
@@ -461,9 +572,17 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                 sel.any_creature_subtypes = creatures;
             } else {
                 for st in &f.subtypes {
-                    let sub = resolve_selector_subtype(st, f.any_types, vocabulary)
-                        .ok_or("oracle:selector-multi-subtypes")?;
-                    sel.any_subtypes.insert(sub);
+                    if st.eq_ignore_ascii_case("outlaw") {
+                        let outlaws = resolve_outlaw_creature_types(vocabulary)
+                            .ok_or("oracle:selector-multi-subtypes")?;
+                        for ct in outlaws {
+                            sel.any_subtypes.insert(SelectorSubtype::Creature(ct));
+                        }
+                    } else {
+                        let sub = resolve_selector_subtype(st, f.any_types, vocabulary)
+                            .ok_or("oracle:selector-multi-subtypes")?;
+                        sel.any_subtypes.insert(sub);
+                    }
                 }
             }
         } else {
@@ -474,15 +593,21 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
             return Err("oracle:selector-multi-subtypes");
         }
     } else if let Some(st) = f.subtypes.first() {
-        let sub = resolve_selector_subtype(st, f.any_types, vocabulary)
-            .ok_or("oracle:selector-unknown-subtype")?;
-        match sub {
-            SelectorSubtype::Creature(ct) => sel.creature_subtype = Some(ct),
-            SelectorSubtype::Land(lt) => sel.land_subtype = Some(lt),
-            SelectorSubtype::Artifact(at) => sel.artifact_subtype = Some(at),
-            SelectorSubtype::Planeswalker(pw) => sel.planeswalker_subtype = Some(pw),
-            SelectorSubtype::Enchantment(_) | SelectorSubtype::Aura => {
-                sel.required_subtypes.insert(sub);
+        if st.eq_ignore_ascii_case("outlaw") {
+            let outlaws = resolve_outlaw_creature_types(vocabulary)
+                .ok_or("oracle:selector-unknown-subtype")?;
+            sel.any_creature_subtypes.extend(outlaws);
+        } else {
+            let sub = resolve_selector_subtype(st, f.any_types, vocabulary)
+                .ok_or("oracle:selector-unknown-subtype")?;
+            match sub {
+                SelectorSubtype::Creature(ct) => sel.creature_subtype = Some(ct),
+                SelectorSubtype::Land(lt) => sel.land_subtype = Some(lt),
+                SelectorSubtype::Artifact(at) => sel.artifact_subtype = Some(at),
+                SelectorSubtype::Planeswalker(pw) => sel.planeswalker_subtype = Some(pw),
+                SelectorSubtype::Enchantment(_) | SelectorSubtype::Aura => {
+                    sel.required_subtypes.insert(sub);
+                }
             }
         }
     }
@@ -490,6 +615,12 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
         let fst = &f.forbidden_subtypes[0];
         if fst.eq_ignore_ascii_case("aura") {
             sel.exclude_auras = true;
+        } else if fst.eq_ignore_ascii_case("outlaw") {
+            let outlaws = resolve_outlaw_creature_types(vocabulary)
+                .ok_or("oracle:selector-unknown-forbidden-subtype")?;
+            for ct in outlaws {
+                sel.forbidden_subtypes.insert(SelectorSubtype::Creature(ct));
+            }
         } else if let Some(ct) = vocabulary.resolve_label(fst) {
             sel.forbidden_creature_subtype = Some(ct);
         } else if let Some(sub) = resolve_selector_subtype(fst, f.any_types, vocabulary) {
@@ -499,9 +630,17 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
         }
     } else if f.forbidden_subtypes.len() > 1 {
         for fst in &f.forbidden_subtypes {
-            let sub = resolve_selector_subtype(fst, f.any_types, vocabulary)
-                .ok_or("oracle:selector-unknown-forbidden-subtype")?;
-            sel.forbidden_subtypes.insert(sub);
+            if fst.eq_ignore_ascii_case("outlaw") {
+                let outlaws = resolve_outlaw_creature_types(vocabulary)
+                    .ok_or("oracle:selector-unknown-forbidden-subtype")?;
+                for ct in outlaws {
+                    sel.forbidden_subtypes.insert(SelectorSubtype::Creature(ct));
+                }
+            } else {
+                let sub = resolve_selector_subtype(fst, f.any_types, vocabulary)
+                    .ok_or("oracle:selector-unknown-forbidden-subtype")?;
+                sel.forbidden_subtypes.insert(sub);
+            }
         }
     }
 
@@ -511,7 +650,9 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
     // Controller & owner
     sel.controller = match f.controller {
         None => ControllerSelector::Any,
-        Some(ControllerRelation::You) => ControllerSelector::SourceController,
+        Some(ControllerRelation::You | ControllerRelation::YourTeam) => {
+            ControllerSelector::SourceController
+        }
         Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
             ControllerSelector::Opponents
         }
@@ -594,6 +735,30 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                     }
                     "with a -1/-1 counter on it" | "that have -1/-1 counters on them" => {
                         sel.minus_one_counter = true;
+                    }
+                    "with toughness greater than its power" => {
+                        sel.toughness_greater_than_power = true;
+                    }
+                    "kicked" => {
+                        sel.kicked = true;
+                    }
+                    "renowned" => {
+                        sel.renowned = true;
+                    }
+                    "saddled" => {
+                        sel.saddled = true;
+                    }
+                    "monstrous" => {
+                        sel.monstrous = true;
+                    }
+                    "suspected" => {
+                        sel.suspected = true;
+                    }
+                    "solved" => {
+                        sel.solved = true;
+                    }
+                    "exerted" => {
+                        sel.exerted = true;
                     }
                     other => {
                         if let Some(pt_raw) = other.strip_prefix("pt:")
@@ -686,6 +851,12 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                     for fst in &excl.subtypes {
                         if fst.eq_ignore_ascii_case("aura") {
                             sel.exclude_auras = true;
+                        } else if fst.eq_ignore_ascii_case("outlaw") {
+                            let outlaws = resolve_outlaw_creature_types(vocabulary)
+                                .ok_or("oracle:unsupported-selector-predicate")?;
+                            for ct in outlaws {
+                                sel.forbidden_subtypes.insert(SelectorSubtype::Creature(ct));
+                            }
                         } else if let Some(sub) =
                             resolve_selector_subtype(fst, f.any_types, vocabulary)
                         {
@@ -3399,6 +3570,29 @@ fn intersect_object_clauses(
     {
         return Err("oracle:unsupported-filter-predicate");
     }
+    if flags.contains(ObjectFilterFlags::FACE_DOWN) && flags.contains(ObjectFilterFlags::FACE_UP) {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    if (flags.contains(ObjectFilterFlags::EVEN_MANA_VALUE) || mana_value == ManaValueFilter::Even)
+        && (flags.contains(ObjectFilterFlags::ODD_MANA_VALUE) || mana_value == ManaValueFilter::Odd)
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    if flags.contains(ObjectFilterFlags::HAS_ACTIVATED_ABILITY)
+        && flags.contains(ObjectFilterFlags::NO_ACTIVATED_ABILITIES)
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
+    if (flags.contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+        || matches!(
+            source_relation,
+            SourceRelation::SharingNameWithAbilitySource
+                | SourceRelation::OtherThanAbilitySourceSharingName
+        ))
+        && flags.contains(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE)
+    {
+        return Err("oracle:unsupported-filter-predicate");
+    }
     let required_counter_kind = match (base.required_counter_kind, extra.required_counter_kind) {
         (None, k) | (k, None) => k,
         (Some(a), Some(b)) if a == b => Some(a),
@@ -3479,7 +3673,29 @@ pub(super) fn lower_object_filter(
                     ExactNameKey::from_name(name).ok_or("oracle:unsupported-object-filter")?;
                 clause.exact_name = Some(key);
             }
-            NameFilterAst::SameAsReferenced | NameFilterAst::SameAs(_) => {
+            NameFilterAst::SameAs(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_SOURCE);
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_SOURCE);
+                }
+                SubjectRefAst::TargetObject {
+                    count: TargetCountAst::Exact(1),
+                    ..
+                } => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_TARGET);
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if raw.trim().to_ascii_lowercase().contains("target") =>
+                {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_TARGET);
+                }
+                _ => return Err("oracle:unsupported-object-filter"),
+            },
+            NameFilterAst::SameAsReferenced => {
                 return Err("oracle:unsupported-object-filter");
             }
         }
@@ -3548,6 +3764,7 @@ pub(super) fn lower_object_filter(
     };
 
     // Controller and owner lowered independently
+    let mut owner_from_controller = ControllerFilter::Any;
     clause.controller = match f.controller {
         None => ControllerFilter::Any,
         Some(ctrl) => match ctrl {
@@ -3558,6 +3775,10 @@ pub(super) fn lower_object_filter(
             ControllerRelation::NotYou => ControllerFilter::NotYou,
             ControllerRelation::OwnerYou => ControllerFilter::OwnerYou,
             ControllerRelation::OwnerOpponent => ControllerFilter::OwnerOpponent,
+            ControllerRelation::OwnerThatPlayer if f.owner.is_none() => {
+                owner_from_controller = ControllerFilter::RelatedPlayer;
+                ControllerFilter::Any
+            }
             ControllerRelation::ThatPlayer => ControllerFilter::RelatedPlayer,
             ControllerRelation::DefendingPlayer => ControllerFilter::DefendingPlayer,
             ControllerRelation::ActivePlayer => ControllerFilter::ActivePlayer,
@@ -3567,7 +3788,7 @@ pub(super) fn lower_object_filter(
         },
     };
     clause.owner = match f.owner {
-        None => ControllerFilter::Any,
+        None => owner_from_controller,
         Some(owner) => match owner {
             ControllerRelation::You
             | ControllerRelation::YourTeam
@@ -3576,7 +3797,9 @@ pub(super) fn lower_object_filter(
             | ControllerRelation::Opponents
             | ControllerRelation::OwnerOpponent => ControllerFilter::Opponent,
             ControllerRelation::NotYou => ControllerFilter::NotYou,
-            ControllerRelation::ThatPlayer => ControllerFilter::RelatedPlayer,
+            ControllerRelation::ThatPlayer | ControllerRelation::OwnerThatPlayer => {
+                ControllerFilter::RelatedPlayer
+            }
             ControllerRelation::DefendingPlayer => ControllerFilter::DefendingPlayer,
             ControllerRelation::ActivePlayer => ControllerFilter::ActivePlayer,
             ControllerRelation::TargetPlayer => ControllerFilter::TargetPlayer,
@@ -3647,26 +3870,84 @@ pub(super) fn lower_object_filter(
             use spellwake_engine::program::DynamicStatAnchor as A;
             match val {
                 ValueExprAst::ChosenX => Some(A::ChosenX),
-                ValueExprAst::ObjectStat { subject, stat } => match (subject.as_ref(), stat) {
-                    (SubjectRefAst::SelfObject, StatKind::Power) => Some(A::SourcePower),
-                    (SubjectRefAst::SelfObject, StatKind::Toughness) => Some(A::SourceToughness),
-                    (SubjectRefAst::SelfObject, StatKind::ManaValue) => Some(A::SourceManaValue),
-                    (SubjectRefAst::TargetObject { .. }, StatKind::Power) => Some(A::TargetPower),
-                    (SubjectRefAst::Anaphora(raw), StatKind::Power)
-                        if raw.to_ascii_lowercase().contains("target") =>
-                    {
-                        Some(A::TargetPower)
+                ValueExprAst::CardsExiledThisWay => Some(A::LastMovedCount),
+                ValueExprAst::ObjectStat { subject, stat } => {
+                    match (peel_battlefield_subject(subject), stat) {
+                        (SubjectRefAst::SelfObject, StatKind::Power) => Some(A::SourcePower),
+                        (SubjectRefAst::SelfObject, StatKind::Toughness) => {
+                            Some(A::SourceToughness)
+                        }
+                        (SubjectRefAst::SelfObject, StatKind::ManaValue) => {
+                            Some(A::SourceManaValue)
+                        }
+                        (SubjectRefAst::Anaphora(raw), stat_kind)
+                            if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                        {
+                            match stat_kind {
+                                StatKind::Power => Some(A::SourcePower),
+                                StatKind::Toughness => Some(A::SourceToughness),
+                                StatKind::ManaValue => Some(A::SourceManaValue),
+                                StatKind::Loyalty => None,
+                            }
+                        }
+                        (SubjectRefAst::TargetObject { .. }, StatKind::Power) => {
+                            Some(A::TargetPower)
+                        }
+                        (SubjectRefAst::TargetObject { .. }, StatKind::Toughness) => {
+                            Some(A::TargetToughness)
+                        }
+                        (SubjectRefAst::TargetObject { .. }, StatKind::ManaValue) => {
+                            Some(A::TargetManaValue)
+                        }
+                        (SubjectRefAst::Anaphora(raw), stat_kind) => {
+                            let low = raw.trim().to_ascii_lowercase();
+                            if low.contains("target") {
+                                match stat_kind {
+                                    StatKind::Power => Some(A::TargetPower),
+                                    StatKind::Toughness => Some(A::TargetToughness),
+                                    StatKind::ManaValue => Some(A::TargetManaValue),
+                                    StatKind::Loyalty => None,
+                                }
+                            } else if low.contains("sacrificed") {
+                                match stat_kind {
+                                    StatKind::Power => Some(A::LastSacrificedPower),
+                                    StatKind::Toughness => Some(A::LastSacrificedToughness),
+                                    StatKind::ManaValue => Some(A::LastSacrificedManaValue),
+                                    StatKind::Loyalty => None,
+                                }
+                            } else if low.contains("discarded")
+                                || low.contains("exiled")
+                                || low.contains("revealed")
+                                || low.contains("milled")
+                                || low.contains("tapped")
+                                || low.contains("ring-bearer")
+                                || low.contains("chosen")
+                                || low.contains("returned")
+                                || low.contains("exploited")
+                                || matches!(low.as_str(), "its" | "his" | "her" | "their")
+                            {
+                                None
+                            } else {
+                                match stat_kind {
+                                    StatKind::Power => Some(A::TriggerSubjectPower),
+                                    StatKind::Toughness => Some(A::TriggerSubjectToughness),
+                                    StatKind::ManaValue => Some(A::TriggerSubjectManaValue),
+                                    StatKind::Loyalty => None,
+                                }
+                            }
+                        }
+                        (SubjectRefAst::TriggerSubject, StatKind::Power) => {
+                            Some(A::TriggerSubjectPower)
+                        }
+                        (SubjectRefAst::TriggerSubject, StatKind::Toughness) => {
+                            Some(A::TriggerSubjectToughness)
+                        }
+                        (SubjectRefAst::TriggerSubject, StatKind::ManaValue) => {
+                            Some(A::TriggerSubjectManaValue)
+                        }
+                        _ => None,
                     }
-                    (
-                        SubjectRefAst::TriggerSubject | SubjectRefAst::Anaphora(_),
-                        StatKind::Power,
-                    ) => Some(A::TriggerSubjectPower),
-                    (
-                        SubjectRefAst::TriggerSubject | SubjectRefAst::Anaphora(_),
-                        StatKind::ManaValue,
-                    ) => Some(A::TriggerSubjectManaValue),
-                    _ => None,
-                },
+                }
                 ValueExprAst::CounterCount {
                     subject,
                     counter_kind,
@@ -3688,6 +3969,9 @@ pub(super) fn lower_object_filter(
                     _ => None,
                 },
                 ValueExprAst::Count(inner) => {
+                    if is_unrestricted_last_moved_count_filter(inner) {
+                        return Some(A::LastMovedCount);
+                    }
                     if inner.zone == Some(ZoneFilter::YourHand)
                         && filter_only_has(
                             inner,
@@ -3745,6 +4029,88 @@ pub(super) fn lower_object_filter(
         };
     for sb in &f.stat_bounds {
         match (sb.stat, sb.op, sb.value.as_ref()) {
+            (
+                StatKind::Power,
+                CompareOp::Eq,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Toughness,
+                },
+            )
+            | (
+                StatKind::Toughness,
+                CompareOp::Eq,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Power,
+                },
+            ) if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "its" | "his" | "her" | "their"
+                    )
+            ) =>
+            {
+                clause.flags = clause.flags.union(ObjectFilterFlags::SAME_TOTAL_PT);
+            }
+            (
+                StatKind::Toughness,
+                CompareOp::Gt,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Power,
+                },
+            )
+            | (
+                StatKind::Power,
+                CompareOp::Lt,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Toughness,
+                },
+            ) if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "its" | "his" | "her" | "their"
+                    )
+            ) =>
+            {
+                clause.flags = clause
+                    .flags
+                    .union(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER);
+            }
+            (
+                StatKind::Power,
+                CompareOp::Gt,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Toughness,
+                },
+            )
+            | (
+                StatKind::Toughness,
+                CompareOp::Lt,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Power,
+                },
+            ) if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "its" | "his" | "her" | "their"
+                    )
+            ) =>
+            {
+                clause.flags = clause
+                    .flags
+                    .union(ObjectFilterFlags::POWER_GREATER_THAN_TOUGHNESS);
+            }
             (StatKind::Power, CompareOp::Ge, ValueExprAst::Const(n)) => {
                 clause.power =
                     PowerFilter::AtLeast(i16::try_from(*n).map_err(|_| "oracle:stat-ovf")?);
@@ -3964,8 +4330,16 @@ pub(super) fn lower_object_filter(
             clause = clause.with_flags(ObjectFilterFlags::WITHOUT_COUNTERS);
         }
     }
-    if f.flags.0 & AstFilterFlags::FACE_DOWN.0 != 0 {
+    let has_face_down = (f.flags.0 & AstFilterFlags::FACE_DOWN.0) != 0;
+    let has_face_up = (f.flags.0 & AstFilterFlags::FACE_UP.0) != 0;
+    if has_face_down && has_face_up {
+        return Err("oracle:unsupported-filter-flag");
+    }
+    if has_face_down {
         clause.flags = clause.flags.union(ObjectFilterFlags::FACE_DOWN);
+    }
+    if has_face_up {
+        clause.flags = clause.flags.union(ObjectFilterFlags::FACE_UP);
     }
     if f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0 != 0 {
         clause.flags = clause.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
@@ -4024,6 +4398,7 @@ pub(super) fn lower_object_filter(
         | AstFilterFlags::WITH_ANY_COUNTER.0
         | AstFilterFlags::WITHOUT_COUNTERS.0
         | AstFilterFlags::FACE_DOWN.0
+        | AstFilterFlags::FACE_UP.0
         | AstFilterFlags::EXILED_WITH_SELF.0
         | AstFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN.0
         | AstFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR.0
@@ -4065,11 +4440,220 @@ pub(super) fn lower_object_filter(
     let mut extra_forbidden_subtypes: Vec<&str> = Vec::new();
     for pred in &f.predicates {
         match pred {
-            FilterPredicateAst::HasAbilityKind {
-                kind,
+            FilterPredicateAst::HasAbilityKind { kind, negated } => {
+                let norm_kind = kind.trim().to_ascii_lowercase();
+                if norm_kind == "adventure" && !negated {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ADVENTURE);
+                } else if matches!(
+                    norm_kind.as_str(),
+                    "activated" | "activated_ability" | "an activated ability"
+                ) {
+                    if *negated {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::HAS_ACTIVATED_ABILITY)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::NO_ACTIVATED_ABILITIES);
+                    } else {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::NO_ACTIVATED_ABILITIES)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ACTIVATED_ABILITY);
+                    }
+                } else {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+            }
+            FilterPredicateAst::NotOwnedByController => {
+                clause.flags = clause
+                    .flags
+                    .union(ObjectFilterFlags::NOT_OWNED_BY_CONTROLLER);
+            }
+            FilterPredicateAst::WithoutCounterKind(ck_raw) => {
+                let ck_low = ck_raw.trim().to_ascii_lowercase();
+                let ck_clean = ck_low
+                    .trim_end_matches(" counters")
+                    .trim_end_matches(" counter")
+                    .trim();
+                let ck = ck_clean
+                    .strip_prefix("any ")
+                    .or_else(|| ck_clean.strip_prefix("a "))
+                    .or_else(|| ck_clean.strip_prefix("an "))
+                    .unwrap_or(ck_clean)
+                    .trim();
+                if matches!(ck, "" | "any" | "a" | "one or more") {
+                    if clause.flags.contains(ObjectFilterFlags::WITH_ANY_COUNTER)
+                        || clause
+                            .flags
+                            .contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)
+                        || clause
+                            .flags
+                            .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+                        || clause.required_counter_kind.is_some()
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+                } else {
+                    let kind = parse_counter_kind(ck)
+                        .filter(|k| k.is_permanent())
+                        .ok_or("oracle:unsupported-filter-predicate")?;
+                    if clause.required_counter_kind == Some(kind)
+                        || (kind == CounterKind::PlusOne
+                            && clause
+                                .flags
+                                .contains(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER))
+                        || (kind == CounterKind::MinusOne
+                            && clause
+                                .flags
+                                .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER))
+                        || clause
+                            .forbidden_counter_kind
+                            .is_some_and(|prev| prev != kind)
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.forbidden_counter_kind = Some(kind);
+                }
+            }
+            FilterPredicateAst::SharesPropertyWith {
+                property,
+                reference,
                 negated: false,
-            } if kind == "adventure" => {
-                clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ADVENTURE);
+            } => {
+                let prop = property.trim().to_ascii_lowercase();
+                let flag = match peel_battlefield_subject(reference) {
+                    SubjectRefAst::SelfObject => match prop.as_str() {
+                        "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
+                        "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE,
+                        "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
+                        _ => return Err("oracle:unsupported-filter-predicate"),
+                    },
+                    SubjectRefAst::Anaphora(raw)
+                        if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                    {
+                        match prop.as_str() {
+                            "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
+                            "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE,
+                            "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
+                            _ => return Err("oracle:unsupported-filter-predicate"),
+                        }
+                    }
+                    SubjectRefAst::TargetObject {
+                        count: TargetCountAst::Exact(1),
+                        ..
+                    } => match prop.as_str() {
+                        "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
+                        "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET,
+                        "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
+                        _ => return Err("oracle:unsupported-filter-predicate"),
+                    },
+                    SubjectRefAst::Anaphora(raw) => {
+                        let low = raw.trim().to_ascii_lowercase();
+                        if low.contains("target") {
+                            match prop.as_str() {
+                                "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
+                                "creature_type" => {
+                                    ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET
+                                }
+                                "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
+                                _ => return Err("oracle:unsupported-filter-predicate"),
+                            }
+                        } else if (low.contains("sacrificed creature")
+                            || low.contains("sacrificed permanent")
+                            || low.contains("sacrificed card"))
+                            && prop == "color"
+                        {
+                            ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED
+                        } else {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                    }
+                    _ => return Err("oracle:unsupported-filter-predicate"),
+                };
+                clause.flags = clause.flags.union(flag);
+            }
+            FilterPredicateAst::DifferentNameFrom(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    if clause
+                        .flags
+                        .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+                        || matches!(
+                            clause.source_relation,
+                            SourceRelation::SharingNameWithAbilitySource
+                                | SourceRelation::OtherThanAbilitySourceSharingName
+                        )
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
+                    if clause
+                        .flags
+                        .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+                        || matches!(
+                            clause.source_relation,
+                            SourceRelation::SharingNameWithAbilitySource
+                                | SourceRelation::OtherThanAbilitySourceSharingName
+                        )
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
+                }
+                SubjectRefAst::Group(g) | SubjectRefAst::All(g) | SubjectRefAst::Each(g)
+                    if g.any_permanent
+                        && g.controller == Some(ControllerRelation::You)
+                        && filter_only_has(
+                            g,
+                            FilterAllow {
+                                controller: true,
+                                flags: true,
+                                ..FilterAllow::NONE
+                            },
+                        )
+                        && (g.flags.0
+                            & !(AstFilterFlags::EXCLUDE_SELF.0
+                                | AstFilterFlags::LKI_PAST_TENSE.0))
+                            == 0 =>
+                {
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::UNIQUE_NAME_AMONG_CONTROLLED);
+                }
+                _ => return Err("oracle:unsupported-filter-predicate"),
+            },
+            FilterPredicateAst::AffectedByPriorAction(
+                PriorActionRefKind::ExiledThisWay
+                | PriorActionRefKind::DiscardedThisWay
+                | PriorActionRefKind::DestroyedThisWay
+                | PriorActionRefKind::SacrificedThisWay
+                | PriorActionRefKind::PutIntoGraveyardThisWay
+                | PriorActionRefKind::ReturnedToHandThisWay,
+            ) => {
+                clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
+            }
+            FilterPredicateAst::PriorActionZoneRef { kind }
+                if matches!(
+                    kind.as_str(),
+                    "milled_this_way" | "put_onto_battlefield_this_way"
+                ) =>
+            {
+                clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
             }
             FilterPredicateAst::SubtypesMatchAny => {
                 subtypes_match_any = true;
@@ -4149,19 +4733,37 @@ pub(super) fn lower_object_filter(
                     .union(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN);
             }
             FilterPredicateAst::AnyOf(filters) => {
-                if any_of_pair.is_some() || mana_value_pair.is_some() {
+                if any_of_pair.is_some() || mana_value_pair.is_some() || filters.len() < 2 {
                     return Err("oracle:unsupported-filter-predicate");
                 }
-                let [first_ast, second_ast] = filters.as_slice() else {
-                    return Err("oracle:unsupported-filter-predicate");
-                };
-                let ObjectFilter::Clause(c1) = lower_object_filter(first_ast, vocabulary)? else {
-                    return Err("oracle:unsupported-filter-predicate");
-                };
-                let ObjectFilter::Clause(c2) = lower_object_filter(second_ast, vocabulary)? else {
-                    return Err("oracle:unsupported-filter-predicate");
-                };
-                any_of_pair = Some((c1, c2));
+                let mut clauses = Vec::with_capacity(filters.len());
+                for sub_ast in filters {
+                    let ObjectFilter::Clause(sub_clause) =
+                        lower_object_filter(sub_ast, vocabulary)?
+                    else {
+                        return Err("oracle:unsupported-filter-predicate");
+                    };
+                    let mut merged = false;
+                    for existing in &mut clauses {
+                        if let Some(u) = try_union_any_types_clauses(*existing, sub_clause) {
+                            *existing = u;
+                            merged = true;
+                            break;
+                        }
+                    }
+                    if !merged {
+                        clauses.push(sub_clause);
+                    }
+                }
+                match clauses.as_slice() {
+                    [single] => {
+                        clause = intersect_object_clauses(clause, *single)?;
+                    }
+                    [c1, c2] => {
+                        any_of_pair = Some((*c1, *c2));
+                    }
+                    _ => return Err("oracle:unsupported-filter-predicate"),
+                }
             }
             FilterPredicateAst::Exclude(subj)
                 if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
@@ -4287,14 +4889,26 @@ pub(super) fn lower_object_filter(
                     clause.forbidden_keyword = Some(kw);
                 }
             }
-            FilterPredicateAst::AttachedTo(subj)
-                if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
-            {
-                set_clause_source_relation(
-                    &mut clause.source_relation,
-                    SourceRelation::AttachedToSelf,
-                )?;
-            }
+            FilterPredicateAst::AttachedTo(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    set_clause_source_relation(
+                        &mut clause.source_relation,
+                        SourceRelation::AttachedToSelf,
+                    )?;
+                }
+                SubjectRefAst::TargetObject {
+                    count: TargetCountAst::Exact(1),
+                    ..
+                } => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_TARGET);
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if raw.trim().to_ascii_lowercase().contains("target") =>
+                {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_TARGET);
+                }
+                _ => return Err("oracle:unsupported-filter-predicate"),
+            },
             FilterPredicateAst::Blocking(subj)
                 if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
             {
@@ -4367,14 +4981,32 @@ pub(super) fn lower_object_filter(
                 }
             }
             FilterPredicateAst::ManaValueParity { even } => {
-                if clause.mana_value != ManaValueFilter::Any || mana_value_pair.is_some() {
-                    return Err("oracle:unsupported-filter-predicate");
-                }
-                clause.mana_value = if *even {
-                    ManaValueFilter::Even
+                if clause.mana_value == ManaValueFilter::Any && mana_value_pair.is_none() {
+                    if (*even && clause.flags.contains(ObjectFilterFlags::ODD_MANA_VALUE))
+                        || (!*even && clause.flags.contains(ObjectFilterFlags::EVEN_MANA_VALUE))
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.mana_value = if *even {
+                        ManaValueFilter::Even
+                    } else {
+                        ManaValueFilter::Odd
+                    };
+                } else if *even {
+                    if clause.mana_value == ManaValueFilter::Odd
+                        || clause.flags.contains(ObjectFilterFlags::ODD_MANA_VALUE)
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause.flags.union(ObjectFilterFlags::EVEN_MANA_VALUE);
                 } else {
-                    ManaValueFilter::Odd
-                };
+                    if clause.mana_value == ManaValueFilter::Even
+                        || clause.flags.contains(ObjectFilterFlags::EVEN_MANA_VALUE)
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ODD_MANA_VALUE);
+                }
             }
             FilterPredicateAst::ManaValueIn(vals) => {
                 if clause.mana_value != ManaValueFilter::Any || mana_value_pair.is_some() {
@@ -4665,6 +5297,174 @@ pub(super) fn lower_object_filter(
                     "exiled with ~" => {
                         clause.flags = clause.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
                     }
+                    "suspended" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SUSPENDED);
+                    }
+                    "with an activated ability"
+                    | "that has an activated ability"
+                    | "that have activated abilities" => {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::NO_ACTIVATED_ABILITIES)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ACTIVATED_ABILITY);
+                    }
+                    "without activated abilities"
+                    | "with no activated abilities"
+                    | "that doesn't have an activated ability"
+                    | "that don't have activated abilities" => {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::HAS_ACTIVATED_ABILITY)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::NO_ACTIVATED_ABILITIES);
+                    }
+                    "with power equal to its toughness"
+                    | "whose power is equal to its toughness" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SAME_TOTAL_PT);
+                    }
+                    "that shares a color with ~" | "that share a color with ~" => {
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE);
+                    }
+                    "that shares a creature type with ~" | "that share a creature type with ~" => {
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE);
+                    }
+                    "that shares a card type with ~" | "that share a card type with ~" => {
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE);
+                    }
+                    "that don't have the same name as ~"
+                    | "that doesn't have the same name as ~"
+                    | "with a different name than ~" => {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+                            || matches!(
+                                clause.source_relation,
+                                SourceRelation::SharingNameWithAbilitySource
+                                    | SourceRelation::OtherThanAbilitySourceSharingName
+                            )
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
+                    }
+                    "you own and control" => {
+                        if !matches!(
+                            clause.controller,
+                            ControllerFilter::Any | ControllerFilter::You
+                        ) || !matches!(
+                            clause.owner,
+                            ControllerFilter::Any | ControllerFilter::You
+                        ) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.controller = ControllerFilter::You;
+                        clause.owner = ControllerFilter::You;
+                    }
+                    "you neither own nor control" => {
+                        if !matches!(
+                            clause.controller,
+                            ControllerFilter::Any | ControllerFilter::NotYou
+                        ) || !matches!(
+                            clause.owner,
+                            ControllerFilter::Any | ControllerFilter::NotYou
+                        ) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.controller = ControllerFilter::NotYou;
+                        clause.owner = ControllerFilter::NotYou;
+                    }
+                    "they own" => {
+                        if !matches!(
+                            clause.owner,
+                            ControllerFilter::Any | ControllerFilter::RelatedPlayer
+                        ) || matches!(
+                            clause.controller,
+                            ControllerFilter::OwnerYou | ControllerFilter::OwnerOpponent
+                        ) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.owner = ControllerFilter::RelatedPlayer;
+                    }
+                    "they own that you control" => {
+                        if !matches!(
+                            clause.owner,
+                            ControllerFilter::Any | ControllerFilter::RelatedPlayer
+                        ) || !matches!(
+                            clause.controller,
+                            ControllerFilter::Any | ControllerFilter::You
+                        ) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.owner = ControllerFilter::RelatedPlayer;
+                        clause.controller = ControllerFilter::You;
+                    }
+                    "exiled this way"
+                    | "that was exiled this way"
+                    | "that were exiled this way"
+                    | "discarded this way"
+                    | "you discarded this way"
+                    | "destroyed this way"
+                    | "that were destroyed this way"
+                    | "put into a graveyard this way"
+                    | "that was put into a graveyard this way"
+                    | "that were put into a graveyard this way"
+                    | "put into graveyards this way"
+                    | "you put into your graveyard this way"
+                    | "milled this way"
+                    | "they milled this way"
+                    | "returned this way" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
+                    }
+                    "with power 3 or greater" => {
+                        if clause.power != PowerFilter::Any {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.power = PowerFilter::AtLeast(3);
+                    }
+                    "with power less than ~'s toughness" => {
+                        if clause.power != PowerFilter::Any {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.power = PowerFilter::CompareAnchor {
+                            op: Comparison::Less,
+                            anchor: DynamicStatAnchor::SourceToughness,
+                        };
+                    }
+                    "with toughness less than ~'s" | "with toughness less than ~'s toughness" => {
+                        if clause.toughness != ToughnessFilter::Any {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.toughness = ToughnessFilter::CompareAnchor {
+                            op: Comparison::Less,
+                            anchor: DynamicStatAnchor::SourceToughness,
+                        };
+                    }
+                    "with lesser mana value than ~"
+                    | "with mana value less than ~'s"
+                    | "with mana value less than ~'s mana value" => {
+                        if clause.mana_value != ManaValueFilter::Any || mana_value_pair.is_some() {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.mana_value = ManaValueFilter::CompareAnchor {
+                            op: Comparison::Less,
+                            anchor: DynamicStatAnchor::SourceManaValue,
+                        };
+                    }
                     other => {
                         if let Some(ck_raw) = extract_state_qual_counter_kind(other) {
                             let ck = ck_raw.trim().to_ascii_lowercase();
@@ -4832,6 +5632,10 @@ pub(super) fn lower_object_filter(
             clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
         } else if fst.eq_ignore_ascii_case("saga") {
             clause.flags = clause.flags.union(ObjectFilterFlags::NON_SAGA);
+        } else if fst.eq_ignore_ascii_case("outlaw") {
+            let outlaws = resolve_outlaw_creature_types(vocabulary)
+                .ok_or("oracle:unsupported-forbidden-subtype")?;
+            forb_creature_types.extend(outlaws);
         } else if let Some(ct) = vocabulary.resolve_label(fst) {
             forb_creature_types.push(ct);
         } else if let Some(lt) = parse_land_subtype(fst) {
@@ -4906,8 +5710,20 @@ pub(super) fn lower_object_filter(
         if clause.subtypes != SubtypeFilter::Any {
             return Err("oracle:mixed-subtype-filter");
         }
-        clause.subtypes =
-            resolve_single_subtype(&f.subtypes[0]).ok_or("oracle:unsupported-subtype-filter")?;
+        if f.subtypes[0].eq_ignore_ascii_case("outlaw") {
+            let outlaws = resolve_outlaw_creature_types(vocabulary)
+                .ok_or("oracle:unsupported-subtype-filter")?;
+            let atoms: Vec<_> = outlaws
+                .into_iter()
+                .map(spellwake_engine::program::SingleSubtype::Creature)
+                .collect();
+            let list = spellwake_engine::program::SubtypeList::from_slice(&atoms)
+                .ok_or("oracle:too-many-subtypes")?;
+            clause.subtypes = SubtypeFilter::AnyOfList(list);
+        } else {
+            clause.subtypes = resolve_single_subtype(&f.subtypes[0])
+                .ok_or("oracle:unsupported-subtype-filter")?;
+        }
     } else if f.subtypes.len() >= 2 {
         if clause.subtypes != SubtypeFilter::Any {
             return Err("oracle:mixed-subtype-filter");
@@ -4932,12 +5748,23 @@ pub(super) fn lower_object_filter(
         {
             clause.subtypes = SubtypeFilter::AnyOf([a, b, c]);
         } else {
-            let atoms: Vec<_> = f
-                .subtypes
-                .iter()
-                .map(|st| resolve_single_subtype_atom(st))
-                .collect::<Option<Vec<_>>>()
-                .ok_or("oracle:unsupported-multi-subtype")?;
+            let mut atoms = Vec::with_capacity(f.subtypes.len());
+            for st in &f.subtypes {
+                if st.eq_ignore_ascii_case("outlaw") {
+                    let outlaws = resolve_outlaw_creature_types(vocabulary)
+                        .ok_or("oracle:unsupported-multi-subtype")?;
+                    atoms.extend(
+                        outlaws
+                            .into_iter()
+                            .map(spellwake_engine::program::SingleSubtype::Creature),
+                    );
+                } else {
+                    atoms.push(
+                        resolve_single_subtype_atom(st)
+                            .ok_or("oracle:unsupported-multi-subtype")?,
+                    );
+                }
+            }
             let list = spellwake_engine::program::SubtypeList::from_slice(&atoms)
                 .ok_or("oracle:too-many-subtypes")?;
             clause.subtypes = SubtypeFilter::AnyOfList(list);
@@ -5136,11 +5963,20 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
         || filter.is_ability
         || filter.named.is_some()
         || !filter.subtypes.is_empty()
-        || !filter.forbidden_subtypes.is_empty()
         || !filter.predicates.is_empty()
         || !filter.stat_bounds.is_empty()
     {
         return None;
+    }
+    let mut non_aura_only = false;
+    if !filter.forbidden_subtypes.is_empty() {
+        if filter.forbidden_subtypes.len() == 1
+            && filter.forbidden_subtypes[0].eq_ignore_ascii_case("aura")
+        {
+            non_aura_only = true;
+        } else {
+            return None;
+        }
     }
     if filter_only_has(
         filter,
@@ -5160,7 +5996,7 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
             return Some(BodyTarget::SinglePermanent);
         }
     }
-    if (filter.flags.0 & !AstFilterFlags::LKI_PAST_TENSE.0) != 0
+    if (filter.flags.0 & !(AstFilterFlags::LKI_PAST_TENSE.0 | AstFilterFlags::EXCLUDE_SELF.0)) != 0
         || !filter.required_supertypes.is_empty()
         || !filter.forbidden_supertypes.is_empty()
         || filter.required_keywords.len() > 1
@@ -5170,6 +6006,12 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
         return None;
     }
     let mut clause = ObjectClause::any();
+    if non_aura_only {
+        clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
+    }
+    if (filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0) != 0 {
+        clause.source_relation = SourceRelation::OtherThanAbilitySource;
+    }
     clause.any_types = lower_card_type_mask(filter.any_types).ok()?;
     clause.forbidden_types = lower_card_type_mask(filter.forbidden_types).ok()?;
     clause.color = if let Some(arity) = filter.color_arity {
@@ -6843,6 +7685,19 @@ fn lower_value_expr_inner(
                     _ => Err("oracle:unsupported-count-zone"),
                 };
             }
+            if let Some(moved_zone) = prior_action_moved_count_zone(f) {
+                if f.controller.is_some()
+                    || !context.is_some_and(|(b, in_trig)| in_trig || !b.instructions.is_empty())
+                {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                let obj = lower_object_filter(f, vocabulary)?;
+                return Ok(ValueExpr::Count {
+                    zone: moved_zone,
+                    filter: Box::new(obj),
+                    controller_scope: None,
+                });
+            }
             let controller_scope = match f.controller {
                 Some(ControllerRelation::ThatPlayer) => {
                     Some(resolve_that_player_for_value_expr(context, true)?)
@@ -7095,10 +7950,22 @@ fn lower_value_expr_inner(
                     {
                         if prior_single_sacrifice {
                             ValueObjectRef::LastSacrificedCreature
-                        } else if low.contains("sacrificed permanent") {
+                        } else if low.contains("sacrificed permanent")
+                            || st == ObjectStatKind::ManaValue
+                        {
                             ValueObjectRef::SacrificedPermanent
                         } else {
                             ValueObjectRef::SacrificedCreature
+                        }
+                    } else if low.contains("sacrificed artifact")
+                        || low.contains("sacrificed enchantment")
+                        || low.contains("sacrificed land")
+                        || low.contains("sacrificed planeswalker")
+                    {
+                        if !prior_single_sacrifice && st == ObjectStatKind::ManaValue {
+                            ValueObjectRef::SacrificedPermanent
+                        } else {
+                            return Err("oracle:unsupported-stat-subject");
                         }
                     } else if low.contains("milled card") || low.contains("milled creature") {
                         if st == ObjectStatKind::ManaValue {
@@ -7237,6 +8104,16 @@ fn lower_value_expr_inner(
             };
             let st = lower_stat_kind(*stat);
             let obj = lower_object_filter(filter, vocabulary)?;
+            let moved_onto_battlefield = filter.predicates.iter().any(|p| {
+                matches!(
+                    p,
+                    FilterPredicateAst::PriorActionZoneRef { kind }
+                        if kind == "put_onto_battlefield_this_way"
+                )
+            });
+            if obj.has_flag(ObjectFilterFlags::IN_LAST_MOVED) && !moved_onto_battlefield {
+                return Err("oracle:unsupported-filter-predicate");
+            }
             Ok(ValueExpr::aggregate(obj, st, agg))
         }
         ValueExprAst::PlayerCounterCount {
