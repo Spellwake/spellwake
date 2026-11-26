@@ -16860,6 +16860,65 @@ pub enum StaticOrReplacement {
     Replacement(ReplacementEffectAst),
 }
 
+/// Resolve independent conditional statements before attaching any leading or trailing
+/// gate. Otherwise a suffix on the final statement can leak into earlier statements.
+fn parse_independent_conditional_statics(s: &str, vocab: &Vocabulary) -> Option<StaticAbilityAst> {
+    let sentences = split_top_level(s, ". ");
+    if sentences.len() > 1
+        && sentences.iter().any(|sentence| {
+            let low = sentence.to_ascii_lowercase();
+            low.contains("as long as ") || low.starts_with("if ")
+        })
+    {
+        let mut items = Vec::new();
+        for sentence in sentences {
+            let StaticOrReplacement::Static(item) =
+                parse_static_or_replacement(sentence.trim(), vocab).ok()?
+            else {
+                return None;
+            };
+            items.push(item);
+        }
+        return Some(StaticAbilityAst::Compound(items));
+    }
+
+    // Shared-subject lists such as "~ gets ... as long as A, has ... as long as B".
+    // Every continuation must introduce its own effect verb and its own gate.
+    let clauses = split_top_level(s, ", ");
+    if clauses.len() < 2 || !clauses.iter().all(|part| part.contains(" as long as ")) {
+        return None;
+    }
+    let first = clauses[0];
+    let subject_end = [" gets ", " get ", " has ", " have "]
+        .iter()
+        .filter_map(|verb| first.find(verb))
+        .min()?;
+    let subject = &first[..subject_end];
+    parse_subject_or_target(subject, vocab).ok()?;
+    let mut items = Vec::new();
+    for (index, clause) in clauses.iter().enumerate() {
+        let clause = clause.trim().strip_prefix("and ").unwrap_or(clause.trim());
+        let statement = if index == 0 {
+            clause.to_string()
+        } else {
+            if !["gets ", "get ", "has ", "have "]
+                .iter()
+                .any(|verb| clause.starts_with(verb))
+            {
+                return None;
+            }
+            format!("{subject} {clause}")
+        };
+        let StaticOrReplacement::Static(item) =
+            parse_static_or_replacement(&statement, vocab).ok()?
+        else {
+            return None;
+        };
+        items.push(item);
+    }
+    Some(StaticAbilityAst::Compound(items))
+}
+
 /// Strictly parse a permanent static/replacement paragraph or spell static/cost modifier.
 pub fn parse_static_or_replacement(
     para: &str,
@@ -16870,6 +16929,10 @@ pub fn parse_static_or_replacement(
     };
     let s = para.trim().trim_end_matches('.').trim();
     let low = s.to_ascii_lowercase();
+
+    if let Some(compound) = parse_independent_conditional_statics(s, vocab) {
+        return Ok(StaticOrReplacement::Static(compound));
+    }
 
     // 0. Global trailing ", where X is <ValueExpr>" in static/keyword-X clauses (quote-aware)
     if let Some(idx) = find_top_level_pattern(s, ", where x is ")
