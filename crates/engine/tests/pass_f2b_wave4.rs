@@ -35,9 +35,8 @@ use spellwake_engine::{
         ArtifactSubtype, BodyTarget, CardType, EffectSubject, ExecutableBody, Instruction,
         LibrarySearch, MoveSubjectRef, ObjectFilter, ObjectStatKind, PermanentDefinition,
         PlayerRelation, Program, ProgramKind, ResolvingPlayer, SearchCardMatcher, SearchCount,
-        SearchDestination, SearchSource, SubjectDestination, TriggerEvent, TriggerGrouping,
-        TriggerPlayerScope, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr,
-        ValueObjectRef,
+        SearchDestination, SearchSource, TriggerEvent, TriggerGrouping, TriggerPlayerScope,
+        TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueObjectRef,
     },
     targets::TargetRef,
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
@@ -836,17 +835,40 @@ fn set_subject_tapped_handles_created_tokens_trigger_subject_and_last_moved() {
         2,
         BodyTarget::SingleOwnGraveyardCard,
         vec![
-            Instruction::MoveSubject {
-                subject: MoveSubjectRef::TargetObject,
-                destination: SubjectDestination::Battlefield {
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Battlefield {
+                    controller: if false {
+                        spellwake_engine::toolbox::ZoneController::Owner
+                    } else {
+                        spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                        ))
+                    },
                     tapped: false,
                     attacking: false,
                     transformed: false,
-                    under_owner_control: false,
-                    with_counter: None,
-                    attach_to_self: false,
+                    face_down: false,
+                    entering_counters: (None)
+                        .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                            (
+                                k,
+                                Box::new(spellwake_engine::program::ValueExpr::literal(i64::from(
+                                    c,
+                                ))),
+                            )
+                        })
+                        .into_iter()
+                        .collect(),
+                    attach_to: if false {
+                        Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                    } else {
+                        None
+                    },
                 },
-            },
+            ))),
             Instruction::SetSubjectTapped {
                 subject: Box::new(EffectSubject::LastMoved),
                 tapped: true,
@@ -933,7 +955,14 @@ fn multi_target_graveyard_shuffle_moves_selected_cards_and_handles_zero_targets(
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SingleOwnGraveyardCard,
-            vec![Instruction::ShuffleTargetIntoLibrary],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Library {
+                        position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                    },
+                ),
+            ))],
         )
         .with_graveyard_target_bounds(0, 3),
     });

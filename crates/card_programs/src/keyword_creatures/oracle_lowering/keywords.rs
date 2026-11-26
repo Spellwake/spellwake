@@ -925,12 +925,12 @@ pub(super) fn lower_keyword(
                         },
                         Instruction::ReturnSourceGraveyardToHand,
                         Instruction::Jump { destination: 4 },
-                        Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AbilitySource,
-                            destination: SubjectDestination::Exile {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::AbilitySource,
+                            SubjectDestination::Exile {
                                 delayed_return: None,
                             },
-                        },
+                        ),
                     ],
                 ),
             });
@@ -3578,21 +3578,21 @@ fn lower_champion_keyword(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::SelectZoneCardsToZone {
-                    player: ResolvingPlayer::Controller,
-                    source_zone: SourceZoneFilter::Battlefield,
-                    filter: Box::new(obj),
-                    min: ValueExpr::literal(0),
-                    max: ValueExpr::literal(1),
-                    destination: SubjectDestination::Exile {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(
+                    ResolvingPlayer::Controller,
+                    SourceZoneFilter::Battlefield,
+                    obj,
+                    ValueExpr::literal(0),
+                    ValueExpr::literal(1),
+                    SubjectDestination::Exile {
                         delayed_return: Some(
                             spellwake_engine::program::DelayedReturnTiming::LinkedGroup(
                                 spellwake_engine::program::LinkedExileGroup::SourceLinked,
                             ),
                         ),
                     },
-                    reveal: false,
-                },
+                    false,
+                ),
                 Instruction::BranchIfFalse {
                     condition: ResolutionCondition {
                         left: ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
@@ -3601,9 +3601,9 @@ fn lower_champion_keyword(
                     },
                     destination: 3,
                 },
-                Instruction::SacrificeSubject {
-                    subject: Box::new(EffectSubject::AbilitySource),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                    EffectSubject::AbilitySource,
+                ),
             ],
         ),
     });
@@ -3613,9 +3613,7 @@ fn lower_champion_keyword(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ReturnCardsExiledWithLink(
-                spellwake_engine::program::LinkedExileGroup::SourceLinked,
-            )],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_cards_exiled_with_link(spellwake_engine::program::LinkedExileGroup::SourceLinked, false, false)],
         ),
     });
     Ok(())
@@ -3750,12 +3748,14 @@ fn lower_non_mana_cumulative_upkeep(
             comparison: Comparison::GreaterOrEqual,
             right: age_count.clone(),
         });
-        vec![Instruction::ExileLibraryTopLinked {
-            player: ResolvingPlayer::Controller,
-            amount: age_count,
-            group: spellwake_engine::program::LinkedExileGroup::SourceLinked,
-            face_down: false,
-        }]
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top_linked(
+                ResolvingPlayer::Controller,
+                age_count,
+                spellwake_engine::program::LinkedExileGroup::SourceLinked,
+                false,
+            ),
+        ]
     } else if let Some(life_part) = low
         .strip_prefix("an opponent gains ")
         .and_then(|rest| rest.strip_suffix(" life"))

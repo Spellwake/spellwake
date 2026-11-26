@@ -13,10 +13,7 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::{RulesOccurrence, RulesRecord},
     priority::SeatId,
-    program::{
-        AffectedPlayers, BodyTarget, Instruction, ObjectFilter, Program, ResolvingPlayer,
-        SourceZoneFilter,
-    },
+    program::{AffectedPlayers, BodyTarget, Instruction, ObjectFilter, Program, ResolvingPlayer},
     targets::TargetRef,
 };
 use trajectories::*;
@@ -34,11 +31,29 @@ fn combined_exile() -> SeedCard {
     spell(
         1,
         BodyTarget::SinglePlayer,
-        vec![Instruction::ExileGroupFromZone {
-            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-            zone: SourceZoneFilter::HandOrGraveyard,
-            filter: Box::new(ObjectFilter::any()),
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Union(vec![
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(
+                                ResolvingPlayer::TargetPlayer,
+                            )),
+                        )),
+                        ObjectFilter::any(),
+                    ),
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(
+                                ResolvingPlayer::TargetPlayer,
+                            )),
+                        )),
+                        ObjectFilter::any(),
+                    ),
+                ]),
+                spellwake_engine::toolbox::ZoneDest::exile(),
+            ),
+        ))],
     )
 }
 

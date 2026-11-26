@@ -352,14 +352,23 @@ fn stage_a_and_b_fidelity_regressions() {
     assert!(
         matches!(
             sp_all.body.instructions.as_slice(),
-            [Instruction::SacrificeSubject { subject }]
+            [Instruction::ZoneOp(spec)]
                 if matches!(
-                    subject.as_ref(),
-                    spellwake_engine::program::EffectSubject::Matching(filter)
-                        if *filter == spellwake_engine::program::ObjectFilter::creature()
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(subject)
+                        if matches!(
+                            subject.as_ref(),
+                            spellwake_engine::program::EffectSubject::Matching(filter)
+                                if *filter == spellwake_engine::program::ObjectFilter::creature()
+                        )
+                ) && matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                    }
                 )
         ),
-        "sacrifice all creatures must lower to SacrificeSubject(Matching(Creature)), not sacrifice 1; got {:?}",
+        "sacrifice all creatures must lower to ZoneOp(Sacrifice, Matching(Creature)), not sacrifice 1; got {:?}",
         sp_all.body.instructions
     );
     let sac_two = synthetic_card(

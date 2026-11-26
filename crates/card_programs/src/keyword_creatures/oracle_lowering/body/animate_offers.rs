@@ -378,18 +378,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ap(ap: &mut AffectedPlayers) {
     }
 }
 
-pub(super) fn rewrite_offer_chosen_to_loop_pl(pl: &mut LibraryPlacement) {
-    if let LibraryPlacement::ChoiceTopOrBottom { chooser } = pl {
-        rewrite_offer_chosen_to_loop_rp(chooser);
-    }
-}
-
-pub(super) fn rewrite_offer_chosen_to_loop_dest(dest: &mut SubjectDestination) {
-    if let SubjectDestination::Library(pl) = dest {
-        rewrite_offer_chosen_to_loop_pl(pl);
-    }
-}
-
 pub(super) fn rewrite_offer_chosen_to_loop_dg(dg: &mut DamageGroup) {
     match dg {
         DamageGroup::AffectedPlayers(ap) | DamageGroup::FilteredAndPlayers { players: ap, .. } => {
@@ -519,24 +507,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 players, amount, ..
             }
             | Instruction::Discard { players, amount }
-            | Instruction::DiscardFiltered {
-                players, amount, ..
-            }
-            | Instruction::DiscardUpToExt {
-                players,
-                max_count: amount,
-                ..
-            }
             | Instruction::Sacrifice {
-                players, amount, ..
-            }
-            | Instruction::ExileChosenPermanents {
-                players, amount, ..
-            }
-            | Instruction::ReturnControlledPermanents {
-                players, amount, ..
-            }
-            | Instruction::ExileFromZone {
                 players, amount, ..
             }
             | Instruction::TapOrUntapControlled {
@@ -556,18 +527,25 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_ve(count);
                 rewrite_offer_chosen_to_loop_ap(library_owner);
             }
-            Instruction::ExilePlayerGraveyards(players)
-            | Instruction::LoseGame(players)
-            | Instruction::ExileGroupFromZone { players, .. } => {
+            Instruction::LoseGame(players) => {
                 rewrite_offer_chosen_to_loop_ap(players);
             }
-            Instruction::MoveGraveyardGroupOwned {
-                players,
-                destination,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_ap(players);
-                rewrite_offer_chosen_to_loop_dest(destination);
+            Instruction::ZoneOp(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
+                    spec,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+            }
+            Instruction::ForEachPlayerQuery { selector, body, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    selector,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
             }
             Instruction::ChooseOptionForPlayers { players, options } => {
                 rewrite_offer_chosen_to_loop_ap(players);
@@ -581,8 +559,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::PayLife { player, amount }
             | Instruction::PayEnergy { player, amount }
             | Instruction::ManifestTop { player, amount }
-            | Instruction::Blight { player, amount }
-            | Instruction::ExileLibraryTopLinked { player, amount, .. } => {
+            | Instruction::Blight { player, amount } => {
                 rewrite_offer_chosen_to_loop_rp(player);
                 rewrite_offer_chosen_to_loop_ve(amount);
             }
@@ -590,23 +567,11 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_rp(player);
                 rewrite_offer_chosen_to_loop_ve(minimum);
             }
-            Instruction::UntapOrTapSelect { chooser, count, .. }
-            | Instruction::DestroyChosen { chooser, count, .. } => {
+            Instruction::UntapOrTapSelect { chooser, count, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);
                 rewrite_offer_chosen_to_loop_ve(count);
             }
-            Instruction::SelectZoneCardsToZone {
-                player,
-                min,
-                max,
-                destination,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_rp(player);
-                rewrite_offer_chosen_to_loop_ve(min);
-                rewrite_offer_chosen_to_loop_ve(max);
-                rewrite_offer_chosen_to_loop_dest(destination);
-            }
+
             Instruction::LookTopChoose {
                 count,
                 library_owner,
@@ -666,16 +631,11 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ve(amount);
                 }
             }
-            Instruction::ShufflePlayerLibrary(rp)
-            | Instruction::RevealPlayerHand(rp)
-            | Instruction::DiscardOneAtRandom(rp)
-            | Instruction::WinGame(rp)
+            Instruction::WinGame(rp)
             | Instruction::SkipNextTurns { player: rp, .. }
             | Instruction::SkipNextStep { player: rp, .. }
             | Instruction::AttachPermanentToPlayer { player: rp, .. }
             | Instruction::ExileLibraryTop { player: rp, .. }
-            | Instruction::ExileCardsFromGraveyard { player: rp, .. }
-            | Instruction::PutHandPermanentFiltered { player: rp, .. }
             | Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
             | Instruction::GrantCardPlayPermission { player: rp, .. }
             | Instruction::VentureIntoDungeon { player: rp, .. }
@@ -722,14 +682,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ve(e);
                 }
             }
-            Instruction::MoveSubject { destination, .. } => {
-                rewrite_offer_chosen_to_loop_dest(destination);
-            }
-            Instruction::PutTargetInLibrary(pl)
-            | Instruction::PutResolvingSpellInLibrary(pl)
-            | Instruction::MoveGroupToLibrary { placement: pl, .. } => {
-                rewrite_offer_chosen_to_loop_pl(pl);
-            }
+
             Instruction::CreateTemporaryRule { rule, .. } => {
                 rewrite_offer_chosen_to_loop_rule(rule);
             }
@@ -969,17 +922,19 @@ pub(in super::super) fn lower_animate_or_set_pt(
         }
         let return_body = ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::MoveSubject {
-                subject: MoveSubjectRef::TriggeringObject,
-                destination: SubjectDestination::Battlefield {
-                    tapped: true,
-                    attacking: false,
-                    transformed: false,
-                    under_owner_control: false,
-                    with_counter: None,
-                    attach_to_self: false,
-                },
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                    MoveSubjectRef::TriggeringObject,
+                    SubjectDestination::Battlefield {
+                        tapped: true,
+                        attacking: false,
+                        transformed: false,
+                        under_owner_control: false,
+                        with_counter: None,
+                        attach_to_self: false,
+                    },
+                ),
+            ],
         );
         builder
             .instructions
@@ -1770,28 +1725,13 @@ pub(in super::super) fn lower_animate_or_set_pt(
     let has_last_moved = builder.instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::MoveSubject {
-                destination: SubjectDestination::Battlefield { .. },
-                ..
-            } | Instruction::SelectZoneCardsToZone {
-                destination: SubjectDestination::Battlefield { .. },
-                ..
-            } | Instruction::MoveGraveyardGroupOwned {
-                destination: SubjectDestination::Battlefield { .. },
-                ..
-            } | Instruction::MoveLastMovedFiltered {
-                destination: SubjectDestination::Battlefield { .. },
-                ..
-            } | Instruction::ReturnLinkedExile {
-                destination: SubjectDestination::Battlefield { .. },
-                ..
-            } | Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
-                | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
+            Instruction::ZoneOp(spec)
+                if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
+        ) || matches!(
+            op,
+            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
                 | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
                 | Instruction::ReturnChosenXGraveyardCreatures
-                | Instruction::ReturnGraveyardTargetsTapped(_)
                 | Instruction::ReturnSourceGraveyardToBattlefield { .. }
                 | Instruction::ReturnExiledTargetCohort { .. }
                 | Instruction::ReturnCardsDestroyedThisWay

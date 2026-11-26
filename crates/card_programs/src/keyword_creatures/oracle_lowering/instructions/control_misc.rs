@@ -1048,19 +1048,13 @@ pub(super) fn lower_control_misc_instruction(
                 || matches!(
                     builder.instructions.last(),
                     Some(
-                        Instruction::ExileTopPlay { .. }
+                        Instruction::ZoneOp(_)
+                            | Instruction::ForEachPlayerQuery { .. }
+                            | Instruction::ExileTopPlay { .. }
                             | Instruction::ExileLibraryTop { .. }
-                            | Instruction::ExileLibraryTopLinked { .. }
-                            | Instruction::ExileTopFaceDown
                             | Instruction::LookTopChooseExt { .. }
                             | Instruction::RevealUntilMatchExt { .. }
-                            | Instruction::MoveLastMovedFiltered { .. }
-                            | Instruction::MoveSubject { .. }
-                            | Instruction::MoveGroup { .. }
-                            | Instruction::SelectZoneCardsToZone { .. }
                             | Instruction::ChooseObjects { .. }
-                            | Instruction::ExileGroupFromZone { .. }
-                            | Instruction::ExileFromZone { .. }
                             | Instruction::Mill { .. }
                     )
                 ))
@@ -1895,12 +1889,14 @@ pub(super) fn lower_control_misc_instruction(
                 label: "Exile three cards from your graveyard".to_owned(),
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::ExileFromZone {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        zone: CostExileZone::Graveyard,
-                        amount: ValueExpr::literal(3),
-                        filter: Box::new(ObjectFilter::any()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            CostExileZone::Graveyard,
+                            ValueExpr::literal(3),
+                            ObjectFilter::any(),
+                        ),
+                    ],
                 ),
             };
             let food_filter = PermanentTypeFilter {
@@ -2052,7 +2048,7 @@ fn try_lower_choose_objects_new_primitives(
         && builder
             .instructions
             .iter()
-            .any(|op| matches!(op, Instruction::RevealPlayerHand(_)))
+            .any(|op| matches!(op, Instruction::ZoneOp(spec) if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)))
         && let Some(card_phrase) = body_raw
             .strip_suffix(" from it")
             .or_else(|| body_raw.strip_suffix(" in it"))
@@ -2094,14 +2090,10 @@ fn try_lower_choose_objects_new_primitives(
         || builder.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::ExileGroupFromZone { .. }
-                    | Instruction::ExileFromZone { .. }
+                Instruction::ZoneOp(_)
+                    | Instruction::ForEachPlayerQuery { .. }
                     | Instruction::ExileTopPlay { .. }
                     | Instruction::ExileLibraryTop { .. }
-                    | Instruction::ExileLibraryTopLinked { .. }
-                    | Instruction::MoveGroup { .. }
-                    | Instruction::MoveSubject { .. }
-                    | Instruction::SelectZoneCardsToZone { .. }
                     | Instruction::Mill { .. }
             )
         });
@@ -2717,37 +2709,19 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
                 players: AffectedPlayers::One(_),
                 ..
             }
-            | Instruction::DiscardFiltered {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Instruction::DiscardUpToExt {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Instruction::DiscardOneAtRandom(_)
             | Instruction::Sacrifice {
                 players: AffectedPlayers::One(_),
                 ..
             }
-            | Instruction::SacrificeSubject { .. }
+            | Instruction::ZoneOp(_)
+            | Instruction::ForEachPlayerQuery { .. }
             | Instruction::SacrificeMatching(_)
-            | Instruction::ExileFromZone {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Instruction::ExileGroupFromZone { .. }
             | Instruction::Mill { .. }
-            | Instruction::MoveSubject { .. }
-            | Instruction::ReturnLinkedExile { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::TransformSubject { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::SelectZoneCardsToZone { .. }
             | Instruction::ChooseObjects { .. }
-            | Instruction::DestroyGroup(_)
-            | Instruction::MoveGroup { .. }
             | Instruction::Blight { .. }
             | Instruction::CollectEvidence { .. }
     )
@@ -4481,18 +4455,6 @@ pub(super) fn rewrite_chosen_to_loop_mana_yield(yield_kind: &mut EffectManaYield
     }
 }
 
-pub(super) fn rewrite_chosen_to_loop_pl(pl: &mut LibraryPlacement) {
-    if let LibraryPlacement::ChoiceTopOrBottom { chooser } = pl {
-        rewrite_chosen_to_loop_rp(chooser);
-    }
-}
-
-pub(super) fn rewrite_chosen_to_loop_dest(dest: &mut SubjectDestination) {
-    if let SubjectDestination::Library(pl) = dest {
-        rewrite_chosen_to_loop_pl(pl);
-    }
-}
-
 pub(super) fn rewrite_chosen_to_loop_dg(dg: &mut DamageGroup) {
     match dg {
         DamageGroup::AffectedPlayers(ap) | DamageGroup::FilteredAndPlayers { players: ap, .. } => {
@@ -4615,24 +4577,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             }
             | Instruction::SetPlayersLife { players, amount }
             | Instruction::Discard { players, amount }
-            | Instruction::DiscardFiltered {
-                players, amount, ..
-            }
-            | Instruction::DiscardUpToExt {
-                players,
-                max_count: amount,
-                ..
-            }
             | Instruction::Sacrifice {
-                players, amount, ..
-            }
-            | Instruction::ExileChosenPermanents {
-                players, amount, ..
-            }
-            | Instruction::ReturnControlledPermanents {
-                players, amount, ..
-            }
-            | Instruction::ExileFromZone {
                 players, amount, ..
             }
             | Instruction::TapOrUntapControlled {
@@ -4659,18 +4604,25 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_ve(count);
                 rewrite_chosen_to_loop_ap(library_owner);
             }
-            Instruction::ExilePlayerGraveyards(players)
-            | Instruction::LoseGame(players)
-            | Instruction::ExileGroupFromZone { players, .. } => {
+            Instruction::LoseGame(players) => {
                 rewrite_chosen_to_loop_ap(players);
             }
-            Instruction::MoveGraveyardGroupOwned {
-                players,
-                destination,
-                ..
-            } => {
-                rewrite_chosen_to_loop_ap(players);
-                rewrite_chosen_to_loop_dest(destination);
+            Instruction::ZoneOp(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
+                    spec,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+            }
+            Instruction::ForEachPlayerQuery { selector, body, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    selector,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                rewrite_chosen_to_loop_ops(&mut body.instructions);
             }
             Instruction::ChooseOptionForPlayers { players, options } => {
                 rewrite_chosen_to_loop_ap(players);
@@ -4684,8 +4636,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::PayLife { player, amount }
             | Instruction::PayEnergy { player, amount }
             | Instruction::ManifestTop { player, amount }
-            | Instruction::Blight { player, amount }
-            | Instruction::ExileLibraryTopLinked { player, amount, .. } => {
+            | Instruction::Blight { player, amount } => {
                 rewrite_chosen_to_loop_rp(player);
                 rewrite_chosen_to_loop_ve(amount);
             }
@@ -4693,23 +4644,11 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_rp(player);
                 rewrite_chosen_to_loop_ve(minimum);
             }
-            Instruction::UntapOrTapSelect { chooser, count, .. }
-            | Instruction::DestroyChosen { chooser, count, .. } => {
+            Instruction::UntapOrTapSelect { chooser, count, .. } => {
                 rewrite_chosen_to_loop_rp(chooser);
                 rewrite_chosen_to_loop_ve(count);
             }
-            Instruction::SelectZoneCardsToZone {
-                player,
-                min,
-                max,
-                destination,
-                ..
-            } => {
-                rewrite_chosen_to_loop_rp(player);
-                rewrite_chosen_to_loop_ve(min);
-                rewrite_chosen_to_loop_ve(max);
-                rewrite_chosen_to_loop_dest(destination);
-            }
+
             Instruction::ChooseObjects {
                 players,
                 min,
@@ -4777,16 +4716,11 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ops(&mut br.body.instructions);
                 }
             }
-            Instruction::ShufflePlayerLibrary(rp)
-            | Instruction::RevealPlayerHand(rp)
-            | Instruction::DiscardOneAtRandom(rp)
-            | Instruction::WinGame(rp)
+            Instruction::WinGame(rp)
             | Instruction::SkipNextTurns { player: rp, .. }
             | Instruction::SkipNextStep { player: rp, .. }
             | Instruction::AttachPermanentToPlayer { player: rp, .. }
             | Instruction::ExileLibraryTop { player: rp, .. }
-            | Instruction::ExileCardsFromGraveyard { player: rp, .. }
-            | Instruction::PutHandPermanentFiltered { player: rp, .. }
             | Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
             | Instruction::GrantCardPlayPermission { player: rp, .. }
             | Instruction::VentureIntoDungeon { player: rp, .. }
@@ -4863,14 +4797,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ve(e);
                 }
             }
-            Instruction::MoveSubject { destination, .. } => {
-                rewrite_chosen_to_loop_dest(destination);
-            }
-            Instruction::PutTargetInLibrary(pl)
-            | Instruction::PutResolvingSpellInLibrary(pl)
-            | Instruction::MoveGroupToLibrary { placement: pl, .. } => {
-                rewrite_chosen_to_loop_pl(pl);
-            }
+
             Instruction::CreateTemporaryRule { rule, .. } => {
                 rewrite_chosen_to_loop_rule(rule);
             }

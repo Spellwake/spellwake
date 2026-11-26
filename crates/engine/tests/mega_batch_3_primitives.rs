@@ -30,8 +30,8 @@ use spellwake_engine::{
     priority::SeatId,
     program::{
         BodyTarget, DiesTriggerMode, EffectSubject, ExecutableBody, Instruction, ObjectFilter,
-        Program, SpellFilter, SubjectDestination, TriggerEvent, TriggerGrouping, TriggerSpec,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        Program, SpellFilter, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr,
     },
     targets::TargetRef,
 };
@@ -167,17 +167,51 @@ fn return_linked_exile_returns_cards_exiled_with_source() {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ReturnLinkedExile {
-                destination: SubjectDestination::Battlefield {
-                    tapped: false,
-                    attacking: false,
-                    transformed: false,
-                    under_owner_control: true,
-                    with_counter: None,
-                    attach_to_self: false,
-                },
-                only_first: false,
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    if false {
+                        spellwake_engine::toolbox::ObjectQuery::Take {
+                            source: Box::new(spellwake_engine::toolbox::ObjectQuery::LinkedExile {
+                                group: None,
+                            }),
+                            count: Box::new(spellwake_engine::program::ValueExpr::literal(1)),
+                        }
+                    } else {
+                        spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None }
+                    },
+                    spellwake_engine::toolbox::ZoneDest::Battlefield {
+                        controller: if true {
+                            spellwake_engine::toolbox::ZoneController::Owner
+                        } else {
+                            spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::Controller,
+                                ),
+                            ))
+                        },
+                        tapped: false,
+                        attacking: false,
+                        transformed: false,
+                        face_down: false,
+                        entering_counters: (None)
+                            .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                                (
+                                    k,
+                                    Box::new(spellwake_engine::program::ValueExpr::literal(
+                                        i64::from(c),
+                                    )),
+                                )
+                            })
+                            .into_iter()
+                            .collect(),
+                        attach_to: if false {
+                            Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                        } else {
+                            None
+                        },
+                    },
+                ),
+            ))],
         ),
     });
     let wave = validated(wave, &v);
@@ -703,12 +737,7 @@ fn set_players_life_sets_dynamic_total_and_works_in_lose_game_replacement() {
             body: Box::new(ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::MoveSubject {
-                        subject: spellwake_engine::program::MoveSubjectRef::AbilitySource,
-                        destination: SubjectDestination::Exile {
-                            delayed_return: None,
-                        },
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: matches!(None, Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)), delayed_return: None, link_group: None }))),
                     Instruction::SetPlayersLife {
                         players: spellwake_engine::program::AffectedPlayers::One(
                             spellwake_engine::program::ResolvingPlayer::Controller,

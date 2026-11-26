@@ -2771,7 +2771,14 @@ fn put_resolving_spell_in_library_and_put_subject_into_library_from_top() {
                     Instruction::GainControllerLife {
                         amount: ValueExpr::literal(2),
                     },
-                    Instruction::PutResolvingSpellInLibrary(LibraryPlacement::Top),
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        spellwake_engine::toolbox::ZoneDest::Library {
+                            position: spellwake_engine::toolbox::LibraryOrderPos::from_placement(
+                                LibraryPlacement::Top,
+                            ),
+                        },
+                    ))),
                 ],
             ),
         ),
@@ -2786,7 +2793,14 @@ fn put_resolving_spell_in_library_and_put_subject_into_library_from_top() {
                     Instruction::GainControllerLife {
                         amount: ValueExpr::literal(1),
                     },
-                    Instruction::PutResolvingSpellInLibrary(LibraryPlacement::Bottom),
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        spellwake_engine::toolbox::ZoneDest::Library {
+                            position: spellwake_engine::toolbox::LibraryOrderPos::from_placement(
+                                LibraryPlacement::Bottom,
+                            ),
+                        },
+                    ))),
                 ],
             ),
         ),
@@ -2858,10 +2872,16 @@ fn put_resolving_spell_in_library_and_put_subject_into_library_from_top() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::PutSubjectIntoLibraryFromTop {
-                    subject: MoveSubjectRef::TargetObject,
-                    offset: ValueExpr::controlled_type(CardType::Artifact),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Library {
+                            position: spellwake_engine::toolbox::LibraryOrderPos::NthFromTop(
+                                Box::new(ValueExpr::controlled_type(CardType::Artifact)),
+                            ),
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,

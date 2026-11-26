@@ -42,7 +42,7 @@ pub(super) fn compile(
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped: false },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                 ],
             ),
         });

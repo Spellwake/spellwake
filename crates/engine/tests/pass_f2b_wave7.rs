@@ -81,11 +81,11 @@ use spellwake_engine::{
         ObjectColorFilter, ObjectFilter, ObjectStatKind, PermanentTargetAction, PlayerRelation,
         PlayerStatExpr, PowerFilter, Program, ProgramKind, ProtectionRecipients,
         PublicZoneDestination, ResolutionChoiceDomain, ResolutionCondition, ResolvingPlayer,
-        SourceStateExpr, SourceZoneFilter, SpellFilter, SubjectDestination, Supertype,
-        TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
-        TriggeredAbilityId, ValueExpr, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
-        ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
-        ZoneReplacementExtra, ZoneReplacementSubject,
+        SourceStateExpr, SourceZoneFilter, SpellFilter, Supertype, TemporaryRuleKind, TriggerEvent,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        ZoneActionKind, ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility,
+        ZoneReplacementAbilityId, ZoneReplacementChoice, ZoneReplacementExtra,
+        ZoneReplacementSubject,
     },
     targets::TargetRef,
     token::{
@@ -1341,10 +1341,19 @@ fn move_group_to_library_bottom_random_and_move_graveyard_group_owned() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::MoveGroupToLibrary {
-                    group: ObjectFilter::creature(),
-                    placement: LibraryPlacement::BottomRandom,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            ObjectFilter::creature(),
+                        ),
+                        spellwake_engine::toolbox::ZoneDest::Library {
+                            position: spellwake_engine::toolbox::LibraryOrderPos::from_placement(
+                                LibraryPlacement::BottomRandom,
+                            ),
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1354,18 +1363,49 @@ fn move_group_to_library_bottom_random_and_move_graveyard_group_owned() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::MoveGraveyardGroupOwned {
-                    players: AffectedPlayers::EachPlayer,
-                    filter: Box::new(ObjectFilter::creature()),
-                    destination: SubjectDestination::Battlefield {
-                        tapped: true,
-                        attacking: false,
-                        transformed: false,
-                        under_owner_control: true,
-                        with_counter: None,
-                        attach_to_self: false,
-                    },
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Group(
+                                    AffectedPlayers::EachPlayer,
+                                ),
+                            )),
+                            ObjectFilter::creature(),
+                        ),
+                        spellwake_engine::toolbox::ZoneDest::Battlefield {
+                            controller: if true {
+                                spellwake_engine::toolbox::ZoneController::Owner
+                            } else {
+                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                ))
+                            },
+                            tapped: true,
+                            attacking: false,
+                            transformed: false,
+                            face_down: false,
+                            entering_counters: (None)
+                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                                    (
+                                        k,
+                                        Box::new(spellwake_engine::program::ValueExpr::literal(
+                                            i64::from(c),
+                                        )),
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
+                            attach_to: if false {
+                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                            } else {
+                                None
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1486,12 +1526,32 @@ fn exile_library_top_linked_and_exile_matching_ext_nightveil_specter_flow() {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::ExileLibraryTopLinked {
-                player: ResolvingPlayer::TargetPlayer,
-                amount: ValueExpr::literal(1),
-                group: LinkedExileGroup::SourceLinked,
-                face_down: false,
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                        )),
+                        filter: Box::new(spellwake_engine::program::ObjectFilter::any()),
+                        slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                            ValueExpr::literal(1),
+                        )),
+                    },
+                    spellwake_engine::toolbox::ZoneDest::Exile {
+                        face_down: false,
+                        viewer: (false).then_some(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                        ),
+                        link_to_source: false,
+                        delayed_return: None,
+                        link_group: Some(LinkedExileGroup::SourceLinked),
+                    },
+                ),
+            ))],
         ),
     });
     specter.continuous = Some(StaticContinuousAbility::CastPermission {
@@ -3142,17 +3202,42 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOwnGraveyardCard,
-                vec![Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TargetObject,
-                    destination: SubjectDestination::Battlefield {
-                        tapped: false,
-                        attacking: false,
-                        transformed: false,
-                        under_owner_control: false,
-                        with_counter: None,
-                        attach_to_self: false,
-                    },
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Battlefield {
+                            controller: if false {
+                                spellwake_engine::toolbox::ZoneController::Owner
+                            } else {
+                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                ))
+                            },
+                            tapped: false,
+                            attacking: false,
+                            transformed: false,
+                            face_down: false,
+                            entering_counters: (None)
+                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                                    (
+                                        k,
+                                        Box::new(spellwake_engine::program::ValueExpr::literal(
+                                            i64::from(c),
+                                        )),
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
+                            attach_to: if false {
+                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                            } else {
+                                None
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -3634,17 +3719,42 @@ fn turn_and_provenance_trackers_evaluate_accurately() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOwnGraveyardCard,
-                vec![Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TargetObject,
-                    destination: SubjectDestination::Battlefield {
-                        tapped: false,
-                        attacking: false,
-                        transformed: false,
-                        under_owner_control: false,
-                        with_counter: None,
-                        attach_to_self: false,
-                    },
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Battlefield {
+                            controller: if false {
+                                spellwake_engine::toolbox::ZoneController::Owner
+                            } else {
+                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                ))
+                            },
+                            tapped: false,
+                            attacking: false,
+                            transformed: false,
+                            face_down: false,
+                            entering_counters: (None)
+                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                                    (
+                                        k,
+                                        Box::new(spellwake_engine::program::ValueExpr::literal(
+                                            i64::from(c),
+                                        )),
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
+                            attach_to: if false {
+                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                            } else {
+                                None
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -3834,17 +3944,42 @@ fn wave7_triggers_deals_at_least_enters_without_played_and_blocked_by_at_least()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOwnGraveyardCard,
-                vec![Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TargetObject,
-                    destination: SubjectDestination::Battlefield {
-                        tapped: false,
-                        attacking: false,
-                        transformed: false,
-                        under_owner_control: false,
-                        with_counter: None,
-                        attach_to_self: false,
-                    },
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Battlefield {
+                            controller: if false {
+                                spellwake_engine::toolbox::ZoneController::Owner
+                            } else {
+                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                ))
+                            },
+                            tapped: false,
+                            attacking: false,
+                            transformed: false,
+                            face_down: false,
+                            entering_counters: (None)
+                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                                    (
+                                        k,
+                                        Box::new(spellwake_engine::program::ValueExpr::literal(
+                                            i64::from(c),
+                                        )),
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
+                            attach_to: if false {
+                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                            } else {
+                                None
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -3972,11 +4107,21 @@ fn wave7_validation_uses_target_permanent_cfg_flow_facts_and_optional_exile_spel
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::DestroyGroup(Box::new(
-                    ObjectFilter::creature().with_power(PowerFilter::CompareAnchor {
-                        op: Comparison::Less,
-                        anchor: DynamicStatAnchor::TargetPower,
-                    }),
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            ObjectFilter::creature().with_power(PowerFilter::CompareAnchor {
+                                op: Comparison::Less,
+                                anchor: DynamicStatAnchor::TargetPower,
+                            }),
+                        ),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
                 ))],
             ),
         ),
@@ -3993,7 +4138,10 @@ fn wave7_validation_uses_target_permanent_cfg_flow_facts_and_optional_exile_spel
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::ExileTarget,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::exile(),
+                    ))),
                     Instruction::BranchIfFalse {
                         condition: ResolutionCondition {
                             left: ValueExpr::event(EventValueKind::LastActionSucceeded),
@@ -4025,7 +4173,10 @@ fn wave7_validation_uses_target_permanent_cfg_flow_facts_and_optional_exile_spel
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::ExileResolvingSpell,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        spellwake_engine::toolbox::ZoneDest::exile(),
+                    ))),
                 ],
             ),
         ),

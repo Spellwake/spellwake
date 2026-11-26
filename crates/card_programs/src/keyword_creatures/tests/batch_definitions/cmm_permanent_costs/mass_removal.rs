@@ -385,7 +385,10 @@ fn cmm_avacyn_is_flying_vigilant_and_indestructible_and_protects_other_allied_pe
             6,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SingleCreature, Instruction::ExileTarget),
+            free_instant(
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+            ),
         ),
     ]);
     let start = game(vec![A, B], cards, &price, Step::PrecombatMain);

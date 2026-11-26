@@ -25,253 +25,6 @@ impl EffectWindow {
         self.begin_shuffle(player, false)
     }
 
-    pub(super) fn begin_player_library_shuffle(
-        &mut self,
-        player: ResolvingPlayer,
-    ) -> Result<(), EffectError> {
-        let seat = self.resolving_player(player)?;
-        self.begin_shuffle(seat, false)
-    }
-
-    pub(super) fn begin_subject_into_library_shuffle(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        subject: crate::program::EffectSubject,
-        zone: Option<crate::program::SourceZoneFilter>,
-    ) -> Result<(), EffectError> {
-        let resolved: Vec<ObjectId> = match (&subject, zone) {
-            (crate::program::EffectSubject::TargetObject, _) => {
-                let assessment = self
-                    .window
-                    .target_assessment()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                assessment
-                    .results()
-                    .iter()
-                    .filter(|row| row.legality == TargetLegality::Legal)
-                    .filter_map(|row| match row.choice.target {
-                        TargetRef::Object(id) => Some(id),
-                        _ => None,
-                    })
-                    .collect()
-            }
-            (crate::program::EffectSubject::Matching(filter), Some(src_zone)) => {
-                let evaluated = self.evaluated_characteristics()?;
-                let controller = entry.controller();
-                let opponents = self.opponents_of(controller)?;
-                let excluded = BTreeSet::new();
-                let source_id = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    StackKind::CardSpell(card) => Some(*card),
-                    _ => None,
-                };
-                self.window
-                    .cards()
-                    .iter()
-                    .filter(|obj| {
-                        let zone_ok = match src_zone {
-                            crate::program::SourceZoneFilter::Hand => {
-                                obj.zone() == ObjectZone::Hand(controller)
-                            }
-                            crate::program::SourceZoneFilter::Graveyard => {
-                                obj.zone() == ObjectZone::Graveyard(controller)
-                            }
-                            crate::program::SourceZoneFilter::HandOrGraveyard => {
-                                obj.zone() == ObjectZone::Hand(controller)
-                                    || obj.zone() == ObjectZone::Graveyard(controller)
-                            }
-                            crate::program::SourceZoneFilter::OpponentGraveyard => {
-                                matches!(obj.zone(), ObjectZone::Graveyard(p) if opponents.contains(&p))
-                            }
-                            crate::program::SourceZoneFilter::AnyGraveyard => {
-                                matches!(obj.zone(), ObjectZone::Graveyard(_))
-                            }
-                            crate::program::SourceZoneFilter::Exile => {
-                                obj.zone() == ObjectZone::Exile
-                            }
-                            crate::program::SourceZoneFilter::Battlefield
-                            | crate::program::SourceZoneFilter::AnyBattlefield => {
-                                obj.zone() == ObjectZone::Battlefield
-                                    && self.window.cards().phased_out_under(obj.id()).is_none()
-                            }
-                            crate::program::SourceZoneFilter::YourLibrary => {
-                                obj.zone() == ObjectZone::Library(controller)
-                            }
-                            crate::program::SourceZoneFilter::OpponentExile => {
-                                obj.zone() == ObjectZone::Exile && opponents.contains(&obj.owner())
-                            }
-                            crate::program::SourceZoneFilter::LinkedExile => {
-                                obj.zone() == ObjectZone::Exile
-                                    && source_id.is_some_and(|src| {
-                                        self.linked_exiles
-                                            .get(&src)
-                                            .is_some_and(|list| list.contains(&obj.id()))
-                                            || self
-                                                .characteristics
-                                                .imprinted_cards
-                                                .get(&src)
-                                                .is_some_and(|list| list.contains(&obj.id()))
-                                    })
-                            }
-                            crate::program::SourceZoneFilter::LastMoved => self
-                                .resolution_cursor()
-                                .is_some_and(|cursor| {
-                                    cursor.results.last_moved_objects.contains(&obj.id())
-                                }),
-                            crate::program::SourceZoneFilter::TargetPlayerHand => self
-                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
-                                .is_ok_and(|seat| obj.zone() == ObjectZone::Hand(seat)),
-                            crate::program::SourceZoneFilter::TargetPlayerGraveyard => self
-                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
-                                .is_ok_and(|seat| obj.zone() == ObjectZone::Graveyard(seat)),
-                            crate::program::SourceZoneFilter::OpponentHand => {
-                                matches!(obj.zone(), ObjectZone::Hand(p) if opponents.contains(&p))
-                            }
-                            crate::program::SourceZoneFilter::CommandZone => {
-                                obj.zone() == ObjectZone::Command && obj.owner() == controller
-                            }
-                        };
-                        zone_ok
-                            && evaluated.get(obj.id()).is_some_and(|view| {
-                                self.matches_object_filter(
-                                    *filter,
-                                    view,
-                                    controller,
-                                    source_id,
-                                    &excluded,
-                                    &evaluated,
-                                )
-                            })
-                    })
-                    .map(GameObject::id)
-                    .collect()
-            }
-            _ => self.effect_group(entry, subject)?.into_iter().collect(),
-        };
-        let movable: Vec<ObjectId> = resolved
-            .into_iter()
-            .filter(|id| {
-                self.window.cards().get(*id).is_some_and(|obj| {
-                    obj.card_id().is_some()
-                        && (matches!(
-                            obj.zone(),
-                            ObjectZone::Hand(_) | ObjectZone::Graveyard(_) | ObjectZone::Exile
-                        ) || (obj.zone() == ObjectZone::Battlefield
-                            && self.window.cards().phased_out_under(*id).is_none()))
-                })
-            })
-            .collect();
-        if movable.is_empty() {
-            return self.advance_instruction();
-        }
-        let owners_set: BTreeSet<SeatId> = movable
-            .iter()
-            .filter_map(|id| self.window.cards().get(*id).map(GameObject::owner))
-            .collect();
-        let mut remaining_players: std::collections::VecDeque<SeatId> = self
-            .window
-            .apnap_players()
-            .map_err(EffectError::from)?
-            .filter(|seat| owners_set.contains(seat))
-            .collect();
-        let Some(first_player) = remaining_players.pop_front() else {
-            return self.advance_instruction();
-        };
-        let cursor = self
-            .resolution_cursor()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .clone();
-        let batch = self.begin_zone_replacements(zone_replacement::AuthorizedZoneBatch {
-            cause: EventCause::Instruction {
-                entry: cursor.entry,
-                instruction: cursor.instruction,
-            },
-            action: ZoneActionKind::EffectShuffleGraveyard,
-            intents: movable
-                .iter()
-                .map(|id| zone_replacement::ZoneMoveIntent {
-                    before: *id,
-                    reason: ZoneReason::ShuffleHandAndGraveyardIntoLibrary,
-                })
-                .collect(),
-        })?;
-        if !matches!(self.pending_work, Some(PendingWork::Resolution(_))) {
-            return Err(EffectError::WrongResolutionFrame);
-        }
-        self.pending_work = Some(PendingWork::GraveyardShuffle(Box::new(
-            GraveyardShuffleWork {
-                cursor,
-                batch,
-                player: first_player,
-                remaining_players,
-                remaining_owner_batches: std::collections::VecDeque::new(),
-                collective: true,
-                ability_source: None,
-                objects: movable,
-                ready: false,
-                continue_reveals: false,
-            },
-        )));
-        Ok(())
-    }
-
-    pub(super) fn begin_target_into_library_shuffle(
-        &mut self,
-        _entry: &crate::stack_window::StackEntry,
-    ) -> Result<(), EffectError> {
-        let targets = self.legal_permanent_targets()?;
-        let mut by_owner: std::collections::BTreeMap<SeatId, Vec<ObjectId>> =
-            std::collections::BTreeMap::new();
-        for target in targets {
-            let Some(object) = self.window.cards().get(target).filter(|object| {
-                (object.zone() == ObjectZone::Battlefield
-                    && self.window.cards().phased_out_under(target).is_none())
-                    || matches!(object.zone(), ObjectZone::Graveyard(_))
-            }) else {
-                continue;
-            };
-            by_owner.entry(object.owner()).or_default().push(target);
-        }
-        let mut batches: std::collections::VecDeque<(SeatId, Vec<ObjectId>)> = self
-            .window
-            .apnap_players()?
-            .filter_map(|seat| by_owner.remove(&seat).map(|cards| (seat, cards)))
-            .collect();
-        for (seat, cards) in by_owner {
-            batches.push_back((seat, cards));
-        }
-        let Some((first_owner, first_cards)) = batches.pop_front() else {
-            return self.advance_instruction();
-        };
-        self.begin_shuffle_with_owner_batches(first_owner, false, Some(first_cards), None, batches)
-    }
-
-    pub(super) fn begin_ability_source_shuffle(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-    ) -> Result<(), EffectError> {
-        let source = match entry.kind() {
-            StackKind::ActivatedAbility { source } => source.id(),
-            StackKind::TriggeredAbility { source } => source.id(),
-            StackKind::CardSpell(card) => *card,
-            StackKind::SpellCopy { .. } => return self.advance_instruction(),
-            _ => return Err(EffectError::InconsistentProgram),
-        };
-        self.resolution_cursor_mut()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .results
-            .shuffled_source_owner = None;
-        let Some(object) = self.window.cards().get(source).filter(|object| {
-            (object.zone() == ObjectZone::Battlefield
-                && self.window.cards().phased_out_under(source).is_none())
-                || object.zone() == ObjectZone::Stack
-        }) else {
-            return self.advance_instruction();
-        };
-        self.begin_shuffle_with_cards(object.owner(), false, Some(vec![source]), Some(source))
-    }
-
     pub(super) fn begin_targeted_graveyard_shuffle(&mut self) -> Result<(), EffectError> {
         let assessment = self
             .window
@@ -298,6 +51,45 @@ impl EffectWindow {
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.begin_shuffle_with_cards(player, false, Some(cards), None)
+    }
+
+    pub(super) fn begin_library_shuffles(
+        &mut self,
+        mut seats: std::collections::VecDeque<SeatId>,
+    ) -> Result<(), EffectError> {
+        let Some(player) = seats.pop_front() else {
+            return Ok(());
+        };
+        let cursor = self
+            .resolution_cursor()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .clone();
+        let batch = self.begin_zone_replacements(zone_replacement::AuthorizedZoneBatch {
+            cause: EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            },
+            action: shuffle_action(None),
+            intents: Vec::new(),
+        })?;
+        if !matches!(self.pending_work, Some(PendingWork::Resolution(_))) {
+            return Err(EffectError::WrongResolutionFrame);
+        }
+        self.pending_work = Some(PendingWork::GraveyardShuffle(Box::new(
+            GraveyardShuffleWork {
+                cursor,
+                batch,
+                player,
+                remaining_players: seats,
+                remaining_owner_batches: std::collections::VecDeque::new(),
+                collective: false,
+                ability_source: None,
+                objects: Vec::new(),
+                ready: false,
+                continue_reveals: false,
+            },
+        )));
+        Ok(())
     }
 
     pub(super) fn begin_shuffle(
@@ -336,10 +128,8 @@ impl EffectWindow {
             .resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?
             .clone();
-        let is_each_hand_gy =
-            self.current_instruction()? == &Instruction::ShuffleEachHandAndGraveyard;
-        let collective = is_each_hand_gy
-            || self.current_instruction()? == &Instruction::ShuffleTargetIntoLibrary;
+        let is_each_hand_gy = false;
+        let collective = false;
         let mut remaining_players = std::collections::VecDeque::new();
         let player = if is_each_hand_gy {
             remaining_players = self.window.apnap_players()?.collect();
@@ -364,7 +154,7 @@ impl EffectWindow {
         } else if continue_reveals
             || matches!(
                 self.current_instruction()?,
-                Instruction::ShuffleOwnLibrary | Instruction::ShufflePlayerLibrary(_)
+                Instruction::ZoneOp(spec) if spec.shuffle_library.is_some()
             )
         {
             vec![]

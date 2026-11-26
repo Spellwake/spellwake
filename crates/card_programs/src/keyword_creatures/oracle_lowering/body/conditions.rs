@@ -203,36 +203,60 @@ pub(super) fn resolve_prev_anaphora_ref(
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::ExileLibraryTop { .. } => Some(MatchObjectRef::RevealedTop),
-        Instruction::Discard { .. }
-        | Instruction::DiscardFiltered { .. }
-        | Instruction::DiscardUpTo { .. }
-        | Instruction::DiscardUpToExt { .. }
-        | Instruction::DiscardOneAtRandom(_) => Some(MatchObjectRef::DiscardedCard),
+        Instruction::Discard { .. } => Some(MatchObjectRef::DiscardedCard),
         Instruction::Mill { .. } | Instruction::PutLibraryCohortIntoGraveyard(_) => {
             Some(MatchObjectRef::MovedLibraryCard)
         }
-        Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration => {
-            Some(MatchObjectRef::DestructionTarget)
+        Instruction::DestroyTarget => Some(MatchObjectRef::DestructionTarget),
+        Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+            if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some() =>
+        {
+            let spec = crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .unwrap();
+            match &spec.destination {
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. },
+                } if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets) => {
+                    Some(MatchObjectRef::DestructionTarget)
+                }
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                } => Some(MatchObjectRef::DiscardedCard),
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                } => Some(MatchObjectRef::LastMovedToGraveyard),
+                spellwake_engine::toolbox::ZoneDest::None
+                | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                | spellwake_engine::toolbox::ZoneDest::LookOnly { .. } => None,
+                _ => match &spec.source {
+                    spellwake_engine::toolbox::ObjectQuery::Source => {
+                        Some(MatchObjectRef::AbilitySource)
+                    }
+                    spellwake_engine::toolbox::ObjectQuery::AttachedHost => {
+                        Some(MatchObjectRef::AttachedHost)
+                    }
+                    spellwake_engine::toolbox::ObjectQuery::Targets if is_obj_target => {
+                        Some(MatchObjectRef::TargetObject)
+                    }
+                    spellwake_engine::toolbox::ObjectQuery::TriggerSubject if in_trigger => {
+                        Some(MatchObjectRef::TriggerSubject)
+                    }
+                    spellwake_engine::toolbox::ObjectQuery::Revealed if has_checked_top => {
+                        Some(MatchObjectRef::RevealedTop)
+                    }
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan { .. }
+                    | spellwake_engine::toolbox::ObjectQuery::Union(_) => {
+                        Some(MatchObjectRef::LastAffected)
+                    }
+                    _ => None,
+                },
+            }
         }
-        Instruction::ExileTarget | Instruction::ExileGraveyardTarget if is_obj_target => {
-            Some(MatchObjectRef::TargetObject)
+        Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_) => {
+            Some(MatchObjectRef::LastMovedToGraveyard)
         }
-        Instruction::MoveSubject { subject, .. } => match subject {
-            MoveSubjectRef::AbilitySource => Some(MatchObjectRef::AbilitySource),
-            MoveSubjectRef::AttachedHost => Some(MatchObjectRef::AttachedHost),
-            MoveSubjectRef::TargetObject if is_obj_target => Some(MatchObjectRef::TargetObject),
-            MoveSubjectRef::TriggeringObject if in_trigger => Some(MatchObjectRef::TriggerSubject),
-            MoveSubjectRef::RevealedCard if has_checked_top => Some(MatchObjectRef::RevealedTop),
-            _ => None,
-        },
-        Instruction::Sacrifice { .. }
-        | Instruction::SacrificeUpTo { .. }
-        | Instruction::SacrificeMatching(_)
-        | Instruction::SacrificeSubject { .. } => Some(MatchObjectRef::LastMovedToGraveyard),
-        Instruction::SearchLibrary { .. }
-        | Instruction::MoveGroup { .. }
-        | Instruction::ExileGroupFromZone { .. }
-        | Instruction::SelectZoneCardsToZone { .. } => Some(MatchObjectRef::LastAffected),
+        Instruction::SearchLibrary { .. } => Some(MatchObjectRef::LastAffected),
         _ => None,
     })
 }
@@ -358,23 +382,15 @@ pub(super) fn resolve_match_object_ref(
                     return Some(MatchObjectRef::RevealedTop);
                 }
                 if last_moved_subject_safe(builder, MatchObjectRef::LastMovedToExile)
-                    && matches!(
-                        builder.instructions.last(),
-                        Some(
-                            Instruction::ExileTarget
-                                | Instruction::ExileGraveyardTarget
-                                | Instruction::ExileGroupFromZone { .. }
-                                | Instruction::SelectZoneCardsToZone {
-                                    destination: SubjectDestination::Exile { .. },
-                                    ..
-                                }
-                                | Instruction::MoveSubject {
-                                    destination: SubjectDestination::Exile { .. },
-                                    ..
-                                }
-                                | Instruction::ExileChosenPermanents { .. }
-                        )
-                    )
+                    && builder.instructions.last().is_some_and(|op| {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                            .is_some_and(|spec| {
+                                matches!(
+                                    spec.destination,
+                                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                                )
+                            })
+                    })
                 {
                     return Some(MatchObjectRef::LastMovedToExile);
                 }
@@ -404,12 +420,16 @@ pub(super) fn resolve_match_object_ref(
             ) {
                 if matches!(
                     builder.instructions.last(),
-                    Some(
-                        Instruction::Sacrifice { .. }
-                            | Instruction::SacrificeUpTo { .. }
-                            | Instruction::SacrificeMatching(_)
-                            | Instruction::SacrificeSubject { .. }
-                    )
+                    Some(Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_))
+                ) || matches!(
+                    builder.instructions.last(),
+                    Some(Instruction::ZoneOp(spec))
+                        if matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
                 ) {
                     return Some(MatchObjectRef::LastMovedToGraveyard);
                 }
@@ -3803,14 +3823,10 @@ pub(in super::super) fn lower_resolution_condition(
                     let has_lki = matches!(
                         builder.instructions.last(),
                         Some(
-                            Instruction::Discard { .. }
-                                | Instruction::DiscardFiltered { .. }
-                                | Instruction::DiscardUpTo { .. }
-                                | Instruction::DiscardUpToExt { .. }
+                            Instruction::ZoneOp(_)
+                                | Instruction::ForEachPlayerQuery { .. }
+                                | Instruction::Discard { .. }
                                 | Instruction::Sacrifice { .. }
-                                | Instruction::SacrificeUpTo { .. }
-                                | Instruction::ExileChosenPermanents { .. }
-                                | Instruction::SelectZoneCardsToZone { .. }
                                 | Instruction::ChooseObjects { .. }
                                 | Instruction::UntapOrTapSelect { .. }
                         )

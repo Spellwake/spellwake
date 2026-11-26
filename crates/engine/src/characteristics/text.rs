@@ -349,7 +349,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             | Instruction::PayLife { amount, .. }
             | Instruction::PayEnergy { amount, .. }
-            | Instruction::ExileFromZone { amount, .. }
             | Instruction::TapOrUntapControlled { amount, .. }
             | Instruction::CollectEvidence {
                 minimum: amount, ..
@@ -361,10 +360,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DamageGroupAmount { amount, .. }
             | Instruction::OpponentsLoseAndControllerGains(amount)
             | Instruction::ExileFromHandOrBattlefield(amount)
-            | Instruction::ReturnControlledPermanents { amount, .. }
-            | Instruction::ExileChosenPermanents { amount, .. }
             | Instruction::Discard { amount, .. }
-            | Instruction::DiscardFiltered { amount, .. }
             | Instruction::AddPlayerCounter { amount, .. }
             | Instruction::PutNamedCounterOnTarget { amount, .. }
             | Instruction::PutCountersOnSubject { amount, .. }
@@ -373,10 +369,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::LookTopChoose { count: amount, .. }
             | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
-            Instruction::SelectZoneCardsToZone { min, max, .. } => {
-                rewrite_amount(min);
-                rewrite_amount(max);
-            }
             Instruction::ChooseObjects {
                 min,
                 max,
@@ -390,7 +382,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::Sacrifice { amount, .. }
-            | Instruction::SacrificeUpTo { amount, .. }
             | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
             | Instruction::DrainOpponents(amount)
@@ -407,16 +398,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             _ => {}
         }
         match instruction {
-            Instruction::DiscardFiltered { filter, .. }
-            | Instruction::ExileFromZone { filter, .. }
-            | Instruction::TapOrUntapControlled { filter, .. } => {
+            Instruction::TapOrUntapControlled { filter, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::Sacrifice { filter, .. }
-            | Instruction::SacrificeUpTo { filter, .. }
-            | Instruction::ReturnControlledPermanents { filter, .. }
-            | Instruction::ExileChosenPermanents { filter, .. }
-            | Instruction::SacrificeToContinue { filter } => {
+            Instruction::Sacrifice { filter, .. } | Instruction::SacrificeToContinue { filter } => {
                 if let Some(obj) = &mut filter.object_filter {
                     obj.rewrite_creature_type(change.from, change.to);
                 }
@@ -431,11 +416,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     sec.filter.rewrite_creature_type(change.from, change.to);
                 }
             }
-            Instruction::SelectZoneCardsToZone { filter, .. }
-            | Instruction::ChooseObjects { filter, .. }
-            | Instruction::RevealUntilMatch { filter, .. }
-            | Instruction::MoveGraveyardGroup { filter, .. }
-            | Instruction::PutHandPermanentFiltered { filter, .. } => {
+            Instruction::ChooseObjects { filter, .. }
+            | Instruction::RevealUntilMatch { filter, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
             }
             Instruction::RepeatLoop { body: inner, .. } => {
@@ -467,8 +449,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             Instruction::SkipNextUntap { subject }
             | Instruction::RequireCombatAction { subject, .. }
-            | Instruction::DestroySubject { subject, .. }
-            | Instruction::ExileSubjectUntilSourceLeaves { subject }
             | Instruction::TurnFaceUpSubject { subject }
             | Instruction::TurnFaceDownSubject { subject }
             | Instruction::TransformSubject { subject }
@@ -589,10 +569,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::BindResolutionX(expr) => {
                 expr.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::PutSubjectIntoLibraryFromTop { offset, .. } => {
-                offset.rewrite_creature_type(change.from, change.to);
-            }
-            Instruction::PutResolvingSpellInLibrary(_) | Instruction::SetDayNight(_) => {}
+            Instruction::SetDayNight(_) => {}
             Instruction::CreateAuraTokenAttached { definition, .. } => {
                 definition.rewrite_creature_types(change);
             }
@@ -612,12 +589,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::UnattachSubject { .. }
             | Instruction::ChooseOneLastMoved { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
-            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::ReturnLinkedExile { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::ExploreSubject(_)
-            | Instruction::MoveSubject { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
@@ -652,14 +626,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::Earthbend { amount } => {
                 amount.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::DiscardUpToExt {
-                max_count, filter, ..
-            } => {
-                rewrite_amount(max_count);
-                if let Some(filter) = filter {
-                    filter.rewrite_creature_type(change.from, change.to);
-                }
-            }
             Instruction::AttachChoosingPermanent {
                 attachment, host, ..
             } => {
@@ -668,16 +634,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                         filter.rewrite_creature_type(change.from, change.to);
                     }
                 }
-            }
-            Instruction::ExileGroupFromZone { filter, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
-            }
-            Instruction::DestroyChosen { filter, count, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
-                count.rewrite_creature_type(change.from, change.to);
-            }
-            Instruction::SacrificeSubject { subject } => {
-                subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::RollDie { bands, .. } => {
                 for band in bands {
@@ -706,8 +662,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             Instruction::GainControlOfPermanent { subject, .. }
             | Instruction::DoublePowerToughnessSubject { subject, .. }
-            | Instruction::DoubleCountersOnSubject { subject, .. }
-            | Instruction::ShuffleSubjectIntoLibrary { subject, .. } => {
+            | Instruction::DoubleCountersOnSubject { subject, .. } => {
                 subject.rewrite_creature_type(change.from, change.to);
             }
             Instruction::BecomeCopy {
@@ -737,11 +692,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     body(change, &mut act.body);
                 }
             }
-            Instruction::MoveGroup { group, .. }
-            | Instruction::DestroyGroup(group)
-            | Instruction::DestroyGroupWithoutRegeneration(group)
-            | Instruction::PutGroupOnLibraryBottom(group)
-            | Instruction::SetGroupTapped { filter: group, .. } => {
+            Instruction::SetGroupTapped { filter: group, .. } => {
                 group.rewrite_creature_type(change.from, change.to);
             }
             Instruction::SetSubjectTapped { subject, .. } => {
@@ -906,8 +857,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     body(change, declined);
                 }
             }
-            Instruction::DealDamageToAnnouncedTargets { amount, .. }
-            | Instruction::ExileLibraryTopLinked { amount, .. } => rewrite_amount(amount),
+            Instruction::DealDamageToAnnouncedTargets { amount, .. } => rewrite_amount(amount),
             Instruction::GrantChosenProtection { recipients, .. } => {
                 if let crate::program::ProtectionRecipients::Matching(filter) = recipients {
                     filter.rewrite_creature_type(change.from, change.to);
@@ -926,16 +876,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     rewrite_amount(expr);
                 }
             }
-            Instruction::MoveGroupToLibrary { group, .. } => {
-                group.rewrite_creature_type(change.from, change.to);
-            }
             Instruction::UntapOrTapSelect { filter, count, .. }
             | Instruction::RevealUntilMatchExt { filter, count, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
                 rewrite_amount(count);
-            }
-            Instruction::MoveGraveyardGroupOwned { filter, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
             }
             Instruction::LookTopChooseExt { count, filter, .. } => {
                 rewrite_amount(count);
@@ -991,9 +935,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileRelatedHandCardForPlay
             | Instruction::PayLifeOrSacrificeCreatures
             | Instruction::ChooseOtherControlledCreature { .. }
-            | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::DiscardUpTo { .. }
             | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. }
             | Instruction::Jump { .. }
@@ -1037,7 +979,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::PreventDamageSpec(_)
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
-            | Instruction::ExileAbilitySource
             | Instruction::ReturnSourceToHand
             | Instruction::PutCounterOnRelatedPermanent
             | Instruction::PutCountersOnControlledCreatures
@@ -1088,7 +1029,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardTargetsTapped(_)
             | Instruction::ReturnCapturedDyingCreature
             | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
             | Instruction::DivideThreeDamageAmongTargets
@@ -1096,8 +1036,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
-            | Instruction::ExileResolvingSpell
-            | Instruction::ReturnResolvingSpellToHand
             | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
@@ -1132,7 +1070,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RevealTopHandLoseManaValue { .. }
             | Instruction::RevealUntilLandKind
             | Instruction::RevealOpponentChoosesCreature
-            | Instruction::ShuffleAbilitySourceIntoLibrary
             | Instruction::RevealToNameAfterSourceShuffle(_)
             | Instruction::WatchSmallCreatureCombatDraw(_)
             | Instruction::WatchTargetCombatDamageDraw
@@ -1190,16 +1127,12 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileRelatedTopForCastThisTurn
             | Instruction::ExileRelatedTopForPlay
             | Instruction::ExileTopForPlay { .. }
-            | Instruction::ExileTopFaceDown
             | Instruction::ScheduleCreatedTokenExile(_)
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ExileRelatedPermanents(_)
             | Instruction::ExileTargetWithLink(_)
-            | Instruction::ReturnCardsExiledWithLink(_)
-            | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
             | Instruction::DestroyCapturedCombatCreature { .. }
@@ -1284,17 +1217,12 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::BoostSaddledAttacker { .. }
-            | Instruction::PutTargetInLibrary(_)
             | Instruction::PutOwnHandCardOnLibraryBottom
-            | Instruction::ExileGraveyardTarget
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
-            | Instruction::ReturnTargetGraveyardCreatureToHand
-            | Instruction::ReturnRandomGraveyardCards { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
             | Instruction::ReturnSourceGraveyardToBattlefield { .. }
@@ -1303,12 +1231,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
-            | Instruction::ShuffleOwnLibrary
-            | Instruction::ShufflePlayerLibrary(_)
-            | Instruction::ShuffleTargetIntoLibrary
-            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
@@ -1317,17 +1240,13 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::PutChosenXChargeCounters
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::ExileAllGraveyards
-            | Instruction::ExilePlayerGraveyards(_)
             | Instruction::PayControllerEnergy(_)
             | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileCreatureAtMostRevealedPower
-            | Instruction::ExileTarget
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
             | Instruction::ExileTargetUntilSourceLeaves
-            | Instruction::ExileUntilNextEndStep
             | Instruction::ExileTargetUntilOpponentMonarch
             | Instruction::BoostSource { .. }
             | Instruction::ResolvePowerAbility(_)
@@ -1341,11 +1260,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RemoveTargetFromCombat
             | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
-            | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ReturnToOwnersHand
-            | Instruction::ReturnOwnGraveyardCreatureToBattlefield
-            | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
-            | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell

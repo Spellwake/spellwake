@@ -667,17 +667,6 @@ impl EffectWindow {
                 None,
                 usize::from(*maximum),
             ),
-            Instruction::PutHandPermanentFiltered {
-                player,
-                filter,
-                maximum,
-                ..
-            } => (
-                self.resolving_player(*player)?,
-                None,
-                Some(filter.as_ref()),
-                usize::from(*maximum),
-            ),
             Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
             | Instruction::PutGraveyardCreatureAtMostX
             | Instruction::PutLandFromExiledCohort => (
@@ -783,7 +772,7 @@ impl EffectWindow {
                                 .iter()
                                 .copied()
                                 .any(CardType::is_permanent)
-                            && hand_filter.is_some_and(|filter| {
+                            && hand_filter.is_some_and(|filter: &crate::program::ObjectFilter| {
                                 filter.matches_static_characteristics(card, &excluded, || {
                                     self.copiable_program(card.object).map(Program::mana_value)
                                 })
@@ -880,7 +869,6 @@ impl EffectWindow {
                         tapped: matches!(
                             self.current_instruction()?,
                             Instruction::PutHandPermanentsOntoBattlefield { tapped: true, .. }
-                                | Instruction::PutHandPermanentFiltered { tapped: true, .. }
                         ),
                         player: actor,
                         entry: frame.entry(),

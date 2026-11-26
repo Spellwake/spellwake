@@ -566,14 +566,23 @@ fn mega_batch_1_sacrifice_up_to_allows_zero_partial_and_rejects_nonmatching() {
             P0,
             GameCommand::Reply {
                 decision: decision_id,
-                choice: DecisionReply::SelectResolution(vec![land_obj]),
+                choice: DecisionReply::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceReply::Objects(vec![land_obj])
+                ),
             },
         ),
         "non-creature land must be rejected by SacrificeUpTo(creature)"
     );
 
     // Positive 1: sacrificing 0 creatures is legal and draws 0 cards.
-    let g_zero = reply(&g_pending, P0, DecisionReply::SelectResolution(vec![])).into_state();
+    let g_zero = reply(
+        &g_pending,
+        P0,
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Objects(
+            vec![],
+        )),
+    )
+    .into_state();
     assert_eq!(hand_count(&g_zero, P0), 0);
     assert_eq!(
         g_zero.execution().window().cards().get(b2).unwrap().zone(),
@@ -585,7 +594,9 @@ fn mega_batch_1_sacrifice_up_to_allows_zero_partial_and_rejects_nonmatching() {
         reply(
             &g_pending,
             P0,
-            DecisionReply::SelectResolution(vec![b2, b3]),
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Objects(
+                vec![b2, b3],
+            )),
         )
         .into_state(),
     );

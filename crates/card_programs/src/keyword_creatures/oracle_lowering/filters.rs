@@ -6426,7 +6426,11 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
                 Instruction::LookTopChoose {
                     reveal_only: false,
                     ..
-                } | Instruction::RevealPlayerHand(_)
+                }
+            ) || matches!(
+                op,
+                Instruction::ZoneOp(spec)
+                    if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)
             )
         })
     })
@@ -6437,11 +6441,14 @@ fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::ExileFromZone { .. }
-                    | Instruction::ExileLibraryTop { .. }
-                    | Instruction::ExileTopPlay { .. }
-                    | Instruction::ExileChosenPermanents { .. }
-            )
+                Instruction::ExileLibraryTop { .. } | Instruction::ExileTopPlay { .. }
+            ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                })
         })
     })
 }
@@ -7406,28 +7413,33 @@ fn lower_value_expr_inner(
                 let action_matches = matches!(
                     (kind, last_ins),
                     (
-                        PriorActionRefKind::DestroyedThisWay,
-                        Instruction::DestroyGroup(_)
-                            | Instruction::DestroyGroupWithoutRegeneration(_),
-                    ) | (
-                        PriorActionRefKind::ExiledThisWay,
-                        Instruction::MoveGroup {
-                            destination: PublicZoneDestination::Exile,
-                            ..
-                        } | Instruction::ExileGroupFromZone { .. }
-                            | Instruction::ExileChosenPermanents { .. },
-                    ) | (
                         PriorActionRefKind::TappedThisWay,
                         Instruction::SetGroupTapped { tapped: true, .. }
                             | Instruction::UntapOrTapSelect { tap: true, .. },
                     ) | (
                         PriorActionRefKind::SacrificedThisWay,
-                        Instruction::Sacrifice { .. }
-                            | Instruction::SacrificeUpTo { .. }
-                            | Instruction::SacrificeMatching(_)
-                            | Instruction::SacrificeSubject { .. },
+                        Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_),
                     )
-                );
+                ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(last_ins)
+                    .is_some_and(|spec| match kind {
+                        PriorActionRefKind::DestroyedThisWay => matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. }
+                            }
+                        ),
+                        PriorActionRefKind::ExiledThisWay => matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        ),
+                        PriorActionRefKind::SacrificedThisWay => matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        ),
+                        _ => false,
+                    });
                 if action_matches {
                     let mut clean = f.as_ref().clone();
                     clean.predicates.remove(pos);
@@ -7898,7 +7910,9 @@ fn lower_value_expr_inner(
                         b.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::ExileTarget | Instruction::ExileGraveyardTarget
+                                Instruction::ZoneOp(spec)
+                                    if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                                        && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Exile { .. })
                             )
                         })
                     });
@@ -7911,12 +7925,16 @@ fn lower_value_expr_inner(
                     });
                     let prior_discard = context.is_some_and(|(b, _)| {
                         b.instructions.iter().any(|op| {
-                            matches!(
-                                op,
-                                Instruction::Discard { .. }
-                                    | Instruction::DiscardFiltered { .. }
-                                    | Instruction::DiscardOneAtRandom(_)
-                            )
+                            matches!(op, Instruction::Discard { .. })
+                                || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                                    .is_some_and(|spec| {
+                                        matches!(
+                                            spec.destination,
+                                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard
+                                            }
+                                        )
+                                    })
                         })
                     });
                     let no_target = context.is_none_or(|(b, _)| b.target == BodyTarget::None);

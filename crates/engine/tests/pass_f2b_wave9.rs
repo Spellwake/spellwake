@@ -54,8 +54,8 @@ use spellwake_engine::{
     combat::{AttackDeclaration, CombatDecision, CombatRules},
     draw::GameOutcome,
     effects::{
-        CounterKind, EffectError, LibraryTopReply, ResolutionSelectionKind, SeedCard,
-        ZoneReplacementReply, ZoneReplacementRequest,
+        CounterKind, EffectError, LibraryTopReply, SeedCard, ZoneReplacementReply,
+        ZoneReplacementRequest,
     },
     game::{
         DecisionReply, GameCommand, GameContext, GameError, GameId, GameInput, GameState,
@@ -77,9 +77,9 @@ use spellwake_engine::{
         ObjectFilterFlags, PermanentDefinition, PermanentTargetAction, PlayerRelation,
         PlayerTriggerAction, Program, ProgramKind, ResolutionCondition, ResolvingPlayer,
         SearchCardMatcher, SearchManaValue, SourceStateExpr, SourceZoneFilter, StatusTriggerKind,
-        SubjectDestination, SubtypeFilter, Supertype, TemporaryRuleKind, TriggerCondition,
-        TriggerEvent, TriggerGrouping, TriggerPlayerScope, TriggerSpec, TriggerZone,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        SubtypeFilter, Supertype, TemporaryRuleKind, TriggerCondition, TriggerEvent,
+        TriggerGrouping, TriggerPlayerScope, TriggerSpec, TriggerZone, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr,
     },
     setup::GameSeed,
     targets::TargetRef,
@@ -423,7 +423,12 @@ fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::ShuffleTargetIntoLibrary,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Library {
+                            position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                        },
+                    ))),
                     Instruction::LookTopChoose {
                         count: ValueExpr::literal(1),
                         library_owner: ResolvingPlayer::TargetOwner,
@@ -440,17 +445,40 @@ fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
                         random_rest_order: false,
                         secondary: None,
                     },
-                    Instruction::MoveSubject {
-                        subject: MoveSubjectRef::RevealedCard,
-                        destination: SubjectDestination::Battlefield {
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Revealed,
+                        spellwake_engine::toolbox::ZoneDest::Battlefield {
+                            controller: if true {
+                                spellwake_engine::toolbox::ZoneController::Owner
+                            } else {
+                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                ))
+                            },
                             tapped: false,
                             attacking: false,
                             transformed: false,
-                            under_owner_control: true,
-                            with_counter: None,
-                            attach_to_self: false,
+                            face_down: false,
+                            entering_counters: (None)
+                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                                    (
+                                        k,
+                                        Box::new(spellwake_engine::program::ValueExpr::literal(
+                                            i64::from(c),
+                                        )),
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
+                            attach_to: if false {
+                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                            } else {
+                                None
+                            },
                         },
-                    },
+                    ))),
                 ],
             ),
         ),
@@ -561,12 +589,7 @@ fn discard_up_to_ext_filtered_zero_and_nonzero_counts() {
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::DiscardUpToExt {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        max_count: ValueExpr::literal(0),
-                        filter: Some(Box::new(ObjectFilter::creature())),
-                        any_number: true,
-                    },
+                    Instruction::ForEachPlayerQuery { selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(ResolvingPlayer::Controller))), bind_player: spellwake_engine::toolbox::BindingId(904), body: Box::new(spellwake_engine::program::ExecutableBody::new(spellwake_engine::program::BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Bound(spellwake_engine::toolbox::BindingId(904)))), ObjectFilter::creature()), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Bound(spellwake_engine::toolbox::BindingId(904)), min: Box::new(spellwake_engine::program::ValueExpr::literal(0)), max: Box::new(ValueExpr::QueryCount(Box::new(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Bound(spellwake_engine::toolbox::BindingId(904)))), ObjectFilter::creature())))), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: true }, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard })))])) },
                     Instruction::BranchIfFalse {
                         condition: ResolutionCondition {
                             left: ValueExpr::event(EventValueKind::LastActionSucceeded),
@@ -613,13 +636,18 @@ fn discard_up_to_ext_filtered_zero_and_nonzero_counts() {
     let decision_zero = pending_zero
         .state()
         .pending_decision()
-        .expect("DiscardUpToExt must prompt ResolutionSelect");
-    let RuleFrame::ResolutionSelect(sel) = decision_zero.frame() else {
-        panic!("expected ResolutionSelect frame");
+        .expect("DiscardUpToExt must prompt PromptChoice");
+    let RuleFrame::PromptChoice(frame) = decision_zero.frame() else {
+        panic!("expected PromptChoice frame");
     };
-    assert_eq!(sel.operation(), ResolutionSelectionKind::DiscardUpTo);
-    assert_eq!(sel.minimum(), 0);
-    let domain: BTreeSet<ObjectId> = sel.domain().iter().copied().collect();
+    let spellwake_engine::toolbox::ResolvedPromptDomain::Objects {
+        candidates, min, ..
+    } = &frame.domain
+    else {
+        panic!("expected Objects domain");
+    };
+    assert_eq!(*min, 0);
+    let domain: BTreeSet<ObjectId> = candidates.iter().copied().collect();
     assert_eq!(
         domain,
         BTreeSet::from([bear3, bear4]),
@@ -630,7 +658,9 @@ fn discard_up_to_ext_filtered_zero_and_nonzero_counts() {
     let after_zero = reply(
         pending_zero.state(),
         P0,
-        DecisionReply::SelectResolution(vec![]),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Objects(
+            vec![],
+        )),
     );
     assert!(after_zero.state().pending_decision().is_none());
     assert_eq!(zone_of(after_zero.state(), 3), ObjectZone::Hand(P0));
@@ -656,10 +686,10 @@ fn discard_up_to_ext_filtered_zero_and_nonzero_counts() {
     let mut after_two = reply(
         pending_two.state(),
         P0,
-        DecisionReply::SelectResolution(vec![
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Objects(vec![
             object(pending_two.state(), 3),
             object(pending_two.state(), 4),
-        ]),
+        ])),
     );
     if let Some(decision) = after_two.state().pending_decision() {
         let RuleFrame::ResolutionGraveyardOrder(frame) = decision.frame() else {
@@ -742,12 +772,7 @@ fn earthbend_animates_returns_tapped_on_death_and_ignores_bounce() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TargetObject,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                }],
+                vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: matches!(None, Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)), delayed_return: None, link_group: None })))],
             ),
         ),
         &vocab,
@@ -757,10 +782,12 @@ fn earthbend_animates_returns_tapped_on_death_and_ignores_bounce() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TargetObject,
-                    destination: SubjectDestination::Hand,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1905,12 +1932,39 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::MoveGraveyardGroup {
-                    filter: Box::new(died_filter),
-                    all_graveyards: false,
-                    to_battlefield: true,
-                    tapped: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Group(if false {
+                                    spellwake_engine::program::AffectedPlayers::EachPlayer
+                                } else {
+                                    spellwake_engine::program::AffectedPlayers::One(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    )
+                                }),
+                            )),
+                            died_filter,
+                        ),
+                        if true {
+                            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                controller: spellwake_engine::toolbox::ZoneController::Player(
+                                    Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    )),
+                                ),
+                                tapped: false,
+                                attacking: false,
+                                transformed: false,
+                                face_down: false,
+                                entering_counters: Vec::new(),
+                                attach_to: None,
+                            }
+                        } else {
+                            spellwake_engine::toolbox::ZoneDest::Hand
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1921,12 +1975,39 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::MoveGraveyardGroup {
-                    filter: Box::new(from_lib_filter),
-                    all_graveyards: false,
-                    to_battlefield: false,
-                    tapped: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Group(if false {
+                                    spellwake_engine::program::AffectedPlayers::EachPlayer
+                                } else {
+                                    spellwake_engine::program::AffectedPlayers::One(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    )
+                                }),
+                            )),
+                            from_lib_filter,
+                        ),
+                        if false {
+                            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                controller: spellwake_engine::toolbox::ZoneController::Player(
+                                    Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    )),
+                                ),
+                                tapped: false,
+                                attacking: false,
+                                transformed: false,
+                                face_down: false,
+                                entering_counters: Vec::new(),
+                                attach_to: None,
+                            }
+                        } else {
+                            spellwake_engine::toolbox::ZoneDest::Hand
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,

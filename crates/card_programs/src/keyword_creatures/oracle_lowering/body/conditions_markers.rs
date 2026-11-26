@@ -435,12 +435,7 @@ pub(super) fn lower_zone_action_this_way_action(
     {
         if matches!(
             builder.instructions.last(),
-            Some(
-                Instruction::ReturnToOwnersHand
-                    | Instruction::MoveSubject { .. }
-                    | Instruction::MoveGroup { .. }
-                    | Instruction::SelectZoneCardsToZone { .. }
-            )
+            Some(Instruction::ReturnToOwnersHand | Instruction::ZoneOp(_))
         ) {
             (MatchObjectRef::LastAffected, s.trim())
         } else {
@@ -642,8 +637,20 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
         MatchObjectRef::LastMovedToGraveyard
             if matches!(
                 builder.instructions.last(),
-                Some(Instruction::DiscardOneAtRandom(_) | Instruction::SacrificeRandomUntilLand)
-            ) =>
+                Some(Instruction::SacrificeRandomUntilLand)
+            ) || builder.instructions.last().is_some_and(|op| {
+                matches!(
+                    op,
+                    Instruction::ZoneOp(spec)
+                        if matches!(spec.selection, spellwake_engine::toolbox::ZoneSelection::Random { .. })
+                            && matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard
+                                }
+                            )
+                )
+            }) =>
         {
             false
         }
@@ -654,11 +661,7 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
                     Instruction::LookTopChoose { .. }
                         | Instruction::CreateTokens { .. }
                         | Instruction::CreateAttackingTokens { .. }
-                        | Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                        | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
                         | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                        | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
-                        | Instruction::ReturnRandomGraveyardCards { .. }
                 )
             ) =>
         {
@@ -670,7 +673,6 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
                 Some(
                     Instruction::ExileLibraryTop { .. }
                         | Instruction::ExileTopForPlay { .. }
-                        | Instruction::ExileTopFaceDown
                         | Instruction::ExileTopForFreePlay
                 )
             ) =>
@@ -2533,10 +2535,8 @@ pub(super) fn lower_marker_or_action_condition(
                         builder.instructions.last(),
                         Some(
                             Instruction::DestroyTarget
-                                | Instruction::DestroyTargetWithoutRegeneration
-                                | Instruction::ExileTarget
                                 | Instruction::ReturnToOwnersHand
-                                | Instruction::MoveSubject { .. }
+                                | Instruction::ZoneOp(_)
                         )
                     );
                     if target_just_moved {
@@ -5544,15 +5544,11 @@ pub(super) fn lower_marker_or_action_condition(
                 "it entered under your control" => {
                     let returned_to_bf = matches!(
                         builder.instructions.last(),
-                        Some(
-                            Instruction::ReturnDelayedExile(_)
-                                | Instruction::ReturnCardsExiledWithLink(_)
-                                | Instruction::ReturnCardsExiledWithLinkExt { .. }
-                                | Instruction::MoveSubject {
-                                    destination: SubjectDestination::Battlefield { .. },
-                                    ..
-                                }
-                        )
+                        Some(Instruction::ReturnDelayedExile(_))
+                    ) || matches!(
+                        builder.instructions.last(),
+                        Some(Instruction::ZoneOp(spec))
+                            if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
                     );
                     if !returned_to_bf {
                         return Err("oracle:unsupported-if-condition");

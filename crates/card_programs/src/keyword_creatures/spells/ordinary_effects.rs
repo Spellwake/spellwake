@@ -65,7 +65,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             BodyTarget::FilteredOwnGraveyardCard(
                 ObjectFilter::creature().with_mana_value(ManaValueFilter::AtMost(limit)),
             ),
-            vec![Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped: false }],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false)],
         ));
     }
     if text.trim()
@@ -90,7 +90,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ShuffleEachHandAndGraveyard,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_each_hand_and_graveyard(),
                 Instruction::DrawEachPlayer {
                     amount: spellwake_engine::program::ValueExpr::Literal(7.into()),
                 },
@@ -363,11 +363,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         .and_then(|clause| clause.strip_suffix(" target creature cards in your graveyard. sacrifice a creature. if you do, return the chosen cards to the battlefield tapped."))
     {
         use spellwake_engine::program::PermanentTypeFilter;
-        let count = u8::try_from(number(count)?).ok().filter(|count| *count > 0)?;
+        let _count = u8::try_from(number(count)?).ok().filter(|count| *count > 0)?;
         return Some(ExecutableBody::new(BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()), vec![
             Instruction::SacrificeToContinue { filter: PermanentTypeFilter {
                 any_types: Default::default(), required_types: [CardType::Creature].into(), forbidden_types: Default::default(), object_filter: None } },
-            Instruction::ReturnGraveyardTargetsTapped(count),
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(true),
         ]));
     }
     if lower.trim()
@@ -376,7 +376,10 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::DestroyGroupWithoutRegeneration(Box::new(ObjectFilter::creature())),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    ObjectFilter::creature(),
+                    false,
+                ),
                 Instruction::DrawController {
                     amount: spellwake_engine::program::ValueExpr::event(
                         spellwake_engine::program::EventValueKind::DestroyedPermanents,
@@ -410,10 +413,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::DestroyGroup(Box::new(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
                     ObjectFilter::nonland()
                         .with_mana_value(ManaValueFilter::AtMost(limit.parse().ok()?)),
-                )),
+                    true,
+                ),
                 Instruction::AddMana(spellwake_engine::program::EffectManaYield::Split {
                     first,
                     second,
@@ -726,9 +730,12 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
     if lower == "destroy all creatures. they can't be regenerated." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DestroyGroupWithoutRegeneration(Box::new(
-                ObjectFilter::creature(),
-            ))],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    ObjectFilter::creature(),
+                    false,
+                ),
+            ],
         ));
     }
     if let Some(result) = lower
@@ -785,7 +792,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             text if text.strip_prefix("look at the top six cards of your library. you may reveal any number of cards of the chosen type from among them and put the revealed cards into your hand. ")==Some("put the rest on the bottom of your library in a random order.")=>
                 Some(Instruction::LookTopReveal {count:6,filter:spellwake_engine::program::LookTopFilter::AllOfChosenType(slot)}),
             "destroy all creatures that aren't of the chosen type." =>
-                Some(Instruction::DestroyGroup(Box::new(ObjectFilter::creature().except_chosen_slot(slot)))),
+                Some(crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::creature().except_chosen_slot(slot), true)),
             effect if effect.starts_with("creatures that aren't of the chosen type get ") => {
                 let stats = effect.strip_prefix("creatures that aren't of the chosen type get ")?.strip_suffix(" until end of turn.")?;
                 let (p, t) = stats.split_once('/')?;
@@ -912,7 +919,10 @@ pub(in crate::keyword_creatures) fn exile_followup(
     let (exile, next) = text.split_once(". Its controller ")?;
     let mut body = body(&format!("{exile}."), name)?;
     let destroyed = body.instructions.as_slice() == [Instruction::DestroyTarget];
-    if !destroyed && body.instructions.as_slice() != [Instruction::ExileTarget] {
+    if !destroyed
+        && body.instructions.as_slice()
+            != [crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()]
+    {
         return None;
     }
     if destroyed {
@@ -1385,9 +1395,18 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         let group = Box::new(group);
         return Some((
             NoTarget,
-            destination.map_or(Instruction::DestroyGroup(group.clone()), |destination| {
-                Instruction::MoveGroup { group, destination }
-            }),
+            destination.map_or(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    *(group.clone()),
+                    true,
+                ),
+                |destination| {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                        *(group),
+                        destination,
+                    )
+                },
+            ),
         ));
     }
     if let Some(selection) = player_selection(line) {
@@ -1446,14 +1465,21 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
             _ => return None,
         };
         let op = if !tapped && target == ObjectFilter::creature() {
-            Instruction::ReturnOwnGraveyardCreatureToBattlefield
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
+                false,
+            )
         } else {
-            Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped }
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
+                tapped,
+            )
         };
         return Some((BodyTarget::FilteredOwnGraveyardCard(target), op));
     }
     if let Some(target) = line.strip_prefix("exile target ").and_then(filtered_target) {
-        return Some((target, Instruction::ExileTarget));
+        return Some((
+            target,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+        ));
     }
     if let Some(target) = line
         .strip_prefix("destroy target ")
@@ -1735,7 +1761,10 @@ pub(super) fn threshold_destruction(
         .trim_start()
         .strip_prefix("Threshold — If there are seven or more cards in your graveyard, instead destroy all creatures, then create ")?
         .strip_suffix(". Creatures destroyed this way can't be regenerated.")?;
-    let destroy = Instruction::DestroyGroupWithoutRegeneration(Box::new(ObjectFilter::creature()));
+    let destroy = crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+        ObjectFilter::creature(),
+        false,
+    );
     Some(ExecutableBody::new(
         BodyTarget::None,
         vec![

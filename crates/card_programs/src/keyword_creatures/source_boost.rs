@@ -639,7 +639,7 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ShuffleOwnLibrary,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
                     Instruction::ExileTopForFreePlay,
                 ],
             ),
@@ -862,7 +862,16 @@ pub(super) fn parse(
     if let Some(consequence) = rest.strip_prefix("Flip a coin. If you win the flip, ") {
         let mut body = super::spells::ordinary_effects::body(consequence, name)?;
         if body.target != BodyTarget::None
-            || !matches!(body.instructions.as_slice(), [Instruction::DestroyGroup(_)])
+            || !matches!(
+                body.instructions.as_slice(),
+                [Instruction::ZoneOp(spec)]
+                    if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. }
+                        }
+                    )
+            )
         {
             return None;
         }
@@ -1194,7 +1203,12 @@ pub(super) fn parse(
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(BodyTarget::None, vec![Instruction::ExileAllGraveyards]),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_all_graveyards(),
+                ],
+            ),
             restriction,
         ));
     }

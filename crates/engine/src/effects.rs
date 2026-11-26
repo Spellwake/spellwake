@@ -7856,10 +7856,7 @@ impl EffectWindow {
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
         let (object, chooser) = if self.resolution_cursor().is_some() {
             match self.current_instruction()? {
-                Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker => {
+                Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_) => {
                     let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
                     else {
                         return Ok(None);
@@ -7975,13 +7972,17 @@ impl EffectWindow {
             }))
     }
     fn graveyard_aura_entry_frame(&self) -> Result<Option<LinkedAuraChoiceFrame>, EffectError> {
-        if !matches!(
-            self.current_instruction()?,
-            Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
-        ) {
+        let cur_op = self.current_instruction()?;
+        let is_target_bf_return = matches!(
+            cur_op,
+            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
+        ) || matches!(
+            cur_op,
+            Instruction::ZoneOp(spec)
+                if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
+                    && matches!(spec.destination, crate::toolbox::ZoneDest::Battlefield { .. })
+        );
+        if !is_target_bf_return {
             return Ok(None);
         }
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
@@ -10604,22 +10605,15 @@ impl EffectWindow {
             | Instruction::DestroyOtherCreatures
             | Instruction::SacrificeOtherCreatures
             | Instruction::SacrificeColoredPermanents
-            | Instruction::ExileChosenPermanents { .. }
             | Instruction::ExileFromHandOrBattlefield(_)
             | Instruction::ExileRelatedHandCardForPlay
             | Instruction::PayLifeOrSacrificeCreatures
-            | Instruction::ReturnControlledPermanents { .. }
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
-            | Instruction::SacrificeUpTo { .. }
-            | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::DiscardUpTo { .. }
-            | Instruction::DiscardUpToExt { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
-            | Instruction::Discard { .. }
-            | Instruction::DiscardFiltered { .. } => {
+            | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::AdjustTargetLife { .. }
@@ -10685,40 +10679,29 @@ impl EffectWindow {
             Instruction::GoadTarget | Instruction::RequireTargetAttack => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|p| p.zone == ObjectZone::Battlefield && p.is_creature()))
             }
-            Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration => {
+            Instruction::DestroyTarget => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|view| view.zone == ObjectZone::Battlefield && !view.has_keyword(KeywordAbility::Indestructible)))
             }
             Instruction::ExileCreatureAtMostRevealedPower
-            | Instruction::ExileTarget
             | Instruction::ExileTargetWithLink(_)
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
             | Instruction::ExileTargetUntilSourceLeaves
-            | Instruction::ExileUntilNextEndStep
             | Instruction::ExileTargetUntilOpponentMonarch => {
                 matches!(target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|o| o.zone() == ObjectZone::Battlefield))
             }
-            Instruction::ReturnToOwnersHand | Instruction::PutTargetInLibrary(_) => {
+            Instruction::ReturnToOwnersHand => {
                 matches!(target, TargetRef::Object(id)
                 if self.window.cards().get(id).is_some_and(|o| matches!(o.zone(), ObjectZone::Battlefield | ObjectZone::Graveyard(_) | ObjectZone::Exile)))
             }
-            Instruction::ExileForBlackToken { .. }
-            | Instruction::ExileGraveyardTarget
-            | Instruction::ReturnTargetGraveyardCreatureToHand => {
+            Instruction::ExileForBlackToken { .. } => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|card| matches!(card.zone, ObjectZone::Graveyard(_))))
             }
-            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-            | Instruction::ReturnOwnGraveyardCreatureToBattlefield => {
+            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_) => {
                 matches!(target, TargetRef::Object(id)
                 if self.window.cards().get(id).is_some_and(|o| matches!(o.zone(), ObjectZone::Graveyard(_)))
                     && evaluated.get(id).is_some_and(ObjectCharacteristics::is_creature))
-            }
-            Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-            | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker => {
-                matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|o| matches!(o.zone(), ObjectZone::Graveyard(_)))
-                    && evaluated.get(id).is_some_and(|value| value.current_types.iter().copied().any(CardType::is_permanent)))
             }
             Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
@@ -10768,8 +10751,6 @@ impl EffectWindow {
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
-            | Instruction::MoveSubject { .. }
-            | Instruction::SelectZoneCardsToZone { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DealDamageFrom { .. }
@@ -10781,7 +10762,6 @@ impl EffectWindow {
             | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DoublePowerToughnessSubject { .. }
             | Instruction::DoubleCountersOnSubject { .. }
-            | Instruction::ShuffleSubjectIntoLibrary { .. }
             | Instruction::WinGame(_)
             | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -10805,9 +10785,6 @@ impl EffectWindow {
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
             | Instruction::CopyStackObject { .. }
-            | Instruction::ExileGroupFromZone { .. }
-            | Instruction::SacrificeSubject { .. }
-            | Instruction::DestroyChosen { .. }
             | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
@@ -10828,18 +10805,13 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::PutResolvingSpellInLibrary(_)
-            | Instruction::PutSubjectIntoLibraryFromTop { .. }
             | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::MoveGraveyardGroup { .. }
-            | Instruction::PutHandPermanentFiltered { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
@@ -10900,15 +10872,12 @@ impl EffectWindow {
             | Instruction::ExileRelatedTopForCastThisTurn
             | Instruction::ExileRelatedTopForPlay
             | Instruction::ExileTopForPlay { .. }
-            | Instruction::ExileTopFaceDown
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ScheduleCreatedTokenExile(_)
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ExileRelatedPermanents(_)
-            | Instruction::ReturnCardsExiledWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
             | Instruction::DestroyCapturedCombatCreature { .. }
@@ -11011,7 +10980,6 @@ impl EffectWindow {
             | Instruction::DrawPlayersControllingName(_)
             | Instruction::DrawController { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardTargetsTapped(_)
             | Instruction::ReturnCapturedDyingCreature
             | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
             | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
@@ -11022,8 +10990,6 @@ impl EffectWindow {
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::ExileResolvingSpell
-            | Instruction::ReturnResolvingSpellToHand
             | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
@@ -11052,7 +11018,6 @@ impl EffectWindow {
             | Instruction::RevealTopHandLoseManaValue { .. }
             | Instruction::RevealUntilLandKind
             | Instruction::RevealOpponentChoosesCreature
-            | Instruction::ShuffleAbilitySourceIntoLibrary
             | Instruction::RevealToNameAfterSourceShuffle(_)
             | Instruction::WatchSmallCreatureCombatDraw(_)
             | Instruction::ChooseOwnCommanderToCast
@@ -11094,16 +11059,12 @@ impl EffectWindow {
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::PreventDamageSpec(_)
-            | Instruction::MoveGroup { .. }
             | Instruction::PutOwnHandCardOnLibraryBottom
-            | Instruction::PutGroupOnLibraryBottom(_)
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
-            | Instruction::ReturnRandomGraveyardCards { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
             | Instruction::ReturnSourceGraveyardToBattlefield { .. }
@@ -11112,12 +11073,7 @@ impl EffectWindow {
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
-            | Instruction::ShuffleOwnLibrary
-            | Instruction::ShufflePlayerLibrary(_)
-            | Instruction::ShuffleTargetIntoLibrary
-            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
@@ -11126,13 +11082,10 @@ impl EffectWindow {
             | Instruction::PutChosenXChargeCounters
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::ExileAllGraveyards
-            | Instruction::ExilePlayerGraveyards(_)
             | Instruction::PayControllerEnergy(_)
             | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
-            | Instruction::ExileAbilitySource
             | Instruction::ReturnSourceToHand
             | Instruction::PutCounterOnRelatedPermanent
             | Instruction::PutCountersOnControlledCreatures
@@ -11164,8 +11117,6 @@ impl EffectWindow {
             | Instruction::TapAbilitySource
             | Instruction::RegenerateSource
             | Instruction::RegenerateControlledSubtype(_)
-            | Instruction::DestroyGroupWithoutRegeneration(_)
-            | Instruction::DestroyGroup(_)
             | Instruction::DoubleCountersOnTargets
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
@@ -11191,7 +11142,6 @@ impl EffectWindow {
             | Instruction::AdjustControllerLife { .. }
             | Instruction::PayLife { .. }
             | Instruction::PayEnergy { .. }
-            | Instruction::ExileFromZone { .. }
             | Instruction::TapOrUntapControlled { .. }
             | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
@@ -11203,17 +11153,12 @@ impl EffectWindow {
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
             | Instruction::RemoveCountersFromSubject { .. }
-            | Instruction::MoveGroupToLibrary { .. }
-            | Instruction::ExileLibraryTopLinked { .. }
             | Instruction::UntapOrTapSelect { .. }
-            | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::ExileSubjectUntilSourceLeaves { .. }
-            | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
             | Instruction::TurnFaceDownSubject { .. }
@@ -11221,9 +11166,7 @@ impl EffectWindow {
             | Instruction::EmpowerJace { .. }
             | Instruction::AddOneOfEachCounterKindOnSubject { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
-            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::ReturnLinkedExile { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
         })
     }

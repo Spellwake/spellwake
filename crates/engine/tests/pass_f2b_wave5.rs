@@ -45,12 +45,12 @@ use spellwake_engine::{
     priority::SeatId,
     program::{
         AffectedPlayers, BodyTarget, CardType, CastEntryKind, ColorMask, Comparison,
-        EventValueKind, ExecutableBody, Instruction, MoveSubjectRef, ObjectFilter,
-        PermanentDefinition, PermanentTargetAction, PermanentTypeFilter, PlaneswalkerSubtype,
-        PlayerRelation, PlayerStatExpr, PlayerTriggerAction, Program, ProgramKind,
-        ResolutionCondition, ResolvingPlayer, SpellFilter, StatusTriggerKind, SubjectDestination,
-        TriggerCondition, TriggerEvent, TriggerFromZone, TriggerGrouping, TriggerSpec,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        EventValueKind, ExecutableBody, Instruction, ObjectFilter, PermanentDefinition,
+        PermanentTargetAction, PermanentTypeFilter, PlaneswalkerSubtype, PlayerRelation,
+        PlayerStatExpr, PlayerTriggerAction, Program, ProgramKind, ResolutionCondition,
+        ResolvingPlayer, SpellFilter, StatusTriggerKind, TriggerCondition, TriggerEvent,
+        TriggerFromZone, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
+        ValueExpr,
     },
     targets::TargetRef,
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
@@ -485,22 +485,40 @@ fn prevent_graveyard_targeting_rejects_graveyard_card_and_creature_targets() {
     let exile_any_gy = spell(
         2,
         BodyTarget::AnyGraveyardCard,
-        vec![Instruction::MoveSubject {
-            subject: MoveSubjectRef::TargetObject,
-            destination: SubjectDestination::Exile {
-                delayed_return: None,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Exile {
+                    face_down: false,
+                    viewer: None,
+                    link_to_source: matches!(
+                        None,
+                        Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)
+                    ),
+                    delayed_return: None,
+                    link_group: None,
+                },
+            ),
+        ))],
     );
     let exile_gy_creature = spell(
         3,
         BodyTarget::AnyGraveyardCreature,
-        vec![Instruction::MoveSubject {
-            subject: MoveSubjectRef::TargetObject,
-            destination: SubjectDestination::Exile {
-                delayed_return: None,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Exile {
+                    face_down: false,
+                    viewer: None,
+                    link_to_source: matches!(
+                        None,
+                        Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)
+                    ),
+                    delayed_return: None,
+                    link_group: None,
+                },
+            ),
+        ))],
     );
 
     let mut ground_seal = Program::enchantment(Some(ManaCost::free()));
@@ -1564,7 +1582,12 @@ fn planeswalker_subtype_filter_and_permanent_selector_match_jace_and_reject_chan
         BodyTarget::FilteredPermanent(
             ObjectFilter::planeswalker().with_planeswalker_subtype(PlaneswalkerSubtype::Jace),
         ),
-        vec![Instruction::ExileTarget],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::exile(),
+            ),
+        ))],
     );
 
     let initial = world(
@@ -1671,17 +1694,42 @@ fn cast_entry_kind_not_cast_triggers_on_token_and_reanimate_but_not_cast() {
     let reanimate = spell(
         5,
         BodyTarget::SingleOwnGraveyardCard,
-        vec![Instruction::MoveSubject {
-            subject: MoveSubjectRef::TargetObject,
-            destination: SubjectDestination::Battlefield {
-                tapped: false,
-                attacking: false,
-                transformed: false,
-                under_owner_control: false,
-                with_counter: None,
-                attach_to_self: false,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Battlefield {
+                    controller: if false {
+                        spellwake_engine::toolbox::ZoneController::Owner
+                    } else {
+                        spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                        ))
+                    },
+                    tapped: false,
+                    attacking: false,
+                    transformed: false,
+                    face_down: false,
+                    entering_counters: (None)
+                        .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                            (
+                                k,
+                                Box::new(spellwake_engine::program::ValueExpr::literal(i64::from(
+                                    c,
+                                ))),
+                            )
+                        })
+                        .into_iter()
+                        .collect(),
+                    attach_to: if false {
+                        Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                    } else {
+                        None
+                    },
+                },
+            ),
+        ))],
     );
 
     let game = world(

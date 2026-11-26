@@ -30,8 +30,7 @@ use spellwake_engine::{
     program::{
         BodyTarget, CardTypeMask, Comparison, DynamicStatAnchor, EffectSubject, ExecutableBody,
         Instruction, LookTopKeepDest, LookTopRestDest, ManaValueFilter, ObjectClause, ObjectFilter,
-        ObjectFilterFlags, PowerFilter, Program, ResolvingPlayer, SourceZoneFilter,
-        SubjectDestination, ValueExpr,
+        ObjectFilterFlags, PowerFilter, Program, ResolvingPlayer, ValueExpr,
     },
     targets::TargetRef,
 };
@@ -144,10 +143,18 @@ fn even_and_odd_mana_value_filter_flags_destroy_only_matching_creatures() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(even_clause))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(even_clause)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -198,10 +205,18 @@ fn shares_color_with_target_and_same_total_pt_filter_flags() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(clause)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -276,10 +291,18 @@ fn has_activated_ability_filter_flag_distinguishes_creatures() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(clause)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -330,10 +353,18 @@ fn dynamic_stat_anchor_target_toughness_and_target_mana_value() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(clause)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -388,10 +419,18 @@ fn dynamic_stat_anchor_target_toughness_and_target_mana_value() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(mv_clause))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(mv_clause)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -448,17 +487,7 @@ fn source_zone_filter_target_player_hand_exiles_chosen_creature() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOpponent,
-                vec![Instruction::SelectZoneCardsToZone {
-                    player: ResolvingPlayer::Controller,
-                    source_zone: SourceZoneFilter::TargetPlayerHand,
-                    filter: Box::new(ObjectFilter::Clause(creature_clause())),
-                    min: ValueExpr::literal(1),
-                    max: ValueExpr::literal(1),
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                    reveal: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer))), ObjectFilter::Clause(creature_clause())), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller), min: Box::new(ValueExpr::literal(1)), max: Box::new(ValueExpr::literal(1)), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: !(false) }, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: matches!(None, Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)), delayed_return: None, link_group: None })))],
             ),
         ),
         &v,
@@ -503,7 +532,9 @@ fn source_zone_filter_target_player_hand_exiles_chosen_creature() {
         decision.chooser(),
         GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::SelectResolution(vec![opp_creature_obj]),
+            choice: DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::Objects(vec![opp_creature_obj]),
+            ),
         },
     );
 
@@ -695,10 +726,18 @@ fn static_world_eval_shares_creature_type_with_source_and_unique_name() {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DestroySubject {
-                subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(lord_clause))),
-                no_regeneration: false,
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(ObjectFilter::Clause(lord_clause)),
+                    )),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: !(false),
+                        },
+                    },
+                ),
+            ))],
         ),
     });
     let elf_lord = validated(elf_lord, &v);
@@ -760,10 +799,18 @@ fn static_world_eval_shares_creature_type_with_source_and_unique_name() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(unique_clause))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(unique_clause)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -801,10 +848,18 @@ fn toughness_greater_than_power_and_power_greater_than_toughness_filter_flags() 
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(tgp))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(tgp)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,
@@ -817,10 +872,18 @@ fn toughness_greater_than_power_and_power_greater_than_toughness_filter_flags() 
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(pgt))),
-                    no_regeneration: false,
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(pgt)),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: !(false),
+                            },
+                        },
+                    ),
+                ))],
             ),
         ),
         &v,

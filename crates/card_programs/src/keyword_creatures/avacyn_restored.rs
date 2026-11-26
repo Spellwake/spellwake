@@ -172,7 +172,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                 vec![
                     clause(
                         BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
-                        ReturnTargetGraveyardCreatureToHand,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand(),
                     ),
                     clause(
                         SinglePlayer,
@@ -282,11 +282,11 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                     .union(CardTypeMask::CREATURE)
                     .union(CardTypeMask::ENCHANTMENT),
             )),
-            vec![PutTargetInLibrary(LibraryPlacement::Bottom)],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(LibraryPlacement::Bottom)],
         ),
         "Put all creatures on the bottom of their owners' libraries." => (
             NoTarget,
-            vec![PutGroupOnLibraryBottom(Box::new(ObjectFilter::creature()))],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_group_on_library_bottom(ObjectFilter::creature())],
         ),
 
         "Target creature gains flying until end of turn. Prevent all damage that would be dealt to that creature this turn." => {
@@ -349,10 +349,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         ),
         "Return all nonland permanents to their owners' hands." => (
             NoTarget,
-            vec![MoveGroup {
-                group: Box::new(ObjectFilter::nonland()),
-                destination: spellwake_engine::program::PublicZoneDestination::Hand,
-            }],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(ObjectFilter::nonland(), spellwake_engine::program::PublicZoneDestination::Hand)],
         ),
         "Each player discards their hand, then draws seven cards." => (
             NoTarget,
@@ -385,7 +382,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             .and_then(|tail| tail.strip_suffix('.'))
             == Some(name) =>
         {
-            (NoTarget, vec![TakeExtraTurn, ExileResolvingSpell])
+            (NoTarget, vec![TakeExtraTurn, crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell()])
         }
         "Discard your hand, then draw two cards." => (
             NoTarget,
@@ -926,7 +923,11 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
                 spellwake_engine::program::ObjectFilter::self_object(),
             ),
             BodyTarget::AnyGraveyardCard,
-            vec![Instruction::PutTargetInLibrary(LibraryPlacement::Bottom)],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(
+                    LibraryPlacement::Bottom,
+                ),
+            ],
         );
         program.mana.push(ManaAbility {
             id: ManaAbilityId(0),
@@ -1451,7 +1452,7 @@ fn creature(
                             sacrifice: true,
                             or_exile_source: true,
                         },
-                        ExileAbilitySource,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source(),
                     ],
                 )],
             )
@@ -1463,12 +1464,9 @@ fn creature(
                     spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
                     NoTarget,
                     vec![
-                        MoveGroup {
-                            group: Box::new(ObjectFilter::any().with_subtype(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(ObjectFilter::any().with_subtype(
                                 vocabulary.resolve_label("Zombie")?,
-                            )),
-                            destination: spellwake_engine::program::PublicZoneDestination::Exile,
-                        },
+                            ), spellwake_engine::program::PublicZoneDestination::Exile),
                         ReturnGraveyardCohort(spellwake_engine::program::GraveyardCohortReturn::own(
                             spellwake_engine::program::GraveyardReturnFilter::CreatureSubtype(vocabulary.resolve_label("Human")?),
                         )),
@@ -1502,7 +1500,7 @@ fn creature(
                         )),
                         3,
                     ),
-                    ExileTarget,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                 ],
             ));
             return Some(program);
@@ -1574,7 +1572,7 @@ fn creature(
                 ManaCost::free(),
                 SourceCost::Sacrifice,
                 BodyTarget::AnyGraveyardCard,
-                vec![ExileGraveyardTarget],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
             ));
             return Some(program);
         }
@@ -1590,7 +1588,7 @@ fn creature(
                     exclude_source: true,
                 },
                 BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()),
-                vec![ExileTarget],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
             ));
             return Some(program);
         }
@@ -1739,14 +1737,10 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
                     NoTarget,
-                    vec![ReturnControlledPermanents {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: literal(1),
-                        filter: PermanentTypeFilter {
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_controlled_permanents(AffectedPlayers::One(ResolvingPlayer::Controller), literal(1), PermanentTypeFilter {
                             any_types: BTreeSet::new(),
                             required_types: BTreeSet::new(),
-                            forbidden_types: BTreeSet::new(), object_filter: None },
-                    }],
+                            forbidden_types: BTreeSet::new(), object_filter: None })],
                 )],
             )
         }

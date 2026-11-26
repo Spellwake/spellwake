@@ -157,14 +157,20 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 } => static_cond_uses_damage_pairs(condition) || static_uses_damage_pairs(ability),
                 _ => false,
             },
-            Instruction::DestroyGroup(f)
-            | Instruction::DestroyGroupWithoutRegeneration(f)
-            | Instruction::PutGroupOnLibraryBottom(f) => filter_uses_damage_pairs(**f),
-            Instruction::MoveGroup { group, .. } => filter_uses_damage_pairs(**group),
+            Instruction::ZoneOp(spec) => match &spec.source {
+                crate::toolbox::ObjectQuery::ZoneScan { filter, .. }
+                | crate::toolbox::ObjectQuery::Filtered { filter, .. }
+                | crate::toolbox::ObjectQuery::BoundFiltered { filter, .. } => {
+                    filter_uses_damage_pairs(**filter)
+                }
+                crate::toolbox::ObjectQuery::EffectSubject(subject) => {
+                    subject_uses_damage_pairs(subject)
+                }
+                _ => false,
+            },
             Instruction::SetGroupTapped { filter, .. } => filter_uses_damage_pairs(**filter),
             Instruction::SetSubjectTapped { subject, .. }
             | Instruction::PutCountersOnSubject { subject, .. }
-            | Instruction::ExileSubjectUntilSourceLeaves { subject }
             | Instruction::TurnFaceUpSubject { subject }
             | Instruction::TurnFaceDownSubject { subject }
             | Instruction::TransformSubject { subject }
@@ -173,9 +179,7 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             }
             Instruction::EmpowerJace { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
-            | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::ReturnLinkedExile { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
             Instruction::DamageGroupAmount { group, amount } => {
                 value_expr_uses_damage_pairs(amount)
@@ -590,7 +594,6 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         Instruction::GainControllerLife { amount }
         | Instruction::DrawController { amount }
         | Instruction::DrawPlayer { amount, .. }
-        | Instruction::DiscardFiltered { amount, .. }
         | Instruction::DamageAmount(amount)
         | Instruction::DamageGroupAmount { amount, .. }
         | Instruction::DealDamageToAnnouncedTargets { amount, .. }

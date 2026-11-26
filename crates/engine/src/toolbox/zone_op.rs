@@ -5,7 +5,10 @@
 
 use crate::{
     effects::CounterKind,
-    program::{DefinitionError, ValueExpr},
+    object_identity::ObjectId,
+    program::{
+        DefinitionError, DelayedReturnTiming, LibraryPlacement, LinkedExileGroup, ValueExpr,
+    },
     toolbox::{
         choice::ChoiceCategory,
         env::BindingId,
@@ -78,18 +81,45 @@ pub enum GraveyardSemantics {
 pub enum LibraryOrderPos {
     Top,
     Bottom,
+    /// Put on the bottom of the owner's library in a random order.
+    BottomRandom,
     /// `N`th from the top (`1` = top, `2` = second from top, etc.).
     NthFromTop(Box<ValueExpr>),
     /// Put into owner's library and shuffle that library.
     ShuffleInto,
+    /// Prompt `chooser` to choose top or bottom of owner's library.
+    ChoiceTopOrBottom {
+        chooser: Box<PlayerSelector>,
+    },
+}
+
+impl LibraryOrderPos {
+    /// Convert a legacy [`LibraryPlacement`] into a universal [`LibraryOrderPos`].
+    #[must_use]
+    pub fn from_placement(placement: LibraryPlacement) -> Self {
+        match placement {
+            LibraryPlacement::Top => Self::Top,
+            LibraryPlacement::Bottom => Self::Bottom,
+            LibraryPlacement::BottomRandom => Self::BottomRandom,
+            LibraryPlacement::FromTop(offset) => Self::NthFromTop(Box::new(ValueExpr::literal(
+                spellwake_contracts::RulesInteger::from_usize(usize::from(offset)),
+            ))),
+            LibraryPlacement::ChoiceTopOrBottom { chooser } => Self::ChoiceTopOrBottom {
+                chooser: Box::new(PlayerSelector::Resolving(chooser)),
+            },
+        }
+    }
 }
 
 /// Destination and entry modifiers for [`ZoneOpSpec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZoneDest {
+    /// No zone movement (for pure shuffle, bind, or tagging operations).
+    None,
     Battlefield {
         controller: ZoneController,
         tapped: bool,
+        attacking: bool,
         transformed: bool,
         face_down: bool,
         entering_counters: Vec<(CounterKind, Box<ValueExpr>)>,
@@ -102,6 +132,8 @@ pub enum ZoneDest {
         face_down: bool,
         viewer: Option<PlayerSelector>,
         link_to_source: bool,
+        delayed_return: Option<DelayedReturnTiming>,
+        link_group: Option<LinkedExileGroup>,
     },
     Hand,
     Library {
@@ -113,6 +145,34 @@ pub enum ZoneDest {
     LookOnly {
         viewer: PlayerSelector,
     },
+}
+
+impl ZoneDest {
+    /// Plain face-up exile with no links or delayed return.
+    #[must_use]
+    pub const fn exile() -> Self {
+        Self::Exile {
+            face_down: false,
+            viewer: None,
+            link_to_source: false,
+            delayed_return: None,
+            link_group: None,
+        }
+    }
+
+    /// Plain battlefield entry under `controller` with default flags.
+    #[must_use]
+    pub const fn battlefield(controller: ZoneController) -> Self {
+        Self::Battlefield {
+            controller,
+            tapped: false,
+            attacking: false,
+            transformed: false,
+            face_down: false,
+            entering_counters: Vec::new(),
+            attach_to: None,
+        }
+    }
 }
 
 /// Complete universal zone-operation pipeline specification.
@@ -136,7 +196,62 @@ pub struct ZoneOpSpec {
 }
 
 impl ZoneOpSpec {
-    /// Whether any part of this zone operation references an announced target.
+    /// Construct a `ZoneOpSpec` with no optional bindings, tags, or post-shuffle.
+    #[must_use]
+    pub fn simple(source: ObjectQuery, selection: ZoneSelection, destination: ZoneDest) -> Self {
+        Self {
+            source,
+            selection,
+            destination,
+            bind_moved: None,
+            bind_snapshots: None,
+            bind_unchosen: None,
+            bind_succeeded: None,
+            tag_moved: None,
+            shuffle_library: None,
+        }
+    }
+
+    /// Construct a `ZoneOpSpec` that moves all objects from `source` to `destination`.
+    #[must_use]
+    pub fn move_all(source: ObjectQuery, destination: ZoneDest) -> Self {
+        Self::simple(source, ZoneSelection::All, destination)
+    }
+
+    /// Construct a pure library shuffle for `player`.
+    #[must_use]
+    pub fn shuffle(player: PlayerSelector) -> Self {
+        Self {
+            source: ObjectQuery::Empty,
+            selection: ZoneSelection::All,
+            destination: ZoneDest::None,
+            bind_moved: None,
+            bind_snapshots: None,
+            bind_unchosen: None,
+            bind_succeeded: None,
+            tag_moved: None,
+            shuffle_library: Some(player),
+        }
+    }
+
+    /// Construct a delayed return of fixed object IDs to the battlefield under owner's control.
+    #[must_use]
+    pub fn return_fixed_to_battlefield(objects: Vec<ObjectId>, transformed: bool) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(objects),
+            ZoneDest::Battlefield {
+                controller: ZoneController::Owner,
+                tapped: false,
+                attacking: false,
+                transformed,
+                face_down: false,
+                entering_counters: Vec::new(),
+                attach_to: None,
+            },
+        )
+    }
+
+    /// Whether any part of this `ZoneOpSpec` depends on an announced target.
     #[must_use]
     pub fn uses_target(&self) -> bool {
         if self.source.uses_target() {
@@ -171,8 +286,12 @@ impl ZoneOpSpec {
             ZoneDest::Library {
                 position: LibraryOrderPos::NthFromTop(expr),
             } => expr.uses_target(),
+            ZoneDest::Library {
+                position: LibraryOrderPos::ChoiceTopOrBottom { chooser },
+            } => chooser.uses_target(),
             ZoneDest::LookOnly { viewer } => viewer.uses_target(),
-            ZoneDest::Graveyard { .. }
+            ZoneDest::None
+            | ZoneDest::Graveyard { .. }
             | ZoneDest::Hand
             | ZoneDest::Library { .. }
             | ZoneDest::RevealOnly => false,
@@ -240,8 +359,12 @@ impl ZoneOpSpec {
                 expr.validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction)?;
             }
+            ZoneDest::Library {
+                position: LibraryOrderPos::ChoiceTopOrBottom { chooser },
+            } => chooser.validate_vocabulary(vocabulary)?,
             ZoneDest::LookOnly { viewer } => viewer.validate_vocabulary(vocabulary)?,
-            ZoneDest::Graveyard { .. }
+            ZoneDest::None
+            | ZoneDest::Graveyard { .. }
             | ZoneDest::Hand
             | ZoneDest::Library { .. }
             | ZoneDest::RevealOnly => {}

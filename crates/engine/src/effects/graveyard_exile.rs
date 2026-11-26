@@ -12,34 +12,6 @@ pub(super) struct GraveyardExileWork {
     objects: Vec<ObjectId>,
 }
 impl EffectWindow {
-    pub(super) fn begin_graveyard_exile(&mut self) -> Result<(), EffectError> {
-        let objects = self
-            .window
-            .cards()
-            .iter()
-            .filter(|card| {
-                card.card_id().is_some() && matches!(card.zone(), ObjectZone::Graveyard(_))
-            })
-            .map(GameObject::id)
-            .collect::<Vec<_>>();
-        self.begin_selected_graveyard_exile(objects)
-    }
-    pub(super) fn begin_players_graveyard_exile(
-        &mut self,
-        players: &[SeatId],
-    ) -> Result<(), EffectError> {
-        let objects = self
-            .window
-            .cards()
-            .iter()
-            .filter(|card| {
-                card.card_id().is_some()
-                    && matches!(card.zone(), ObjectZone::Graveyard(owner) if players.contains(&owner))
-            })
-            .map(GameObject::id)
-            .collect::<Vec<_>>();
-        self.begin_selected_graveyard_exile(objects)
-    }
     pub(super) fn begin_selected_graveyard_exile(
         &mut self,
         objects: Vec<ObjectId>,

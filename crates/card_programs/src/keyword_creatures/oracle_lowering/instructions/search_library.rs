@@ -2983,18 +2983,25 @@ pub(super) fn lower_search_library_group(
                         *slot_grant_play = true;
                         return Ok(());
                     }
-                    Some(last @ Instruction::ExileLibraryTopLinked { .. }) => {
-                        if let Instruction::ExileLibraryTopLinked {
-                            player: lib_p,
-                            amount,
-                            face_down,
-                            ..
-                        } = last.clone()
-                            && amount != ValueExpr::literal(1)
+                    Some(last @ Instruction::ZoneOp(_)) => {
+                        if let Instruction::ZoneOp(spec) = last
+                            && let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(p_sel),
+                                slice: spellwake_engine::toolbox::QuerySlice::Top(amount),
+                                ..
+                            } = &spec.source
+                            && let spellwake_engine::toolbox::PlayerSelector::Resolving(lib_p) =
+                                p_sel.as_ref()
+                            && let spellwake_engine::toolbox::ZoneDest::Exile {
+                                face_down,
+                                link_group: Some(_),
+                                ..
+                            } = spec.destination
+                            && **amount != ValueExpr::literal(1)
                         {
                             *last = Instruction::ExileTopPlay {
-                                count: amount,
-                                library_owner: AffectedPlayers::One(lib_p),
+                                count: (**amount).clone(),
+                                library_owner: AffectedPlayers::One(*lib_p),
                                 duration: impulse_dur,
                                 cast_only: *cast_only,
                                 free: *free,
@@ -3117,7 +3124,20 @@ pub(super) fn lower_search_library_group(
                         && f.zone.is_none()
                         && matches!(
                             builder.instructions.last(),
-                            Some(Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer))
+                            Some(Instruction::ZoneOp(spec))
+                                if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)
+                                    && matches!(
+                                        &spec.source,
+                                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                            zone: spellwake_engine::toolbox::QueryZone::Hand(ps),
+                                            ..
+                                        } if matches!(
+                                            ps.as_ref(),
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TargetPlayer
+                                            )
+                                        )
+                                    )
                         )
                         && strip_revealed_hand_ref_predicates(&mut inner);
                     let target_zone_choose_one: Option<(Option<BodyTarget>, SourceZoneFilter)> =
@@ -3888,20 +3908,18 @@ fn try_lower_counter_matching_stack_objects(
 
 fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool) -> bool {
     match op {
-        Instruction::ExileLibraryTop { .. }
-        | Instruction::ExileLibraryTopLinked { .. }
-        | Instruction::ExileGroupFromZone { .. }
-        | Instruction::ExileFromZone { .. }
-        | Instruction::ExileSubjectUntilSourceLeaves { .. }
-        | Instruction::ExileTopForPlay { .. } => true,
-        Instruction::MoveSubject { destination, .. }
-        | Instruction::MoveLastMovedFiltered { destination, .. }
-        | Instruction::SelectZoneCardsToZone { destination, .. }
-        | Instruction::MoveGraveyardGroupOwned { destination, .. } => {
-            !expected_exile_only || matches!(destination, SubjectDestination::Exile { .. })
-        }
-        Instruction::MoveGroup { destination, .. } => {
-            !expected_exile_only || *destination == PublicZoneDestination::Exile
+        Instruction::ExileLibraryTop { .. } | Instruction::ExileTopForPlay { .. } => true,
+        Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+            if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some() =>
+        {
+            let spec = crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .unwrap();
+            !expected_exile_only
+                || matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                )
         }
         Instruction::LookTopChooseExt { keep_dest, .. }
         | Instruction::RevealUntilMatchExt {
@@ -3921,13 +3939,9 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
             .iter()
             .rev()
             .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
-        Instruction::Mill { .. }
-        | Instruction::MillEachPlayer(_)
-        | Instruction::Discard { .. }
-        | Instruction::DiscardFiltered { .. }
-        | Instruction::DiscardOneAtRandom(_)
-        | Instruction::DiscardUpTo { .. }
-        | Instruction::DiscardUpToExt { .. } => !expected_exile_only,
+        Instruction::Mill { .. } | Instruction::MillEachPlayer(_) | Instruction::Discard { .. } => {
+            !expected_exile_only
+        }
         _ => false,
     }
 }
@@ -4023,8 +4037,6 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
             | Instruction::DrawRelatedPlayer
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
-            | Instruction::ShuffleOwnLibrary
-            | Instruction::ShufflePlayerLibrary(_)
             | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::OptionalEffect { .. }
@@ -4038,6 +4050,7 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
             | Instruction::GainControllerLife { .. }
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. } => continue,
+            Instruction::ZoneOp(spec) if spec.shuffle_library.is_some() => continue,
             _ => return false,
         }
     }
@@ -4090,12 +4103,17 @@ fn strip_revealed_hand_ref_predicates(filter: &mut ObjectFilterAst) -> bool {
 fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::ExileGroupFromZone { .. }
-            | Instruction::ExileFromZone { .. }
-            | Instruction::MoveGroup {
-                destination: PublicZoneDestination::Exile,
-                ..
-            } => return true,
+            Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+                if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        )
+                    }) =>
+            {
+                return true;
+            }
             Instruction::ExileLibraryTop { amount, .. } => {
                 return *amount == 1;
             }
@@ -4106,10 +4124,9 @@ fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
             | Instruction::DrawRelatedPlayer
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
-            | Instruction::ShuffleOwnLibrary
-            | Instruction::ShufflePlayerLibrary(_)
             | Instruction::CreateTemporaryRule { .. }
             | Instruction::BindResolutionX(_) => continue,
+            Instruction::ZoneOp(spec) if spec.shuffle_library.is_some() => continue,
             _ => return false,
         }
     }

@@ -1384,13 +1384,8 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::DamageGroupAmount { amount, .. }
         | Instruction::DrainOpponents(amount)
         | Instruction::Discard { amount, .. }
-        | Instruction::DiscardFiltered { amount, .. }
-        | Instruction::DiscardUpToExt {
-            max_count: amount, ..
-        }
         | Instruction::Earthbend { amount }
         | Instruction::Sacrifice { amount, .. }
-        | Instruction::ReturnControlledPermanents { amount, .. }
         | Instruction::AddPlayerCounter { amount, .. }
         | Instruction::PutNamedCounterOnTarget { amount, .. }
         | Instruction::PutCountersOnSubject { amount, .. }
@@ -1412,7 +1407,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::PayLife { amount, .. }
         | Instruction::PayEnergy { amount, .. }
         | Instruction::TapOrUntapControlled { amount, .. }
-        | Instruction::ExileFromZone { amount, .. }
         | Instruction::CreateTokenCopy { count: amount, .. }
         | Instruction::Monstrosity { amount }
         | Instruction::OfferDynamicManaPayment {
@@ -1437,9 +1431,18 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 rewrite_value_expr_anaphora(expr, replacement);
             }
         }
-        Instruction::SelectZoneCardsToZone { min, max, .. } => {
-            rewrite_value_expr_anaphora(min, replacement);
-            rewrite_value_expr_anaphora(max, replacement);
+        Instruction::ZoneOp(spec) => {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
+                spec,
+                &|_| {},
+                &|_| {},
+                &|v| rewrite_value_expr_anaphora(v, replacement),
+            );
+        }
+        Instruction::ForEachPlayerQuery { body, .. } => {
+            for inner in &mut body.instructions {
+                rewrite_instruction_anaphora(inner, replacement);
+            }
         }
         Instruction::CreateContinuousEffect { parts, .. }
         | Instruction::ChangeAbilitySource { parts, .. }
@@ -1561,14 +1564,8 @@ pub(in super::super) fn rewrite_body_prior_result(
                 | Instruction::DamageGroupAmount { amount, .. }
                 | Instruction::DrainOpponents(amount)
                 | Instruction::Discard { amount, .. }
-                | Instruction::DiscardFiltered { amount, .. }
-                | Instruction::DiscardUpToExt {
-                    max_count: amount, ..
-                }
                 | Instruction::Earthbend { amount }
                 | Instruction::Sacrifice { amount, .. }
-                | Instruction::SacrificeUpTo { amount, .. }
-                | Instruction::ReturnControlledPermanents { amount, .. }
                 | Instruction::AddPlayerCounter { amount, .. }
                 | Instruction::PutNamedCounterOnTarget { amount, .. }
                 | Instruction::PutCountersOnSubject { amount, .. }
@@ -1601,7 +1598,16 @@ pub(in super::super) fn rewrite_body_prior_result(
                     rewrite_value_expr_prior_result(&mut condition.left, replacement);
                     rewrite_value_expr_prior_result(&mut condition.right, replacement);
                 }
-                Instruction::EmitReflexiveTrigger { body: inner }
+                Instruction::ZoneOp(spec) => {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
+                        spec,
+                        &|_| {},
+                        &|_| {},
+                        &|v| rewrite_value_expr_prior_result(v, replacement),
+                    );
+                }
+                Instruction::ForEachPlayerQuery { body: inner, .. }
+                | Instruction::EmitReflexiveTrigger { body: inner }
                 | Instruction::ScheduleDelayedStepTrigger { body: inner, .. }
                 | Instruction::FixedTargetClause(inner) => {
                     rewrite_body_prior_result(inner, replacement);
@@ -1611,16 +1617,12 @@ pub(in super::super) fn rewrite_body_prior_result(
         }
         if matches!(
             op,
-            Instruction::Discard { .. }
-                | Instruction::DiscardFiltered { .. }
-                | Instruction::DiscardUpTo { .. }
-                | Instruction::DiscardUpToExt { .. }
+            Instruction::ZoneOp(_)
+                | Instruction::ForEachPlayerQuery { .. }
+                | Instruction::Discard { .. }
                 | Instruction::Mill { .. }
                 | Instruction::Sacrifice { .. }
                 | Instruction::SacrificeMatching(_)
-                | Instruction::DestroyGroup(_)
-                | Instruction::DestroyGroupWithoutRegeneration(_)
-                | Instruction::MoveGroup { .. }
         ) {
             saw_count_action = true;
         }
@@ -2568,13 +2570,8 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::DamageGroupAmount { amount, .. }
             | Instruction::DrainOpponents(amount)
             | Instruction::Discard { amount, .. }
-            | Instruction::DiscardFiltered { amount, .. }
-            | Instruction::DiscardUpToExt {
-                max_count: amount, ..
-            }
             | Instruction::Earthbend { amount }
             | Instruction::Sacrifice { amount, .. }
-            | Instruction::ReturnControlledPermanents { amount, .. }
             | Instruction::AddPlayerCounter { amount, .. }
             | Instruction::PutNamedCounterOnTarget { amount, .. }
             | Instruction::PutCountersOnSubject { amount, .. }
@@ -2594,7 +2591,6 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::PayLife { amount, .. }
             | Instruction::PayEnergy { amount, .. }
             | Instruction::TapOrUntapControlled { amount, .. }
-            | Instruction::ExileFromZone { amount, .. }
             | Instruction::CreateTokenCopy { count: amount, .. }
             | Instruction::Monstrosity { amount }
             | Instruction::OfferDynamicManaPayment {
@@ -2619,9 +2615,16 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                     rewrite_value_expr_trigger_subject(expr, replacement);
                 }
             }
-            Instruction::SelectZoneCardsToZone { min, max, .. } => {
-                rewrite_value_expr_trigger_subject(min, replacement);
-                rewrite_value_expr_trigger_subject(max, replacement);
+            Instruction::ZoneOp(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
+                    spec,
+                    &|_| {},
+                    &|_| {},
+                    &|v| rewrite_value_expr_trigger_subject(v, replacement),
+                );
+            }
+            Instruction::ForEachPlayerQuery { body, .. } => {
+                rewrite_body_trigger_subject_stats(body, replacement);
             }
             Instruction::CreateContinuousEffect { parts, .. }
             | Instruction::ChangeAbilitySource { parts, .. }

@@ -808,21 +808,33 @@ fn is_attached_to_self_filter(f: &ObjectFilter) -> bool {
 
 fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
     match op {
-        Instruction::DestroyGroup(f)
-        | Instruction::DestroyGroupWithoutRegeneration(f)
-        | Instruction::MoveGroup { group: f, .. } => !is_attached_to_self_filter(f),
-        Instruction::MoveSubject { subject, .. } => *subject != MoveSubjectRef::AttachedHost,
+        Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+            if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some() =>
+        {
+            let spec = crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .unwrap();
+            let attached_only = matches!(
+                &spec.source,
+                spellwake_engine::toolbox::ObjectQuery::AttachedHost
+            ) || matches!(
+                &spec.source,
+                spellwake_engine::toolbox::ObjectQuery::ZoneScan { filter, .. }
+                    if is_attached_to_self_filter(filter)
+            );
+            !attached_only
+                && !matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::None
+                        | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                        | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                )
+        }
         Instruction::CreateTokens { .. }
         | Instruction::CreateTokenCopy { .. }
         | Instruction::CreateTokenCopyExt { .. }
         | Instruction::CreateAttackingTokens { .. }
-        | Instruction::ExileFromZone { .. }
-        | Instruction::ExileGroupFromZone { .. }
-        | Instruction::ExileChosenPermanents { .. }
-        | Instruction::DestroyChosen { .. }
         | Instruction::Sacrifice { .. }
-        | Instruction::SacrificeUpTo { .. }
-        | Instruction::SacrificeSubject { .. }
         | Instruction::SearchLibrary { .. }
         | Instruction::LookTopChoose { .. }
         | Instruction::LookTopChooseExt { .. }
@@ -1107,12 +1119,14 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             yield_kind: yield_spec,
             ..
         } => effect_mana_yield_uses_chosen_x(yield_spec),
-        Instruction::DiscardUpToExt {
-            max_count: amount,
-            any_number: false,
-            ..
+        Instruction::Earthbend { amount } => value_expr_uses_chosen_x(amount),
+        Instruction::ZoneOp(spec) => {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op_any_value_expr(
+                spec,
+                &value_expr_uses_chosen_x,
+            )
         }
-        | Instruction::Earthbend { amount } => value_expr_uses_chosen_x(amount),
+        Instruction::ForEachPlayerQuery { body, .. } => body_uses_chosen_x(body),
         Instruction::DamageAmount(amount)
         | Instruction::DamageAmountThenExileIfDies(amount)
         | Instruction::DamageOpponentsAmount(amount)
@@ -1139,23 +1153,16 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::AdjustPlayersLife { amount, .. }
         | Instruction::Mill { amount, .. }
         | Instruction::Discard { amount, .. }
-        | Instruction::DiscardFiltered { amount, .. }
         | Instruction::Scry { amount, .. }
         | Instruction::Surveil { amount, .. }
         | Instruction::Sacrifice { amount, .. }
-        | Instruction::SacrificeUpTo { amount, .. }
-        | Instruction::ExileFromZone { amount, .. }
-        | Instruction::ExileChosenPermanents { amount, .. }
-        | Instruction::DestroyChosen { count: amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
         | Instruction::RevealTopTwoPiles { count: amount, .. }
         | Instruction::ModifyGroupByAmount { amount, .. }
         | Instruction::BoostTargetPower { amount, .. } => value_expr_uses_chosen_x(amount),
-        Instruction::SelectZoneCardsToZone { min, max, .. } => {
-            value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
-        }
+
         Instruction::ChooseObjects {
             min,
             max,

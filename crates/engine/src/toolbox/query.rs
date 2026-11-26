@@ -1,10 +1,14 @@
 //! Universal composable `PlayerSelector` and `ObjectQuery` algebra.
 //!
 //! Reuses existing [`ObjectFilter`], [`ResolvingPlayer`], [`AffectedPlayers`],
-//! and [`ValueExpr`] without duplicating filter semantics.
+//! [`EffectSubject`], and [`ValueExpr`] without duplicating filter semantics.
 
 use crate::{
-    program::{AffectedPlayers, DefinitionError, ObjectFilter, ResolvingPlayer, ValueExpr},
+    object_identity::ObjectId,
+    program::{
+        AffectedPlayers, DefinitionError, EffectSubject, LinkedExileGroup, ObjectFilter,
+        ResolvingPlayer, ValueExpr,
+    },
     toolbox::{
         env::BindingId,
         tags::{TagKey, TagValue},
@@ -32,22 +36,14 @@ impl PlayerSelector {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Resolving(p) => matches!(
+            Self::Resolving(p) | Self::Group(AffectedPlayers::One(p)) => matches!(
                 p,
                 ResolvingPlayer::TargetPlayer
                     | ResolvingPlayer::TargetSpellController
                     | ResolvingPlayer::TargetController
                     | ResolvingPlayer::TargetOwner
             ),
-            Self::Group(AffectedPlayers::One(p)) => matches!(
-                p,
-                ResolvingPlayer::TargetPlayer
-                    | ResolvingPlayer::TargetSpellController
-                    | ResolvingPlayer::TargetController
-                    | ResolvingPlayer::TargetOwner
-            ),
-            Self::Group(_) => false,
-            Self::Bound(_) => false,
+            Self::Group(_) | Self::Bound(_) => false,
             Self::OwnersOf(q) | Self::ControllersOf(q) => q.uses_target(),
         }
     }
@@ -71,10 +67,12 @@ impl PlayerSelector {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryZone {
     Battlefield,
+    BattlefieldControlledBy(Box<PlayerSelector>),
     Hand(Box<PlayerSelector>),
     Library(Box<PlayerSelector>),
     Graveyard(Box<PlayerSelector>),
     Exile,
+    ExileOwnedBy(Box<PlayerSelector>),
     Stack,
     Command,
     AllZones,
@@ -84,7 +82,11 @@ impl QueryZone {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Hand(p) | Self::Library(p) | Self::Graveyard(p) => p.uses_target(),
+            Self::Hand(p)
+            | Self::Library(p)
+            | Self::Graveyard(p)
+            | Self::ExileOwnedBy(p)
+            | Self::BattlefieldControlledBy(p) => p.uses_target(),
             Self::Battlefield | Self::Exile | Self::Stack | Self::Command | Self::AllZones => false,
         }
     }
@@ -94,9 +96,11 @@ impl QueryZone {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Hand(p) | Self::Library(p) | Self::Graveyard(p) => {
-                p.validate_vocabulary(vocabulary)
-            }
+            Self::Hand(p)
+            | Self::Library(p)
+            | Self::Graveyard(p)
+            | Self::ExileOwnedBy(p)
+            | Self::BattlefieldControlledBy(p) => p.validate_vocabulary(vocabulary),
             Self::Battlefield | Self::Exile | Self::Stack | Self::Command | Self::AllZones => {
                 Ok(())
             }
@@ -159,6 +163,10 @@ impl QuerySlice {
 /// Universal composable object selector resolving to an ordered, deduplicated list of `ObjectId`s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectQuery {
+    /// Empty object set (for pure shuffle, tag, or bind operations).
+    Empty,
+    /// Explicit live object IDs (e.g. delayed return/exile/sacrifice triggers).
+    Fixed(Vec<ObjectId>),
     /// Scan a zone, optionally slicing top/bottom/until-match, and filter with [`ObjectFilter`].
     ZoneScan {
         zone: QueryZone,
@@ -172,6 +180,16 @@ pub enum ObjectQuery {
         binding: BindingId,
         filter: Box<ObjectFilter>,
     },
+    /// Filter any nested [`ObjectQuery`] with an [`ObjectFilter`].
+    Filtered {
+        source: Box<ObjectQuery>,
+        filter: Box<ObjectFilter>,
+    },
+    /// Take at most `count` leading objects from a nested [`ObjectQuery`].
+    Take {
+        source: Box<ObjectQuery>,
+        count: Box<ValueExpr>,
+    },
     /// Every still-legal object target announced for the resolving spell or ability.
     Targets,
     /// The resolving spell or ability's source object.
@@ -180,6 +198,18 @@ pub enum ObjectQuery {
     TriggerSubject,
     /// Permanent or player-attached host of the resolving source.
     AttachedHost,
+    /// Objects moved by the preceding instruction in this resolution.
+    LastMoved,
+    /// Tokens created earlier during this resolution.
+    CreatedTokens,
+    /// Top/revealed card remembered during this resolution.
+    Revealed,
+    /// Remembered/linked target pair element (`0` = first, `1` = second).
+    LinkedTarget { index: u8 },
+    /// Cards currently in exile linked to the resolving source (optionally scoped by group).
+    LinkedExile { group: Option<LinkedExileGroup> },
+    /// Composable [`EffectSubject`] adapter (triggering attacker/group/target, same-name/color sets).
+    EffectSubject(Box<EffectSubject>),
     /// Objects bearing a metadata tag or partition membership in [`crate::toolbox::ObjectTagStore`].
     Tagged {
         key: TagKey,
@@ -206,13 +236,43 @@ impl ObjectQuery {
         }
     }
 
+    /// Convenience constructor wrapping an existing query with an [`ObjectFilter`].
+    #[must_use]
+    pub fn filtered(source: Self, filter: ObjectFilter) -> Self {
+        Self::Filtered {
+            source: Box::new(source),
+            filter: Box::new(filter),
+        }
+    }
+
     /// Whether this query depends on an announced target.
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Targets => true,
-            Self::Bound(_) | Self::Source | Self::TriggerSubject | Self::AttachedHost => false,
+            Self::Targets | Self::LinkedTarget { .. } => true,
+            Self::Empty
+            | Self::Fixed(_)
+            | Self::Bound(_)
+            | Self::Source
+            | Self::TriggerSubject
+            | Self::AttachedHost
+            | Self::LastMoved
+            | Self::CreatedTokens
+            | Self::Revealed
+            | Self::LinkedExile { .. } => false,
             Self::BoundFiltered { filter, .. } => filter.uses_target_permanent(),
+            Self::Filtered { source, filter } => {
+                source.uses_target() || filter.uses_target_permanent()
+            }
+            Self::Take { source, count } => source.uses_target() || count.uses_target(),
+            Self::EffectSubject(subject) => match **subject {
+                EffectSubject::TargetObject
+                | EffectSubject::TargetAndSameNameMatching(_)
+                | EffectSubject::MatchingOtherThanTarget(_)
+                | EffectSubject::TargetAndSharingColorMatching(_) => true,
+                EffectSubject::Matching(filter) => filter.uses_target_permanent(),
+                _ => false,
+            },
             Self::ZoneScan {
                 zone,
                 filter,
@@ -236,12 +296,34 @@ impl ObjectQuery {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Bound(_)
+            Self::Empty
+            | Self::Fixed(_)
+            | Self::Bound(_)
             | Self::Targets
             | Self::Source
             | Self::TriggerSubject
-            | Self::AttachedHost => Ok(()),
+            | Self::AttachedHost
+            | Self::LastMoved
+            | Self::CreatedTokens
+            | Self::Revealed
+            | Self::LinkedTarget { .. }
+            | Self::LinkedExile { .. } => Ok(()),
             Self::BoundFiltered { filter, .. } => filter
+                .validate_vocabulary(vocabulary)
+                .map_err(|_| DefinitionError::InvalidInstruction),
+            Self::Filtered { source, filter } => {
+                source.validate_vocabulary(vocabulary)?;
+                filter
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)
+            }
+            Self::Take { source, count } => {
+                source.validate_vocabulary(vocabulary)?;
+                count
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)
+            }
+            Self::EffectSubject(subject) => subject
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
             Self::ZoneScan {
