@@ -188,6 +188,260 @@ fn lower_as_enters_choice_form(
     Ok(())
 }
 
+struct StagedModalActivated {
+    ability: ActivatedAbility,
+    restriction: spellwake_engine::activated::ActivationRestriction,
+    extra_costs: Option<Vec<spellwake_engine::activated::ExtraActivationCost>>,
+    modes: Option<SpellModes>,
+    hybrid_symbols: Option<Vec<HybridSymbol>>,
+    cost_reduction: Option<ValueExpr>,
+    target_cost_reduction: Option<(ObjectFilter, u8)>,
+}
+
+fn lower_as_enters_modal_choice(
+    choice: &str,
+    modes: &[spellwake_oracle_compiler::ast::ModalModeAst],
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    if modes.len() < 2
+        || modes
+            .iter()
+            .any(|m| !m.body.is_empty() || m.granted.is_none())
+    {
+        return Err("oracle:unsupported-replacement");
+    }
+    let (attachment, printed_pt) = match &program.kind {
+        ProgramKind::Permanent(def) => (def.attachment, def.printed_pt.clone()),
+        ProgramKind::Spell(_) => return Err("oracle:replacement-on-spell"),
+    };
+    let choice_low = choice
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .trim_end_matches('\u{2014}')
+        .trim()
+        .to_ascii_lowercase();
+    let candidate = choice_low
+        .strip_prefix("as ~ enters, choose ")
+        .or_else(|| choice_low.strip_prefix("choose "))
+        .unwrap_or(&choice_low)
+        .trim();
+    let mut probe = Program::new(
+        program.card_types.clone(),
+        program.creature_subtypes.clone(),
+        program.land_subtypes.clone(),
+        ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
+            printed_pt: None,
+            casting_cost: None,
+        }),
+    );
+    lower_replacement(
+        &ReplacementEffectAst::AsEntersChoose {
+            choice: candidate.to_string(),
+        },
+        &mut probe,
+        vocabulary,
+        ids,
+    )
+    .map_err(|_| "oracle:unsupported-replacement")?;
+    let ProgramKind::Permanent(probe_def) = probe.kind else {
+        return Err("oracle:unsupported-replacement");
+    };
+    let Some(entry_tap) = probe_def.entry_tap else {
+        return Err("oracle:unsupported-replacement");
+    };
+    let Some(option_labels) = entry_tap.option_labels() else {
+        return Err("oracle:unsupported-replacement");
+    };
+    if option_labels.len() != modes.len() {
+        return Err("oracle:unsupported-replacement");
+    }
+
+    let mut seen_indices = BTreeSet::new();
+    let mut staged_triggered: Vec<TriggeredAbility> = Vec::new();
+    let mut staged_statics: Vec<(StaticContinuousAbility, StaticSourceCondition)> = Vec::new();
+    let mut staged_activated: Vec<StagedModalActivated> = Vec::new();
+
+    for (pos, mode) in modes.iter().enumerate() {
+        let opt_idx = if let Some(lbl) = mode.label.as_deref() {
+            option_labels
+                .iter()
+                .position(|o| o.eq_ignore_ascii_case(lbl.trim()))
+                .ok_or("oracle:unsupported-replacement")?
+        } else {
+            pos
+        };
+        let opt_u8 = u8::try_from(opt_idx).map_err(|_| "oracle:unsupported-replacement")?;
+        if !seen_indices.insert(opt_u8) {
+            return Err("oracle:unsupported-replacement");
+        }
+        let Some(gf) = mode.granted.as_deref() else {
+            return Err("oracle:unsupported-replacement");
+        };
+        if !gf.replacements.is_empty()
+            || !gf.spell_effects.is_empty()
+            || !gf.level_bands.is_empty()
+            || !gf.class_levels.is_empty()
+            || !gf.case_solved.is_empty()
+            || !gf.failures.is_empty()
+        {
+            return Err("oracle:unsupported-replacement");
+        }
+        let mut scratch = Program::new(
+            program.card_types.clone(),
+            program.creature_subtypes.clone(),
+            program.land_subtypes.clone(),
+            ProgramKind::Permanent(PermanentDefinition {
+                entry_tap: None,
+                attachment,
+                printed_pt: printed_pt.clone(),
+                casting_cost: None,
+            }),
+        );
+        for (kw_idx, kw) in gf.keywords.iter().enumerate() {
+            lower_keyword(kw, kw_idx, gf, &mut scratch, vocabulary, ids, false)
+                .map_err(|_| "oracle:unsupported-replacement")?;
+        }
+        for st in &gf.statics {
+            lower_static(st, &mut scratch, vocabulary, ids, false)
+                .map_err(|_| "oracle:unsupported-replacement")?;
+        }
+        for ab in &gf.abilities {
+            lower_ability(ab, &mut scratch, vocabulary, ids)
+                .map_err(|_| "oracle:unsupported-replacement")?;
+        }
+        if !scratch.printed_keywords.is_empty()
+            || !scratch.mana.is_empty()
+            || !scratch.zone_replacements.is_empty()
+            || !scratch.zone_replacement_extras.is_empty()
+            || scratch.entry_copy.is_some()
+            || scratch.entry_tap_unless.is_some()
+            || !scratch.cast_reductions.is_empty()
+            || !scratch.entry_counter_abilities.is_empty()
+            || scratch.cannot_be_countered
+            || scratch.cannot_be_copied
+            || scratch.conditional_flash.is_some()
+            || scratch.attack_requirement.is_some()
+            || !scratch.additional_attack_requirements.is_empty()
+            || scratch.combat_limits != Default::default()
+            || scratch.conditional_cost.is_some()
+            || !scratch.additional_cast_costs.is_empty()
+            || !scratch.extra_cast_costs.is_empty()
+            || !scratch.loyalty_costs.is_empty()
+            || !scratch.variable_loyalty_costs.is_empty()
+            || !scratch.face_up_abilities.is_empty()
+            || scratch.opening_hand_battlefield
+            || scratch.enters_prepared
+            || matches!(scratch.kind, ProgramKind::Permanent(ref d) if d.entry_tap.is_some())
+        {
+            return Err("oracle:unsupported-replacement");
+        }
+        let statics: Vec<StaticContinuousAbility> = scratch
+            .continuous
+            .into_iter()
+            .chain(scratch.additional_battlefield_abilities)
+            .collect();
+        if scratch.triggered.is_empty() && scratch.activated.is_empty() && statics.is_empty() {
+            return Err("oracle:unsupported-replacement");
+        }
+        for mut trig in scratch.triggered {
+            let gate = TriggerCondition::SourceEntryOption(opt_u8);
+            trig.condition.intervening_if = Some(match trig.condition.intervening_if.take() {
+                Some(prev) => TriggerCondition::And(Box::new(gate), Box::new(prev)),
+                None => gate,
+            });
+            staged_triggered.push(trig);
+        }
+        for st in statics {
+            st.validate(vocabulary)
+                .map_err(|_| "oracle:unsupported-replacement")?;
+            let st_id = st.id();
+            let gate = StaticSourceCondition::EntryOptionChosen(opt_u8);
+            let cond = match scratch.static_conditions.remove(&st_id) {
+                Some(prev) => StaticSourceCondition::And(Box::new(gate), Box::new(prev)),
+                None => gate,
+            };
+            staged_statics.push((st, cond));
+        }
+        for act in scratch.activated {
+            let act_id = act.id;
+            let gate =
+                spellwake_engine::activated::ActivationRestriction::SourceEntryOption(opt_u8);
+            let restr = match scratch.activation_restrictions.remove(&act_id) {
+                Some(prev) => {
+                    spellwake_engine::activated::ActivationRestriction::All(vec![gate, prev])
+                }
+                None => gate,
+            };
+            let extra_costs = scratch.extra_activation_costs.remove(&act_id);
+            let act_modes = scratch.activation_modes.remove(&act_id);
+            let hybs = scratch.activation_hybrid_symbols.remove(&act_id);
+            let cost_red = scratch.activation_cost_reductions.remove(&act_id);
+            let tgt_red = scratch.activation_target_cost_reductions.remove(&act_id);
+            staged_activated.push(StagedModalActivated {
+                ability: act,
+                restriction: restr,
+                extra_costs,
+                modes: act_modes,
+                hybrid_symbols: hybs,
+                cost_reduction: cost_red,
+                target_cost_reduction: tgt_red,
+            });
+        }
+    }
+
+    {
+        let ProgramKind::Permanent(def) = &mut program.kind else {
+            return Err("oracle:replacement-on-spell");
+        };
+        if def.entry_tap.is_none() {
+            def.entry_tap = Some(entry_tap);
+        } else if def.entry_tap == Some(EntryTap::Always)
+            && program.entry_tap_unless.is_none()
+            && is_non_tapping_entry_choice(entry_tap)
+        {
+            def.entry_tap = Some(entry_tap);
+            program.entry_tap_unless = Some(Box::new(always_tapped_unless_condition()));
+        } else {
+            return Err("oracle:duplicate-entry-tap");
+        }
+    }
+
+    program.triggered.extend(staged_triggered);
+    for (st, cond) in staged_statics {
+        let st_id = st.id();
+        push_static_ability(program, st)?;
+        program.static_conditions.insert(st_id, cond);
+    }
+    for staged in staged_activated {
+        let act_id = staged.ability.id;
+        program.activated.push(staged.ability);
+        program
+            .activation_restrictions
+            .insert(act_id, staged.restriction);
+        if let Some(ec) = staged.extra_costs {
+            program.extra_activation_costs.insert(act_id, ec);
+        }
+        if let Some(am) = staged.modes {
+            program.activation_modes.insert(act_id, am);
+        }
+        if let Some(h) = staged.hybrid_symbols {
+            program.activation_hybrid_symbols.insert(act_id, h);
+        }
+        if let Some(cr) = staged.cost_reduction {
+            program.activation_cost_reductions.insert(act_id, cr);
+        }
+        if let Some(tr) = staged.target_cost_reduction {
+            program.activation_target_cost_reductions.insert(act_id, tr);
+        }
+    }
+    Ok(())
+}
+
 fn single_creature_subtype_filter(
     filter: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -798,6 +1052,34 @@ pub(super) fn lower_replacement(
                         .push(EntryCounterAbility::ChosenXPlusOne);
                     Ok(())
                 }
+                ("twice x +1/+1", ValueExprAst::Const(1), None) => {
+                    program
+                        .entry_counter_abilities
+                        .push(EntryCounterAbility::ChosenXPlusOne);
+                    program
+                        .entry_counter_abilities
+                        .push(EntryCounterAbility::ChosenXPlusOne);
+                    Ok(())
+                }
+                ("+1/+1", ValueExprAst::Mul(lhs, rhs), None)
+                    if matches!(
+                        (lhs.as_ref(), rhs.as_ref()),
+                        (ValueExprAst::Const(k), ValueExprAst::ChosenX)
+                            | (ValueExprAst::ChosenX, ValueExprAst::Const(k))
+                            if (2..=4).contains(k)
+                    ) =>
+                {
+                    let mult = match (lhs.as_ref(), rhs.as_ref()) {
+                        (ValueExprAst::Const(k), _) | (_, ValueExprAst::Const(k)) => *k,
+                        _ => return Err("oracle:unsupported-entry-counters"),
+                    };
+                    for _ in 0..mult {
+                        program
+                            .entry_counter_abilities
+                            .push(EntryCounterAbility::ChosenXPlusOne);
+                    }
+                    Ok(())
+                }
                 (
                     "+1/+1",
                     ValueExprAst::Const(n),
@@ -822,7 +1104,9 @@ pub(super) fn lower_replacement(
                         .push(EntryCounterAbility::FixedLoyalty(i64::from(*n).into()));
                     Ok(())
                 }
-                (other, ValueExprAst::Const(n), None) if *n > 0 => {
+                (other, ValueExprAst::Const(n), None)
+                    if *n > 0 && parse_counter_kind(other).is_some() =>
+                {
                     let kind =
                         parse_counter_kind(other).ok_or("oracle:unsupported-entry-counters")?;
                     if kind.is_player_counter()
@@ -1176,6 +1460,9 @@ pub(super) fn lower_replacement(
             Ok(())
         }
         ReplacementEffectAst::AsEntersAction(ins) => {
+            if let [InstructionAst::Modal { choice, modes }] = ins.as_slice() {
+                return lower_as_enters_modal_choice(choice, modes, program, vocabulary, ids);
+            }
             if let [InstructionAst::ChooseOption(raw)] = ins.as_slice() {
                 if let Some(res) = lower_as_enters_reveal_subtype(raw, program, vocabulary) {
                     return res;
@@ -6485,6 +6772,14 @@ fn lower_inline_replacement_body(
         }
         for op in &mut body.instructions {
             match op {
+                Instruction::ExileAbilitySource => {
+                    *op = Instruction::MoveSubject {
+                        subject: MoveSubjectRef::AbilitySource,
+                        destination: SubjectDestination::Exile {
+                            delayed_return: None,
+                        },
+                    };
+                }
                 Instruction::ExileLibraryTop { player, amount } => {
                     *op = Instruction::ExileTopPlay {
                         count: ValueExpr::literal(i64::from(*amount)),

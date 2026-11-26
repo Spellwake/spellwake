@@ -19226,14 +19226,26 @@ pub fn parse_static_or_replacement(
                         .replace(" you cast", "")
                         .replace(" players cast", "");
                     let subj_trimmed = subj_clean.trim();
+                    let had_you_cast = raw_left.contains(" you cast")
+                        && !raw_left.contains(" you cast from anywhere other than your hand")
+                        && !raw_left.contains(" you cast but don't own");
+                    let had_opp_cast = raw_left.contains(" your opponents cast")
+                        || raw_left.contains(" opponents cast");
                     let subj_opt = if subj_trimmed == "~" {
                         Some(SubjectRefAst::SelfObject)
                     } else if subj_trimmed.eq_ignore_ascii_case("it") {
                         Some(SubjectRefAst::Anaphora("it".to_string()))
                     } else {
-                        parse_object_filter(subj_trimmed, vocab)
-                            .ok()
-                            .map(|f| SubjectRefAst::Group(Box::new(f)))
+                        parse_object_filter(subj_trimmed, vocab).ok().map(|mut f| {
+                            if f.controller.is_none() {
+                                if had_you_cast {
+                                    f.controller = Some(ControllerRelation::You);
+                                } else if had_opp_cast {
+                                    f.controller = Some(ControllerRelation::Opponents);
+                                }
+                            }
+                            SubjectRefAst::Group(Box::new(f))
+                        })
                     };
                     if let Some(subj) = subj_opt {
                         return Ok(StaticOrReplacement::Static(

@@ -1307,6 +1307,7 @@ pub(crate) struct ActiveTemporaryRule {
     pub(crate) target: Option<TargetRef>,
     pub(crate) second_target: Option<TargetRef>,
     pub(crate) consumed: bool,
+    pub(crate) spell_cast_baselines: BTreeMap<SeatId, u16>,
 }
 
 /// Resolution facts captured when `Instruction::EmitReflexiveTrigger` fires so the resulting

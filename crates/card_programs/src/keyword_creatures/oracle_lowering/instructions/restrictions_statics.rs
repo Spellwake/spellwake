@@ -98,44 +98,68 @@ pub(super) fn lower_restrictions_statics_instruction(
                         {
                             let mut rules = Vec::with_capacity(keywords.len());
                             for kw in keywords {
-                                let rule = match kw.trim().to_ascii_lowercase().as_str() {
-                                    "flash" => TemporaryRuleKind::FilteredFlash {
-                                        player: ResolvingPlayer::Controller,
-                                        filter: flt_obj,
-                                        next_only: true,
-                                    },
-                                    "convoke" => TemporaryRuleKind::NextSpellKeyword {
-                                        filter: flt_obj,
-                                        keyword: KeywordAbility::Convoke,
-                                    },
-                                    "improvise" => TemporaryRuleKind::NextSpellKeyword {
-                                        filter: flt_obj,
-                                        keyword: KeywordAbility::Improvise,
-                                    },
-                                    "delve" => TemporaryRuleKind::NextSpellKeyword {
-                                        filter: flt_obj,
-                                        keyword: KeywordAbility::Delve,
-                                    },
-                                    "bargain" => TemporaryRuleKind::NextSpellKeyword {
-                                        filter: flt_obj,
-                                        keyword: KeywordAbility::Bargain,
-                                    },
-                                    "retrace" => TemporaryRuleKind::NextSpellKeyword {
-                                        filter: flt_obj,
-                                        keyword: KeywordAbility::Retrace,
-                                    },
-                                    "jump-start" | "jumpstart" => {
-                                        TemporaryRuleKind::NextSpellKeyword {
-                                            filter: flt_obj,
-                                            keyword: KeywordAbility::JumpStart,
+                                let kw_low = kw.trim().to_ascii_lowercase();
+                                let rule =
+                                    if let Some(aff_raw) = kw_low.strip_prefix("affinity for ") {
+                                        let aff_ast =
+                                            spellwake_oracle_compiler::filter::parse_object_filter(
+                                                aff_raw.trim(),
+                                                &cached_compiler_vocab(vocabulary),
+                                            )
+                                            .map_err(|_| "oracle:unsupported-temp-static")?;
+                                        if aff_ast.zone.is_some() {
+                                            return Err("oracle:unsupported-temp-static");
                                         }
-                                    }
-                                    "rebound" => TemporaryRuleKind::NextSpellKeyword {
-                                        filter: flt_obj,
-                                        keyword: KeywordAbility::Rebound,
-                                    },
-                                    _ => return Err("oracle:unsupported-temp-static"),
-                                };
+                                        let aff_obj = lower_object_filter(&aff_ast, vocabulary)
+                                            .map_err(|_| "oracle:unsupported-temp-static")?;
+                                        if aff_obj.has_target_player() {
+                                            return Err("oracle:unsupported-temp-static");
+                                        }
+                                        TemporaryRuleKind::NextSpellAffinity {
+                                            player: ResolvingPlayer::Controller,
+                                            spell_filter: flt_obj,
+                                            affinity_filter: aff_obj,
+                                        }
+                                    } else {
+                                        match kw_low.as_str() {
+                                            "flash" => TemporaryRuleKind::FilteredFlash {
+                                                player: ResolvingPlayer::Controller,
+                                                filter: flt_obj,
+                                                next_only: true,
+                                            },
+                                            "convoke" => TemporaryRuleKind::NextSpellKeyword {
+                                                filter: flt_obj,
+                                                keyword: KeywordAbility::Convoke,
+                                            },
+                                            "improvise" => TemporaryRuleKind::NextSpellKeyword {
+                                                filter: flt_obj,
+                                                keyword: KeywordAbility::Improvise,
+                                            },
+                                            "delve" => TemporaryRuleKind::NextSpellKeyword {
+                                                filter: flt_obj,
+                                                keyword: KeywordAbility::Delve,
+                                            },
+                                            "bargain" => TemporaryRuleKind::NextSpellKeyword {
+                                                filter: flt_obj,
+                                                keyword: KeywordAbility::Bargain,
+                                            },
+                                            "retrace" => TemporaryRuleKind::NextSpellKeyword {
+                                                filter: flt_obj,
+                                                keyword: KeywordAbility::Retrace,
+                                            },
+                                            "jump-start" | "jumpstart" => {
+                                                TemporaryRuleKind::NextSpellKeyword {
+                                                    filter: flt_obj,
+                                                    keyword: KeywordAbility::JumpStart,
+                                                }
+                                            }
+                                            "rebound" => TemporaryRuleKind::NextSpellKeyword {
+                                                filter: flt_obj,
+                                                keyword: KeywordAbility::Rebound,
+                                            },
+                                            _ => return Err("oracle:unsupported-temp-static"),
+                                        }
+                                    };
                                 rules.push(rule);
                             }
                             for rule in rules {
@@ -375,6 +399,127 @@ pub(super) fn lower_restrictions_statics_instruction(
                     return Err("oracle:unsupported-temp-static");
                 }
                 StaticAbilityAst::Compound(items) if !items.is_empty() => {
+                    if items.len() >= 2
+                        && let Some(StaticAbilityAst::RuleOrCombatRestriction {
+                            subject: Some(first_subj),
+                            condition: None,
+                            ..
+                        }) = items.first()
+                        && items.iter().all(|it| {
+                            matches!(
+                                it,
+                                StaticAbilityAst::RuleOrCombatRestriction {
+                                    subject: Some(s),
+                                    condition: None,
+                                    ..
+                                } if s == first_subj
+                            )
+                        })
+                    {
+                        let dur = lower_duration(duration)?;
+                        let mut br_parts = Vec::with_capacity(items.len());
+                        let mut all_br = true;
+                        for it in items {
+                            let StaticAbilityAst::RuleOrCombatRestriction { rule, filter, .. } = it
+                            else {
+                                all_br = false;
+                                break;
+                            };
+                            let rule_norm_owned = rule
+                                .trim()
+                                .trim_end_matches('.')
+                                .to_ascii_lowercase()
+                                .replace(
+                                    "can't be blocked this turn except by ",
+                                    "can't be blocked except by ",
+                                )
+                                .replace(
+                                    "can't be blocked this combat except by ",
+                                    "can't be blocked except by ",
+                                )
+                                .replace("can't be blocked this turn by ", "can't be blocked by ")
+                                .replace(
+                                    "can't be blocked this combat by ",
+                                    "can't be blocked by ",
+                                );
+                            let br_opt = lower_rule_blocking_restriction(
+                                rule,
+                                filter.as_deref(),
+                                vocabulary,
+                            )
+                            .or_else(|| {
+                                lower_rule_blocking_restriction(
+                                    &rule_norm_owned,
+                                    filter.as_deref(),
+                                    vocabulary,
+                                )
+                            })
+                            .or_else(|| {
+                                filter
+                                    .as_deref()
+                                    .and_then(|flt| match rule_norm_owned.as_str() {
+                                        "can't be blocked except by"
+                                        | "cant_be_blocked_except_by" => {
+                                            lower_rule_blocking_restriction(
+                                                "CantBeBlockedExceptBy",
+                                                Some(flt),
+                                                vocabulary,
+                                            )
+                                        }
+                                        "can't be blocked by" | "cant_be_blocked_by" => {
+                                            lower_rule_blocking_restriction(
+                                                "CantBeBlockedBy",
+                                                Some(flt),
+                                                vocabulary,
+                                            )
+                                        }
+                                        _ => None,
+                                    })
+                            })
+                            .or_else(|| {
+                                filter
+                                    .is_none()
+                                    .then(|| {
+                                        lower_combat_mod_blocking_restriction(
+                                            &rule_norm_owned,
+                                            vocabulary,
+                                        )
+                                    })
+                                    .flatten()
+                            })
+                            .filter(|br| {
+                                !matches!(
+                                    br,
+                                    BlockingRestriction::CannotBlockSource
+                                        | BlockingRestriction::MustBlockSource
+                                        | BlockingRestriction::CannotBeBlockedBySource
+                                ) || self_pronoun_valid
+                            });
+                            if let Some(br) = br_opt {
+                                br_parts.push(ResolvedPartSpec::BlockingRestriction(br));
+                            } else {
+                                all_br = false;
+                                break;
+                            }
+                        }
+                        if all_br && !br_parts.is_empty() {
+                            let mut trial = builder.clone();
+                            if emit_resolved_parts_for_subject(
+                                first_subj,
+                                ResolvedPartsSpec(br_parts),
+                                dur,
+                                &mut trial,
+                                vocabulary,
+                                in_trigger,
+                                self_pronoun_valid,
+                            )
+                            .is_ok()
+                            {
+                                *builder = trial;
+                                return Ok(());
+                            }
+                        }
+                    }
                     for item in items {
                         lower_instruction(
                             &InstructionAst::TemporaryStatic {
@@ -398,21 +543,46 @@ pub(super) fn lower_restrictions_statics_instruction(
                     grant_keywords,
                     grant_ability_text,
                     scale,
-                    condition: None,
+                    condition,
                     paired_rule,
-                } => {
+                } if condition.is_none() || condition.as_deref().is_some_and(|c| {
+                    condition_to_for_as_long_as_duration(c).is_some()
+                        && (matches!(duration, DurationAst::Permanent | DurationAst::Instant)
+                            || matches!(duration, DurationAst::ForAsLongAs(dc) if dc.as_ref() == c))
+                }) =>
+                {
+                    let eff_duration = if let Some(cond) = condition.as_deref() {
+                        let as_long_dur = condition_to_for_as_long_as_duration(cond)
+                            .ok_or("oracle:unsupported-temp-static")?;
+                        if lower_duration(&as_long_dur)?.requires_ability_source()
+                            && !(in_trigger || self_pronoun_valid)
+                        {
+                            return Err("oracle:unsupported-temp-static");
+                        }
+                        as_long_dur
+                    } else {
+                        duration.clone()
+                    };
+                    let follow_subject = if matches!(
+                        subject.as_ref(),
+                        SubjectRefAst::TargetObject { .. } | SubjectRefAst::TargetOneOf { .. }
+                    ) {
+                        Box::new(SubjectRefAst::Anaphora("it".to_string()))
+                    } else {
+                        subject.clone()
+                    };
                     let mut seq = vec![InstructionAst::ModifyPT {
                         subject: subject.clone(),
                         dx: dx.clone(),
                         dy: dy.clone(),
-                        duration: duration.clone(),
+                        duration: eff_duration.clone(),
                         scale: scale.clone(),
                     }];
                     if !grant_keywords.is_empty() {
                         seq.push(InstructionAst::GrantKeywords {
-                            subject: subject.clone(),
+                            subject: follow_subject.clone(),
                             keywords: grant_keywords.clone(),
-                            duration: duration.clone(),
+                            duration: eff_duration.clone(),
                         });
                     }
                     if let Some(raw_text) = grant_ability_text {
@@ -438,16 +608,18 @@ pub(super) fn lower_restrictions_statics_instruction(
                             None
                         };
                         seq.push(InstructionAst::GrantAbilityText {
-                            subject: subject.clone(),
+                            subject: follow_subject.clone(),
                             ability_text: raw_text.clone(),
                             compiled,
-                            duration: duration.clone(),
+                            duration: eff_duration.clone(),
                         });
                     }
                     if let Some(paired) = paired_rule {
+                        let rewritten_paired =
+                            rewrite_paired_static_target_to_anaphora(paired, subject.as_ref());
                         seq.push(InstructionAst::TemporaryStatic {
-                            static_ability: paired.clone(),
-                            duration: duration.clone(),
+                            static_ability: Box::new(rewritten_paired),
+                            duration: eff_duration.clone(),
                         });
                     }
                     return lower_instruction_seq(
@@ -463,9 +635,26 @@ pub(super) fn lower_restrictions_statics_instruction(
                 StaticAbilityAst::GrantKeywords {
                     subject,
                     keywords,
-                    condition: None,
+                    condition,
                     paired_rule,
-                } => {
+                } if condition.is_none() || condition.as_deref().is_some_and(|c| {
+                    condition_to_for_as_long_as_duration(c).is_some()
+                        && (matches!(duration, DurationAst::Permanent | DurationAst::Instant)
+                            || matches!(duration, DurationAst::ForAsLongAs(dc) if dc.as_ref() == c))
+                }) =>
+                {
+                    let eff_kw_dur = if let Some(cond) = condition.as_deref() {
+                        let as_long_dur = condition_to_for_as_long_as_duration(cond)
+                            .ok_or("oracle:unsupported-temp-static")?;
+                        if lower_duration(&as_long_dur)?.requires_ability_source()
+                            && !(in_trigger || self_pronoun_valid)
+                        {
+                            return Err("oracle:unsupported-temp-static");
+                        }
+                        as_long_dur
+                    } else {
+                        duration.clone()
+                    };
                     if paired_rule.is_none()
                         && keywords.len() == 1
                         && keywords[0].trim().eq_ignore_ascii_case("flash")
@@ -476,7 +665,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 & (AstCardTypeMask::INSTANT.0 | AstCardTypeMask::SORCERY.0))
                                 != 0)
                     {
-                        let dur = lower_duration(duration)?;
+                        let dur = lower_duration(&eff_kw_dur)?;
                         let mut inner = f.as_ref().clone();
                         inner.any_spell = false;
                         let obj = if is_unrestricted_filter(&inner) {
@@ -532,7 +721,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                             )
                         })
                     {
-                        let dur = lower_duration(duration)?;
+                        let dur = lower_duration(&eff_kw_dur)?;
                         let players = match subject.as_ref() {
                             SubjectRefAst::Player(p) => {
                                 lower_affected_players_in_context(*p, builder, in_trigger)?
@@ -562,12 +751,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                     let mut seq = vec![InstructionAst::GrantKeywords {
                         subject: subject.clone(),
                         keywords: keywords.clone(),
-                        duration: duration.clone(),
+                        duration: eff_kw_dur.clone(),
                     }];
                     if let Some(paired) = paired_rule {
+                        let rewritten_paired =
+                            rewrite_paired_static_target_to_anaphora(paired, subject.as_ref());
                         seq.push(InstructionAst::TemporaryStatic {
-                            static_ability: paired.clone(),
-                            duration: duration.clone(),
+                            static_ability: Box::new(rewritten_paired),
+                            duration: eff_kw_dur.clone(),
                         });
                     }
                     let mut trial = builder.clone();
@@ -690,6 +881,34 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
                                     BlockingRestriction::OnlyBlockedByMatching(obj_flt),
                                 )]);
+                            if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                                && is_permanent_body_target(builder.target)
+                                && let Some((minimum, maximum)) =
+                                    builder.instructions.iter().rev().find_map(|op| {
+                                        if let Instruction::AffectPermanentTargets {
+                                            minimum,
+                                            maximum,
+                                            ..
+                                        } = op
+                                        {
+                                            Some((*minimum, *maximum))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                            {
+                                builder
+                                    .instructions
+                                    .push(Instruction::AffectPermanentTargets {
+                                        minimum,
+                                        maximum,
+                                        action: PermanentTargetAction::Modify {
+                                            parts,
+                                            duration: dur,
+                                        },
+                                    });
+                                return Ok(());
+                            }
                             let mut trial = builder.clone();
                             if emit_resolved_parts_for_subject(
                                 subject,
@@ -1696,6 +1915,21 @@ pub(super) fn lower_restrictions_statics_instruction(
                         });
                         return Ok(());
                     }
+                    if let Some((players, max_more)) = try_parse_cast_max_more_spells_this_turn(
+                        &rule_low,
+                        subject.as_deref(),
+                        builder,
+                        in_trigger,
+                    )? {
+                        builder.instructions.push(Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::CastMaxMoreSpellsThisTurn {
+                                players,
+                                max_more,
+                            }),
+                            duration: dur,
+                        });
+                        return Ok(());
+                    }
                     if rule_low == "cant_cast_additional_spells" {
                         let players = match subject.as_deref() {
                             Some(SubjectRefAst::Player(p)) => {
@@ -2193,6 +2427,27 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 filter.as_deref(),
                                 vocabulary,
                             )
+                        })
+                        .or_else(|| {
+                            filter
+                                .as_deref()
+                                .and_then(|flt| match rule_norm_owned.as_str() {
+                                    "can't be blocked except by" | "cant_be_blocked_except_by" => {
+                                        lower_rule_blocking_restriction(
+                                            "CantBeBlockedExceptBy",
+                                            Some(flt),
+                                            vocabulary,
+                                        )
+                                    }
+                                    "can't be blocked by" | "cant_be_blocked_by" => {
+                                        lower_rule_blocking_restriction(
+                                            "CantBeBlockedBy",
+                                            Some(flt),
+                                            vocabulary,
+                                        )
+                                    }
+                                    _ => None,
+                                })
                         })
                         .or_else(|| {
                             filter
@@ -3660,6 +3915,70 @@ pub(super) fn lower_restrictions_statics_instruction(
                 .trim()
                 .trim_end_matches('.')
                 .to_ascii_lowercase();
+            r_low.contains("can cast only ") && r_low.contains(" more spell")
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            if let Some((players, max_more)) =
+                try_parse_cast_max_more_spells_this_turn(&r_low, None, builder, in_trigger)?
+            {
+                builder.instructions.push(Instruction::CreateTemporaryRule {
+                    rule: Box::new(TemporaryRuleKind::CastMaxMoreSpellsThisTurn {
+                        players,
+                        max_more,
+                    }),
+                    duration: ResolvedDuration::UntilEndOfTurn,
+                });
+                return Ok(());
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if (self_pronoun_valid || in_trigger)
+            && builder.target == BodyTarget::None
+            && matches!(
+                restriction
+                    .trim()
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "it isn't an equipment"
+                    | "it is not an equipment"
+                    | "it's not an equipment"
+                    | "it's no longer an equipment"
+                    | "it is no longer an equipment"
+            ) =>
+        {
+            builder.instructions.push(Instruction::ChangeAbilitySource {
+                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::TypeWithSubtypes {
+                    base: TypeChangeSpec {
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Keep,
+                        subtypes: SubtypeOperation::Keep,
+                        land_subtypes: SubtypeOperation::Keep,
+                    },
+                    artifact_subtypes: SubtypeOperation::Remove(BTreeSet::from([
+                        ArtifactSubtype::Equipment,
+                    ])),
+                    enchantment_subtypes: SubtypeOperation::Keep,
+                }]),
+                duration: ResolvedDuration::NoStatedDuration,
+            });
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
             r_low.starts_with("roll ")
                 && (r_low.ends_with("-sided die") || r_low.ends_with("-sided dice"))
         } =>
@@ -3953,7 +4272,7 @@ pub(super) fn lower_restrictions_statics_instruction(
         InstructionAst::GrantAbilityText {
             subject,
             ability_text,
-            compiled: Some(compiled_face),
+            compiled,
             duration,
         } => {
             let eff_subject = match subject.as_ref() {
@@ -3971,7 +4290,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         &InstructionAst::GrantAbilityText {
                             subject: Box::new(it.clone()),
                             ability_text: ability_text.clone(),
-                            compiled: Some(compiled_face.clone()),
+                            compiled: compiled.clone(),
                             duration: duration.clone(),
                         },
                         builder,
@@ -3985,7 +4304,71 @@ pub(super) fn lower_restrictions_statics_instruction(
                 return Ok(());
             }
             let dur = lower_duration(duration)?;
-            let parts = lower_granted_ability_specs(compiled_face, vocabulary, ids)?;
+            let ab_low = ability_text
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .trim_end_matches('.')
+                .trim()
+                .to_ascii_lowercase();
+            let is_exile_if_leaves = matches!(
+                ab_low.as_str(),
+                "if this creature would leave the battlefield, exile it instead of putting it anywhere else"
+                    | "if this permanent would leave the battlefield, exile it instead of putting it anywhere else"
+                    | "if ~ would leave the battlefield, exile it instead of putting it anywhere else"
+                    | "if this token would leave the battlefield, exile it instead of putting it anywhere else"
+                    | "if this creature would leave the battlefield, exile it instead"
+                    | "if this permanent would leave the battlefield, exile it instead"
+                    | "if ~ would leave the battlefield, exile it instead"
+                    | "if this token would leave the battlefield, exile it instead"
+            );
+            let is_temp_exile_if_dies = dur == ResolvedDuration::UntilEndOfTurn
+                && matches!(
+                    ab_low.as_str(),
+                    "if this creature would die, exile it instead"
+                        | "if this permanent would die, exile it instead"
+                        | "if ~ would die, exile it instead"
+                        | "if this token would die, exile it instead"
+                );
+            if (is_exile_if_leaves || is_temp_exile_if_dies)
+                && let Some(es) = resolve_grant_effect_subject(
+                    eff_subject,
+                    builder,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                )?
+            {
+                let rule = if is_exile_if_leaves {
+                    TemporaryRuleKind::ExileIfLeavesBattlefield {
+                        subject: Box::new(es),
+                    }
+                } else {
+                    TemporaryRuleKind::ExileIfDies {
+                        subject: Box::new(es),
+                    }
+                };
+                builder.instructions.push(Instruction::CreateTemporaryRule {
+                    rule: Box::new(rule),
+                    duration: dur,
+                });
+                return Ok(());
+            }
+            let Some(compiled_face) = compiled.as_deref() else {
+                return Err("oracle:unsupported-grant-ability-text");
+            };
+            let parts = match lower_granted_ability_specs(compiled_face, vocabulary, ids) {
+                Ok(p) => p,
+                Err(err) => {
+                    if let Some(loyalty_parts) =
+                        try_lower_granted_loyalty_specs(compiled_face, vocabulary, ids)?
+                    {
+                        loyalty_parts
+                    } else {
+                        return Err(err);
+                    }
+                }
+            };
             if parts.is_empty() {
                 return Err("oracle:unsupported-grant-ability-text");
             }
@@ -4147,6 +4530,20 @@ pub(super) fn lower_restrictions_statics_instruction(
                         });
                     Ok(())
                 }
+                SubjectRefAst::Anaphora(raw)
+                    if last_instruction_created_tokens(&builder.instructions)
+                        && (raw.to_ascii_lowercase().contains("token")
+                            || !is_permanent_body_target(builder.target)) =>
+                {
+                    for part in parts {
+                        builder.instructions.push(Instruction::ChangeGroup {
+                            group: Box::new(EffectSubject::CreatedTokens),
+                            parts: ResolvedPartsSpec(vec![part]),
+                            duration: dur,
+                        });
+                    }
+                    Ok(())
+                }
                 SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                     if is_permanent_body_target(builder.target) =>
                 {
@@ -4161,7 +4558,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
-                    if builder.target == BodyTarget::None
+                    if !is_permanent_body_target(builder.target)
                         && last_instruction_moved_object(&builder.instructions) =>
                 {
                     for part in parts {
@@ -8329,6 +8726,247 @@ pub(super) fn try_lower_cant_cast_from_zone(
     }
 
     None
+}
+
+fn rewrite_paired_static_target_to_anaphora(
+    paired: &StaticAbilityAst,
+    primary_subject: &SubjectRefAst,
+) -> StaticAbilityAst {
+    if !matches!(
+        primary_subject,
+        SubjectRefAst::TargetObject { .. } | SubjectRefAst::TargetOneOf { .. }
+    ) {
+        return paired.clone();
+    }
+    let anaphora = Box::new(SubjectRefAst::Anaphora("it".to_string()));
+    match paired {
+        StaticAbilityAst::RuleOrCombatRestriction {
+            subject: Some(s),
+            rule,
+            filter,
+            condition,
+        } if s.as_ref() == primary_subject => StaticAbilityAst::RuleOrCombatRestriction {
+            subject: Some(anaphora),
+            rule: rule.clone(),
+            filter: filter.clone(),
+            condition: condition.clone(),
+        },
+        StaticAbilityAst::CantBeBlockedExceptByAny {
+            subject,
+            allowed_filters,
+            condition,
+        } if subject.as_ref() == primary_subject => StaticAbilityAst::CantBeBlockedExceptByAny {
+            subject: anaphora,
+            allowed_filters: allowed_filters.clone(),
+            condition: condition.clone(),
+        },
+        StaticAbilityAst::Compound(items) => StaticAbilityAst::Compound(
+            items
+                .iter()
+                .map(|it| rewrite_paired_static_target_to_anaphora(it, primary_subject))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn try_parse_cast_max_more_spells_this_turn(
+    rule_low: &str,
+    subject: Option<&SubjectRefAst>,
+    builder: &mut BodyBuilder,
+    in_trigger: bool,
+) -> Result<Option<(AffectedPlayers, u8)>, &'static str> {
+    let clean = rule_low.trim().trim_end_matches('.').trim();
+    let (players_opt, rest) = if let Some(after) = clean.strip_prefix("can cast only ") {
+        let players = match subject {
+            Some(SubjectRefAst::Player(p)) => {
+                lower_affected_players_in_context(*p, builder, in_trigger)?
+            }
+            Some(SubjectRefAst::TargetPlayer {
+                opponent_only,
+                count: TargetCountAst::Exact(1),
+            }) => {
+                builder.bind_target(if *opponent_only {
+                    BodyTarget::SingleOpponent
+                } else {
+                    BodyTarget::SinglePlayer
+                })?;
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+            }
+            _ => return Ok(None),
+        };
+        (Some(players), after)
+    } else {
+        let mut matched: Option<(AffectedPlayers, &str)> = None;
+        for (prefix, pref) in [
+            ("you can cast only ", PlayerRefAst::You),
+            ("players can cast only ", PlayerRefAst::EachPlayer),
+            ("each player can cast only ", PlayerRefAst::EachPlayer),
+            ("your opponents can cast only ", PlayerRefAst::EachOpponent),
+            ("opponents can cast only ", PlayerRefAst::EachOpponent),
+            ("each opponent can cast only ", PlayerRefAst::EachOpponent),
+            ("that player can cast only ", PlayerRefAst::ThatPlayer),
+            ("they can cast only ", PlayerRefAst::ThatPlayer),
+        ] {
+            if let Some(after) = clean.strip_prefix(prefix) {
+                let players = lower_affected_players_in_context(pref, builder, in_trigger)?;
+                matched = Some((players, after));
+                break;
+            }
+        }
+        if let Some((players, after)) = matched {
+            (Some(players), after)
+        } else {
+            return Ok(None);
+        }
+    };
+    let Some(count_tok) = rest
+        .strip_suffix(" more spells this turn")
+        .or_else(|| rest.strip_suffix(" more spell this turn"))
+        .map(str::trim)
+    else {
+        return Ok(None);
+    };
+    let count_opt = count_tok
+        .parse::<u8>()
+        .ok()
+        .or_else(|| parse_small_number_word(count_tok).and_then(|n| u8::try_from(n).ok()));
+    let (Some(players), Some(max_more)) = (players_opt, count_opt) else {
+        return Ok(None);
+    };
+    Ok(Some((players, max_more)))
+}
+
+fn resolve_grant_effect_subject(
+    eff_subject: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+) -> Result<Option<EffectSubject>, &'static str> {
+    match eff_subject {
+        s if (self_pronoun_valid || in_trigger)
+            && is_self_pronoun(s, builder, self_pronoun_valid) =>
+        {
+            Ok(Some(EffectSubject::AbilitySource))
+        }
+        SubjectRefAst::TargetObject {
+            filter,
+            count: TargetCountAst::Exact(1),
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let bt = lower_battlefield_body_target_in_context(
+                &f_clean, builder, in_trigger, vocabulary,
+            )?;
+            builder.bind_target(bt)?;
+            Ok(Some(EffectSubject::TargetObject))
+        }
+        SubjectRefAst::Anaphora(raw)
+            if last_instruction_created_tokens(&builder.instructions)
+                && (raw.to_ascii_lowercase().contains("token")
+                    || !is_permanent_body_target(builder.target)) =>
+        {
+            Ok(Some(EffectSubject::CreatedTokens))
+        }
+        SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+            if is_permanent_body_target(builder.target) =>
+        {
+            Ok(Some(EffectSubject::TargetObject))
+        }
+        SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+            if !is_permanent_body_target(builder.target)
+                && last_instruction_moved_object(&builder.instructions) =>
+        {
+            Ok(Some(EffectSubject::LastMoved))
+        }
+        SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+            if builder.target == BodyTarget::None
+                && has_prior_token_creation(&builder.instructions) =>
+        {
+            Ok(Some(EffectSubject::CreatedTokens))
+        }
+        SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+            if builder.target == BodyTarget::None && builder.last_group_filter.is_some() =>
+        {
+            Ok(builder.last_group_filter.map(EffectSubject::Matching))
+        }
+        SubjectRefAst::AttachedHost(_) => Ok(Some(EffectSubject::Matching(ObjectFilter::Clause(
+            ObjectClause::any().attached_to_self(),
+        )))),
+        SubjectRefAst::TriggerSubject if in_trigger => Ok(Some(EffectSubject::TriggerSubject)),
+        SubjectRefAst::Anaphora(raw)
+            if builder.target == BodyTarget::None
+                && in_trigger
+                && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
+        {
+            Ok(Some(EffectSubject::TriggerSubject))
+        }
+        SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
+            if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+        {
+            let mut f_clean = f.as_ref().clone();
+            f_clean.zone = None;
+            let obj = lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
+            bind_filter_player_target(builder, &obj)?;
+            builder.last_group_filter = Some(obj);
+            Ok(Some(EffectSubject::Matching(obj)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn try_lower_granted_loyalty_specs(
+    compiled_face: &FaceAst,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<Option<Vec<ResolvedPartSpec>>, &'static str> {
+    if !compiled_face.failures.is_empty()
+        || !compiled_face.replacements.is_empty()
+        || !compiled_face.spell_effects.is_empty()
+        || !compiled_face.statics.is_empty()
+        || !compiled_face.keywords.is_empty()
+        || compiled_face.abilities.is_empty()
+        || !compiled_face
+            .abilities
+            .iter()
+            .all(|ab| matches!(ab, AbilityAst::Loyalty { .. }))
+    {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(compiled_face.abilities.len());
+    for ability in &compiled_face.abilities {
+        let AbilityAst::Loyalty { delta, body } = ability else {
+            return Ok(None);
+        };
+        let trimmed = delta.trim().replace('\u{2212}', "-");
+        let (loyalty, variable_loyalty) = if trimmed.eq_ignore_ascii_case("-x") {
+            (Some(0), true)
+        } else {
+            let n: i32 = trimmed
+                .strip_prefix('+')
+                .unwrap_or(&trimmed)
+                .parse()
+                .map_err(|_| "oracle:bad-loyalty-delta")?;
+            (Some(n), false)
+        };
+        let (exec_body, restriction) = lower_activated_body(body, vocabulary, ids)?;
+        if restriction.is_some() {
+            return Err("oracle:unsupported-grant-ability-text");
+        }
+        let id = ids.activated();
+        out.push(ResolvedPartSpec::GrantLoyalty {
+            ability: Box::new(ActivatedAbility {
+                id,
+                mana_cost: ManaCost::free(),
+                source_cost: SourceCost::None,
+                body: exec_body,
+            }),
+            loyalty,
+            variable_loyalty,
+        });
+    }
+    Ok(Some(out))
 }
 
 #[cfg(test)]

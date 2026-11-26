@@ -436,6 +436,21 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 continue;
             }
+            if entry.targets().targets().is_empty()
+                && self
+                    .payloads
+                    .get(&entry.id())
+                    .and_then(StackPayload::body)
+                    .is_some_and(ExecutableBody::is_up_to_one_target)
+                && instruction.uses_mode_target()
+                && !matches!(instruction, Instruction::BranchIfFalse { .. })
+            {
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.last_action_succeeded = false;
+                }
+                self.advance_instruction()?;
+                continue;
+            }
             let mut power_dealer: Option<crate::damage::DamageSource> = None;
             let mut ctx = RuleStepContext {
                 journal: &mut journal,
@@ -4158,6 +4173,7 @@ impl EffectWindow {
                                 target: bound_target,
                                 second_target: second_bound_target,
                                 consumed: false,
+                                spell_cast_baselines: BTreeMap::new(),
                             });
                         }
                     }
@@ -4189,6 +4205,7 @@ impl EffectWindow {
                                 target: bound_target,
                                 second_target: second_bound_target,
                                 consumed: false,
+                                spell_cast_baselines: BTreeMap::new(),
                             });
                         }
                     }
@@ -4221,6 +4238,7 @@ impl EffectWindow {
                                 target: None,
                                 second_target: None,
                                 consumed: false,
+                                spell_cast_baselines: BTreeMap::new(),
                             });
                         }
                     }
@@ -4275,6 +4293,7 @@ impl EffectWindow {
                                 target: bound_target,
                                 second_target: second_bound_target,
                                 consumed: false,
+                                spell_cast_baselines: BTreeMap::new(),
                             });
                         }
                     }
@@ -4314,6 +4333,7 @@ impl EffectWindow {
                             target: bound_target,
                             second_target: second_bound_target,
                             consumed: false,
+                            spell_cast_baselines: BTreeMap::new(),
                         });
                     }
                     other => {
@@ -4326,13 +4346,15 @@ impl EffectWindow {
                             | TemporaryRuleKind::CantPlayLands { players }
                             | TemporaryRuleKind::PlayerGrantKeyword { players, .. }
                             | TemporaryRuleKind::SpellCostIncrease { players, .. }
+                            | TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, .. }
                             | TemporaryRuleKind::ExileSpellOnResolve { players, .. } => self
                                 .selection_players(*players, entry.controller(), cursor.as_ref())?
                                 .into_iter()
                                 .collect(),
                             TemporaryRuleKind::AdditionalLandPlay { player, .. }
                             | TemporaryRuleKind::FilteredFlash { player, .. }
-                            | TemporaryRuleKind::ZoneCastPermission { player, .. } => {
+                            | TemporaryRuleKind::ZoneCastPermission { player, .. }
+                            | TemporaryRuleKind::NextSpellAffinity { player, .. } => {
                                 [self.resolving_player_identity_at(*player, cursor.as_ref())?]
                                     .into_iter()
                                     .collect()
@@ -4355,6 +4377,25 @@ impl EffectWindow {
                                 .unwrap_or_default(),
                             _ => BTreeSet::new(),
                         };
+                        let spell_cast_baselines =
+                            if matches!(other, TemporaryRuleKind::CastMaxMoreSpellsThisTurn { .. })
+                            {
+                                resolved_players
+                                    .iter()
+                                    .map(|&seat| {
+                                        (
+                                            seat,
+                                            self.characteristics
+                                                .spells_cast_this_turn
+                                                .get(&seat)
+                                                .copied()
+                                                .unwrap_or(0),
+                                        )
+                                    })
+                                    .collect()
+                            } else {
+                                BTreeMap::new()
+                            };
                         let id = self.next_temp_rule_id;
                         self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
                         self.temporary_rules.push(super::ActiveTemporaryRule {
@@ -4370,6 +4411,7 @@ impl EffectWindow {
                             target: bound_target,
                             second_target: second_bound_target,
                             consumed: false,
+                            spell_cast_baselines,
                         });
                     }
                 }
@@ -11743,6 +11785,7 @@ impl EffectWindow {
                         resolved_players: BTreeSet::new(),
                         resolved_objects: BTreeSet::from([object]),
                         consumed: false,
+                        spell_cast_baselines: BTreeMap::new(),
                     });
                 }
             }

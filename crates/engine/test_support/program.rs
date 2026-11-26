@@ -8919,6 +8919,9 @@ pub fn parts_spec(value: &ResolvedPartsSpec) -> Value {
                 ResolvedPartSpec::MustBlockSubject(subject) => {
                     json!({"tag":"MustBlockSubject","subject":format!("{subject:?}")})
                 }
+                ResolvedPartSpec::GrantLoyalty { ability, loyalty, variable_loyalty } => {
+                    json!({"tag":"GrantLoyalty","ability":format!("{ability:?}"),"loyalty":loyalty,"variable_loyalty":variable_loyalty})
+                }
             })
             .collect::<Vec<_>>()
     )
@@ -8987,6 +8990,9 @@ pub fn resolved_parts(value: &ResolvedParts) -> Value {
                 }
                 ResolvedPart::GrantRestriction(restriction) => {
                     json!({"tag":"GrantRestriction","restriction":format!("{restriction:?}")})
+                }
+                ResolvedPart::GrantLoyalty { ability, loyalty, variable_loyalty } => {
+                    json!({"tag":"GrantLoyalty","ability":format!("{ability:?}"),"loyalty":loyalty,"variable_loyalty":variable_loyalty})
                 }
             })
             .collect::<Vec<_>>()
@@ -9281,6 +9287,28 @@ fn expression(value: &NumericExpression) -> Value {
             offset,
         } => {
             json!({"tag":"Count","selector":selector(value),"multiplier":multiplier,"offset":offset})
+        }
+        NumericExpression::Add(lhs, rhs) => {
+            json!({"tag":"Add","lhs":expression(lhs),"rhs":expression(rhs)})
+        }
+        NumericExpression::Scale {
+            expr,
+            multiplier,
+            offset,
+        } => {
+            json!({"tag":"Scale","expr":expression(expr),"multiplier":multiplier,"offset":offset})
+        }
+        NumericExpression::Cap { expr, max } => {
+            json!({"tag":"Cap","expr":expression(expr),"max":max})
+        }
+        NumericExpression::PlayerStat(StaticPlayerStat::TotalUnspentMana) => {
+            json!({"tag":"PlayerStat","stat":"TotalUnspentMana"})
+        }
+        NumericExpression::PlayerStat(StaticPlayerStat::OtherControlledCreatureCounters(kind)) => {
+            json!({"tag":"PlayerStat","stat":"OtherControlledCreatureCounters","kind":format!("{kind:?}")})
+        }
+        NumericExpression::PlayerStat(StaticPlayerStat::OwnGraveyardWithCycling) => {
+            json!({"tag":"PlayerStat","stat":"OwnGraveyardWithCycling"})
         }
     }
 }
@@ -10068,6 +10096,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticPart::GrantRestriction(restriction) => {
                     json!({"tag":"GrantRestriction","restriction":format!("{restriction:?}")})
+                }
+                StaticPart::GrantLoyalty { ability, loyalty, variable_loyalty } => {
+                    json!({"tag":"GrantLoyalty","ability":format!("{ability:?}"),"loyalty":loyalty,"variable_loyalty":variable_loyalty})
+                }
+                StaticPart::InheritZoneAbilities { zone, filter, loyalty_only } => {
+                    json!({"tag":"InheritZoneAbilities","zone":format!("{zone:?}"),"filter":format!("{filter:?}"),"loyalty_only":loyalty_only})
                 }
     }).collect::<Vec<_>>();
     json!({"tag":"Battlefield","id":id.0,"selector":selector(target),"parts":parts})

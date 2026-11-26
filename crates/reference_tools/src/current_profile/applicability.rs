@@ -1304,6 +1304,7 @@ native!(ResolvedContinuousEffect, self, {
         | ResolvedPart::SetPT(_)
         | ResolvedPart::SetToughness(_)
         | ResolvedPart::ModifyPT(_)
+        | ResolvedPart::GrantLoyalty { .. }
         | ResolvedPart::SwitchPT => Ok(()),
     })
 });

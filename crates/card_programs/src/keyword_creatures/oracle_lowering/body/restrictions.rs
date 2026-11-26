@@ -4245,6 +4245,69 @@ pub(in super::super) fn parse_activation_restriction(
         && let Ok(n) = rest.trim().parse::<u16>()
     {
         Ok(ActivationRestriction::ControllerLifeAtMost(n))
+    } else if let Some(after_has) = [
+        "if it has ",
+        "if ~ has ",
+        "if this land has ",
+        "if this permanent has ",
+        "if this artifact has ",
+        "if this creature has ",
+        "if this enchantment has ",
+    ]
+    .iter()
+    .find_map(|p| core.strip_prefix(p))
+        && let Some(counter_clause) = after_has
+            .strip_suffix(" on it")
+            .or_else(|| after_has.strip_suffix(" on ~"))
+    {
+        if counter_clause == "no counters" {
+            Ok(ActivationRestriction::Condition(Box::new(
+                ResolutionCondition {
+                    left: ValueExpr::CounterCount {
+                        subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                        kind: None,
+                    },
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                },
+            )))
+        } else if let Some(kind_raw) = counter_clause.strip_prefix("no ").and_then(|r| {
+            r.strip_suffix(" counters")
+                .or_else(|| r.strip_suffix(" counter"))
+        }) && let Some(ck) = parse_counter_kind(kind_raw.trim())
+            && ck.is_permanent()
+        {
+            Ok(ActivationRestriction::Condition(Box::new(
+                ResolutionCondition {
+                    left: ValueExpr::CounterCount {
+                        subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                        kind: Some(ck),
+                    },
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                },
+            )))
+        } else if let Some((cnt_raw, rest_kind)) = counter_clause.split_once(" or more ")
+            && let Some(n) = parse_small_positive_count(cnt_raw.trim())
+            && let Some(kind_raw) = rest_kind
+                .strip_suffix(" counters")
+                .or_else(|| rest_kind.strip_suffix(" counter"))
+            && let Some(ck) = parse_counter_kind(kind_raw.trim())
+            && ck.is_permanent()
+        {
+            Ok(ActivationRestriction::Condition(Box::new(
+                ResolutionCondition {
+                    left: ValueExpr::CounterCount {
+                        subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                        kind: Some(ck),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(n),
+                },
+            )))
+        } else {
+            Err("oracle:unsupported-act-restriction")
+        }
     } else if low.contains("creature died this turn") {
         Ok(ActivationRestriction::CreatureDiedThisTurn)
     } else if low.contains("no cards in hand") || low.contains("no cards in your hand") {

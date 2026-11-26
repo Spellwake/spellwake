@@ -720,6 +720,12 @@ pub enum ResolvedPart {
         ability: Box<crate::activated::ActivatedAbility>,
         restriction: Box<crate::activated::ActivationRestriction>,
     },
+    /// Grant an activated loyalty ability (CR 606; e.g. Rowan's Talent).
+    GrantLoyalty {
+        ability: Box<crate::activated::ActivatedAbility>,
+        loyalty: Option<i32>,
+        variable_loyalty: bool,
+    },
     InheritedAbilities(Box<super::InheritedAbilities>),
     /// Grant an independent tap ability that adds one mana of any color.
     GrantAnyColorMana,
@@ -752,6 +758,7 @@ impl ResolvedPart {
             Self::InheritedAbilities(_)
             | Self::GrantActivated(_)
             | Self::GrantActivatedRestricted { .. }
+            | Self::GrantLoyalty { .. }
             | Self::GrantTrigger(_)
             | Self::GrantAnyColorMana
             | Self::GrantFixedColorMana(_)
@@ -802,6 +809,11 @@ pub enum ResolvedPartSpec {
         ability: Box<crate::activated::ActivatedAbility>,
         restriction: Box<crate::activated::ActivationRestriction>,
     },
+    GrantLoyalty {
+        ability: Box<crate::activated::ActivatedAbility>,
+        loyalty: Option<i32>,
+        variable_loyalty: bool,
+    },
     GrantAnyColorMana,
     GrantFixedColorMana(crate::mana::ManaType),
     GrantMana(Box<crate::mana::ManaOutput>),
@@ -841,6 +853,7 @@ impl ResolvedPartSpec {
             Self::GrantTrigger(_)
             | Self::GrantActivated(_)
             | Self::GrantActivatedRestricted { .. }
+            | Self::GrantLoyalty { .. }
             | Self::GrantAnyColorMana
             | Self::GrantFixedColorMana(_)
             | Self::GrantMana(_)
@@ -1229,6 +1242,14 @@ pub enum StaticZone {
     OwnGraveyard,
     /// Cards currently in the source controller's hand.
     OwnHand,
+    /// Cards in all players' graveyards.
+    AllGraveyards,
+    /// Permanents on the battlefield under any player's control.
+    AnyBattlefield,
+    /// Cards owned by the source controller in exile.
+    OwnExile,
+    /// Cards exiled with / imprinted by the ability source.
+    LinkedExile,
 }
 
 /// Player-level scalar statistic evaluated by [`NumericExpression::PlayerStat`].
@@ -1238,10 +1259,16 @@ pub enum StaticPlayerStat {
     Devotion(Color),
     /// Mana of the given type currently in the source controller's mana pool.
     ManaInPool(crate::mana::ManaType),
+    /// Total unspent mana of all types currently in the source controller's mana pool.
+    TotalUnspentMana,
     /// Half the highest life total among opponents, rounded up.
     HalfHighestOpponentLife,
     /// Highest current power among creature cards in the source controller's graveyard.
     OwnGraveyardGreatestCreaturePower,
+    /// Total counters of `kind` on other creatures controlled by the source controller.
+    OtherControlledCreatureCounters(crate::effects::CounterKind),
+    /// Number of cards with cycling in the source controller's graveyard.
+    OwnGraveyardWithCycling,
 }
 
 /// Condition gating a [`NumericExpression::ConditionalBonus`].
@@ -1292,6 +1319,19 @@ pub enum NumericExpression {
     },
     /// General world-evaluable numeric expression evaluated against the current scratch world.
     Eval(Box<crate::program::ValueExpr>),
+    /// Sum of two numeric expressions.
+    Add(Box<NumericExpression>, Box<NumericExpression>),
+    /// Linear scaling of a numeric expression (`expr * multiplier + offset`).
+    Scale {
+        expr: Box<NumericExpression>,
+        multiplier: RulesInteger,
+        offset: RulesInteger,
+    },
+    /// Upper-bounded numeric expression (`min(expr, max)`).
+    Cap {
+        expr: Box<NumericExpression>,
+        max: RulesInteger,
+    },
 }
 impl NumericExpression {
     /// Author an unadjusted exact permanent count; wire operands remain explicit.
@@ -1322,6 +1362,11 @@ impl NumericExpression {
                 expr.validate_world_expr(vocabulary)
                     .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)
             }
+            Self::Add(lhs, rhs) => {
+                lhs.validate(vocabulary)?;
+                rhs.validate(vocabulary)
+            }
+            Self::Scale { expr, .. } | Self::Cap { expr, .. } => expr.validate(vocabulary),
         }
     }
 }
@@ -1356,7 +1401,19 @@ pub enum StaticPart {
         ability: Box<crate::activated::ActivatedAbility>,
         restriction: Box<crate::activated::ActivationRestriction>,
     },
+    /// Grant an activated loyalty ability (CR 606; e.g. Rowan's Talent).
+    GrantLoyalty {
+        ability: Box<crate::activated::ActivatedAbility>,
+        loyalty: Option<i32>,
+        variable_loyalty: bool,
+    },
     InheritCounteredCreatureAbilities,
+    /// Inherit activated (or loyalty-only) abilities from objects in `zone` matching `filter`.
+    InheritZoneAbilities {
+        zone: StaticZone,
+        filter: Box<crate::program::ObjectFilter>,
+        loyalty_only: bool,
+    },
     InheritExiledCreatureAbilities,
     /// Grant an independent tap ability that adds one mana of any color.
     GrantAnyColorMana,
@@ -1395,9 +1452,11 @@ impl StaticPart {
             Self::Type(_) | Self::TypeWithSubtypes { .. } => CharacteristicBucket::Type,
             Self::Color(_) => CharacteristicBucket::Color,
             Self::InheritCounteredCreatureAbilities
+            | Self::InheritZoneAbilities { .. }
             | Self::InheritExiledCreatureAbilities
             | Self::GrantActivated(_)
             | Self::GrantActivatedRestricted { .. }
+            | Self::GrantLoyalty { .. }
             | Self::GrantTrigger(_)
             | Self::GrantAnyColorMana
             | Self::GrantFixedColorMana(_)
@@ -1739,7 +1798,8 @@ impl ResolvedPartsSpec {
                     .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
             }
             if let ResolvedPartSpec::GrantActivated(ability)
-            | ResolvedPartSpec::GrantActivatedRestricted { ability, .. } = part
+            | ResolvedPartSpec::GrantActivatedRestricted { ability, .. }
+            | ResolvedPartSpec::GrantLoyalty { ability, .. } = part
             {
                 if !ability.mana_cost.valid() {
                     return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
@@ -2002,6 +2062,15 @@ impl ResolvedPartsSpec {
                     } => ResolvedPart::GrantActivatedRestricted {
                         ability: ability.clone(),
                         restriction: restriction.clone(),
+                    },
+                    ResolvedPartSpec::GrantLoyalty {
+                        ability,
+                        loyalty,
+                        variable_loyalty,
+                    } => ResolvedPart::GrantLoyalty {
+                        ability: ability.clone(),
+                        loyalty: *loyalty,
+                        variable_loyalty: *variable_loyalty,
                     },
                     ResolvedPartSpec::GrantAnyColorMana => ResolvedPart::GrantAnyColorMana,
                     ResolvedPartSpec::GrantFixedColorMana(color) => {
