@@ -807,6 +807,7 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
         | Instruction::SearchLibrary { .. }
         | Instruction::LookTopChoose { .. }
         | Instruction::LookTopChooseExt { .. }
+        | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatch { .. }
         | Instruction::RevealUntilMatchExt { .. } => true,
         _ => false,
@@ -822,7 +823,7 @@ fn try_group_affected_players(p: PlayerRefAst) -> Option<AffectedPlayers> {
     }
 }
 
-fn push_for_each_player(
+pub(super) fn push_for_each_player(
     players: AffectedPlayers,
     ops: Vec<Instruction>,
     builder: &mut BodyBuilder,
@@ -833,7 +834,7 @@ fn push_for_each_player(
     });
 }
 
-fn lower_affected_players_in_context(
+pub(super) fn lower_affected_players_in_context(
     p: PlayerRefAst,
     builder: &mut BodyBuilder,
     in_trigger: bool,
@@ -16681,7 +16682,36 @@ pub(super) fn lower_instruction(
             if let Ok(kind) = parse_choice_kind(cleaned, false, vocabulary) {
                 return emit_choice_for_player_ref(*chooser, kind, builder, ids, in_trigger);
             }
-            Err("oracle:unsupported-instruction")
+            interactive::try_lower_interactive_choose_from_group(
+                *chooser, cleaned, builder, vocabulary, ids, in_trigger,
+            )
+        }
+        InstructionAst::ChooseFromGroup {
+            count,
+            random,
+            group,
+        } => interactive::lower_choose_from_group(
+            PlayerRefAst::You,
+            count,
+            *random,
+            group,
+            builder,
+            vocabulary,
+            in_trigger,
+            bound_x,
+        ),
+        InstructionAst::PlayerChooseFromGroup {
+            chooser,
+            count,
+            random,
+            group,
+        } => interactive::lower_choose_from_group(
+            *chooser, count, *random, group, builder, vocabulary, in_trigger, bound_x,
+        ),
+        InstructionAst::PlayerChooseOption { chooser, options } => {
+            interactive::lower_player_choose_option(
+                *chooser, options, builder, vocabulary, ids, in_trigger,
+            )
         }
         InstructionAst::InteractiveChoice(InteractiveChoiceKind::SecretNumberChoice {
             min_value,
@@ -16836,8 +16866,17 @@ pub(super) fn lower_instruction(
                     return Ok(());
                 }
             }
-            let kind = parse_choice_kind(cleaned_choice, true, vocabulary)?;
-            emit_choice_for_player_ref(chooser_ref, kind, builder, ids, in_trigger)
+            if let Ok(kind) = parse_choice_kind(cleaned_choice, true, vocabulary) {
+                return emit_choice_for_player_ref(chooser_ref, kind, builder, ids, in_trigger);
+            }
+            interactive::try_lower_choose_option_ext(
+                chooser_ref,
+                cleaned_choice,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+            )
         }
         InstructionAst::Incubate { count } => {
             let amt = lower_value_expr_in_context(
@@ -25391,6 +25430,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
+        | Instruction::RevealTopTwoPiles { count: amount, .. }
         | Instruction::ModifyGroupByAmount { amount, .. }
         | Instruction::BoostTargetPower { amount, .. } => value_expr_uses_chosen_x(amount),
         Instruction::SelectZoneCardsToZone { min, max, .. } => {
@@ -25580,6 +25620,7 @@ fn last_instruction_moved_object(ops: &[Instruction]) -> bool {
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::LookTopChoose { .. }
                 | Instruction::LookTopChooseExt { .. }
+                | Instruction::RevealTopTwoPiles { .. }
                 | Instruction::ExileGroupFromZone { .. }
                 | Instruction::ExileFromZone { .. }
                 | Instruction::ExileChosenPermanents { .. }
@@ -29694,12 +29735,12 @@ fn parse_card_type_choice_list(cleaned: &str) -> Option<Vec<CardType>> {
     (types.len() >= 2).then_some(types)
 }
 
-enum ParsedChoiceKind {
+pub(super) enum ParsedChoiceKind {
     Domain(spellwake_engine::program::ResolutionChoiceDomain),
     CreatureType { excluding: BTreeSet<CreatureTypeId> },
 }
 
-fn parse_choice_kind(
+pub(super) fn parse_choice_kind(
     cleaned_choice: &str,
     allow_arbitrary_or_labels: bool,
     vocabulary: &CreatureTypeVocabulary,
@@ -29874,7 +29915,7 @@ fn choice_domain_to_player_option_branches(
     )
 }
 
-fn emit_choice_for_player_ref(
+pub(super) fn emit_choice_for_player_ref(
     chooser: PlayerRefAst,
     kind: ParsedChoiceKind,
     builder: &mut BodyBuilder,
@@ -33373,6 +33414,9 @@ fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             } => {
                 rewrite_chosen_to_loop_rp(library_owner);
                 rewrite_chosen_to_loop_rp(chooser);
+                rewrite_chosen_to_loop_ve(count);
+            }
+            Instruction::RevealTopTwoPiles { count, .. } => {
                 rewrite_chosen_to_loop_ve(count);
             }
             Instruction::OfferManaPayment { payer, .. } => {

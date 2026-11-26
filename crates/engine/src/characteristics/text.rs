@@ -879,6 +879,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
             }
+            Instruction::RevealTopTwoPiles { count, .. } => {
+                rewrite_amount(count);
+            }
             Instruction::CreateTokenCopyExt {
                 count,
                 extra_subtypes,

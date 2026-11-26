@@ -4,6 +4,10 @@
 //! Kept in a dedicated submodule with minimal single-line dispatch hooks in sibling files so
 //! wire-backed lowering evolves independently of zero-wire convergence passes.
 
+use super::instructions::{
+    emit_choice_for_player_ref, lower_affected_players_in_context, parse_choice_kind,
+    push_for_each_player,
+};
 use super::*;
 use spellwake_engine::mana::{
     AbilityManaClause, AbilitySpendKind, ManaOutputRestriction, ManaSpecialAction,
@@ -970,6 +974,360 @@ pub(super) fn unwrap_look_top_with_bind_x<'a>(
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Fuse `LookTopLibrary` (or `BindX([LookTopLibrary])`) + `SeparateIntoPiles(2)`
+/// (+ optional `ChoosePile`) + `ChooseAndKeep("one pile" | "that pile", keep_to, rest_to)`
+/// into [`Instruction::RevealTopTwoPiles`].
+pub(super) fn try_fuse_two_pile_split(
+    ins: &[InstructionAst],
+    i: usize,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Option<usize> {
+    let (_, library, count, eff_bound_x) = unwrap_look_top_with_bind_x(&ins[i], bound_x)?;
+    let lib_low = library.trim().to_ascii_lowercase();
+    if !matches!(
+        lib_low.as_str(),
+        "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" | "your library" | "library"
+    ) {
+        return None;
+    }
+    let sep_idx = i + 1;
+    let InstructionAst::SeparateIntoPiles {
+        chooser: divider,
+        pile_count: 2,
+        ..
+    } = ins.get(sep_idx)?
+    else {
+        return None;
+    };
+    let (controller_divides, target_opponent) = match divider {
+        PlayerRefAst::You => (true, false),
+        PlayerRefAst::AnyOpponent => (false, false),
+        PlayerRefAst::TargetOpponent => (false, true),
+        PlayerRefAst::ThatPlayer => (false, false),
+        _ => return None,
+    };
+    let mut cursor = sep_idx + 1;
+    if let Some(InstructionAst::ChoosePile { chooser: taker }) = ins.get(cursor) {
+        let expected_ok = if controller_divides {
+            matches!(
+                taker,
+                PlayerRefAst::AnyOpponent | PlayerRefAst::TargetOpponent | PlayerRefAst::ThatPlayer
+            )
+        } else {
+            matches!(taker, PlayerRefAst::You)
+        };
+        if !expected_ok {
+            return None;
+        }
+        cursor += 1;
+    }
+    let InstructionAst::ChooseAndKeep {
+        pick,
+        keep_to,
+        rest_to,
+    } = ins.get(cursor)?
+    else {
+        return None;
+    };
+    let pick_low = pick.trim().to_ascii_lowercase();
+    if !matches!(
+        pick_low.as_str(),
+        "one pile" | "that pile" | "one of those piles" | "the chosen pile" | "a pile"
+    ) {
+        return None;
+    }
+    let chosen_dest = parse_two_pile_keep_dest(keep_to)?;
+    let other_dest = parse_two_pile_rest_dest(rest_to)?;
+    let cnt = lower_value_expr_in_context(
+        resolve_x(count, eff_bound_x),
+        builder,
+        in_trigger,
+        vocabulary,
+    )
+    .ok()?;
+    if target_opponent {
+        let mut probe = builder.clone();
+        probe.bind_target(BodyTarget::SingleOpponent).ok()?;
+        *builder = probe;
+    }
+    builder.instructions.push(Instruction::RevealTopTwoPiles {
+        count: cnt,
+        controller_divides,
+        target_opponent,
+        chosen_dest,
+        other_dest,
+    });
+    Some(cursor - i + 1)
+}
+
+fn parse_two_pile_keep_dest(keep_to: &str) -> Option<spellwake_engine::program::LookTopKeepDest> {
+    let low = keep_to.trim().to_ascii_lowercase();
+    if low.contains("hand") {
+        Some(spellwake_engine::program::LookTopKeepDest::Hand)
+    } else if low.contains("battlefield") {
+        Some(spellwake_engine::program::LookTopKeepDest::Battlefield {
+            tapped: low.contains("tapped"),
+            attacking: low.contains("attacking"),
+        })
+    } else if low.contains("graveyard") {
+        Some(spellwake_engine::program::LookTopKeepDest::Graveyard)
+    } else if low.contains("exile") {
+        Some(spellwake_engine::program::LookTopKeepDest::Exile {
+            playable: low.contains("play") || low.contains("cast"),
+            duration: ResolvedDuration::NoStatedDuration,
+        })
+    } else if !low.contains("bottom") && low.contains("top") {
+        Some(spellwake_engine::program::LookTopKeepDest::LibraryTop)
+    } else {
+        None
+    }
+}
+
+fn parse_two_pile_rest_dest(rest_to: &str) -> Option<spellwake_engine::program::LookTopRestDest> {
+    let low = rest_to.trim().to_ascii_lowercase();
+    if low.contains("graveyard") {
+        Some(spellwake_engine::program::LookTopRestDest::Graveyard)
+    } else if low.contains("exile") {
+        Some(spellwake_engine::program::LookTopRestDest::Exile)
+    } else if low.contains("hand") {
+        Some(spellwake_engine::program::LookTopRestDest::Hand)
+    } else if low.contains("bottom") {
+        if low.contains("random") {
+            Some(spellwake_engine::program::LookTopRestDest::BottomRandom)
+        } else {
+            Some(spellwake_engine::program::LookTopRestDest::BottomOrder)
+        }
+    } else if low.contains("top") {
+        Some(spellwake_engine::program::LookTopRestDest::TopOrder)
+    } else {
+        None
+    }
+}
+
+/// Lower `InstructionAst::ChooseFromGroup` / `PlayerChooseFromGroup` for announcement target
+/// bindings and player selection domains.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_choose_from_group(
+    chooser: PlayerRefAst,
+    count: &ValueExprAst,
+    random: bool,
+    group: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<(), &'static str> {
+    if random {
+        return Err("oracle:unsupported-instruction");
+    }
+    let _ = (in_trigger, bound_x);
+    if chooser == PlayerRefAst::You {
+        match group {
+            SubjectRefAst::TargetObject {
+                count: TargetCountAst::Exact(1) | TargetCountAst::UpTo(1),
+                ..
+            } if matches!(count, ValueExprAst::Const(1)) => {
+                let bt = lower_target_subject(group, vocabulary)?;
+                builder.bind_target(bt)?;
+                return Ok(());
+            }
+            SubjectRefAst::Player(PlayerRefAst::AnyOpponent)
+                if matches!(count, ValueExprAst::Const(1)) =>
+            {
+                builder.instructions.push(Instruction::ChooseValue {
+                    chooser: ResolvingPlayer::Controller,
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                        opponents_only: true,
+                    },
+                });
+                return Ok(());
+            }
+            SubjectRefAst::Player(PlayerRefAst::AnyPlayer)
+                if matches!(count, ValueExprAst::Const(1)) =>
+            {
+                builder.instructions.push(Instruction::ChooseValue {
+                    chooser: ResolvingPlayer::Controller,
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                        opponents_only: false,
+                    },
+                });
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    Err("oracle:unsupported-instruction")
+}
+
+/// Lower `InstructionAst::PlayerChooseOption { chooser, options }` into `ChooseValue` /
+/// `ChooseOptionForPlayers` / `ChooseCreatureType`.
+pub(super) fn lower_player_choose_option(
+    chooser: PlayerRefAst,
+    options: &[String],
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    if options.is_empty() {
+        return Err("oracle:unsupported-choose-option");
+    }
+    if options.len() == 1 {
+        let cleaned = options[0].trim().trim_end_matches('.').to_ascii_lowercase();
+        let cleaned = cleaned.strip_prefix("choose ").unwrap_or(&cleaned).trim();
+        return try_lower_choose_option_ext(chooser, cleaned, builder, vocabulary, ids, in_trigger);
+    }
+    if options.len() <= 20 {
+        let domain =
+            spellwake_engine::program::ResolutionChoiceDomain::LabeledOption(options.to_vec());
+        return emit_domain_for_player_ref(chooser, domain, builder, in_trigger);
+    }
+    Err("oracle:unsupported-choose-option")
+}
+
+/// Extended fallback for `InstructionAst::ChooseOption` and `PlayerChooseOption`.
+pub(super) fn try_lower_choose_option_ext(
+    chooser: PlayerRefAst,
+    cleaned: &str,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::program::ResolutionChoiceDomain;
+    if let Ok(kind) = parse_choice_kind(cleaned, true, vocabulary) {
+        return emit_choice_for_player_ref(chooser, kind, builder, ids, in_trigger);
+    }
+    let domain = match cleaned {
+        "a number" | "number" => ResolutionChoiceDomain::Number { min: 0, max: 20 },
+        "secretly choose 1, 2, or 3" | "1, 2, or 3" => {
+            ResolutionChoiceDomain::Number { min: 1, max: 3 }
+        }
+        "a creature card name"
+        | "a card name other than a basic land card name"
+        | "a nonbasic land card name" => ResolutionChoiceDomain::CardName { nonland_only: true },
+        "a land type" => ResolutionChoiceDomain::BasicLandType,
+        "land or nonland" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["land".to_owned(), "nonland".to_owned()])
+        }
+        "a creature type"
+            if matches!(
+                chooser,
+                PlayerRefAst::EachPlayer
+                    | PlayerRefAst::EachOpponent
+                    | PlayerRefAst::EachOtherPlayer
+            ) =>
+        {
+            // Each player choosing a creature type uses a deterministic labeled choice if needed;
+            // only controller currently has a dedicated CreatureTypeSlot.
+            return Err("oracle:unsupported-choose-option");
+        }
+        other => {
+            if chooser == PlayerRefAst::You
+                && let Some(target_raw) = other
+                    .strip_prefix("another ")
+                    .filter(|rest| rest.starts_with("target "))
+                && let Ok(mut subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
+                    target_raw,
+                    &cached_compiler_vocab(vocabulary),
+                )
+            {
+                if let SubjectRefAst::TargetObject { filter, .. } = &mut subj {
+                    filter.flags = filter
+                        .flags
+                        .union(spellwake_oracle_compiler::ast::ObjectFilterFlags::EXCLUDE_SELF);
+                }
+                let bt = lower_target_subject(&subj, vocabulary)?;
+                builder.bind_target(bt)?;
+                return Ok(());
+            }
+            return Err("oracle:unsupported-choose-option");
+        }
+    };
+    emit_domain_for_player_ref(chooser, domain, builder, in_trigger)
+}
+
+/// Extended fallback for `InstructionAst::InteractiveChoice(ChooseFromGroup { chooser, description })`.
+pub(super) fn try_lower_interactive_choose_from_group(
+    chooser: PlayerRefAst,
+    cleaned: &str,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    if chooser == PlayerRefAst::You
+        && (cleaned.starts_with("target ") || cleaned.starts_with("another target "))
+    {
+        let (is_another, target_raw) = match cleaned.strip_prefix("another ") {
+            Some(rest) => (true, rest),
+            None => (false, cleaned),
+        };
+        if let Ok(mut subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
+            target_raw,
+            &cached_compiler_vocab(vocabulary),
+        ) {
+            if is_another && let SubjectRefAst::TargetObject { filter, .. } = &mut subj {
+                filter.flags = filter
+                    .flags
+                    .union(spellwake_oracle_compiler::ast::ObjectFilterFlags::EXCLUDE_SELF);
+            }
+            if let Ok(bt) = lower_target_subject(&subj, vocabulary) {
+                builder.bind_target(bt)?;
+                return Ok(());
+            }
+        }
+    }
+    try_lower_choose_option_ext(chooser, cleaned, builder, vocabulary, ids, in_trigger)
+        .map_err(|_| "oracle:unsupported-instruction")
+}
+
+fn emit_domain_for_player_ref(
+    chooser: PlayerRefAst,
+    domain: spellwake_engine::program::ResolutionChoiceDomain,
+    builder: &mut BodyBuilder,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    match chooser {
+        PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent | PlayerRefAst::EachOtherPlayer => {
+            let players = lower_affected_players_in_context(chooser, builder, in_trigger)?;
+            push_for_each_player(
+                players,
+                vec![Instruction::ChooseValue {
+                    chooser: ResolvingPlayer::LoopPlayer,
+                    domain,
+                }],
+                builder,
+            );
+            Ok(())
+        }
+        PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer => {
+            builder.instructions.push(Instruction::ChooseValue {
+                chooser: ResolvingPlayer::Controller,
+                domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                    opponents_only: chooser == PlayerRefAst::AnyOpponent,
+                },
+            });
+            builder.instructions.push(Instruction::ChooseValue {
+                chooser: ResolvingPlayer::ChosenPlayer,
+                domain,
+            });
+            Ok(())
+        }
+        other => {
+            let rp = lower_resolving_player_in_context(other, builder, in_trigger)?;
+            builder.instructions.push(Instruction::ChooseValue {
+                chooser: rp,
+                domain,
+            });
+            Ok(())
+        }
     }
 }
 

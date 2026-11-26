@@ -5377,6 +5377,7 @@ impl EffectWindow {
                 | Instruction::LookTopOneRestBottom { .. }
                 | Instruction::LookTopChoose { .. }
                 | Instruction::LookTopChooseExt { .. }
+                | Instruction::RevealTopTwoPiles { .. }
                 | Instruction::RevealUntilMatch { .. }
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::LookTopCreatureSharingAttachedSubtype { .. }

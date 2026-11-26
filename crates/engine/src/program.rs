@@ -3929,6 +3929,17 @@ pub enum Instruction {
         rest_dest: LookTopRestDest,
         reveal_kept: bool,
     },
+    /// Reveal the top `count` cards of controller's library, separate them into two piles,
+    /// choose one pile, move it to `chosen_dest`, and move the other pile to `other_dest`.
+    /// When `controller_divides` is false, an opponent divides and controller chooses (Fact or Fiction / Atris).
+    /// When `controller_divides` is true, controller divides and an opponent chooses (Steam Augury).
+    RevealTopTwoPiles {
+        count: ValueExpr,
+        controller_divides: bool,
+        target_opponent: bool,
+        chosen_dest: LookTopKeepDest,
+        other_dest: LookTopRestDest,
+    },
     /// Generalized reveal-from-top-until-N-matching into `match_dest`, putting the rest into `rest_dest`.
     RevealUntilMatchExt {
         library_owner: ResolvingPlayer,
@@ -4128,6 +4139,7 @@ impl Instruction {
             | Self::UntapOrTapSelect { .. }
             | Self::MoveGraveyardGroupOwned { .. }
             | Self::LookTopChooseExt { .. }
+            | Self::RevealTopTwoPiles { .. }
             | Self::RevealUntilMatchExt { .. }
             | Self::CreateTokenCopyExt { .. }
             | Self::AttachPermanent { .. }
@@ -5100,6 +5112,11 @@ impl Instruction {
                     || is_target_player(*chooser)
                     || count.uses_target()
             }
+            Self::RevealTopTwoPiles {
+                count,
+                target_opponent,
+                ..
+            } => *target_opponent || count.uses_target(),
             Self::RevealUntilMatchExt {
                 library_owner,
                 chooser,
@@ -5911,6 +5928,7 @@ impl Instruction {
             | Self::UntapOrTapSelect { .. }
             | Self::MoveGraveyardGroupOwned { .. }
             | Self::LookTopChooseExt { .. }
+            | Self::RevealTopTwoPiles { .. }
             | Self::RevealUntilMatchExt { .. }
             | Self::CreateTokenCopyExt { .. }
             | Self::AttachPermanent { .. }
@@ -12016,6 +12034,25 @@ impl ExecutableBody {
                     let af = count.required_operand_family(self.target)?;
                     merge_family(merge_family(lf, cf)?, af)?
                 }
+                Instruction::RevealTopTwoPiles {
+                    count,
+                    target_opponent,
+                    ..
+                } => {
+                    count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                    facts.moved_library_cards = true;
+                    facts.definitely_checked_top = true;
+                    let tf = if *target_opponent {
+                        if self.target != BodyTarget::SingleOpponent {
+                            return Err(DefinitionError::OperandFamily);
+                        }
+                        Some(OperandFamily::Player)
+                    } else {
+                        None
+                    };
+                    let af = count.required_operand_family(self.target)?;
+                    merge_family(tf, af)?
+                }
                 Instruction::RevealUntilMatchExt {
                     library_owner,
                     chooser,
@@ -16299,6 +16336,7 @@ impl ExecutableBody {
                     | Instruction::UntapOrTapSelect { .. }
                     | Instruction::MoveGraveyardGroupOwned { .. }
                     | Instruction::LookTopChooseExt { .. }
+                    | Instruction::RevealTopTwoPiles { .. }
                     | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::CreateTokenCopyExt { .. }
                     | Instruction::AttachPermanent { .. }
@@ -20197,6 +20235,7 @@ impl Program {
                             | Instruction::Discover { .. }
                             | Instruction::CreateTokenCopyExt { .. }
                             | Instruction::LookTopChooseExt { .. }
+                            | Instruction::RevealTopTwoPiles { .. }
                             | Instruction::RevealUntilMatchExt { .. }
                             | Instruction::CreateTemporaryRule { .. }
                             | Instruction::BecomeCopy { .. }

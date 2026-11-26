@@ -1815,3 +1815,151 @@ fn populate_auto_resolves_singleton_prompts_on_multiple_and_rejects_invalid_atom
         .count();
     assert_eq!(token_count, 3);
 }
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn reveal_top_two_piles_fact_or_fiction_and_steam_augury_round_trip_and_reject_invalid_atomically()
+{
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::{
+        object_identity::ObjectZone,
+        program::{LookTopKeepDest, LookTopRestDest, ValueExpr},
+    };
+
+    // Steam Augury mode: controller (A) divides top 3 cards into two piles, opponent (B) chooses a pile
+    // -> chosen pile goes to A's hand, other pile goes to A's graveyard.
+    let steam_augury = instant(
+        BodyTarget::None,
+        vec![Instruction::RevealTopTwoPiles {
+            count: ValueExpr::Literal(3.into()),
+            controller_divides: true,
+            target_opponent: false,
+            chosen_dest: LookTopKeepDest::Hand,
+            other_dest: LookTopRestDest::Graveyard,
+        }],
+    );
+    let vanilla = || Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, steam_augury),
+        card(2, A, ObjectDestination::LibraryTop, vanilla()),
+        card(3, A, ObjectDestination::LibraryTop, vanilla()),
+        card(4, A, ObjectDestination::LibraryTop, vanilla()),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let divide_pending = resolve(&cast);
+
+    // Controller A divides the 3 revealed cards.
+    let dec = divide_pending.pending_decision().expect("divide decision");
+    assert_eq!(dec.chooser(), A);
+    let RuleFrame::RevealedPiles(frame) = dec.frame() else {
+        panic!("expected RevealedPiles divide frame");
+    };
+    let spellwake_engine::effects::PileChoice::Divide(cards) = frame.choice() else {
+        panic!("expected PileChoice::Divide");
+    };
+    assert_eq!(cards.len(), 3);
+    let first_pile = vec![cards[0]];
+
+    // Atomic rejection of out-of-domain card in Divide.
+    let mut view_a = scope(&divide_pending, viewer_a());
+    let snap_a = super::projection::project_test(&mut view_a).unwrap();
+    assert_eq!(snap_a.decisions.len(), 1);
+    assert_eq!(snap_a.decisions[0].kind, DecisionKind::LibrarySearch);
+    assert!(matches!(
+        snap_a.decisions[0].domain,
+        PlayerDomain::LibrarySearch {
+            mode: crate::player_wire::PlayerSearchMode::DividePile,
+            ..
+        }
+    ));
+    let dec_handle_a = view_a.issue(NativeReference::Decision(dec.id())).unwrap();
+    // Atomic rejection of out-of-domain object (e.g., an object not among the 3 revealed cards).
+    let bad_obj = view_a
+        .issue(NativeReference::Object(object(&divide_pending, 1)))
+        .unwrap();
+    let bad_divide = command(
+        &view_a,
+        PlayerAction::Choose {
+            decision: dec_handle_a,
+            response: PlayerChoice::Objects {
+                objects: vec![bad_obj],
+            },
+        },
+    );
+    let _ = rejected_proposal(&view_a, &bad_divide);
+
+    let take_pending = reply(
+        &divide_pending,
+        |v| PlayerChoice::Objects {
+            objects: vec![v.issue(NativeReference::Object(first_pile[0])).unwrap()],
+        },
+        DecisionReply::SelectResolution(first_pile.clone()),
+    );
+
+    // Opponent B chooses pile 1 or pile 2.
+    let take_dec = take_pending.pending_decision().expect("take decision");
+    assert_eq!(take_dec.chooser(), B);
+    let mut view_b = scope(&take_pending, viewer_b());
+    let dec_handle_b = view_b
+        .issue(NativeReference::Decision(take_dec.id()))
+        .unwrap();
+    // Atomic rejection of invalid pile index 3.
+    let bad_pile = command(
+        &view_b,
+        PlayerAction::Choose {
+            decision: dec_handle_b,
+            response: PlayerChoice::Number { value: 3.into() },
+        },
+    );
+    let _ = rejected_proposal(&view_b, &bad_pile);
+
+    // Legal reply: B chooses pile 1 (1 card -> A's hand; 2 cards -> A's graveyard).
+    let after_take = bridged(&take_pending, viewer_b(), |v| PlayerAction::Choose {
+        decision: v.issue(NativeReference::Decision(take_dec.id())).unwrap(),
+        response: PlayerChoice::Number { value: 1.into() },
+    });
+    // Complete graveyard ordering if 2 cards enter graveyard simultaneously.
+    let done = if let Some(order_dec) = after_take.pending_decision() {
+        let RuleFrame::RevealedPiles(ord_frame) = order_dec.frame() else {
+            panic!("expected graveyard order frame");
+        };
+        let spellwake_engine::effects::PileChoice::GraveyardOrder(gy_cards) = ord_frame.choice()
+        else {
+            panic!("expected PileChoice::GraveyardOrder");
+        };
+        let gy_vec = gy_cards.clone();
+        reply(
+            &after_take,
+            |v| PlayerChoice::Ordering {
+                ordered: gy_vec
+                    .iter()
+                    .map(|id| v.issue(NativeReference::Object(*id)).unwrap())
+                    .collect(),
+            },
+            DecisionReply::OrderResolutionGraveyard(gy_vec.clone()),
+        )
+    } else {
+        after_take
+    };
+    let hand_count = done
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(A))
+        .count();
+    let gy_count = done
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Graveyard(A))
+        .count();
+    assert_eq!(hand_count, 1);
+    assert!(gy_count >= 2);
+}

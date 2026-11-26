@@ -19956,6 +19956,13 @@ pub(super) fn lower_instruction_seq(
                 }
             }
         }
+        // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + SeparateIntoPiles (+ optional ChoosePile) + ChooseAndKeep("one pile"/"that pile") -> RevealTopTwoPiles
+        if let Some(consumed) =
+            interactive::try_fuse_two_pile_split(ins, i, builder, vocabulary, in_trigger, bound_x)
+        {
+            i += consumed;
+            continue;
+        }
         // Fuse LookTopLibrary (or BindX([LookTopLibrary])) + ChooseAndKeep (e.g. Anticipate, Impulse, Worldly Counsel, Thassa's Oracle, Memory Deluge)
         if i + 1 < ins.len()
             && let Some((reveal_val, library, count, eff_bound_x)) =
@@ -20032,11 +20039,21 @@ pub(super) fn lower_instruction_seq(
                     | "up to two"
                     | "up to two of them"
                     | "two of those cards"
+                    | "up to two of those cards"
                     | "up to two cards from among them" => Some(2),
-                    "three" | "3" | "three of them" | "up to three" | "up to three of them" => {
-                        Some(3)
-                    }
-                    "four" | "4" | "four of them" | "up to four" | "up to four of them" => Some(4),
+                    "three"
+                    | "3"
+                    | "three of them"
+                    | "three of those cards"
+                    | "up to three"
+                    | "up to three of them"
+                    | "up to three of those cards" => Some(3),
+                    "four"
+                    | "4"
+                    | "four of them"
+                    | "four of those cards"
+                    | "up to four"
+                    | "up to four of them" => Some(4),
                     _ => None,
                 };
                 let (take_all_matching, max_picks, filter_opt): (
@@ -20050,9 +20067,11 @@ pub(super) fn lower_instruction_seq(
                 } else if let Some(rest) = pick_low
                     .strip_prefix("all ")
                     .or_else(|| pick_low.strip_prefix("each "))
+                    .or_else(|| pick_low.strip_prefix("those "))
                 {
                     let cleaned = rest
                         .trim_end_matches(" revealed this way")
+                        .trim_end_matches(" from among them")
                         .trim_end_matches(" cards")
                         .trim_end_matches(" card")
                         .trim();
