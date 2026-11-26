@@ -639,6 +639,7 @@ native!(ExecutableBody, self, {
         | Instruction::AdditionalCombatAfterUntappingAttackers
         | Instruction::TakeExtraTurn
         | Instruction::PreventDamageThisTurn(_)
+        | Instruction::PreventDamageSpec(_)
         | Instruction::MoveGroup { .. }
         | Instruction::PutTargetInLibrary(_)
         | Instruction::PutOwnHandCardOnLibraryBottom
@@ -1510,6 +1511,7 @@ native!(RuleFrame, self, {
         | RuleFrame::AttackDirection(_)
         | RuleFrame::DrawReplacement(_)
         | RuleFrame::DamageRecipientChoice(_)
+        | RuleFrame::DamageSourceChoice(_)
         | RuleFrame::OpponentChoice(_)
         | RuleFrame::ReplacementChooser(_)
         | RuleFrame::MyriadDefender(_)
@@ -1562,6 +1564,7 @@ native!(EffectDecision, self, {
         | EffectDecision::AttackDirection(_)
         | EffectDecision::DrawReplacement(_)
         | EffectDecision::DamageRecipientChoice(_)
+        | EffectDecision::DamageSourceChoice(_)
         | EffectDecision::OpponentChoice(_)
         | EffectDecision::ReplacementChooser(_)
         | EffectDecision::MyriadDefender(_)
@@ -1675,6 +1678,7 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::AttackDirection(_)
         | DecisionReply::DrawReplacement(_)
         | DecisionReply::ChooseDamageRecipient(_)
+        | DecisionReply::ChooseDamageSource(_)
         | DecisionReply::OpponentChoice(_)
         | DecisionReply::ReplacementChooser(_)
         | DecisionReply::MyriadDefender(_)
@@ -2037,6 +2041,7 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::DamageReplacedWithMill { .. }
         | RulesOccurrence::StaticDamageMultiplied { .. }
         | RulesOccurrence::TurnPreventionCreated { .. }
+        | RulesOccurrence::TurnPreventionSpecCreated { .. }
         | RulesOccurrence::TurnDamagePrevented { .. }
         | RulesOccurrence::RegenerationShieldCreated { .. }
         | RulesOccurrence::PermanentRegenerated { .. }

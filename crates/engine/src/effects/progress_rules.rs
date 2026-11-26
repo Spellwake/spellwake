@@ -3356,11 +3356,13 @@ impl EffectWindow {
                     TemporaryRuleKind::PreventAllCombatDamage => {
                         self.damage_state.turn_preventions.insert(
                             (entry.id(), index),
-                            (
-                                entry.controller(),
-                                crate::damage::TurnPreventionFilter::Combat,
-                                None,
-                            ),
+                            crate::damage::ActiveTurnPrevention {
+                                controller: entry.controller(),
+                                kind: crate::damage::ActiveTurnPreventionKind::Legacy {
+                                    filter: crate::damage::TurnPreventionFilter::Combat,
+                                    protected_source: None,
+                                },
+                            },
                         );
                     }
                     TemporaryRuleKind::ExileIfDies { subject } => {
@@ -7831,9 +7833,16 @@ impl EffectWindow {
                     _ => None,
                 },
             };
-            self.damage_state
-                .turn_preventions
-                .insert((entry.id(), index), (entry.controller(), filter, source));
+            self.damage_state.turn_preventions.insert(
+                (entry.id(), index),
+                crate::damage::ActiveTurnPrevention {
+                    controller: entry.controller(),
+                    kind: crate::damage::ActiveTurnPreventionKind::Legacy {
+                        filter,
+                        protected_source: source,
+                    },
+                },
+            );
             self.emit_from(
                 crate::occurrence::EventCause::Instruction {
                     entry: entry.id(),
@@ -7849,6 +7858,189 @@ impl EffectWindow {
                             instruction: index,
                             controller: entry.controller(),
                             filter,
+                        },
+                    ])
+                },
+            )?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::PreventDamageSpec(spec) = instruction {
+            use crate::damage::{
+                ActiveTurnPrevention, ActiveTurnPreventionKind, DamageSourceId,
+                PreventionRecipientSpec, PreventionSourceSpec, ResolvedPreventionRecipient,
+                ResolvedPreventionSource,
+            };
+            let ability_source_id = match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                _ => None,
+            };
+            let resolved_source = match &spec.source {
+                PreventionSourceSpec::Any => ResolvedPreventionSource::Any,
+                PreventionSourceSpec::AbilitySource => {
+                    let id = ability_source_id.ok_or(EffectError::InconsistentProgram)?;
+                    ResolvedPreventionSource::ExactSources(BTreeSet::from([
+                        DamageSourceId::Object(id),
+                    ]))
+                }
+                PreventionSourceSpec::TargetPermanent => {
+                    let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    ResolvedPreventionSource::ExactSources(BTreeSet::from([
+                        DamageSourceId::Object(target),
+                    ]))
+                }
+                PreventionSourceSpec::TargetSpell => {
+                    let TargetRef::Stack(target_entry_id) =
+                        self.instruction_target(entry)?.choice().target
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let mut sources = BTreeSet::new();
+                    if let Some(target_entry) = self
+                        .window
+                        .entries()
+                        .iter()
+                        .find(|e| e.id() == target_entry_id)
+                    {
+                        match target_entry.kind() {
+                            StackKind::CardSpell(obj_id) => {
+                                sources.insert(DamageSourceId::Object(*obj_id));
+                            }
+                            StackKind::SpellCopy { .. } => {
+                                sources.insert(DamageSourceId::SpellCopy(target_entry_id));
+                            }
+                            _ => return Err(EffectError::InconsistentProgram),
+                        }
+                    }
+                    if sources.is_empty() {
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    }
+                    ResolvedPreventionSource::ExactSources(sources)
+                }
+                PreventionSourceSpec::AllPermanentTargets => {
+                    let selected: BTreeSet<DamageSourceId> = self
+                        .legal_permanent_targets()?
+                        .into_iter()
+                        .map(DamageSourceId::Object)
+                        .collect();
+                    if selected.is_empty() {
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    }
+                    ResolvedPreventionSource::ExactSources(selected)
+                }
+                PreventionSourceSpec::ChosenSource(filter) => {
+                    let Some(chosen) = self
+                        .resolution_cursor_mut()
+                        .and_then(|cursor| cursor.chosen_damage_source.take())
+                    else {
+                        let sources = self.legal_damage_sources(*filter)?;
+                        if sources.is_empty() {
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        let frame = EffectDecision::DamageSourceChoice(DamageSourceChoiceFrame {
+                            revision: self.revision,
+                            entry: entry.id(),
+                            instruction: index,
+                            chooser: entry.controller(),
+                            sources,
+                        });
+                        return Ok(StepOutcome::Pending(frame));
+                    };
+                    ResolvedPreventionSource::ExactSources(BTreeSet::from([chosen]))
+                }
+                PreventionSourceSpec::ChosenColor => {
+                    let Some(mana_type) = self
+                        .resolution_cursor_mut()
+                        .and_then(|cursor| cursor.chosen_effect_color.take())
+                    else {
+                        let frame =
+                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                                revision: self.revision,
+                                entry: entry.id(),
+                                instruction: index,
+                                chooser: entry.controller(),
+                                colors: mana_domains::colored_mana(),
+                                split: None,
+                            });
+                        return Ok(StepOutcome::Pending(frame));
+                    };
+                    let color = mana_type
+                        .color()
+                        .ok_or(EffectError::SelectionOutsideDomain)?;
+                    ResolvedPreventionSource::Color(color)
+                }
+                PreventionSourceSpec::Filter(filter) => ResolvedPreventionSource::Filter(*filter),
+                PreventionSourceSpec::CreaturesOtherThanTarget => {
+                    let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    ResolvedPreventionSource::CreaturesOtherThan(target)
+                }
+                PreventionSourceSpec::CreaturesOtherThanAbilitySource => {
+                    let id = ability_source_id.ok_or(EffectError::InconsistentProgram)?;
+                    ResolvedPreventionSource::CreaturesOtherThan(id)
+                }
+            };
+            let resolved_recipient = match spec.recipient {
+                PreventionRecipientSpec::Any => ResolvedPreventionRecipient::Any,
+                PreventionRecipientSpec::Controller => ResolvedPreventionRecipient::Controller,
+                PreventionRecipientSpec::ControllerAndControlledCreatures => {
+                    ResolvedPreventionRecipient::ControllerAndControlledCreatures
+                }
+                PreventionRecipientSpec::ControllerAndControlledPermanents => {
+                    ResolvedPreventionRecipient::ControllerAndControlledPermanents
+                }
+                PreventionRecipientSpec::ControlledCreatures => {
+                    ResolvedPreventionRecipient::ControlledCreatures
+                }
+                PreventionRecipientSpec::AllPlayers => ResolvedPreventionRecipient::AllPlayers,
+                PreventionRecipientSpec::AllCreatures => ResolvedPreventionRecipient::AllCreatures,
+                PreventionRecipientSpec::AbilitySource => {
+                    let id = ability_source_id.ok_or(EffectError::InconsistentProgram)?;
+                    ResolvedPreventionRecipient::ExactTarget(TargetRef::Object(id))
+                }
+                PreventionRecipientSpec::Target => {
+                    let target = self.instruction_target(entry)?.choice().target;
+                    ResolvedPreventionRecipient::ExactTarget(target)
+                }
+            };
+            let before = self.rules_snapshot(None)?;
+            self.damage_state.turn_preventions.insert(
+                (entry.id(), index),
+                ActiveTurnPrevention {
+                    controller: entry.controller(),
+                    kind: ActiveTurnPreventionKind::Spec {
+                        combat_only: spec.combat_only,
+                        source: resolved_source,
+                        recipient: resolved_recipient,
+                        both_directions: spec.both_directions,
+                    },
+                },
+            );
+            self.emit_from(
+                crate::occurrence::EventCause::Instruction {
+                    entry: entry.id(),
+                    instruction: index,
+                },
+                &before,
+                None,
+                ctx.append,
+                |_, _, _| {
+                    Ok(vec![
+                        crate::occurrence::RulesOccurrence::TurnPreventionSpecCreated {
+                            creator: entry.id(),
+                            instruction: index,
+                            controller: entry.controller(),
+                            spec: spec.clone(),
                         },
                     ])
                 },
@@ -9319,6 +9511,48 @@ impl EffectWindow {
                         selected.into_iter().collect(),
                         ctx.append,
                     )?;
+                }
+                crate::program::PermanentTargetAction::PreventDamageThisTurn {
+                    combat_only,
+                    both_directions,
+                } => {
+                    if !selected.is_empty() {
+                        let before = self.rules_snapshot(None)?;
+                        let sources: BTreeSet<crate::damage::DamageSourceId> = selected
+                            .into_iter()
+                            .map(crate::damage::DamageSourceId::Object)
+                            .collect();
+                        let spec = Box::new(crate::damage::TurnPreventionSpec {
+                            combat_only: *combat_only,
+                            source: crate::damage::PreventionSourceSpec::AllPermanentTargets,
+                            recipient: crate::damage::PreventionRecipientSpec::Any,
+                            both_directions: *both_directions,
+                        });
+                        self.damage_state.turn_preventions.insert(
+                            (entry.id(), index),
+                            crate::damage::ActiveTurnPrevention {
+                                controller: entry.controller(),
+                                kind: crate::damage::ActiveTurnPreventionKind::Spec {
+                                    combat_only: *combat_only,
+                                    source: crate::damage::ResolvedPreventionSource::ExactSources(
+                                        sources,
+                                    ),
+                                    recipient: crate::damage::ResolvedPreventionRecipient::Any,
+                                    both_directions: *both_directions,
+                                },
+                            },
+                        );
+                        self.emit_from(cause, &before, None, ctx.append, |_, _, _| {
+                            Ok(vec![
+                                crate::occurrence::RulesOccurrence::TurnPreventionSpecCreated {
+                                    creator: entry.id(),
+                                    instruction: index,
+                                    controller: entry.controller(),
+                                    spec: spec.clone(),
+                                },
+                            ])
+                        })?;
+                    }
                 }
                 crate::program::PermanentTargetAction::PutCounters { kind, amount } => {
                     let resolved = self.resolve_value_expr(entry.controller(), amount)?;

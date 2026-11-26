@@ -1026,6 +1026,12 @@ pub enum RulesOccurrence {
         controller: SeatId,
         filter: crate::damage::TurnPreventionFilter,
     },
+    TurnPreventionSpecCreated {
+        creator: StackEntryId,
+        instruction: usize,
+        controller: SeatId,
+        spec: Box<crate::damage::TurnPreventionSpec>,
+    },
     /// Damage prevented by a persistent source-independent emblem.
     EmblemDamagePrevented {
         emblem: crate::emblem::EmblemId,

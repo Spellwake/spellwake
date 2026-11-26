@@ -805,6 +805,7 @@ pub enum EffectDecision {
     AttackDirection(AttackDirectionFrame),
     OpponentChoice(OpponentChoiceFrame),
     DamageRecipientChoice(DamageRecipientChoiceFrame),
+    DamageSourceChoice(DamageSourceChoiceFrame),
     DrawReplacement(DrawReplacementFrame),
     LoyaltyRemoval(LoyaltyRemovalChoice),
     CastRecovery(CastRecoveryFrame),
@@ -851,6 +852,7 @@ impl EffectDecision {
             Self::AttackDirection(f) => f.chooser,
             Self::OpponentChoice(f) => f.chooser,
             Self::DamageRecipientChoice(f) => f.chooser,
+            Self::DamageSourceChoice(f) => f.chooser,
             Self::DrawReplacement(f) => f.chooser,
             Self::LoyaltyRemoval(f) => f.chooser,
             Self::CastRecovery(f) => f.chooser(),
@@ -896,9 +898,9 @@ impl EffectDecision {
             | Self::OpponentChoice(_)
             | Self::UntapKeepTapped(_)
             | Self::LoyaltyRemoval(_) => EffectError::SelectionRequired,
-            Self::DamageRecipientChoice(_) | Self::LinkedAuraChoice(_) => {
-                EffectError::SelectionRequired
-            }
+            Self::DamageRecipientChoice(_)
+            | Self::DamageSourceChoice(_)
+            | Self::LinkedAuraChoice(_) => EffectError::SelectionRequired,
             Self::LinkedReturnOrder(_) => EffectError::TimestampOrderRequired,
             Self::EntryChoice(_) => EffectError::SelectionRequired,
             Self::TokenEntryChoice(_) | Self::TokenAuraChoice(_) => EffectError::SelectionRequired,
@@ -980,6 +982,7 @@ pub enum DecisionReply {
     AttackDirection(AttackDirection),
     OpponentChoice(SeatId),
     ChooseDamageRecipient(TargetRef),
+    ChooseDamageSource(crate::damage::DamageSourceId),
     DrawReplacement(DrawReplacementChoice),
     ChoosePile(u8),
     OptionIndex(u8),
@@ -1652,6 +1655,25 @@ impl DamageRecipientChoiceFrame {
         &self.recipients
     }
 }
+/// The resolving effect's non-targeted choice of a source of damage (CR 609.7a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DamageSourceChoiceFrame {
+    revision: u64,
+    entry: StackEntryId,
+    instruction: usize,
+    chooser: SeatId,
+    sources: Vec<crate::damage::DamageSourceId>,
+}
+impl DamageSourceChoiceFrame {
+    /// The controller selecting the damage source.
+    pub fn chooser(&self) -> SeatId {
+        self.chooser
+    }
+    /// Exact legal public damage sources available to the resolving instruction.
+    pub fn sources(&self) -> &[crate::damage::DamageSourceId] {
+        &self.sources
+    }
+}
 
 /// Select controlled permanents from which to remove one loyalty counter each.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2121,6 +2143,7 @@ impl Default for ResolutionResults {
 struct ResolutionCursor {
     chosen_opponent: Option<SeatId>,
     chosen_damage_recipient: Option<TargetRef>,
+    chosen_damage_source: Option<crate::damage::DamageSourceId>,
     damage_offer_opponents: Option<std::collections::VecDeque<SeatId>>,
     vowed_creatures: BTreeSet<ObjectId>,
     meld_pair: Option<[(ObjectId, Option<CardId>); 2]>,
@@ -7254,6 +7277,7 @@ impl EffectWindow {
                     revealed_piles: None,
                     chosen_opponent: None,
                     chosen_damage_recipient: None,
+                    chosen_damage_source: None,
                     damage_offer_opponents: None,
                     vowed_creatures: Default::default(),
                     meld_pair: None,
@@ -7399,6 +7423,7 @@ impl EffectWindow {
             revealed_piles: None,
             chosen_opponent: None,
             chosen_damage_recipient: None,
+            chosen_damage_source: None,
             damage_offer_opponents: None,
             vowed_creatures: Default::default(),
             meld_pair: None,
@@ -7523,6 +7548,13 @@ impl EffectWindow {
                 &mut append,
             )?
             .ok_or(EffectError::InconsistentProgram)?;
+        if destination == crate::program::PublicZoneDestination::Battlefield {
+            self.damage_state.propagate_permanent_spell_identity(
+                entry.id(),
+                movement.before.id(),
+                movement.after.id(),
+            );
+        }
         Ok(RuleProgress::new(
             self,
             RuleResult::Complete {
@@ -10542,6 +10574,7 @@ impl EffectWindow {
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::PutGroupOnLibraryBottom(_)

@@ -55,6 +55,7 @@ impl EffectWindow {
             revealed_piles: None,
             chosen_opponent: None,
             chosen_damage_recipient: None,
+            chosen_damage_source: None,
             damage_offer_opponents: None,
             vowed_creatures: Default::default(),
             meld_pair: None,

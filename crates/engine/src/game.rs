@@ -211,6 +211,7 @@ pub enum RuleFrame {
     DrawReplacement(crate::effects::DrawReplacementFrame),
     OpponentChoice(crate::effects::OpponentChoiceFrame),
     DamageRecipientChoice(crate::effects::DamageRecipientChoiceFrame),
+    DamageSourceChoice(crate::effects::DamageSourceChoiceFrame),
     LoyaltyRemoval(crate::effects::LoyaltyRemovalChoice),
     Combat(CombatDecision),
     Proliferate(crate::effects::ProliferateChoice),
@@ -256,6 +257,7 @@ impl RuleFrame {
             Self::DrawReplacement(f) => f.chooser,
             Self::OpponentChoice(f) => f.chooser(),
             Self::DamageRecipientChoice(f) => f.chooser(),
+            Self::DamageSourceChoice(f) => f.chooser(),
             Self::LoyaltyRemoval(f) => f.chooser(),
             Self::Combat(f) => f.chooser(),
             Self::Proliferate(f) => f.chooser(),
@@ -306,6 +308,7 @@ impl RuleFrame {
             Self::DamageRecipientChoice(f) => {
                 Some(EffectDecision::DamageRecipientChoice(f.clone()))
             }
+            Self::DamageSourceChoice(f) => Some(EffectDecision::DamageSourceChoice(f.clone())),
             Self::LoyaltyRemoval(f) => Some(EffectDecision::LoyaltyRemoval(f.clone())),
             Self::TransformOrder(f) => Some(EffectDecision::TransformOrder(f.clone())),
             Self::UntapKeepTapped(f) => Some(EffectDecision::UntapKeepTapped(f.clone())),
@@ -326,6 +329,7 @@ impl From<EffectDecision> for RuleFrame {
             EffectDecision::DrawReplacement(f) => Self::DrawReplacement(f),
             EffectDecision::OpponentChoice(f) => Self::OpponentChoice(f),
             EffectDecision::DamageRecipientChoice(f) => Self::DamageRecipientChoice(f),
+            EffectDecision::DamageSourceChoice(f) => Self::DamageSourceChoice(f),
             EffectDecision::LoyaltyRemoval(f) => Self::LoyaltyRemoval(f),
             EffectDecision::CastRecovery(f) => Self::CastRecovery(f),
             EffectDecision::LinkedAuraChoice(f) => Self::LinkedAuraChoice(f),

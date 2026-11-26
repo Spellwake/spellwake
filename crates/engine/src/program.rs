@@ -1406,6 +1406,11 @@ pub enum PermanentTargetAction {
     },
     /// Create a regeneration shield for each still-legal targeted permanent.
     Regenerate,
+    /// Prevent damage dealt by (and optionally to) each still-legal targeted permanent this turn.
+    PreventDamageThisTurn {
+        combat_only: bool,
+        both_directions: bool,
+    },
 }
 
 /// Position in the physical card owner's library.
@@ -2880,6 +2885,8 @@ pub enum Instruction {
     },
     /// Create a continuous damage-prevention effect lasting through this turn.
     PreventDamageThisTurn(crate::damage::TurnPreventionFilter),
+    /// Create a generalized until-end-of-turn damage prevention effect (including source/color choice and recipient/source scopes).
+    PreventDamageSpec(Box<crate::damage::TurnPreventionSpec>),
     /// The resolving controller takes a turn immediately after the current turn.
     TakeExtraTurn,
     /// Damage can't be prevented this turn (CR 101.2 / Skullcrack, Stomp, Flaring Pain).
@@ -4333,6 +4340,7 @@ impl Instruction {
             | Self::GainCastCardAbilities { .. }
             | Self::ExileCardsFromGraveyard { .. }
             | Self::PreventDamageThisTurn(..)
+            | Self::PreventDamageSpec(..)
             | Self::TakeExtraTurn
             | Self::DisallowDamagePreventionThisTurn
             | Self::GrantNoMaxHandSizeRestOfGame
@@ -4774,6 +4782,18 @@ impl Instruction {
                     | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                     | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget
             ),
+            Self::PreventDamageSpec(spec) => {
+                matches!(
+                    spec.source,
+                    crate::damage::PreventionSourceSpec::TargetPermanent
+                        | crate::damage::PreventionSourceSpec::TargetSpell
+                        | crate::damage::PreventionSourceSpec::AllPermanentTargets
+                        | crate::damage::PreventionSourceSpec::CreaturesOtherThanTarget
+                ) || matches!(
+                    spec.recipient,
+                    crate::damage::PreventionRecipientSpec::Target
+                )
+            }
             Self::OfferManaPayment { payer, .. } | Self::OfferDynamicManaPayment { payer, .. } => {
                 is_target_player(*payer)
             }
@@ -6019,6 +6039,7 @@ impl Instruction {
             | Self::DoublePowerToughness { .. }
             | Self::MillEachPlayer(_)
             | Self::PreventDamageThisTurn(_)
+            | Self::PreventDamageSpec(_)
             | Self::PhaseOut(_)
             | Self::PhaseOutObjects(_)
             | Self::ExileGraveyardTarget
@@ -6543,6 +6564,7 @@ impl Instruction {
                         | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
                         | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
                 )
+                | Self::PreventDamageSpec(_)
         )
     }
 }
@@ -7870,6 +7892,39 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     None
+                }
+                Instruction::PreventDamageSpec(spec) => {
+                    use crate::damage::{PreventionRecipientSpec, PreventionSourceSpec};
+                    let needs_source =
+                        matches!(
+                            spec.source,
+                            PreventionSourceSpec::AbilitySource
+                                | PreventionSourceSpec::CreaturesOtherThanAbilitySource
+                        ) || matches!(spec.recipient, PreventionRecipientSpec::AbilitySource);
+                    if needs_source && !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    let source_family = match spec.source {
+                        PreventionSourceSpec::TargetPermanent
+                        | PreventionSourceSpec::AllPermanentTargets
+                        | PreventionSourceSpec::CreaturesOtherThanTarget => {
+                            Some(OperandFamily::Permanent)
+                        }
+                        PreventionSourceSpec::TargetSpell => Some(OperandFamily::Spell),
+                        _ => None,
+                    };
+                    let recipient_family = match spec.recipient {
+                        PreventionRecipientSpec::Target => match self.target {
+                            BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            _ => Some(OperandFamily::DamageRecipient),
+                        },
+                        _ => None,
+                    };
+                    match (source_family, recipient_family) {
+                        (Some(_), Some(_)) => return Err(DefinitionError::InvalidInstruction),
+                        (Some(f), None) | (None, Some(f)) => Some(f),
+                        (None, None) => None,
+                    }
                 }
                 Instruction::TakeExtraTurn
                 | Instruction::DisallowDamagePreventionThisTurn
@@ -10431,6 +10486,7 @@ impl ExecutableBody {
                                 | PermanentTargetAction::Modify { .. }
                                 | PermanentTargetAction::ModifyWithPartner { .. }
                                 | PermanentTargetAction::Regenerate
+                                | PermanentTargetAction::PreventDamageThisTurn { .. }
                         )
                         && self.instructions.iter().all(|op| {
                             !matches!(op, Instruction::FixedTargetClause(_))
@@ -16158,6 +16214,7 @@ impl ExecutableBody {
                     | Instruction::DisallowDamagePreventionThisTurn
                     | Instruction::GrantNoMaxHandSizeRestOfGame
                     | Instruction::PreventDamageThisTurn(_)
+                    | Instruction::PreventDamageSpec(_)
                     | Instruction::MoveGroup { .. }
                     | Instruction::PutTargetInLibrary(_)
                     | Instruction::PutOwnHandCardOnLibraryBottom
@@ -19074,6 +19131,18 @@ impl Program {
                         | Instruction::PutCounterOnRelatedPermanent
                         | Instruction::PutCountersOnOtherCreatures
                         | Instruction::DamageFromPower(PowerDamageSource::AbilitySource) => true,
+                        Instruction::PreventDamageSpec(spec)
+                            if matches!(
+                                spec.source,
+                                crate::damage::PreventionSourceSpec::AbilitySource
+                                    | crate::damage::PreventionSourceSpec::CreaturesOtherThanAbilitySource
+                            ) || matches!(
+                                spec.recipient,
+                                crate::damage::PreventionRecipientSpec::AbilitySource
+                            ) =>
+                        {
+                            true
+                        }
                         Instruction::ModifyGroupByAmount { group, .. }
                         | Instruction::ModifyGroupUntilEndOfTurn { group, .. }
                         | Instruction::PutCountersOnSubject { subject: group, .. }
@@ -20089,6 +20158,7 @@ impl Program {
                             | Instruction::DisallowDamagePreventionThisTurn
                             | Instruction::GrantNoMaxHandSizeRestOfGame
                             | Instruction::PreventDamageThisTurn(_)
+                            | Instruction::PreventDamageSpec(_)
                             | Instruction::MoveGroup { .. }
                             | Instruction::PutTargetInLibrary(_)
                             | Instruction::PutOwnHandCardOnLibraryBottom

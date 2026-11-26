@@ -3180,6 +3180,7 @@ impl EffectWindow {
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::DoubleCountersOnTargets
             | Instruction::RemoveCreatureCounters { .. }
             | Instruction::UntapControlledLands

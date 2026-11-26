@@ -1707,6 +1707,7 @@ impl EffectWindow {
             | Instruction::AttachPermanentToPlayer { .. }
             | Instruction::AttachChoosingPermanent { .. }
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::PutCounterOnRelatedPermanent
             | Instruction::PutCountersOnControlledCreatures
@@ -2760,6 +2761,7 @@ impl EffectWindow {
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
             | Instruction::PutOwnHandCardOnLibraryBottom

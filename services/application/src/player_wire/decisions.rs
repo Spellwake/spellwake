@@ -962,6 +962,7 @@ impl PlayerDomain {
                     | K::Mulligan
                     | K::CopyTargets
                     | K::DamageOrder
+                    | K::DamageSource
                     | K::ManaColor
                     | K::CreatureType
                     | K::Modes

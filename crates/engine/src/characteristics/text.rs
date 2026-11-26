@@ -993,6 +993,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::damage::TurnPreventionFilter::All
                 | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
             )
+            | Instruction::PreventDamageSpec(_)
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::ExileAbilitySource

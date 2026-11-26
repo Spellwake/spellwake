@@ -117,6 +117,7 @@ fn reply(
                 | NativeReference::TokenMember(_)
                 | NativeReference::DamageApplication(_)
                 | NativeReference::DamageAttempt(_)
+                | NativeReference::DamageSource(_)
         ) {
             let size = fresh.references.len();
             assert!(fresh.issue(*reference).is_err());
@@ -2116,4 +2117,189 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
     let rand_done = resolve(&rand_cast);
     assert!(rand_done.pending_decision().is_none());
     assert_eq!(rand_done.execution().life_total(B), Some(&18.into()));
+}
+
+#[test]
+fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_invalid_atomically() {
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::{
+        activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
+        characteristics::Color,
+        damage::{
+            DamageSourceChoiceFilter, DamageSourceId, PreventionRecipientSpec,
+            PreventionSourceSpec, TurnPreventionSpec,
+        },
+        mana::ManaCost,
+    };
+
+    let mut red_pinger = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    red_pinger.color_indicator = Some(BTreeSet::from([Color::Red]));
+    red_pinger.activated.push(ActivatedAbility {
+        id: ActivatedAbilityId(1),
+        mana_cost: ManaCost::free(),
+        source_cost: SourceCost::None,
+        body: ExecutableBody::new(
+            BodyTarget::SingleAnyTarget,
+            vec![Instruction::Damage { amount: 2.into() }],
+        ),
+    });
+
+    let mut green_pinger = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    green_pinger.color_indicator = Some(BTreeSet::from([Color::Green]));
+    green_pinger.activated.push(ActivatedAbility {
+        id: ActivatedAbilityId(1),
+        mana_cost: ManaCost::free(),
+        source_cost: SourceCost::None,
+        body: ExecutableBody::new(
+            BodyTarget::SingleAnyTarget,
+            vec![Instruction::Damage { amount: 2.into() }],
+        ),
+    });
+
+    let prevent_spell = instant(
+        BodyTarget::None,
+        vec![Instruction::PreventDamageSpec(Box::new(
+            TurnPreventionSpec {
+                combat_only: false,
+                source: PreventionSourceSpec::ChosenSource(DamageSourceChoiceFilter::Any),
+                recipient: PreventionRecipientSpec::Controller,
+                both_directions: false,
+            },
+        ))],
+    );
+
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, prevent_spell),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            red_pinger,
+        ),
+        card(
+            3,
+            B,
+            ObjectDestination::Battlefield { controller: B },
+            green_pinger.clone(),
+        ),
+        // Card 4 sits in B's private hand: MUST NOT appear in A's DamageSourceChoice options!
+        card(4, B, ObjectDestination::Hand, green_pinger),
+    ]);
+
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let pending = resolve(&cast);
+    let dec = pending
+        .pending_decision()
+        .expect("DamageSourceChoice decision expected");
+    let RuleFrame::DamageSourceChoice(frame) = dec.frame() else {
+        panic!("expected DamageSourceChoice frame");
+    };
+    let c2 = object(&pending, 2);
+    let c3 = object(&pending, 3);
+    let hidden_c4 = object(&pending, 4);
+    assert!(frame.sources().contains(&DamageSourceId::Object(c2)));
+    assert!(frame.sources().contains(&DamageSourceId::Object(c3)));
+    assert!(!frame.sources().contains(&DamageSourceId::Object(hidden_c4)));
+
+    // Project wire snapshot for viewer A and verify DecisionKind::DamageSource + Options domain.
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::DamageSource);
+    assert_eq!(
+        snap.decisions[0].subject_label.as_deref(),
+        Some("Choose a source of damage.")
+    );
+    let PlayerDomain::Options { options, query } = &snap.decisions[0].domain else {
+        panic!("expected PlayerDomain::Options");
+    };
+    assert!(query.is_none());
+    assert_eq!(options.len(), frame.sources().len());
+
+    // Atomic invalid reply 1: wrong reference kind (passing battlefield Object handle instead of DamageSource option).
+    let dec_handle = view.issue(NativeReference::Decision(dec.id())).unwrap();
+    let bad_obj_handle = view.issue(NativeReference::Object(c2)).unwrap();
+    let wrong_ref = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle.clone(),
+            response: PlayerChoice::Option {
+                option: bad_obj_handle,
+            },
+        },
+    );
+    assert!(matches!(
+        rejected_proposal(&view, &wrong_ref),
+        Err(NativeBridgeError::WrongReferenceKind)
+    ));
+
+    // Atomic invalid reply 2: wrong choice payload kind (Target instead of Option).
+    let wrong_choice = command(
+        &view,
+        PlayerAction::Choose {
+            decision: dec_handle,
+            response: PlayerChoice::Target {
+                target: PlayerTarget::Seat {
+                    seat_id: viewer_a(),
+                },
+            },
+        },
+    );
+    assert!(rejected_proposal(&view, &wrong_choice).is_err());
+
+    // Legal wire round-trip choosing c3 (opponent's green pinger).
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::Option {
+            option: v
+                .issue(NativeReference::DamageSource(DamageSourceId::Object(c3)))
+                .unwrap(),
+        },
+        DecisionReply::ChooseDamageSource(DamageSourceId::Object(c3)),
+    );
+    assert!(done.pending_decision().is_none());
+
+    // Verify c3 pinging A is prevented while c2 pinging A is NOT prevented.
+    let pass_a = bridged(&done, viewer_a(), |_| PlayerAction::Pass {});
+    let ping_c3 = bridged(&pass_a, viewer_b(), |v| PlayerAction::ActivateAbility {
+        source: v
+            .issue(NativeReference::Object(object(&pass_a, 3)))
+            .unwrap(),
+        ability: v
+            .issue(NativeReference::ActivatedAbility {
+                source: object(&pass_a, 3),
+                ability: ActivatedAbilityId(1),
+            })
+            .unwrap(),
+        target: PlayerTarget::Seat {
+            seat_id: viewer_a(),
+        },
+        payment: None,
+    });
+    let pass_b = bridged(&ping_c3, viewer_b(), |_| PlayerAction::Pass {});
+    let after_c3 = bridged(&pass_b, viewer_a(), |_| PlayerAction::Pass {});
+    assert_eq!(after_c3.execution().life_total(A), Some(&20.into()));
+
+    let ping_c2 = bridged(&after_c3, viewer_a(), |v| PlayerAction::ActivateAbility {
+        source: v
+            .issue(NativeReference::Object(object(&after_c3, 2)))
+            .unwrap(),
+        ability: v
+            .issue(NativeReference::ActivatedAbility {
+                source: object(&after_c3, 2),
+                ability: ActivatedAbilityId(1),
+            })
+            .unwrap(),
+        target: PlayerTarget::Seat {
+            seat_id: viewer_a(),
+        },
+        payment: None,
+    });
+    let after_c2 = resolve(&ping_c2);
+    assert_eq!(after_c2.execution().life_total(A), Some(&18.into()));
 }

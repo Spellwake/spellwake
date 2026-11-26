@@ -600,6 +600,7 @@ impl EffectWindow {
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
+            | Instruction::PreventDamageSpec(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
             | Instruction::PutOwnHandCardOnLibraryBottom

@@ -1603,84 +1603,15 @@ pub(super) fn lower_combat_damage_instruction(
             source,
             recipient,
             duration: DurationAst::UntilEndOfTurn,
-        } => {
-            let both_directions = matches!(recipient.as_deref(), Some(SubjectRefAst::Anaphora(text)) if text == "and dealt");
-            if recipient.is_some() && !(both_directions && *combat_only) {
-                return Err("oracle:unsupported-prevention-recipient");
-            }
-            let filter = if is_self_pronoun(source, builder, self_pronoun_valid) {
-                if !builder.has_source {
-                    return Err("oracle:unsupported-prevention-source");
-                }
-                match (*combat_only, both_directions) {
-                    (true, true) => TurnPreventionFilter::CombatToOrFromAbilitySource,
-                    (true, false) => TurnPreventionFilter::CombatFromAbilitySource,
-                    (false, _) => TurnPreventionFilter::FromAbilitySource,
-                }
-            } else if let SubjectRefAst::Group(group) = source.as_ref() {
-                if both_directions || !matches!(group.zone, None | Some(ZoneFilter::Battlefield)) {
-                    return Err("oracle:unsupported-prevention-source");
-                }
-                let lowered = lower_object_filter(group, vocabulary)?;
-                if lowered == ObjectFilter::creature() {
-                    if *combat_only {
-                        TurnPreventionFilter::CombatFromCreatures
-                    } else {
-                        TurnPreventionFilter::Creatures
-                    }
-                } else if !*combat_only && lowered == ObjectFilter::creature().opposing() {
-                    TurnPreventionFilter::CreaturesControlledByOpponents
-                } else if *combat_only && group.forbidden_subtypes.len() == 1 {
-                    let subtype = vocabulary
-                        .resolve_label(&group.forbidden_subtypes[0])
-                        .ok_or("oracle:unsupported-prevention-source")?;
-                    if lowered != ObjectFilter::creature().without_subtype(subtype) {
-                        return Err("oracle:unsupported-prevention-source");
-                    }
-                    TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(subtype)
-                } else {
-                    return Err("oracle:unsupported-prevention-source");
-                }
-            } else {
-                let target = match source.as_ref() {
-                    SubjectRefAst::TargetObject {
-                        count: TargetCountAst::Exact(1),
-                        ..
-                    } => lower_target_subject(source, vocabulary)?,
-                    SubjectRefAst::Anaphora(text)
-                        if matches!(text.as_str(), "it" | "that creature" | "that permanent") =>
-                    {
-                        builder.target
-                    }
-                    _ => return Err("oracle:unsupported-prevention-source"),
-                };
-                if !matches!(
-                    target,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
-                ) {
-                    return Err("oracle:unsupported-prevention-source");
-                }
-                if matches!(source.as_ref(), SubjectRefAst::TargetObject { .. }) {
-                    builder.bind_target(target)?;
-                } else if builder.x_target_count
-                    || builder.instructions.iter().any(|op| matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1))
-                {
-                    return Err("oracle:unsupported-prevention-source");
-                }
-                match (*combat_only, both_directions) {
-                    (true, true) => TurnPreventionFilter::CombatToOrFromTarget,
-                    (true, false) => TurnPreventionFilter::CombatFromTarget,
-                    (false, _) => TurnPreventionFilter::FromTarget,
-                }
-            };
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(filter));
-            Ok(())
-        }
+        } => interactive::lower_prevent_all_damage_from(
+            *combat_only,
+            source,
+            recipient.as_deref(),
+            builder,
+            vocabulary,
+            in_trigger,
+            self_pronoun_valid,
+        ),
         InstructionAst::PreventAllDamage {
             combat_only: true,
             target: None,
@@ -1730,19 +1661,16 @@ pub(super) fn lower_combat_damage_instruction(
             Ok(())
         }
         InstructionAst::PreventAllDamage {
-            combat_only: false,
+            combat_only,
             target: Some(subj),
             duration: DurationAst::UntilEndOfTurn,
-        } => {
-            let bt = lower_target_subject(subj, vocabulary)?;
-            builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::ToTarget,
-                ));
-            Ok(())
-        }
+        } => interactive::lower_prevent_all_damage(
+            *combat_only,
+            subj,
+            builder,
+            vocabulary,
+            self_pronoun_valid,
+        ),
         InstructionAst::PreventDamage {
             amount,
             target,
@@ -5712,21 +5640,14 @@ mod wave12_source_prevention_tests {
                 required_by_base_formats: true,
                 program_evidence: "test",
             };
-            if name == "Shieldmage Elder" {
-                // The second ability targets any spell. CR 400.7c also requires
-                // carrying prevention onto a resulting permanent, including spell-copy tokens.
-                assert!(matches!(
-                    compile_with_reason(&card, &vocabulary),
-                    Err("oracle:unsupported-prevention-source")
-                ));
-            } else {
-                compile_with_reason(&card, &vocabulary)
-                    .unwrap_or_else(|reason| panic!("{name}: {reason}"));
-            }
+            // Shieldmage Elder is now qualified: CR 400.7c spell-to-permanent and spell-copy
+            // identity propagation is implemented in DamageState::propagate_permanent_spell_identity.
+            compile_with_reason(&card, &vocabulary)
+                .unwrap_or_else(|reason| panic!("{name}: {reason}"));
         }
     }
     #[test]
-    fn source_prevention_rejects_recipient_duration_spell_and_choice_ambiguity() {
+    fn source_prevention_rejects_duration_and_anaphora_ambiguity_and_lowers_qualified_specs() {
         let vocab = vocabulary();
         let filter = spellwake_oracle_compiler::filter::parse_object_filter(
             "creatures",
@@ -5737,30 +5658,20 @@ mod wave12_source_prevention_tests {
             filter: Box::new(filter.clone()),
             count: TargetCountAst::Exact(1),
         };
-        for variant in 0..4 {
+        // Variant 1 (ongoing duration) and variant 3 (raw untyped anaphora instead of
+        // ChosenByPlayer filter predicate) must remain fail-closed.
+        for variant in [1usize, 3] {
             let source = match variant {
                 1 => SubjectRefAst::Anaphora(
                     "that creature for as long as this remains on the battlefield".into(),
                 ),
-                2 => {
-                    let mut f = filter.clone();
-                    f.any_spell = true;
-                    SubjectRefAst::TargetObject {
-                        filter: Box::new(f),
-                        count: TargetCountAst::Exact(1),
-                    }
-                }
                 3 => SubjectRefAst::Anaphora("a source of your choice".into()),
-                _ => target.clone(),
+                _ => unreachable!(),
             };
             let ins = InstructionAst::PreventAllDamageFrom {
                 combat_only: true,
                 source: Box::new(source),
-                recipient: if variant == 0 {
-                    Some(Box::new(SubjectRefAst::Player(PlayerRefAst::You)))
-                } else {
-                    None
-                },
+                recipient: None,
                 duration: DurationAst::UntilEndOfTurn,
             };
             assert!(
@@ -5774,7 +5685,49 @@ mod wave12_source_prevention_tests {
                     None
                 )
                 .is_err(),
-                "variant {variant}"
+                "variant {variant} must stay fail-closed"
+            );
+        }
+        // Variant 0 (explicit Controller recipient) and variant 2 (targeted spell source)
+        // now lower to exact qualified `Instruction::PreventDamageSpec`.
+        for variant in [0usize, 2] {
+            let source = if variant == 2 {
+                let mut f = filter.clone();
+                f.any_spell = true;
+                SubjectRefAst::TargetObject {
+                    filter: Box::new(f),
+                    count: TargetCountAst::Exact(1),
+                }
+            } else {
+                target.clone()
+            };
+            let ins = InstructionAst::PreventAllDamageFrom {
+                combat_only: true,
+                source: Box::new(source),
+                recipient: if variant == 0 {
+                    Some(Box::new(SubjectRefAst::Player(PlayerRefAst::You)))
+                } else {
+                    None
+                },
+                duration: DurationAst::UntilEndOfTurn,
+            };
+            let mut builder = BodyBuilder::new();
+            lower_combat_damage_instruction(
+                &ins,
+                &mut builder,
+                &vocab,
+                &mut LoweringIds::default(),
+                false,
+                false,
+                None,
+            )
+            .unwrap_or_else(|e| panic!("variant {variant} should lower: {e}"));
+            assert!(
+                matches!(
+                    builder.instructions.as_slice(),
+                    [Instruction::PreventDamageSpec(_)]
+                ),
+                "variant {variant} should lower to PreventDamageSpec"
             );
         }
     }

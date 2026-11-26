@@ -10875,6 +10875,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::PreventDamageThisTurn(spellwake_engine::damage::TurnPreventionFilter::CombatFromCreaturesWithoutEitherSubtype(first,second)) =>
                 json!({"op":"PreventCombatDamageWithoutEitherSubtype","first":projection::creature_type_id(*first),"second":projection::creature_type_id(*second)}),
             Instruction::PreventDamageThisTurn(filter) => json!({"op":"PreventDamageThisTurn","filter":format!("{filter:?}")}),
+            Instruction::PreventDamageSpec(spec) => json!({"op":"PreventDamageSpec","spec":format!("{spec:?}")}),
             Instruction::ChangeOnlyTarget => json!({"op":"ChangeOnlyTarget"}),
             Instruction::LoseLifeEqualToTargetSpellManaValue => json!({"op":"LoseLifeEqualToTargetSpellManaValue"}),
             Instruction::GainControlOfSpell => json!({"op":"GainControlOfSpell"}),

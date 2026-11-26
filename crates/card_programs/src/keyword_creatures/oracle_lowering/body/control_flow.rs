@@ -4318,8 +4318,35 @@ pub(in super::super) fn lower_instruction_seq(
                 duration: DurationAst::UntilEndOfTurn,
                 ..
             }
-        ) && matches!(&pair[1], InstructionAst::ChangeLife { delta, .. }
-                if value_expr_contains_prior_result(resolve_x(delta, bound_x)))
+        ) && (match &pair[1] {
+            InstructionAst::ChangeLife { delta, .. } => {
+                value_expr_contains_prior_result(resolve_x(delta, bound_x))
+            }
+            InstructionAst::CreateToken { token, .. }
+            | InstructionAst::CreateTokenWithAbilities { token, .. } => match token {
+                TokenSpecAst::Predefined { count, .. }
+                | TokenSpecAst::Copy { count, .. }
+                | TokenSpecAst::Creature { count, .. } => {
+                    value_expr_contains_prior_result(resolve_x(count, bound_x))
+                }
+                TokenSpecAst::Role { .. } => false,
+            },
+            InstructionAst::PutCounters { count, .. } | InstructionAst::Draw { count, .. } => {
+                value_expr_contains_prior_result(resolve_x(count, bound_x))
+            }
+            InstructionAst::DealDamage { amount, .. } => {
+                value_expr_contains_prior_result(resolve_x(amount, bound_x))
+            }
+            InstructionAst::ForEachCount { count, .. } => {
+                value_expr_contains_prior_result(resolve_x(count, bound_x))
+            }
+            InstructionAst::IfPreviousSucceeded(_) | InstructionAst::IfPreviousFailed(_) => true,
+            InstructionAst::IfCondition { condition, .. } => matches!(
+                condition.as_ref(),
+                ConditionAst::Marker(GameMarker::DamagePreventedThisWay)
+            ),
+            _ => false,
+        })
     }) {
         return Err("oracle:unsupported-prevention-life-followup");
     }
