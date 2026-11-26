@@ -903,14 +903,11 @@ fn honest_known_opaque_fallback_tracking() {
     // opaque prose / replacement strings that `audit_card` MUST honestly surface rather than
     // pretending they are 100% pure typed AST.
     for (name, expected_opaque_code) in [
-        ("Doubling Season", "opaque:EventInstead_unparsed"),
         ("Bolas's Citadel", "opaque:PlayOrCastPermission_prose"),
-        ("Necropotence", "opaque:RuleOrCombatRestriction_prose"),
         (
             "Teferi, Time Raveler",
             "opaque:RuleOrCombatRestriction_prose",
         ),
-        ("Urza's Saga", "uncompiled_token_ability"),
     ] {
         let card = map[name];
         let faces: Vec<FaceInput<'_>> = card
@@ -1182,5 +1179,254 @@ fn negative_strictness_and_auditor_self_tests() {
             .critical_defects
             .iter()
             .any(|f| f.code == "empty_nonvanilla_face")
+    );
+}
+
+#[test]
+fn e14_silent_loss_semantic_regressions() {
+    use spellwake_oracle_compiler::clauses::{
+        StaticOrReplacement, parse_effect_body, parse_static_or_replacement,
+    };
+    use spellwake_oracle_compiler::filter::{
+        parse_for_each_value_expr, parse_object_filter, parse_value_expr,
+    };
+    let vocab = load_pinned_vocabulary();
+    for text in [
+        "~ gets +X/+0, where X is the number of Mountains you control",
+        "Enchanted creature gets +X/+X, where X is the number of creature cards in all graveyards",
+        "Creatures you control get +X/+X, where X is the number of cards in your hand",
+    ] {
+        let node = parse_static_or_replacement(text, &vocab).unwrap();
+        assert!(
+            matches!(
+                node,
+                StaticOrReplacement::Static(StaticAbilityAst::ContinuousModifyPT {
+                    scale: Some(_),
+                    ..
+                })
+            ),
+            "{text}: {node:#?}"
+        );
+    }
+    let xy = parse_static_or_replacement(
+        "~ gets +X/+Y, where X is the exiled card's power and Y is its toughness",
+        &vocab,
+    )
+    .unwrap();
+    assert!(
+        matches!(xy, StaticOrReplacement::Static(StaticAbilityAst::Compound(ref parts)) if parts.len() == 2),
+        "{xy:#?}"
+    );
+    for (text, player) in [
+        (
+            "the number of cards in its controller's hand",
+            PlayerRefAst::ItsController,
+        ),
+        (
+            "the number of cards in enchanted player's hand",
+            PlayerRefAst::EnchantedPlayer,
+        ),
+        (
+            "the number of cards in defending player's hand",
+            PlayerRefAst::DefendingPlayer,
+        ),
+    ] {
+        let value = parse_value_expr(text, &vocab).unwrap();
+        assert!(
+            matches!(value, ValueExprAst::PlayerStat { player: actual, stat: spellwake_oracle_compiler::ast::PlayerStatKind::CardsInHand } if actual == player),
+            "{value:#?}"
+        );
+    }
+    for text in [
+        "other creature you control",
+        "other red creature you control",
+        "other green creature you control",
+    ] {
+        assert!(
+            matches!(
+                parse_for_each_value_expr(text, &vocab).unwrap(),
+                ValueExprAst::Count(_)
+            ),
+            "{text}"
+        );
+    }
+    let filter = parse_object_filter(
+        "creature card in your graveyard that was put there from the battlefield this turn",
+        &vocab,
+    )
+    .unwrap();
+    assert!(filter.flags.0 & ObjectFilterFlags::DIED_THIS_TURN.0 != 0);
+    for text in [
+        "Target player reveals the top card of their library.",
+        "Prevent all damage target creature would deal this turn.",
+        "You may cast any number of spells from among those cards without paying their mana costs.",
+    ] {
+        let (body, failures) = parse_effect_body(text, &vocab);
+        assert!(failures.is_empty(), "{text}: {failures:?}");
+        match text {
+            "Target player reveals the top card of their library." => assert!(
+                matches!(body.as_slice(), [InstructionAst::PlayerLookTopLibrary { player: PlayerRefAst::TargetPlayer, library, count, reveal: true }] if library == "their" && **count == ValueExprAst::Const(1)),
+                "{body:#?}"
+            ),
+            "Prevent all damage target creature would deal this turn." => assert!(
+                matches!(body.as_slice(), [InstructionAst::PreventAllDamageFrom { combat_only: false, source, recipient: None, duration: DurationAst::UntilEndOfTurn }] if matches!(source.as_ref(), SubjectRefAst::TargetObject { .. })),
+                "{body:#?}"
+            ),
+            _ => assert!(
+                matches!(
+                    body.as_slice(),
+                    [InstructionAst::GrantCastPermission {
+                        player: PlayerRefAst::You,
+                        free: true,
+                        count_limit: Some(spellwake_oracle_compiler::ast::CountLimitAst::AnyNumber),
+                        ..
+                    }]
+                ),
+                "{body:#?}"
+            ),
+        }
+    }
+    let (anaphoric, failures) = parse_effect_body(
+        "Prevent all damage that creature would deal this turn",
+        &vocab,
+    );
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(
+        matches!(anaphoric.as_slice(), [InstructionAst::PreventAllDamageFrom { source, .. }] if matches!(source.as_ref(), SubjectRefAst::Anaphora(reference) if reference == "that creature")),
+        "{anaphoric:#?}"
+    );
+    let conditioned = parse_static_or_replacement("As long as you control an artifact, if a creature entering causes a triggered ability of a permanent you control to trigger, that ability triggers an additional time", &vocab).unwrap();
+    assert!(
+        matches!(
+            conditioned,
+            StaticOrReplacement::Static(StaticAbilityAst::ScopedTriggerMultiplier {
+                condition: Some(_),
+                additional_triggers: 1,
+                ..
+            })
+        ),
+        "{conditioned:#?}"
+    );
+    let floor = parse_static_or_replacement("Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.", &vocab).unwrap();
+    assert!(
+        matches!(
+            floor,
+            StaticOrReplacement::Static(StaticAbilityAst::CostModifierWithFloor {
+                min_mana: 1,
+                ..
+            })
+        ),
+        "{floor:#?}"
+    );
+}
+#[test]
+fn e14_pinned_real_card_semantics() {
+    let vocab = load_pinned_vocabulary();
+    let cards: Vec<FixtureCard> =
+        serde_json::from_str(include_str!("fixtures/e14_semantic_cards.json")).unwrap();
+    for card in &cards {
+        let ast = compile_fixture(card, &vocab);
+        assert!(
+            ast.strictly_compiled,
+            "{}: {:#?}",
+            card.name, ast.faces[0].failures
+        );
+        let face = &ast.faces[0];
+        match card.name.as_str() {
+            "Sardian Cliffstomper" | "Exoskeletal Armor" | "Elturel Survivors" | "Meishin, the Mind Cage" => {
+                assert!(face.statics.iter().any(|s| matches!(s, StaticAbilityAst::ContinuousModifyPT { scale: Some(_), .. })), "{}: {face:#?}", card.name);
+            }
+            "Training Grounds" => assert!(matches!(face.statics.as_slice(), [StaticAbilityAst::CostModifierWithFloor { min_mana: 1, delta, less: true, .. }] if delta == "{2}"), "{face:#?}"),
+            "Heartstone" | "Biomancer's Familiar" | "Zirda, the Dawnwaker" | "Power Artifact" | "Agatha of the Vile Cauldron" => {
+                assert!(face.statics.iter().any(|s| matches!(s, StaticAbilityAst::CostModifierWithFloor { min_mana: 1, less: true, .. })), "{}: {face:#?}", card.name);
+                if card.name == "Agatha of the Vile Cauldron" {
+                    assert!(face.statics.iter().any(|s| matches!(s, StaticAbilityAst::CostModifierWithFloor { scale_expr: Some(value), .. } if matches!(value.as_ref(), ValueExprAst::ObjectStat { subject, stat: spellwake_oracle_compiler::ast::StatKind::Power } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)))), "{face:#?}");
+                }
+            }
+            "Phyrexian Ingester" => assert!(face.statics.iter().any(|s| matches!(s, StaticAbilityAst::Compound(parts) if parts.len() == 2 && parts.iter().all(|p| matches!(p, StaticAbilityAst::ContinuousModifyPT { scale: Some(_), .. })))), "{face:#?}"),
+            "Doubling Season" => {
+                assert_eq!(face.replacements.len(), 2);
+                for replacement in &face.replacements {
+                    assert!(matches!(replacement, ReplacementEffectAst::EventInstead { instead_body: Some(body), .. } if matches!(body.as_slice(), [InstructionAst::ModifyReplacedQuantity { multiplier: 2, add: None, .. }])), "{replacement:#?}");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+#[test]
+fn e14_replacement_riders_remain_visible() {
+    use spellwake_oracle_compiler::clauses::{StaticOrReplacement, parse_static_or_replacement};
+    let vocab = load_pinned_vocabulary();
+    for text in [
+        "If an effect would create one or more tokens under your control, it creates twice that many of those tokens and you lose 2 life instead",
+        "If an effect would put one or more counters on a permanent you control, it puts twice that many of those counters on that permanent unless an opponent pays {2} instead",
+    ] {
+        let node = parse_static_or_replacement(text, &vocab).unwrap();
+        assert!(
+            matches!(
+                node,
+                StaticOrReplacement::Replacement(ReplacementEffectAst::EventInstead {
+                    instead_body: None,
+                    ..
+                })
+            ),
+            "{node:#?}"
+        );
+    }
+}
+
+#[test]
+fn e14_compiled_token_abilities_and_skip_step_preserve_semantics() {
+    use spellwake_oracle_compiler::clauses::{
+        StaticOrReplacement, parse_effect_body, parse_static_or_replacement,
+    };
+    let vocab = load_pinned_vocabulary();
+    let (body, failures) = parse_effect_body(
+        "Create a 1/1 white Soldier creature token with \"Whenever this creature attacks, draw a card.\"",
+        &vocab,
+    );
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(
+        matches!(body.as_slice(), [InstructionAst::CreateTokenWithAbilities { controller: PlayerRefAst::You, compiled_abilities, .. }] if matches!(compiled_abilities.abilities.as_slice(), [AbilityAst::Triggered { body, .. }] if matches!(body.as_slice(), [InstructionAst::Draw { player: PlayerRefAst::You, count, up_to: false }] if **count == ValueExprAst::Const(1)))),
+        "{body:#?}"
+    );
+    let skip = parse_static_or_replacement("Skip your draw step", &vocab).unwrap();
+    assert!(
+        matches!(
+            skip,
+            StaticOrReplacement::Static(StaticAbilityAst::SkipStep {
+                player: PlayerRefAst::You,
+                step: spellwake_oracle_compiler::ast::TurnStepAst::DrawStep,
+                condition: None
+            })
+        ),
+        "{skip:#?}"
+    );
+}
+
+#[test]
+fn e14_cost_and_counter_x_definitions_are_retained() {
+    use spellwake_oracle_compiler::clauses::{StaticOrReplacement, parse_static_or_replacement};
+    let vocab = load_pinned_vocabulary();
+    let cost = parse_static_or_replacement(
+        "Spells you cast cost {X} less to cast, where X is the number of creatures you control",
+        &vocab,
+    )
+    .unwrap();
+    assert!(
+        matches!(cost, StaticOrReplacement::Static(StaticAbilityAst::CostModifier { scale_expr: Some(value), .. }) if matches!(value.as_ref(), ValueExprAst::Count(_)))
+    );
+    let enters = parse_static_or_replacement(
+        "~ enters with X +1/+1 counters on it, where X is the number of creatures you control",
+        &vocab,
+    )
+    .unwrap();
+    assert!(
+        matches!(enters, StaticOrReplacement::Replacement(ReplacementEffectAst::EntersWithCounters { x_expr: Some(value), .. }) if matches!(value.as_ref(), ValueExprAst::Count(_)))
+    );
+    let others = parse_static_or_replacement("Other creatures you control enter with X +1/+1 counters on them, where X is the number of creatures you control", &vocab).unwrap();
+    assert!(
+        matches!(others, StaticOrReplacement::Replacement(ReplacementEffectAst::OthersEnterWithCounters { count, .. }) if matches!(count.as_ref(), ValueExprAst::Count(_)))
     );
 }

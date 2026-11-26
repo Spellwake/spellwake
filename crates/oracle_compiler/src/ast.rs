@@ -3565,6 +3565,31 @@ pub enum InstructionAst {
     PayAnyAmountOfMana {
         player: PlayerRefAst,
     },
+    /// Prevent all (or all combat) damage that `source` would deal (optionally to `recipient`) for `duration`
+    /// (`Chain of Silence`, `Dromoka's Command`, `Hallow`, `Frontline Strategist`).
+    PreventAllDamageFrom {
+        combat_only: bool,
+        source: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recipient: Option<Box<SubjectRefAst>>,
+        duration: DurationAst,
+    },
+    /// Token creation with compiled typed abilities instead of raw quoted strings in `TokenSpecAst::Creature.keywords`.
+    CreateTokenWithAbilities {
+        controller: PlayerRefAst,
+        token: TokenSpecAst,
+        compiled_abilities: Box<FaceAst>,
+    },
+    /// Typed quantity modification inside a replacement effect's `instead_body`
+    /// (`Doubling Season`, `Embermaw Hellion`, `Benevolent Hydra`, `Pest Rescuer`, `Barbarian Class`).
+    ModifyReplacedQuantity {
+        quantity_kind: String,
+        multiplier: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        add: Option<Box<ValueExprAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        qualifier: Option<String>,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -3982,6 +4007,51 @@ pub enum StaticAbilityAst {
         source_filter: Box<ObjectFilterAst>,
         additional_triggers: u8,
         condition: Option<Box<ConditionAst>>,
+    },
+    /// Static cost reduction preserving an explicit CR 118.7a minimum mana floor
+    /// (`Training Grounds`, `Heartstone`, `Biomancer's Familiar`, `Zirda`, `Power Artifact`, `Agatha of the Vile Cauldron`).
+    CostModifierWithFloor {
+        subject: Box<SubjectRefAst>,
+        delta: String,
+        less: bool,
+        #[serde(default)]
+        next_only: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        per: Option<Box<ObjectFilterAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale_expr: Option<Box<ValueExprAst>>,
+        /// Minimum total mana remaining after this reduction (e.g. `1` for "less than one mana").
+        min_mana: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Compiled Spacecraft station band (`N+ | <compiled face or P/T>`).
+    CompiledStationBand {
+        min_charge: u8,
+        payload: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        power: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        toughness: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compiled: Option<Box<FaceAst>>,
+    },
+    /// Compiled die-roll result band (`1-9 | <compiled body>`).
+    CompiledDieRollBand {
+        roll: String,
+        payload: String,
+        body: Vec<InstructionAst>,
+    },
+    /// Compiled Unfinity sticker option (`{TK}{TK} — <compiled face or P/T>`).
+    CompiledStickerOption {
+        ticket_cost: u8,
+        payload: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        power: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        toughness: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compiled: Option<Box<FaceAst>>,
     },
 }
 
