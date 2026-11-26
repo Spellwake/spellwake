@@ -4644,6 +4644,13 @@ impl Body {
                         use spellwake_engine::damage::TurnPreventionFilter;
                         Instruction::PreventDamageThisTurn(match filter.as_str() {
                             "ToTarget" => TurnPreventionFilter::ToTarget,
+                        "FromAbilitySource" => TurnPreventionFilter::FromAbilitySource,
+                        "CombatFromAbilitySource" => TurnPreventionFilter::CombatFromAbilitySource,
+                        "FromTarget" => TurnPreventionFilter::FromTarget,
+                        "CombatFromTarget" => TurnPreventionFilter::CombatFromTarget,
+                        "CombatToOrFromTarget" => TurnPreventionFilter::CombatToOrFromTarget,
+                        "Creatures" => TurnPreventionFilter::Creatures,
+                        "CombatFromCreatures" => TurnPreventionFilter::CombatFromCreatures,
                             "CombatToOrFromAbilitySource" => TurnPreventionFilter::CombatToOrFromAbilitySource,
                             "CombatFromCreaturesOtherThanTarget" => TurnPreventionFilter::CombatFromCreaturesOtherThanTarget,
                             "ToAbilitySource" => TurnPreventionFilter::ToAbilitySource,
@@ -14339,6 +14346,51 @@ mod tests {
             invalid["unexpected"] = json!(true);
             assert!(serde_json::from_value::<Amount>(invalid.clone()).is_err());
             assert!(serde_json::from_value::<ConditionValueWire>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn wave12_source_prevention_codec_preserves_binding_and_direction() {
+        use spellwake_engine::damage::TurnPreventionFilter as F;
+        let vocabulary = super::super::creature_types::synthetic_vocabulary();
+        for filter in [
+            F::FromTarget,
+            F::CombatFromTarget,
+            F::CombatToOrFromTarget,
+            F::Creatures,
+            F::CombatFromCreatures,
+        ] {
+            let target = if matches!(filter, F::Creatures | F::CombatFromCreatures) {
+                BodyTarget::None
+            } else {
+                BodyTarget::SingleCreature
+            };
+            let program = Program::instant(
+                ManaCost::free(),
+                ExecutableBody::new(target, vec![Instruction::PreventDamageThisTurn(filter)]),
+            );
+            program.validate(&vocabulary).unwrap();
+            assert_eq!(decode(view(&program), &vocabulary).unwrap(), program);
+        }
+        for filter in [
+            F::FromAbilitySource,
+            F::CombatFromAbilitySource,
+            F::CombatToOrFromAbilitySource,
+        ] {
+            let mut program = Program::artifact(None, vec![]);
+            program
+                .activated
+                .push(spellwake_engine::activated::ActivatedAbility {
+                    id: spellwake_engine::activated::ActivatedAbilityId(1),
+                    mana_cost: ManaCost::free(),
+                    source_cost: spellwake_engine::activated::SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::PreventDamageThisTurn(filter)],
+                    ),
+                });
+            program.validate(&vocabulary).unwrap();
+            assert_eq!(decode(view(&program), &vocabulary).unwrap(), program);
         }
     }
 

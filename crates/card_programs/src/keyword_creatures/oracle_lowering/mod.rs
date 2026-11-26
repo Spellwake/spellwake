@@ -2010,8 +2010,8 @@ fn lower_face(
     }
 
     // Lower static abilities (deferring PrototypeStats, StationBand, and DieRollBand for post-ability wiring)
-    let mut station_bands: Vec<(u8, &str)> = Vec::new();
-    let mut die_roll_bands_raw: Vec<(&str, &str)> = Vec::new();
+    let mut station_bands: Vec<&StaticAbilityAst> = Vec::new();
+    let mut die_roll_bands: Vec<(&str, &str, Option<&[InstructionAst]>)> = Vec::new();
     let mut prev_static_subject: Option<SubjectRefAst> = None;
     for st in &face_ast.statics {
         match st {
@@ -2038,14 +2038,18 @@ fn lower_face(
                     return Err("oracle:duplicate-prototype");
                 }
             }
-            StaticAbilityAst::StationBand {
-                min_charge,
-                payload,
-            } => {
-                station_bands.push((*min_charge, payload.as_str()));
+            StaticAbilityAst::StationBand { .. } | StaticAbilityAst::CompiledStationBand { .. } => {
+                station_bands.push(st);
             }
             StaticAbilityAst::DieRollBand { roll, payload } => {
-                die_roll_bands_raw.push((roll.as_str(), payload.as_str()));
+                die_roll_bands.push((roll.as_str(), payload.as_str(), None));
+            }
+            StaticAbilityAst::CompiledDieRollBand {
+                roll,
+                payload,
+                body,
+            } => {
+                die_roll_bands.push((roll.as_str(), payload.as_str(), Some(body.as_slice())));
             }
             StaticAbilityAst::PlayOrCastPermission {
                 cast_only: true,
@@ -2178,7 +2182,15 @@ fn lower_face(
     // Wire StationBand thresholds (`N+ | <payload>`) on Spacecraft permanents
     if !station_bands.is_empty() {
         let compiler_vocab = cached_compiler_vocab(vocabulary);
-        let max_station = station_bands.iter().map(|(n, _)| *n).max().unwrap_or(0);
+        let max_station = station_bands
+            .iter()
+            .filter_map(|band| match band {
+                StaticAbilityAst::StationBand { min_charge, .. }
+                | StaticAbilityAst::CompiledStationBand { min_charge, .. } => Some(*min_charge),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
         let has_pt = matches!(
             &program.kind,
             ProgramKind::Permanent(def) if def.printed_pt.is_some()
@@ -2188,12 +2200,27 @@ fn lower_face(
             .as_deref()
             .unwrap_or("")
             .to_ascii_lowercase();
-        for (min_charge, payload) in station_bands {
+        for band in station_bands {
+            let (min_charge, payload) = match band {
+                StaticAbilityAst::StationBand {
+                    min_charge,
+                    payload,
+                }
+                | StaticAbilityAst::CompiledStationBand {
+                    min_charge,
+                    payload,
+                    ..
+                } => (*min_charge, payload.as_str()),
+                _ => return Err("oracle:unsupported-station-band"),
+            };
             let cond = StaticSourceCondition::SourceCounterAtLeast {
                 kind: CounterKind::Charge,
                 minimum: u16::from(min_charge),
             };
-            let becomes_creature = has_pt
+            let becomes_creature = !matches!(
+                band,
+                StaticAbilityAst::CompiledStationBand { power: Some(_), .. }
+            ) && has_pt
                 && (oracle_low.contains(&format!("artifact creature at {min_charge}+"))
                     || (min_charge == max_station
                         && !oracle_low.contains("artifact creature at ")));
@@ -2217,6 +2244,25 @@ fn lower_face(
                         )]),
                     },
                 )?;
+            }
+            if let StaticAbilityAst::CompiledStationBand {
+                power,
+                toughness,
+                compiled,
+                ..
+            } = band
+            {
+                lower_compiled_station_band(
+                    face_ast,
+                    power.as_deref(),
+                    toughness.as_deref(),
+                    compiled.as_deref(),
+                    cond,
+                    &mut program,
+                    vocabulary,
+                    &mut ids,
+                )?;
+                continue;
             }
             let band_card = compile_card(
                 &CardInput {
@@ -2252,21 +2298,33 @@ fn lower_face(
     }
 
     // Wire DieRollBand thresholds (`1-9 | ...`, `10-19 | ...`, `20 | ...`, `15+ | ...`) onto RollDie
-    if !die_roll_bands_raw.is_empty() {
+    if !die_roll_bands.is_empty() {
         let compiler_vocab = cached_compiler_vocab(vocabulary);
         let (roll_in_trigger, roll_target) = find_die_roll_context(&program);
-        let mut parsed_bands = Vec::with_capacity(die_roll_bands_raw.len());
-        for (roll_raw, payload_raw) in die_roll_bands_raw {
+        let mut parsed_bands = Vec::with_capacity(die_roll_bands.len());
+        for (roll_raw, payload_raw, compiled) in die_roll_bands {
             let (min, max) = parse_die_roll_range(roll_raw).ok_or("oracle:bad-die-roll-range")?;
-            let stripped = strip_die_band_ability_word(payload_raw);
-            let normalized = stripped.replace(&face.name, "~");
-            let (ins, fails) =
-                spellwake_oracle_compiler::clauses::parse_effect_body(&normalized, &compiler_vocab);
-            if !fails.is_empty() || ins.is_empty() {
-                return Err("oracle:die-roll-band-parse-failed");
-            }
+            let parsed;
+            let ins = if let Some(compiled) = compiled {
+                if compiled.is_empty() {
+                    return Err("oracle:die-roll-band-parse-failed");
+                }
+                compiled
+            } else {
+                let stripped = strip_die_band_ability_word(payload_raw);
+                let normalized = stripped.replace(&face.name, "~");
+                let (body, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
+                    &normalized,
+                    &compiler_vocab,
+                );
+                if !fails.is_empty() || body.is_empty() {
+                    return Err("oracle:die-roll-band-parse-failed");
+                }
+                parsed = body;
+                parsed.as_slice()
+            };
             let band_body = lower_die_roll_band_body(
-                &ins,
+                ins,
                 vocabulary,
                 &mut ids,
                 roll_in_trigger,
@@ -4226,3 +4284,15 @@ fn strip_spell_cast_restrictions_inner(
     }
     filtered
 }
+
+#[cfg(test)]
+mod wave12_die_roll_tests;
+
+#[cfg(test)]
+mod wave12_condition_scope_tests;
+
+#[cfg(test)]
+use super::vocabulary as creature_vocabulary;
+#[cfg(test)]
+#[path = "../../../../engine/test_support/characteristic_trajectories.rs"]
+mod engine_trajectories;

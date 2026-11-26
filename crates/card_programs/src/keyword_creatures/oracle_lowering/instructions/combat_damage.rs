@@ -1598,6 +1598,89 @@ pub(super) fn lower_combat_damage_instruction(
             }
             Ok(())
         }
+        InstructionAst::PreventAllDamageFrom {
+            combat_only,
+            source,
+            recipient,
+            duration: DurationAst::UntilEndOfTurn,
+        } => {
+            let both_directions = matches!(recipient.as_deref(), Some(SubjectRefAst::Anaphora(text)) if text == "and dealt");
+            if recipient.is_some() && !(both_directions && *combat_only) {
+                return Err("oracle:unsupported-prevention-recipient");
+            }
+            let filter = if is_self_pronoun(source, builder, self_pronoun_valid) {
+                if !builder.has_source {
+                    return Err("oracle:unsupported-prevention-source");
+                }
+                match (*combat_only, both_directions) {
+                    (true, true) => TurnPreventionFilter::CombatToOrFromAbilitySource,
+                    (true, false) => TurnPreventionFilter::CombatFromAbilitySource,
+                    (false, _) => TurnPreventionFilter::FromAbilitySource,
+                }
+            } else if let SubjectRefAst::Group(group) = source.as_ref() {
+                if both_directions || !matches!(group.zone, None | Some(ZoneFilter::Battlefield)) {
+                    return Err("oracle:unsupported-prevention-source");
+                }
+                let lowered = lower_object_filter(group, vocabulary)?;
+                if lowered == ObjectFilter::creature() {
+                    if *combat_only {
+                        TurnPreventionFilter::CombatFromCreatures
+                    } else {
+                        TurnPreventionFilter::Creatures
+                    }
+                } else if !*combat_only && lowered == ObjectFilter::creature().opposing() {
+                    TurnPreventionFilter::CreaturesControlledByOpponents
+                } else if *combat_only && group.forbidden_subtypes.len() == 1 {
+                    let subtype = vocabulary
+                        .resolve_label(&group.forbidden_subtypes[0])
+                        .ok_or("oracle:unsupported-prevention-source")?;
+                    if lowered != ObjectFilter::creature().without_subtype(subtype) {
+                        return Err("oracle:unsupported-prevention-source");
+                    }
+                    TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(subtype)
+                } else {
+                    return Err("oracle:unsupported-prevention-source");
+                }
+            } else {
+                let target = match source.as_ref() {
+                    SubjectRefAst::TargetObject {
+                        count: TargetCountAst::Exact(1),
+                        ..
+                    } => lower_target_subject(source, vocabulary)?,
+                    SubjectRefAst::Anaphora(text)
+                        if matches!(text.as_str(), "it" | "that creature" | "that permanent") =>
+                    {
+                        builder.target
+                    }
+                    _ => return Err("oracle:unsupported-prevention-source"),
+                };
+                if !matches!(
+                    target,
+                    BodyTarget::SingleCreature
+                        | BodyTarget::SinglePermanent
+                        | BodyTarget::SinglePlaneswalker
+                        | BodyTarget::FilteredPermanent(_)
+                ) {
+                    return Err("oracle:unsupported-prevention-source");
+                }
+                if matches!(source.as_ref(), SubjectRefAst::TargetObject { .. }) {
+                    builder.bind_target(target)?;
+                } else if builder.x_target_count
+                    || builder.instructions.iter().any(|op| matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1))
+                {
+                    return Err("oracle:unsupported-prevention-source");
+                }
+                match (*combat_only, both_directions) {
+                    (true, true) => TurnPreventionFilter::CombatToOrFromTarget,
+                    (true, false) => TurnPreventionFilter::CombatFromTarget,
+                    (false, _) => TurnPreventionFilter::FromTarget,
+                }
+            };
+            builder
+                .instructions
+                .push(Instruction::PreventDamageThisTurn(filter));
+            Ok(())
+        }
         InstructionAst::PreventAllDamage {
             combat_only: true,
             target: None,
@@ -5456,5 +5539,243 @@ pub(super) fn rewrite_loop_player_subject(
                 .collect(),
         ),
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod wave12_source_prevention_tests {
+    use super::*;
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new(
+            "test-vocab".into(),
+            [0; 32],
+            vec![
+                "Cleric".into(),
+                "Human".into(),
+                "Knight".into(),
+                "Phantom".into(),
+                "Soldier".into(),
+                "Spirit".into(),
+                "Wizard".into(),
+            ],
+        )
+        .unwrap()
+    }
+    #[test]
+    fn pinned_source_prevention_cards_and_spell_source_residual() {
+        let vocabulary = super::super::super::engine_trajectories::vocabulary();
+        for (name, type_line, cost, power, toughness, text) in [
+            (
+                "Deftblade Elite",
+                "Creature \u{2014} Human Soldier",
+                "{W}",
+                Some("1"),
+                Some("1"),
+                "Provoke (Whenever this creature attacks, you may have target creature defending player controls untap and block it if able.)\n{1}{W}: Prevent all combat damage that would be dealt to and dealt by this creature this turn.",
+            ),
+            (
+                "Ethereal Haze",
+                "Instant \u{2014} Arcane",
+                "{W}",
+                None,
+                None,
+                "Prevent all damage that would be dealt by creatures this turn.",
+            ),
+            (
+                "Falling Timber",
+                "Instant",
+                "{2}{G}",
+                None,
+                None,
+                "Kicker\u{2014}Sacrifice a land. (You may sacrifice a land in addition to any other costs as you cast this spell.)\nPrevent all combat damage target creature would deal this turn. If this spell was kicked, prevent all combat damage another target creature would deal this turn.",
+            ),
+            (
+                "Fend Off",
+                "Instant",
+                "{1}{W}",
+                None,
+                None,
+                "Prevent all combat damage that would be dealt by target creature this turn.\nCycling {2} ({2}, Discard this card: Draw a card.)",
+            ),
+            (
+                "Gossamer Chains",
+                "Enchantment",
+                "{W}{W}",
+                None,
+                None,
+                "Return this enchantment to its owner's hand: Prevent all combat damage that would be dealt by target unblocked creature this turn.",
+            ),
+            (
+                "Horn of Deafening",
+                "Artifact",
+                "{4}",
+                None,
+                None,
+                "{2}, {T}: Prevent all combat damage that would be dealt by target creature this turn.",
+            ),
+            (
+                "Ignoble Soldier",
+                "Creature \u{2014} Human Soldier",
+                "{2}{W}",
+                Some("3"),
+                Some("1"),
+                "Whenever this creature becomes blocked, prevent all combat damage that would be dealt by it this turn.",
+            ),
+            (
+                "Kor Haven",
+                "Legendary Land",
+                "",
+                None,
+                None,
+                "{T}: Add {C}.\n{1}{W}, {T}: Prevent all combat damage that would be dealt by target attacking creature this turn.",
+            ),
+            (
+                "Lady Evangela",
+                "Legendary Creature \u{2014} Human Cleric",
+                "{W}{U}{B}",
+                Some("1"),
+                Some("2"),
+                "{W}{B}, {T}: Prevent all combat damage that would be dealt by target creature this turn.",
+            ),
+            (
+                "Maze of Ith",
+                "Land",
+                "",
+                None,
+                None,
+                "{T}: Untap target attacking creature. Prevent all combat damage that would be dealt to and dealt by that creature this turn.",
+            ),
+            (
+                "Resistance Fighter",
+                "Creature \u{2014} Human Soldier",
+                "{W}",
+                Some("1"),
+                Some("1"),
+                "Sacrifice this creature: Prevent all combat damage target creature would deal this turn.",
+            ),
+            (
+                "Restrain",
+                "Instant",
+                "{2}{W}",
+                None,
+                None,
+                "Prevent all combat damage that would be dealt by target attacking creature this turn.\nDraw a card.",
+            ),
+            (
+                "Safeguard",
+                "Enchantment",
+                "{3}{W}{W}",
+                None,
+                None,
+                "{2}{W}: Prevent all combat damage that would be dealt by target creature this turn.",
+            ),
+            (
+                "Shieldmage Elder",
+                "Creature \u{2014} Human Cleric Wizard",
+                "{5}{W}",
+                Some("2"),
+                Some("3"),
+                "Tap two untapped Clerics you control: Prevent all damage target creature would deal this turn.\nTap two untapped Wizards you control: Prevent all damage target spell would deal this turn.",
+            ),
+            (
+                "Urborg Phantom",
+                "Creature \u{2014} Spirit Minion",
+                "{2}{B}",
+                Some("3"),
+                Some("1"),
+                "This creature can't block.\n{U}: Prevent all combat damage that would be dealt to and dealt by this creature this turn.",
+            ),
+            (
+                "Warning",
+                "Instant",
+                "{W}",
+                None,
+                None,
+                "Prevent all combat damage that would be dealt by target attacking creature this turn.",
+            ),
+        ] {
+            let card = InventoryCard {
+                scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+                oracle_id: None,
+                name: name.into(),
+                layout: "normal".into(),
+                faces: vec![spellwake_content::CatalogFace {
+                    name: name.into(),
+                    type_line: Some(type_line.into()),
+                    oracle_text: Some(text.into()),
+                    mana_cost: Some(cost.into()),
+                    power: power.map(str::to_owned),
+                    toughness: toughness.map(str::to_owned),
+                }],
+                legalities: BTreeMap::new(),
+                eligible_formats: vec![],
+                required_by_base_formats: true,
+                program_evidence: "test",
+            };
+            if name == "Shieldmage Elder" {
+                // The second ability targets any spell. CR 400.7c also requires
+                // carrying prevention onto a resulting permanent, including spell-copy tokens.
+                assert!(matches!(
+                    compile_with_reason(&card, &vocabulary),
+                    Err("oracle:unsupported-prevention-source")
+                ));
+            } else {
+                compile_with_reason(&card, &vocabulary)
+                    .unwrap_or_else(|reason| panic!("{name}: {reason}"));
+            }
+        }
+    }
+    #[test]
+    fn source_prevention_rejects_recipient_duration_spell_and_choice_ambiguity() {
+        let vocab = vocabulary();
+        let filter = spellwake_oracle_compiler::filter::parse_object_filter(
+            "creatures",
+            &cached_compiler_vocab(&vocab),
+        )
+        .unwrap();
+        let target = SubjectRefAst::TargetObject {
+            filter: Box::new(filter.clone()),
+            count: TargetCountAst::Exact(1),
+        };
+        for variant in 0..4 {
+            let source = match variant {
+                1 => SubjectRefAst::Anaphora(
+                    "that creature for as long as this remains on the battlefield".into(),
+                ),
+                2 => {
+                    let mut f = filter.clone();
+                    f.any_spell = true;
+                    SubjectRefAst::TargetObject {
+                        filter: Box::new(f),
+                        count: TargetCountAst::Exact(1),
+                    }
+                }
+                3 => SubjectRefAst::Anaphora("a source of your choice".into()),
+                _ => target.clone(),
+            };
+            let ins = InstructionAst::PreventAllDamageFrom {
+                combat_only: true,
+                source: Box::new(source),
+                recipient: if variant == 0 {
+                    Some(Box::new(SubjectRefAst::Player(PlayerRefAst::You)))
+                } else {
+                    None
+                },
+                duration: DurationAst::UntilEndOfTurn,
+            };
+            assert!(
+                lower_combat_damage_instruction(
+                    &ins,
+                    &mut BodyBuilder::new(),
+                    &vocab,
+                    &mut LoweringIds::default(),
+                    false,
+                    false,
+                    None
+                )
+                .is_err(),
+                "variant {variant}"
+            );
+        }
     }
 }

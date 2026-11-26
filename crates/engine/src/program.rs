@@ -4768,6 +4768,9 @@ impl Instruction {
             Self::PreventDamageThisTurn(filter) => matches!(
                 filter,
                 crate::damage::TurnPreventionFilter::ToTarget
+                    | crate::damage::TurnPreventionFilter::FromTarget
+                    | crate::damage::TurnPreventionFilter::CombatFromTarget
+                    | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                     | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget
             ),
             Self::OfferManaPayment { payer, .. } | Self::OfferDynamicManaPayment { payer, .. } => {
@@ -6531,6 +6534,10 @@ impl Instruction {
                     crate::damage::TurnPreventionFilter::Combat
                         | crate::damage::TurnPreventionFilter::All
                         | crate::damage::TurnPreventionFilter::ToAbilitySource
+                        | crate::damage::TurnPreventionFilter::FromAbilitySource
+                        | crate::damage::TurnPreventionFilter::CombatFromAbilitySource
+                        | crate::damage::TurnPreventionFilter::Creatures
+                        | crate::damage::TurnPreventionFilter::CombatFromCreatures
                         | crate::damage::TurnPreventionFilter::CombatToOrFromAbilitySource
                         | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
                         | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
@@ -7849,8 +7856,20 @@ impl ExecutableBody {
                 }
                 Instruction::PreventDamageThisTurn(
                     crate::damage::TurnPreventionFilter::ToTarget
+                    | crate::damage::TurnPreventionFilter::FromTarget
+                    | crate::damage::TurnPreventionFilter::CombatFromTarget
+                    | crate::damage::TurnPreventionFilter::CombatToOrFromTarget
                     | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget,
                 ) => Some(OperandFamily::Permanent),
+                Instruction::PreventDamageThisTurn(
+                    crate::damage::TurnPreventionFilter::FromAbilitySource
+                    | crate::damage::TurnPreventionFilter::CombatFromAbilitySource,
+                ) => {
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    None
+                }
                 Instruction::TakeExtraTurn
                 | Instruction::DisallowDamagePreventionThisTurn
                 | Instruction::GrantNoMaxHandSizeRestOfGame

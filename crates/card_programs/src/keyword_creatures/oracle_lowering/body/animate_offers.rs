@@ -1806,7 +1806,8 @@ pub(super) fn try_lower_preserving_type_animation(
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
-        },
+        }
+        | InstructionAst::KeepExistingTypes(restriction),
         ..,
     ] = instructions
     else {
@@ -2007,8 +2008,12 @@ mod wave11_animation_tests {
             ),
             Ok(None)
         );
-        if let InstructionAst::AbilityRestriction { restriction, .. } = &mut body[1] {
-            *restriction = "it's still a land and can't attack".into();
+        match &mut body[1] {
+            InstructionAst::AbilityRestriction { restriction, .. }
+            | InstructionAst::KeepExistingTypes(restriction) => {
+                *restriction = "it's still a land and can't attack".into();
+            }
+            _ => panic!("expected type-preserving qualifier"),
         }
         assert_eq!(
             try_lower_preserving_type_animation(

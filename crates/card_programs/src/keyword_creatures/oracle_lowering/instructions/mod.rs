@@ -1338,6 +1338,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::Fight { .. }
         | InstructionAst::ForcedBlockByFilter { .. }
         | InstructionAst::PreventAllDamage { .. }
+        | InstructionAst::PreventAllDamageFrom { .. }
         | InstructionAst::PreventDamage { .. }
         | InstructionAst::PreventNextSourceDamage { .. }
         | InstructionAst::RedirectDamage { .. }
@@ -1393,6 +1394,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::CreateEmblemFor { .. }
         | InstructionAst::CreateQualifiedToken(..)
         | InstructionAst::CreateToken { .. }
+        | InstructionAst::CreateTokenWithAbilities { .. }
         | InstructionAst::Earthbend { .. }
         | InstructionAst::Incubate { .. }
         | InstructionAst::Investigate { .. }

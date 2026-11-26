@@ -4248,6 +4248,32 @@ pub(super) fn lower_token_spec(
     bound_x: Option<&ValueExprAst>,
     value_ctx: Option<(&BodyBuilder, bool)>,
 ) -> Result<(TokenCreation, bool), &'static str> {
+    lower_token_spec_with_abilities(spec, recipients, vocabulary, ids, bound_x, value_ctx, None)
+}
+
+pub(super) fn lower_token_spec_with_abilities(
+    spec: &TokenSpecAst,
+    recipients: TokenRecipients,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    bound_x: Option<&ValueExprAst>,
+    value_ctx: Option<(&BodyBuilder, bool)>,
+    compiled_abilities: Option<&FaceAst>,
+) -> Result<(TokenCreation, bool), &'static str> {
+    if let Some(face) = compiled_abilities
+        && (!matches!(spec, TokenSpecAst::Creature { .. })
+            || !face.spell_effects.is_empty()
+            || !face.failures.is_empty()
+            || !face.level_bands.is_empty()
+            || !face.class_levels.is_empty()
+            || face.case_solved != Default::default()
+            || (face.keywords.is_empty()
+                && face.statics.is_empty()
+                && face.replacements.is_empty()
+                && face.abilities.is_empty()))
+    {
+        return Err("oracle:unsupported-token-abilities");
+    }
     let lower_amt = |expr: &ValueExprAst| match value_ctx {
         Some((builder, in_trigger)) => {
             lower_value_expr_in_context(resolve_x(expr, bound_x), builder, in_trigger, vocabulary)
@@ -4534,6 +4560,9 @@ pub(super) fn lower_token_spec(
                         }
                     }
                 }
+            }
+            if let Some(face) = compiled_abilities {
+                lower_token_face_ast(face, is_aura, &mut p, vocabulary, &mut tok_ids)?;
             }
             if is_aura
                 && !matches!(

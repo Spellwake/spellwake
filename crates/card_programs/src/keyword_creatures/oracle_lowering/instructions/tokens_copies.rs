@@ -10,7 +10,19 @@ pub(super) fn lower_tokens_copies_instruction(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
     match ins {
-        InstructionAst::CreateToken { controller, token } => {
+        InstructionAst::CreateToken { controller, token }
+        | InstructionAst::CreateTokenWithAbilities {
+            controller, token, ..
+        } => {
+            let compiled_abilities = match ins {
+                InstructionAst::CreateTokenWithAbilities {
+                    compiled_abilities, ..
+                } => Some(compiled_abilities.as_ref()),
+                _ => None,
+            };
+            if compiled_abilities.is_some() && !matches!(token, TokenSpecAst::Creature { .. }) {
+                return Err("oracle:unsupported-token-abilities");
+            }
             if let TokenSpecAst::Copy {
                 count,
                 source,
@@ -388,13 +400,14 @@ pub(super) fn lower_tokens_copies_instruction(
                 },
                 _ => return Err("oracle:unsupported-token-controller"),
             };
-            let (mut creation, attacking) = lower_token_spec(
+            let (mut creation, attacking) = lower_token_spec_with_abilities(
                 token,
                 recipients,
                 vocabulary,
                 ids,
                 bound_x,
                 Some((builder, in_trigger)),
+                compiled_abilities,
             )?;
             if builder.target == BodyTarget::None
                 && let ValueExpr::CounterCount { subject, kind } = &mut creation.amount
@@ -2288,4 +2301,253 @@ pub(super) fn build_emblem_definition(
         continuous,
         triggered,
     })
+}
+
+#[cfg(test)]
+use super::super::engine_trajectories as token_trajectories;
+
+#[cfg(test)]
+mod wave12_token_ability_tests {
+    use super::*;
+
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new(
+            "wave12-tokens".into(),
+            [0; 32],
+            vec![
+                "Human".into(),
+                "Pest".into(),
+                "Rat".into(),
+                "Warlock".into(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn compiled_token() -> (TokenSpecAst, FaceAst) {
+        let vocab = vocabulary();
+        let parsed = compile_card(
+            &CardInput {
+                oracle_id: "",
+                name: "Token Maker",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Token Maker",
+                    type_line: "Sorcery",
+                    oracle_text: "Create two tapped 1/1 black and green Pest creature tokens with flying and \"When this creature dies, you gain 1 life.\"",
+                }],
+            },
+            &cached_compiler_vocab(&vocab),
+        );
+        assert!(parsed.strictly_compiled);
+        match &parsed.faces[0].spell_effects[0] {
+            InstructionAst::CreateTokenWithAbilities {
+                token,
+                compiled_abilities,
+                ..
+            } => (token.clone(), (**compiled_abilities).clone()),
+            other => panic!("expected compiled token: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wave12_compiled_token_keeps_local_trigger_ids_and_token_properties() {
+        let vocab = vocabulary();
+        let (token, face) = compiled_token();
+        let mut ids = LoweringIds {
+            next_triggered: 73,
+            next_activated: 91,
+            ..Default::default()
+        };
+        let (creation, attacking) = lower_token_spec_with_abilities(
+            &token,
+            TokenRecipients::EachOpponent,
+            &vocab,
+            &mut ids,
+            None,
+            None,
+            Some(&face),
+        )
+        .unwrap();
+        assert!(creation.enters_tapped);
+        assert!(!attacking);
+        assert_eq!(creation.amount, ValueExpr::literal(2));
+        assert_eq!(creation.recipients, TokenRecipients::EachOpponent);
+        let program = creation.definition.program();
+        assert_eq!(program.triggered.len(), 1);
+        assert!(program.printed_keywords.contains(&KeywordAbility::Flying));
+        assert!(program.triggered[0].body.instructions.iter().any(|op|
+            matches!(op, Instruction::AdjustControllerLife { adjustment: LifeAdjustment::Gain(amount) } if *amount == 1.into())));
+        let (second, _) = lower_token_spec_with_abilities(
+            &token,
+            TokenRecipients::EachOpponent,
+            &vocab,
+            &mut ids,
+            None,
+            None,
+            Some(&face),
+        )
+        .unwrap();
+        assert_eq!(creation.definition, second.definition);
+        assert_eq!(ids.next_triggered, 73);
+        assert_eq!(ids.next_activated, 91);
+    }
+
+    #[test]
+    fn wave12_compiled_token_rejects_spell_effects_in_nested_face() {
+        let vocab = vocabulary();
+        let (token, mut face) = compiled_token();
+        face.spell_effects.push(InstructionAst::CreateToken {
+            controller: PlayerRefAst::You,
+            token: token.clone(),
+        });
+        assert!(
+            lower_token_spec_with_abilities(
+                &token,
+                TokenRecipients::Controller,
+                &vocab,
+                &mut LoweringIds::default(),
+                None,
+                None,
+                Some(&face),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wave12_compiled_pest_death_trigger_gains_life_only_when_it_resolves() {
+        use super::token_trajectories::{P0, P1, object, pass_pair, spell, submit, world};
+        use spellwake_engine::{
+            game::GameCommand, mana::ManaPayment, object_identity::ObjectZone, targets::TargetRef,
+        };
+        let vocab = vocabulary();
+        let (mut token, face) = compiled_token();
+        if let TokenSpecAst::Creature { count, .. } = &mut token {
+            **count = ValueExprAst::Const(1);
+        }
+        let (creation, _) = lower_token_spec_with_abilities(
+            &token,
+            TokenRecipients::Controller,
+            &vocab,
+            &mut LoweringIds::default(),
+            None,
+            None,
+            Some(&face),
+        )
+        .unwrap();
+        let game = world(
+            std::sync::Arc::new(vocab),
+            vec![
+                spell(
+                    1,
+                    BodyTarget::None,
+                    vec![Instruction::CreateTokens {
+                        creations: vec![creation],
+                    }],
+                ),
+                spell(
+                    2,
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::DestroyTarget],
+                ),
+            ],
+            vec![],
+        );
+        let cast = submit(
+            &game,
+            P0,
+            GameCommand::CastUntargeted {
+                spell: object(&game, 1),
+                payment: Some(ManaPayment::default()),
+            },
+        );
+        let created = pass_pair(cast.state());
+        let token_object = created
+            .state()
+            .execution()
+            .window()
+            .cards()
+            .iter()
+            .find(|card| card.zone() == ObjectZone::Battlefield)
+            .unwrap()
+            .id();
+        assert_eq!(created.state().execution().life_total(P0), Some(&20.into()));
+        let destroy = submit(
+            created.state(),
+            P0,
+            GameCommand::CastPaid {
+                spell: object(created.state(), 2),
+                target: TargetRef::Object(token_object),
+                payment: ManaPayment::default(),
+            },
+        );
+        let died = pass_pair(destroy.state());
+        assert_eq!(died.state().execution().life_total(P0), Some(&20.into()));
+        let resolved = pass_pair(died.state());
+        assert_eq!(
+            resolved.state().execution().life_total(P0),
+            Some(&21.into())
+        );
+        assert_eq!(
+            resolved.state().execution().life_total(P1),
+            Some(&20.into())
+        );
+    }
+    #[test]
+    fn wave12_named_token_cards_lower_complete() {
+        let vocab = vocabulary();
+        for (name, cost, text) in [
+            (
+                "Rat Out",
+                "{B}",
+                "Target creature gets -1/-1 until end of turn. Create a 1/1 black Rat creature token with \"This token can't block.\"",
+            ),
+            (
+                "Pest Summoning",
+                "{1}{B/G}{B/G}",
+                "Create two 1/1 black and green Pest creature tokens with \"When this token dies, you gain 1 life.\"",
+            ),
+            (
+                "Hunt for Specimens",
+                "{1}{B}",
+                "Create a 1/1 black and green Pest creature token with \"When this creature dies, you gain 1 life.\"\nLearn.",
+            ),
+        ] {
+            let card = InventoryCard {
+                scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+                oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+                name: name.into(),
+                layout: "normal".into(),
+                faces: vec![spellwake_content::CatalogFace {
+                    name: name.into(),
+                    type_line: Some(
+                        if name == "Rat Out" {
+                            "Instant"
+                        } else if name == "Pest Summoning" {
+                            "Sorcery \u{2014} Lesson"
+                        } else {
+                            "Sorcery"
+                        }
+                        .into(),
+                    ),
+                    oracle_text: Some(text.into()),
+                    mana_cost: Some(cost.into()),
+                    power: None,
+                    toughness: None,
+                }],
+                legalities: BTreeMap::new(),
+                eligible_formats: Vec::new(),
+                required_by_base_formats: true,
+                program_evidence: "test",
+            };
+            let result = compile_with_reason(&card, &vocab);
+            if name == "Hunt for Specimens" {
+                // Learn was unsupported before the E14 token AST migration.
+                assert_eq!(result.unwrap_err(), "oracle:unsupported-instruction");
+            } else {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        }
+    }
 }
