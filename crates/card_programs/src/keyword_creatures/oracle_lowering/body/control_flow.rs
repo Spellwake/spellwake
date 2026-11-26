@@ -5285,6 +5285,325 @@ fn try_rewrite_followup_that_player(
     }
 }
 
+fn is_created_token_grant_subject(subj: &SubjectRefAst) -> bool {
+    match subj {
+        SubjectRefAst::Anaphora(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "it" | "them"
+                | "that token"
+                | "the token"
+                | "those tokens"
+                | "the tokens"
+                | "that creature"
+                | "the creature"
+                | "those creatures"
+                | "the creatures"
+                | "that permanent"
+                | "those permanents"
+        ),
+        // "They have \"...\"" parses "they" as PlayerRefAst::ThatPlayer in filter.rs.
+        SubjectRefAst::Player(PlayerRefAst::ThatPlayer) => true,
+        // "The tokens have \"...\"" parses as a bare token-only Group/All/Each filter.
+        SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+            if f.token == Some(true) =>
+        {
+            let mut bare = f.as_ref().clone();
+            bare.token = None;
+            bare.is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn append_quoted_abilities_to_token(token: &mut TokenSpecAst, abilities: &[String]) -> bool {
+    let TokenSpecAst::Creature { keywords, .. } = token else {
+        return false;
+    };
+    for ab in abilities {
+        let trimmed = ab.trim();
+        if !trimmed.is_empty() {
+            keywords.push(format!("\"{trimmed}\""));
+        }
+    }
+    true
+}
+
+/// Fuse a `CreateToken` (or `BindX` ending in `CreateToken`) with consecutive permanent
+/// `GrantAbilityText` instructions referring to the just-created token(s) so those abilities
+/// become part of the token definition (CR 111.3).
+fn fuse_token_grant_ability_text_seq(ins: &[InstructionAst]) -> Option<Vec<InstructionAst>> {
+    let mut changed = false;
+    let mut out: Vec<InstructionAst> = Vec::with_capacity(ins.len());
+    let mut idx = 0usize;
+    while idx < ins.len() {
+        let can_attach_token = match &ins[idx] {
+            InstructionAst::CreateToken {
+                token: TokenSpecAst::Creature { .. },
+                ..
+            } => true,
+            InstructionAst::BindX { body, .. } => matches!(
+                body.last(),
+                Some(InstructionAst::CreateToken {
+                    token: TokenSpecAst::Creature { .. },
+                    ..
+                })
+            ),
+            _ => false,
+        };
+        if can_attach_token {
+            let mut quoted: Vec<String> = Vec::new();
+            let mut scan = idx + 1;
+            while scan < ins.len() {
+                if let InstructionAst::GrantAbilityText {
+                    subject,
+                    ability_text,
+                    duration: DurationAst::Permanent,
+                    ..
+                } = &ins[scan]
+                    && is_created_token_grant_subject(subject)
+                    && !ability_text.trim().is_empty()
+                    && !ability_text.trim().eq_ignore_ascii_case("that ability")
+                {
+                    quoted.push(ability_text.clone());
+                    scan += 1;
+                } else {
+                    break;
+                }
+            }
+            if !quoted.is_empty() {
+                let mut fused = ins[idx].clone();
+                let attached = match &mut fused {
+                    InstructionAst::CreateToken { token, .. } => {
+                        append_quoted_abilities_to_token(token, &quoted)
+                    }
+                    InstructionAst::BindX { body, .. } => match body.last_mut() {
+                        Some(InstructionAst::CreateToken { token, .. }) => {
+                            append_quoted_abilities_to_token(token, &quoted)
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if attached {
+                    out.push(fused);
+                    changed = true;
+                    idx = scan;
+                    continue;
+                }
+            }
+        }
+        out.push(ins[idx].clone());
+        idx += 1;
+    }
+    changed.then_some(out)
+}
+
+fn is_your_zone(z: ZoneFilter) -> bool {
+    matches!(
+        z,
+        ZoneFilter::YourHand
+            | ZoneFilter::YourGraveyard
+            | ZoneFilter::YourLibrary
+            | ZoneFilter::YourGraveyardOrExile
+            | ZoneFilter::YourHandOrGraveyard
+            | ZoneFilter::YourLibraryOrGraveyard
+            | ZoneFilter::YourGraveyardHandOrLibrary
+    )
+}
+
+fn filter_references_you(f: &ObjectFilterAst) -> bool {
+    matches!(
+        f.controller,
+        Some(ControllerRelation::You | ControllerRelation::OwnerYou | ControllerRelation::YourTeam)
+    ) || matches!(
+        f.owner,
+        Some(ControllerRelation::You | ControllerRelation::OwnerYou | ControllerRelation::YourTeam)
+    ) || f.zone.is_some_and(is_your_zone)
+        || f.extra_zones.iter().copied().any(is_your_zone)
+}
+
+fn value_expr_references_you(expr: &ValueExprAst) -> bool {
+    match expr {
+        ValueExprAst::Count(f)
+        | ValueExprAst::AggregateStat { filter: f, .. }
+        | ValueExprAst::ColorsAmong(f)
+        | ValueExprAst::CardTypesAmong(f)
+        | ValueExprAst::SubtypesAmong(f) => filter_references_you(f),
+        ValueExprAst::PlayerStat {
+            player: PlayerRefAst::You,
+            ..
+        }
+        | ValueExprAst::PlayerCounterCount {
+            player: PlayerRefAst::You,
+            ..
+        }
+        | ValueExprAst::StartingLifeTotal(PlayerRefAst::You)
+        | ValueExprAst::LifeChangedThisTurn {
+            player: PlayerRefAst::You,
+            ..
+        }
+        | ValueExprAst::DomainCount
+        | ValueExprAst::Devotion { .. }
+        | ValueExprAst::PartySize
+        | ValueExprAst::CardTypesInGraveyard {
+            all_graveyards: false,
+        } => true,
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::AbsDiff(a, b) => {
+            value_expr_references_you(a) || value_expr_references_you(b)
+        }
+        ValueExprAst::DivConst { expr, .. } => value_expr_references_you(expr),
+        ValueExprAst::Pow { base, exp } => {
+            value_expr_references_you(base) || value_expr_references_you(exp)
+        }
+        ValueExprAst::Shortfall { threshold, actual } => {
+            value_expr_references_you(threshold) || value_expr_references_you(actual)
+        }
+        _ => false,
+    }
+}
+
+fn token_spec_references_you(tok: &TokenSpecAst) -> bool {
+    match tok {
+        TokenSpecAst::Predefined { count, .. } | TokenSpecAst::Creature { count, .. } => {
+            value_expr_references_you(count)
+        }
+        TokenSpecAst::Copy { .. } | TokenSpecAst::Role { .. } => true,
+    }
+}
+
+/// Strictly rewrite top-level actor `PlayerRefAst::You` to `target` for "You and <player> each <act>"
+/// pairs, failing closed when nested filters or expressions depend on controller-relative `You`.
+fn try_rewrite_actor_you_to_player(
+    ins: &InstructionAst,
+    target: PlayerRefAst,
+) -> Option<InstructionAst> {
+    match ins {
+        InstructionAst::Draw {
+            player: PlayerRefAst::You,
+            count,
+            up_to,
+        } if !value_expr_references_you(count) => Some(InstructionAst::Draw {
+            player: target,
+            count: count.clone(),
+            up_to: *up_to,
+        }),
+        InstructionAst::CreateToken {
+            controller: PlayerRefAst::You,
+            token,
+        } if !token_spec_references_you(token) => Some(InstructionAst::CreateToken {
+            controller: target,
+            token: token.clone(),
+        }),
+        InstructionAst::CreateTokenWithAbilities {
+            controller: PlayerRefAst::You,
+            token,
+            compiled_abilities,
+        } if !token_spec_references_you(token) => Some(InstructionAst::CreateTokenWithAbilities {
+            controller: target,
+            token: token.clone(),
+            compiled_abilities: compiled_abilities.clone(),
+        }),
+        InstructionAst::ChangeLife {
+            player: PlayerRefAst::You,
+            delta,
+            gain,
+        } if !value_expr_references_you(delta) => Some(InstructionAst::ChangeLife {
+            player: target,
+            delta: delta.clone(),
+            gain: *gain,
+        }),
+        InstructionAst::Discard {
+            player: PlayerRefAst::You,
+            count,
+            filter,
+            anaphora,
+            random,
+        } if count
+            .as_deref()
+            .is_none_or(|c| !value_expr_references_you(c))
+            && filter.as_deref().is_none_or(|f| !filter_references_you(f)) =>
+        {
+            Some(InstructionAst::Discard {
+                player: target,
+                count: count.clone(),
+                filter: filter.clone(),
+                anaphora: anaphora.clone(),
+                random: *random,
+            })
+        }
+        InstructionAst::Mill {
+            player: PlayerRefAst::You,
+            count,
+        } if !value_expr_references_you(count) => Some(InstructionAst::Mill {
+            player: target,
+            count: count.clone(),
+        }),
+        InstructionAst::Investigate {
+            player: PlayerRefAst::You,
+            count,
+        } if !value_expr_references_you(count) => Some(InstructionAst::Investigate {
+            player: target,
+            count: count.clone(),
+        }),
+        InstructionAst::GainPlayerCounters {
+            player: PlayerRefAst::You,
+            counter_kind,
+            count,
+        } if !value_expr_references_you(count) => Some(InstructionAst::GainPlayerCounters {
+            player: target,
+            counter_kind: counter_kind.clone(),
+            count: count.clone(),
+        }),
+        InstructionAst::Scry {
+            player: PlayerRefAst::You,
+            count,
+        } if !value_expr_references_you(count) => Some(InstructionAst::Scry {
+            player: target,
+            count: count.clone(),
+        }),
+        InstructionAst::Surveil {
+            player: PlayerRefAst::You,
+            count,
+        } if !value_expr_references_you(count) => Some(InstructionAst::Surveil {
+            player: target,
+            count: count.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn instruction_can_precede_if_prev_succeeded(ins: &InstructionAst) -> bool {
+    match ins {
+        InstructionAst::Optional(_)
+        | InstructionAst::OptionalPlayer { .. }
+        | InstructionAst::Sacrifice { .. }
+        | InstructionAst::Discard { .. }
+        | InstructionAst::DiscardHand { .. }
+        | InstructionAst::DiscardUpTo { .. }
+        | InstructionAst::Exile { .. }
+        | InstructionAst::ExileTopLibrary { .. }
+        | InstructionAst::ExileGraveyard { .. }
+        | InstructionAst::MoveZone { .. }
+        | InstructionAst::ReturnZone { .. }
+        | InstructionAst::MoveCounted { .. }
+        | InstructionAst::Destroy { .. }
+        | InstructionAst::PayCost(_)
+        | InstructionAst::PlayerPayCost { .. }
+        | InstructionAst::RemoveCounters { .. }
+        | InstructionAst::SearchLibrary { .. }
+        | InstructionAst::Clash { .. }
+        | InstructionAst::CollectEvidence { .. }
+        | InstructionAst::Forage => true,
+        InstructionAst::BindX { body, .. } => body
+            .last()
+            .is_some_and(instruction_can_precede_if_prev_succeeded),
+        _ => false,
+    }
+}
+
 pub(in super::super) fn lower_instruction_seq(
     ins: &[InstructionAst],
     builder: &mut BodyBuilder,
@@ -5295,6 +5614,8 @@ pub(in super::super) fn lower_instruction_seq(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
     builder.has_source = in_trigger || self_pronoun_valid;
+    let fused_token_grants = fuse_token_grant_ability_text_seq(ins);
+    let ins: &[InstructionAst] = fused_token_grants.as_deref().unwrap_or(ins);
     let mut standalone_x: Option<&ValueExprAst> = None;
     let mut empty_bind_count = 0usize;
     if bound_x.is_none() {
@@ -5363,6 +5684,347 @@ pub(in super::super) fn lower_instruction_seq(
         if empty_bind_count == 1
             && matches!(&ins[i], InstructionAst::BindX { body, .. } if body.is_empty())
         {
+            i += 1;
+            continue;
+        }
+        // Fuse "You and <player> each <action>" pairs emitted by oracle_compiler
+        // (e.g. Bloodroot Apothecary, Thran Spider, Xyris, Loran, Your Temple Is Under Attack).
+        if i + 1 < ins.len()
+            && let InstructionAst::ForEachPlayer {
+                player: PlayerRefAst::You,
+                body: body_you,
+            } = &ins[i]
+            && let InstructionAst::ForEachPlayer {
+                player: other_player,
+                body: body_other,
+            } = &ins[i + 1]
+            && *other_player != PlayerRefAst::You
+            && !body_you.is_empty()
+            && body_you == body_other
+            && let Some(rewritten_other) = body_other
+                .iter()
+                .map(|op| try_rewrite_actor_you_to_player(op, *other_player))
+                .collect::<Option<Vec<InstructionAst>>>()
+        {
+            let mut probe = builder.clone();
+            let mut probe_ids = LoweringIds {
+                next_activated: ids.next_activated,
+                next_triggered: ids.next_triggered,
+                next_mana: ids.next_mana,
+                next_static: ids.next_static,
+                next_ct_slot: ids.next_ct_slot,
+            };
+            if lower_instruction_seq(
+                body_you,
+                &mut probe,
+                vocabulary,
+                &mut probe_ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )
+            .is_ok()
+                && lower_instruction_seq(
+                    &rewritten_other,
+                    &mut probe,
+                    vocabulary,
+                    &mut probe_ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )
+                .is_ok()
+            {
+                *builder = probe;
+                *ids = probe_ids;
+                i += 2;
+                continue;
+            }
+        }
+        // Fuse Counter(unless_pay: Some, unless_action: None) + IfPreviousSucceeded(paid_body)
+        // (e.g. Divert Disaster, Assimilate Essence, Don't Make a Sound).
+        if i + 1 < ins.len()
+            && matches!(
+                &ins[i],
+                InstructionAst::Counter {
+                    unless_pay: Some(_),
+                    unless_action: None,
+                    ..
+                }
+            )
+            && let InstructionAst::IfPreviousSucceeded(paid_body) = &ins[i + 1]
+            && !paid_body.is_empty()
+        {
+            let mut probe = builder.clone();
+            let mut probe_ids = LoweringIds {
+                next_activated: ids.next_activated,
+                next_triggered: ids.next_triggered,
+                next_mana: ids.next_mana,
+                next_static: ids.next_static,
+                next_ct_slot: ids.next_ct_slot,
+            };
+            let start_len = probe.instructions.len();
+            if lower_instruction(
+                &ins[i],
+                &mut probe,
+                vocabulary,
+                &mut probe_ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )
+            .is_ok()
+                && probe.instructions.len() >= start_len + 2
+                && probe.instructions.last() == Some(&Instruction::CounterSpell)
+            {
+                let counter_idx = probe.instructions.len() - 1;
+                let offer_idx = counter_idx - 1;
+                let has_matching_offer = matches!(
+                    probe.instructions.get(offer_idx),
+                    Some(
+                        Instruction::OfferManaPayment {
+                            paid_destination,
+                            declined_destination,
+                            ..
+                        } | Instruction::OfferDynamicManaPayment {
+                            paid_destination,
+                            declined_destination,
+                            ..
+                        }
+                    ) if *paid_destination == counter_idx + 1
+                        && *declined_destination == counter_idx
+                );
+                if has_matching_offer {
+                    let jump_idx = probe.instructions.len();
+                    probe
+                        .instructions
+                        .push(Instruction::Jump { destination: 0 });
+                    let paid_start = probe.instructions.len();
+                    match probe.instructions.get_mut(offer_idx) {
+                        Some(Instruction::OfferManaPayment {
+                            paid_destination, ..
+                        })
+                        | Some(Instruction::OfferDynamicManaPayment {
+                            paid_destination, ..
+                        }) => {
+                            *paid_destination = paid_start;
+                        }
+                        _ => {}
+                    }
+                    if lower_instruction_seq(
+                        paid_body,
+                        &mut probe,
+                        vocabulary,
+                        &mut probe_ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )
+                    .is_ok()
+                        && probe.instructions.len() > paid_start
+                    {
+                        let end_dest = probe.instructions.len();
+                        if let Some(Instruction::Jump { destination }) =
+                            probe.instructions.get_mut(jump_idx)
+                        {
+                            *destination = end_dest;
+                        }
+                        *builder = probe;
+                        *ids = probe_ids;
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Fuse Optional([Draw/ModifyPT]) (or BindX wrapping it) + IfPreviousSucceeded(follow_up)
+        // into a single OptionalSequence (e.g. Force Away, Sanctum of Calm Waters,
+        // Uncover the Moon-Letters, Bebop, Junkyo Bell).
+        if i + 1 < ins.len()
+            && let InstructionAst::IfPreviousSucceeded(follow_up) = &ins[i + 1]
+            && !(i + 2 < ins.len()
+                && matches!(
+                    &ins[i + 2],
+                    InstructionAst::Otherwise(_) | InstructionAst::IfPreviousFailed(_)
+                ))
+        {
+            let opt_uncond: Option<(
+                Option<&ValueExprAst>,
+                &[InstructionAst],
+                Option<&ValueExprAst>,
+            )> = match &ins[i] {
+                InstructionAst::Optional(inner) => match inner.as_slice() {
+                    [
+                        InstructionAst::Draw {
+                            player: PlayerRefAst::You,
+                            count,
+                            up_to: false,
+                        },
+                    ] => Some((bound_x, inner.as_slice(), Some(count.as_ref()))),
+                    [InstructionAst::ModifyPT { .. }] => Some((bound_x, inner.as_slice(), None)),
+                    _ => None,
+                },
+                InstructionAst::BindX { x_expr, body } => match body.as_slice() {
+                    [InstructionAst::Optional(inner)] => match inner.as_slice() {
+                        [
+                            InstructionAst::Draw {
+                                player: PlayerRefAst::You,
+                                count,
+                                up_to: false,
+                            },
+                        ] => Some((
+                            Some(x_expr.as_ref()),
+                            inner.as_slice(),
+                            Some(count.as_ref()),
+                        )),
+                        [InstructionAst::ModifyPT { .. }] => {
+                            Some((Some(x_expr.as_ref()), inner.as_slice(), None))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((eff_x, opt_inner, draw_count_opt)) = opt_uncond {
+                let mut probe = builder.clone();
+                let mut probe_ids = LoweringIds {
+                    next_activated: ids.next_activated,
+                    next_triggered: ids.next_triggered,
+                    next_mana: ids.next_mana,
+                    next_static: ids.next_static,
+                    next_ct_slot: ids.next_ct_slot,
+                };
+                let start = probe.instructions.len();
+                if lower_instruction_seq(
+                    opt_inner,
+                    &mut probe,
+                    vocabulary,
+                    &mut probe_ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    eff_x,
+                )
+                .is_ok()
+                    && probe.instructions.len() > start
+                {
+                    let mut guard_idx: Option<usize> = None;
+                    let mut guard_ok = true;
+                    if let Some(draw_cnt) = draw_count_opt {
+                        let resolved_cnt = resolve_x(draw_cnt, eff_x);
+                        if !matches!(resolved_cnt, ValueExprAst::Const(n) if *n > 0) {
+                            match lower_value_expr_in_context(
+                                resolved_cnt,
+                                &probe,
+                                in_trigger,
+                                vocabulary,
+                            ) {
+                                Ok(cnt_val) => {
+                                    guard_idx = Some(probe.instructions.len());
+                                    probe.instructions.push(Instruction::BranchIfFalse {
+                                        condition: ResolutionCondition {
+                                            left: cnt_val,
+                                            comparison: Comparison::GreaterOrEqual,
+                                            right: ValueExpr::literal(1),
+                                        },
+                                        destination: 0,
+                                    });
+                                }
+                                Err(_) => {
+                                    guard_ok = false;
+                                }
+                            }
+                        }
+                    }
+                    if guard_ok
+                        && lower_instruction_seq(
+                            follow_up,
+                            &mut probe,
+                            vocabulary,
+                            &mut probe_ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            eff_x,
+                        )
+                        .is_ok()
+                    {
+                        let end_dest = probe.instructions.len();
+                        if let Some(g_idx) = guard_idx
+                            && let Some(Instruction::BranchIfFalse { destination, .. }) =
+                                probe.instructions.get_mut(g_idx)
+                        {
+                            *destination = end_dest;
+                        }
+                        let span = end_dest.saturating_sub(start);
+                        if span >= 2 {
+                            prepend_instruction_at(
+                                &mut probe.instructions,
+                                start,
+                                Instruction::OptionalSequence {
+                                    chooser: ResolvingPlayer::Controller,
+                                    instructions: span,
+                                },
+                            );
+                            *builder = probe;
+                            *ids = probe_ids;
+                            i += 2;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        // Unwrap Optional([IfCondition { .. }]) and OptionalPlayer([IfCondition { .. }]) directly
+        // inside lower_instruction_seq so IfCondition lowers via control_flow rather than failing
+        // in lower_instruction (e.g. Deathbringer Liege, Sage-Eye Avengers).
+        if let InstructionAst::Optional(inner) = &ins[i]
+            && let [
+                InstructionAst::IfCondition {
+                    condition,
+                    then_body,
+                },
+            ] = inner.as_slice()
+        {
+            let rewritten = [InstructionAst::IfCondition {
+                condition: condition.clone(),
+                then_body: vec![InstructionAst::Optional(then_body.clone())],
+            }];
+            lower_instruction_seq(
+                &rewritten,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            i += 1;
+            continue;
+        }
+        if let InstructionAst::OptionalPlayer { player, body } = &ins[i]
+            && let [
+                InstructionAst::IfCondition {
+                    condition,
+                    then_body,
+                },
+            ] = body.as_slice()
+        {
+            let rewritten = [InstructionAst::IfCondition {
+                condition: condition.clone(),
+                then_body: vec![InstructionAst::OptionalPlayer {
+                    player: *player,
+                    body: then_body.clone(),
+                }],
+            }];
+            lower_instruction_seq(
+                &rewritten,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
             i += 1;
             continue;
         }
@@ -6379,6 +7041,39 @@ pub(in super::super) fn lower_instruction_seq(
         // When the condition references target anaphora (e.g. Fatal Push / Overload:
         // "Destroy target creature if it has mana value 2 or less") and no target is bound yet,
         // probe then_body first to bind the target before lowering the condition.
+        // Hoist `IfCondition { cond, then_body }` + `IfPreviousSucceeded(follow_up)` when
+        // `then_body` ends in an optional or tracked action (e.g. Force Away, Chandra's Defeat,
+        // Take Out the Trash, Archfiend's Vessel) so `follow_up` runs only when both `cond`
+        // and the action succeeded.
+        if i + 1 < ins.len()
+            && let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = &ins[i]
+            && matches!(&ins[i + 1], InstructionAst::IfPreviousSucceeded(_))
+            && then_body
+                .last()
+                .is_some_and(instruction_can_precede_if_prev_succeeded)
+        {
+            let mut combined = Vec::with_capacity(then_body.len() + 1);
+            combined.extend_from_slice(then_body);
+            combined.push(ins[i + 1].clone());
+            let hoisted = [InstructionAst::IfCondition {
+                condition: condition.clone(),
+                then_body: combined,
+            }];
+            lower_instruction_seq(
+                &hoisted,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            i += 2;
+            continue;
+        }
         if let InstructionAst::IfCondition {
             condition,
             then_body,
@@ -6459,9 +7154,22 @@ pub(in super::super) fn lower_instruction_seq(
                     bound_x,
                 )?;
             }
-            if i + 1 < ins.len()
-                && let InstructionAst::Otherwise(else_body) = &ins[i + 1]
-            {
+            let else_branch_opt: Option<&[InstructionAst]> = if i + 1 < ins.len() {
+                match &ins[i + 1] {
+                    InstructionAst::Otherwise(else_body) => Some(else_body.as_slice()),
+                    InstructionAst::IfPreviousFailed(else_body)
+                        if !then_body
+                            .last()
+                            .is_some_and(instruction_can_precede_if_prev_succeeded) =>
+                    {
+                        Some(else_body.as_slice())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(else_body) = else_branch_opt {
                 let jump_idx = builder.instructions.len();
                 builder
                     .instructions
@@ -6474,14 +7182,14 @@ pub(in super::super) fn lower_instruction_seq(
                         *destination = else_dest;
                     }
                 }
-                let unwrapped_else: Vec<InstructionAst>;
-                let else_slice: &[InstructionAst] = if contains_replace_effect(else_body) {
-                    unwrapped_else =
-                        substitute_those_tokens(&strip_replace_effect(else_body), then_body);
-                    &unwrapped_else
+                let fused_then = fuse_token_grant_ability_text_seq(then_body);
+                let then_for_tokens: &[InstructionAst] = fused_then.as_deref().unwrap_or(then_body);
+                let unwrapped_else = if contains_replace_effect(else_body) {
+                    substitute_those_tokens(&strip_replace_effect(else_body), then_for_tokens)
                 } else {
-                    else_body
+                    substitute_those_tokens(else_body, then_for_tokens)
                 };
+                let else_slice: &[InstructionAst] = &unwrapped_else;
                 lower_instruction_seq(
                     else_slice,
                     builder,
@@ -7344,6 +8052,88 @@ pub(in super::super) fn lower_instruction_seq(
                                 i += 2;
                                 continue;
                             }
+                            if let [InstructionAst::IfPreviousSucceeded(then_body)] =
+                                body.as_slice()
+                            {
+                                let mut sub = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+                                sub.target = builder.target;
+                                sub.has_source = builder.has_source;
+                                sub.last_group_filter = builder.last_group_filter;
+                                lower_instruction_seq(
+                                    then_body,
+                                    &mut sub,
+                                    vocabulary,
+                                    ids,
+                                    in_trigger,
+                                    self_pronoun_valid,
+                                    Some(x_expr.as_ref()),
+                                )?;
+                                if sub.target != BodyTarget::None {
+                                    builder.bind_target(sub.target)?;
+                                }
+                                if builder.graveyard_target_bounds.is_none() {
+                                    builder.graveyard_target_bounds = sub.graveyard_target_bounds;
+                                }
+                                builder.x_target_count |= sub.x_target_count;
+                                builder.up_to_x_target_count |= sub.up_to_x_target_count;
+                                builder.up_to_one_target |= sub.up_to_one_target;
+                                let paid_ops = sub.instructions;
+                                if i + 2 < ins.len()
+                                    && let InstructionAst::Otherwise(else_body) = &ins[i + 2]
+                                {
+                                    let else_ops = lower_sub_branch(else_body, builder, ids)?;
+                                    let choice_op = build_multi_option_offer_instruction(
+                                        payer, mana_costs, life_opt, &paid_ops, &else_ops,
+                                    )?;
+                                    builder.instructions.push(choice_op);
+                                    i += 3;
+                                } else {
+                                    let choice_op = build_multi_option_offer_instruction(
+                                        payer,
+                                        mana_costs,
+                                        life_opt,
+                                        &paid_ops,
+                                        &[],
+                                    )?;
+                                    builder.instructions.push(choice_op);
+                                    i += 2;
+                                }
+                                continue;
+                            }
+                            if let [InstructionAst::IfPreviousFailed(else_body)] = body.as_slice() {
+                                let mut sub = BodyBuilder::with_trigger_hint(builder.trigger_hint);
+                                sub.target = builder.target;
+                                sub.has_source = builder.has_source;
+                                sub.last_group_filter = builder.last_group_filter;
+                                lower_instruction_seq(
+                                    else_body,
+                                    &mut sub,
+                                    vocabulary,
+                                    ids,
+                                    in_trigger,
+                                    self_pronoun_valid,
+                                    Some(x_expr.as_ref()),
+                                )?;
+                                if sub.target != BodyTarget::None {
+                                    builder.bind_target(sub.target)?;
+                                }
+                                if builder.graveyard_target_bounds.is_none() {
+                                    builder.graveyard_target_bounds = sub.graveyard_target_bounds;
+                                }
+                                builder.x_target_count |= sub.x_target_count;
+                                builder.up_to_x_target_count |= sub.up_to_x_target_count;
+                                builder.up_to_one_target |= sub.up_to_one_target;
+                                let choice_op = build_multi_option_offer_instruction(
+                                    payer,
+                                    mana_costs,
+                                    life_opt,
+                                    &[],
+                                    &sub.instructions,
+                                )?;
+                                builder.instructions.push(choice_op);
+                                i += 2;
+                                continue;
+                            }
                         }
                         _ => {}
                     }
@@ -7558,6 +8348,81 @@ pub(in super::super) fn lower_instruction_seq(
                             i += 2;
                             continue;
                         }
+                        if let [InstructionAst::IfPreviousSucceeded(then_body)] = body.as_slice() {
+                            let offer_idx = builder.instructions.len();
+                            builder.instructions.push(with_offer_dests(
+                                offer_template,
+                                offer_idx + 1,
+                                0,
+                            ));
+                            lower_instruction_seq(
+                                then_body,
+                                builder,
+                                vocabulary,
+                                ids,
+                                in_trigger,
+                                self_pronoun_valid,
+                                Some(x_expr.as_ref()),
+                            )?;
+                            if i + 2 < ins.len()
+                                && let InstructionAst::Otherwise(else_body) = &ins[i + 2]
+                            {
+                                let jump_idx = builder.instructions.len();
+                                builder
+                                    .instructions
+                                    .push(Instruction::Jump { destination: 0 });
+                                let else_start = builder.instructions.len();
+                                set_offer_declined(
+                                    builder.instructions.get_mut(offer_idx),
+                                    else_start,
+                                );
+                                lower_instruction_seq(
+                                    else_body,
+                                    builder,
+                                    vocabulary,
+                                    ids,
+                                    in_trigger,
+                                    self_pronoun_valid,
+                                    bound_x,
+                                )?;
+                                let end_dest = builder.instructions.len();
+                                if let Some(Instruction::Jump { destination }) =
+                                    builder.instructions.get_mut(jump_idx)
+                                {
+                                    *destination = end_dest;
+                                }
+                                i += 3;
+                            } else {
+                                let end_dest = builder.instructions.len();
+                                set_offer_declined(
+                                    builder.instructions.get_mut(offer_idx),
+                                    end_dest,
+                                );
+                                i += 2;
+                            }
+                            continue;
+                        }
+                        if let [InstructionAst::IfPreviousFailed(else_body)] = body.as_slice() {
+                            let offer_idx = builder.instructions.len();
+                            builder.instructions.push(with_offer_dests(
+                                offer_template,
+                                0,
+                                offer_idx + 1,
+                            ));
+                            lower_instruction_seq(
+                                else_body,
+                                builder,
+                                vocabulary,
+                                ids,
+                                in_trigger,
+                                self_pronoun_valid,
+                                Some(x_expr.as_ref()),
+                            )?;
+                            let end_dest = builder.instructions.len();
+                            set_offer_paid(builder.instructions.get_mut(offer_idx), end_dest);
+                            i += 2;
+                            continue;
+                        }
                     }
                     _ => {}
                 }
@@ -7736,22 +8601,43 @@ pub(in super::super) fn lower_instruction_seq(
             i += 1;
             continue;
         }
-        // Lower IfPreviousSucceeded / IfPreviousFailed (+ optional Otherwise or paired IfPreviousFailed)
-        // right after an action that tracks last_action_succeeded.
-        if let InstructionAst::IfPreviousSucceeded(then_body)
-        | InstructionAst::IfPreviousFailed(then_body) = &ins[i]
+        // Lower IfPreviousSucceeded / IfPreviousFailed (including BindX-wrapped forms, plus
+        // optional Otherwise or paired IfPreviousFailed) right after an action that tracks
+        // last_action_succeeded.
+        let if_prev_entry: Option<(bool, &[InstructionAst], Option<&ValueExprAst>)> = match &ins[i]
         {
-            let succeeded = matches!(&ins[i], InstructionAst::IfPreviousSucceeded(_));
+            InstructionAst::IfPreviousSucceeded(tb) => Some((true, tb.as_slice(), bound_x)),
+            InstructionAst::IfPreviousFailed(tb) => Some((false, tb.as_slice(), bound_x)),
+            InstructionAst::BindX { x_expr, body } => match body.as_slice() {
+                [InstructionAst::IfPreviousSucceeded(tb)] => {
+                    Some((true, tb.as_slice(), Some(x_expr.as_ref())))
+                }
+                [InstructionAst::IfPreviousFailed(tb)] => {
+                    Some((false, tb.as_slice(), Some(x_expr.as_ref())))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((succeeded, then_body, then_bound_x)) = if_prev_entry {
             let prev_was_optional = i > 0
-                && matches!(
-                    &ins[i - 1],
-                    InstructionAst::Optional(_) | InstructionAst::OptionalPlayer { .. }
-                );
+                && match &ins[i - 1] {
+                    InstructionAst::Optional(_) | InstructionAst::OptionalPlayer { .. } => true,
+                    InstructionAst::BindX { body, .. } => matches!(
+                        body.last(),
+                        Some(InstructionAst::Optional(_) | InstructionAst::OptionalPlayer { .. })
+                    ),
+                    _ => false,
+                };
             let prev_emitted_tracks_action = builder.instructions.last().is_some_and(|op| {
                 matches!(
                     op,
                     Instruction::CollectEvidence { .. }
                         | Instruction::Behold { .. }
+                        | Instruction::PayLife { .. }
+                        | Instruction::PayEnergy { .. }
+                        | Instruction::PayControllerLife(_)
+                        | Instruction::PayControllerEnergy(_)
                         | Instruction::Sacrifice { .. }
                         | Instruction::SacrificeSubject { .. }
                         | Instruction::SacrificeMatching(_)
@@ -7876,7 +8762,7 @@ pub(in super::super) fn lower_instruction_seq(
                     ids,
                     in_trigger,
                     self_pronoun_valid,
-                    bound_x,
+                    then_bound_x,
                 )?;
                 let paired_else: Option<&[InstructionAst]> = if i + 1 < ins.len() {
                     match &ins[i + 1] {

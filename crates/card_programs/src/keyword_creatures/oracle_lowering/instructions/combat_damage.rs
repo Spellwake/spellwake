@@ -545,6 +545,8 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         SubjectRefAst::Anaphora(a)
                             if a.eq_ignore_ascii_case("itself")
+                                || a.eq_ignore_ascii_case("himself")
+                                || a.eq_ignore_ascii_case("herself")
                                 || a.eq_ignore_ascii_case("themselves") =>
                         {
                             match &src {
@@ -1467,7 +1469,10 @@ pub(super) fn lower_combat_damage_instruction(
                         s,
                         SubjectRefAst::Anaphora(a)
                             if (self_pronoun_valid || in_trigger || builder.has_source)
-                                && a.trim().eq_ignore_ascii_case("itself")
+                                && matches!(
+                                    a.trim().to_ascii_lowercase().as_str(),
+                                    "itself" | "himself" | "herself"
+                                )
                     ) =>
                 {
                     let amt_expr = lower_amt(builder)?;
@@ -3306,6 +3311,22 @@ pub(super) fn lower_combat_damage_instruction(
                 ));
                 return Ok(());
             }
+            if low
+                == "creatures you control with toughness greater than their power assign combat damage equal to their toughness rather than their power"
+            {
+                let mut clause = ObjectClause::creature().controlled();
+                clause.flags = clause
+                    .flags
+                    .union(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER);
+                builder.instructions.push(Instruction::ChangeGroup {
+                    group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                        BlockingRestriction::AssignDamageByToughness,
+                    )]),
+                    duration: dur,
+                });
+                return Ok(());
+            }
             if low == "no_max_hand_size"
                 && matches!(subject.as_ref(), SubjectRefAst::Player(PlayerRefAst::You))
             {
@@ -4999,7 +5020,16 @@ pub(super) fn lower_combat_damage_instruction(
                         });
                         return Ok(());
                     }
-                    SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+                    SubjectRefAst::Anaphora(_)
+                        if is_permanent_body_target(builder.target)
+                            || matches!(
+                                builder.target,
+                                BodyTarget::SingleAnyTarget
+                                    | BodyTarget::SingleCreatureOrPlayer
+                                    | BodyTarget::SinglePlayerOrPlaneswalker
+                                    | BodyTarget::SingleOpponentOrPlaneswalker
+                            ) =>
+                    {
                         let parts =
                             ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]);
                         if let Some((minimum, maximum)) =

@@ -110,6 +110,13 @@ fn numeric(change: CreatureTypeTextChange, value: &mut NumericExpression) {
             selector: value, ..
         } => selector(change, value),
         NumericExpression::Eval(expr) => expr.rewrite_creature_type(change.from, change.to),
+        NumericExpression::Add(lhs, rhs) => {
+            numeric(change, lhs);
+            numeric(change, rhs);
+        }
+        NumericExpression::Scale { expr, .. } | NumericExpression::Cap { expr, .. } => {
+            numeric(change, expr);
+        }
     }
 }
 fn rewrite_static_restriction(change: CreatureTypeTextChange, rule: &mut StaticRestriction) {
@@ -170,9 +177,8 @@ fn rewrite_battlefield_static_parts(change: CreatureTypeTextChange, parts: &mut 
                 rewrite_static_restriction(change, restriction);
             }
             StaticPart::GrantActivated(ability)
-            | StaticPart::GrantActivatedRestricted { ability, .. } => {
-                body(change, &mut ability.body)
-            }
+            | StaticPart::GrantActivatedRestricted { ability, .. }
+            | StaticPart::GrantLoyalty { ability, .. } => body(change, &mut ability.body),
             StaticPart::GrantSubtypeProtection { types, .. } => static_subtype(change, types),
             StaticPart::GrantTrigger(ability) => trigger(change, ability),
             StaticPart::Abilities(ability_change) => {
@@ -184,6 +190,7 @@ fn rewrite_battlefield_static_parts(change: CreatureTypeTextChange, parts: &mut 
             | StaticPart::ControlSourceController
             | StaticPart::Color(_)
             | StaticPart::InheritCounteredCreatureAbilities
+            | StaticPart::InheritZoneAbilities { .. }
             | StaticPart::InheritExiledCreatureAbilities
             | StaticPart::GrantFixedColorMana(_)
             | StaticPart::GrantAnyColorMana
@@ -226,7 +233,8 @@ fn parts(change: CreatureTypeTextChange, value: &mut ResolvedPartsSpec) {
             }
             ResolvedPartSpec::GrantTrigger(ability) => trigger(change, ability),
             ResolvedPartSpec::GrantActivated(ability)
-            | ResolvedPartSpec::GrantActivatedRestricted { ability, .. } => {
+            | ResolvedPartSpec::GrantActivatedRestricted { ability, .. }
+            | ResolvedPartSpec::GrantLoyalty { ability, .. } => {
                 body(change, &mut ability.body);
             }
             ResolvedPartSpec::GrantAnyColorMana

@@ -86,6 +86,28 @@ impl EffectWindow {
                     comparison,
                     right,
                 } = condition;
+                let zero_target_skip = entry.targets().targets().is_empty()
+                    && self
+                        .payloads
+                        .get(&entry.id())
+                        .and_then(StackPayload::body)
+                        .is_some_and(ExecutableBody::is_up_to_one_target)
+                    && (left.uses_target() || right.uses_target());
+                if zero_target_skip {
+                    self.set_instruction(*destination)?;
+                    append
+                        .records
+                        .push(crate::occurrence::RulesRecord::InstructionBranch {
+                            entry: entry.id(),
+                            instruction: from,
+                            condition: condition.clone(),
+                            left: 0.into(),
+                            right: 0.into(),
+                            result: false,
+                            next: *destination,
+                        });
+                    return Ok(true);
+                }
                 let left = self.resolve_value_expr(entry.controller(), left)?;
                 let right = self.resolve_value_expr(entry.controller(), right)?;
                 let result = comparison.evaluate(&left, &right);

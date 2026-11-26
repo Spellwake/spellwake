@@ -7646,7 +7646,6 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         | "flip you won"
         | "creature it devoured"
         | "of that spell's colors"
-        | "unspent mana you have"
         | "unspent white mana you have"
         | "unspent blue mana you have"
         | "unspent black mana you have"
@@ -7730,6 +7729,12 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         _ => {}
     }
 
+    if fe == "unspent mana you have" {
+        return Ok(ValueExprAst::EventCountThisTurn {
+            event: "unspent mana you have".to_string(),
+            player: Some(PlayerRefAst::You),
+        });
+    }
     // Compositional Wave E8 `for each ...` value expressions
     if let Some(after_dom) = fe
         .strip_prefix("basic land type among lands ")

@@ -6021,6 +6021,58 @@ pub(super) fn lower_trigger_spec(
             _ => {}
         }
     }
+    if !handled_single && unwrapped_events.len() == 2 {
+        fn is_plain_cycled_other_or_any(ev: &TriggerEventAst) -> Option<&ObjectFilterAst> {
+            if let TriggerEventAst::Cycled { subject } = ev
+                && let SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) =
+                    subject.as_ref()
+                && filter_only_has(
+                    f,
+                    FilterAllow {
+                        controller: true,
+                        flags: true,
+                        ..FilterAllow::NONE
+                    },
+                )
+                && matches!(f.controller, None | Some(ControllerRelation::You))
+                && (f.flags.is_empty() || f.flags == AstFilterFlags::EXCLUDE_SELF)
+            {
+                return Some(f.as_ref());
+            }
+            None
+        }
+        let matched_cycle_or_discard = match (&unwrapped_events[0], &unwrapped_events[1]) {
+            (
+                cycled_ev,
+                disc_ev @ TriggerEventAst::CardDiscarded {
+                    player: PlayerRefAst::You,
+                    filter,
+                },
+            ) if is_plain_cycled_other_or_any(cycled_ev) == Some(filter.as_ref()) => Some(disc_ev),
+            (
+                disc_ev @ TriggerEventAst::CardDiscarded {
+                    player: PlayerRefAst::You,
+                    filter,
+                },
+                cycled_ev,
+            ) if is_plain_cycled_other_or_any(cycled_ev) == Some(filter.as_ref()) => Some(disc_ev),
+            _ => None,
+        };
+        if let Some(disc_ev) = matched_cycle_or_discard {
+            // Engine Discarded / DiscardedMatching triggers on both regular discards and
+            // cycling discards (CR 702.29a); emitting both Cycled and CardDiscarded would
+            // double-trigger when cycling a card.
+            let (e, g) = lower_trigger_event(disc_ev, vocabulary)?;
+            if g != TriggerGrouping::EachOccurrence {
+                if qualified_first_time && g == TriggerGrouping::OneOrMoreByPlayer {
+                    return Err("oracle:unsupported-trigger-qualifier");
+                }
+                grouping = g;
+            }
+            events.push(e);
+            handled_single = true;
+        }
+    }
     if !handled_single {
         for ev in &unwrapped_events {
             let (e, g) = lower_trigger_event(ev, vocabulary)?;
@@ -6097,6 +6149,23 @@ pub(super) fn lower_trigger_spec(
             spellwake_oracle_compiler::filter::parse_object_filter(flt_raw.trim(), &compiler_vocab)
                 .map_err(|_| "oracle:unsupported-trigger-condition")?;
         *source = lower_object_filter(&parsed, vocabulary)?;
+        grouping = TriggerGrouping::OneOrMoreTogether;
+        consumed_if = true;
+    }
+    if !consumed_if
+        && let (
+            TriggerEvent::Attacks {
+                subject,
+                mode: mode @ AttackTriggerMode::Individual { .. },
+            },
+            Some(ConditionAst::PlayerActionThisTurn { action, .. }),
+        ) = (&mut event, &trig.intervening_if)
+        && *subject == ObjectFilter::creature().opposing()
+        && action
+            .trim()
+            .eq_ignore_ascii_case("they attacked you and/or a planeswalker you control")
+    {
+        *mode = AttackTriggerMode::AtControllerOrPlaneswalker;
         grouping = TriggerGrouping::OneOrMoreTogether;
         consumed_if = true;
     }
@@ -7329,41 +7398,91 @@ pub(super) fn lower_trigger_event(
                             }
                         }
                     };
-                    if let Some(inst_sorc) = inst_sorc_only
-                        && let Ok(tgt_filters) = lower_trigger_subject_filters(t, vocabulary)
-                    {
-                        let mut sub_events = Vec::with_capacity(tgt_filters.len());
-                        for tgt_filter in tgt_filters {
-                            let event = match caster {
-                                PlayerRefAst::You => TriggerEvent::TargetedByController {
-                                    subject: tgt_filter,
-                                    spell_only: true,
-                                    instant_or_sorcery_only: inst_sorc,
-                                },
-                                PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
-                                    TriggerEvent::Targeted {
-                                        subject: tgt_filter,
-                                        by_opponent: true,
-                                        spell_only: true,
-                                        instant_or_sorcery_only: inst_sorc,
+                    if let Some(inst_sorc) = inst_sorc_only {
+                        let mut parts = Vec::new();
+                        expand_trigger_subject_parts(t, &mut parts);
+                        if !parts.is_empty() {
+                            let mut sub_events = Vec::with_capacity(parts.len());
+                            let mut all_ok = true;
+                            for part in parts {
+                                if let SubjectRefAst::Player(p) = part {
+                                    let Ok(rel) = lower_player_relation(*p) else {
+                                        all_ok = false;
+                                        break;
+                                    };
+                                    match caster {
+                                        PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
+                                            sub_events.push(TriggerEvent::PlayerTargeted {
+                                                player: rel,
+                                                by_opponent: true,
+                                                spell_only: true,
+                                                instant_or_sorcery_only: inst_sorc,
+                                            });
+                                        }
+                                        PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => {
+                                            sub_events.push(TriggerEvent::PlayerTargeted {
+                                                player: rel,
+                                                by_opponent: false,
+                                                spell_only: true,
+                                                instant_or_sorcery_only: inst_sorc,
+                                            });
+                                        }
+                                        _ => {
+                                            all_ok = false;
+                                            break;
+                                        }
                                     }
-                                }
-                                PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => {
-                                    TriggerEvent::Targeted {
-                                        subject: tgt_filter,
-                                        by_opponent: false,
-                                        spell_only: true,
-                                        instant_or_sorcery_only: inst_sorc,
+                                } else if let Ok(tgt_filters) =
+                                    lower_trigger_subject_filters(part, vocabulary)
+                                {
+                                    for tgt_filter in tgt_filters {
+                                        let event = match caster {
+                                            PlayerRefAst::You => {
+                                                TriggerEvent::TargetedByController {
+                                                    subject: tgt_filter,
+                                                    spell_only: true,
+                                                    instant_or_sorcery_only: inst_sorc,
+                                                }
+                                            }
+                                            PlayerRefAst::AnyOpponent
+                                            | PlayerRefAst::EachOpponent => {
+                                                TriggerEvent::Targeted {
+                                                    subject: tgt_filter,
+                                                    by_opponent: true,
+                                                    spell_only: true,
+                                                    instant_or_sorcery_only: inst_sorc,
+                                                }
+                                            }
+                                            PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => {
+                                                TriggerEvent::Targeted {
+                                                    subject: tgt_filter,
+                                                    by_opponent: false,
+                                                    spell_only: true,
+                                                    instant_or_sorcery_only: inst_sorc,
+                                                }
+                                            }
+                                            _ => {
+                                                all_ok = false;
+                                                break;
+                                            }
+                                        };
+                                        sub_events.push(event);
                                     }
+                                    if !all_ok {
+                                        break;
+                                    }
+                                } else {
+                                    all_ok = false;
+                                    break;
                                 }
-                                _ => return Err("oracle:unsupported-spell-target"),
-                            };
-                            sub_events.push(event);
+                            }
+                            if all_ok && !sub_events.is_empty() {
+                                return Ok((
+                                    wrap_trigger_events_any_of(sub_events)?,
+                                    TriggerGrouping::OneOrMoreTogether,
+                                ));
+                            }
                         }
-                        return Ok((
-                            wrap_trigger_events_any_of(sub_events)?,
-                            TriggerGrouping::OneOrMoreTogether,
-                        ));
                     }
                     return Err("oracle:unsupported-spell-target");
                 }
@@ -7535,11 +7654,54 @@ pub(super) fn lower_trigger_event(
                         AttackTriggerMode::Individual {
                             capture_defender: false,
                         }
-                    } else if let Some(after_you) = other.strip_prefix("you with ")
-                        && matches!(
+                    } else if other
+                        == "you with two or more creatures, draws their second card each turn, or casts their second spell each turn"
+                        && (matches!(
                             actor,
                             Some(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent)
-                        )
+                        ) || (actor.is_none()
+                            && matches!(
+                                subject.as_deref(),
+                                Some(SubjectRefAst::Player(
+                                    PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent
+                                ))
+                            )))
+                    {
+                        let second = NonZeroU16::new(2).ok_or("oracle:zero-nth")?;
+                        let second_spell = NonZeroU32::new(2).ok_or("oracle:zero-nth")?;
+                        return Ok((
+                            TriggerEvent::AnyOf(vec![
+                                TriggerEvent::Attacks {
+                                    subject: ObjectFilter::creature().opposing(),
+                                    mode: AttackTriggerMode::OpponentsAtController { minimum: 2 },
+                                },
+                                TriggerEvent::PlayerAction {
+                                    player: PlayerRelation::Opponent,
+                                    action: PlayerTriggerAction::DrewCard {
+                                        nth_each_turn: Some(second),
+                                    },
+                                },
+                                TriggerEvent::SpellCast {
+                                    caster: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                                    filter: SpellFilter::any().ordinal_this_turn(second_spell),
+                                    self_cast: false,
+                                    include_copy: false,
+                                    min_mana_value: None,
+                                },
+                            ]),
+                            TriggerGrouping::EachOccurrence,
+                        ));
+                    } else if let Some(after_you) = other.strip_prefix("you with ")
+                        && (matches!(
+                            actor,
+                            Some(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent)
+                        ) || (actor.is_none()
+                            && matches!(
+                                subject.as_deref(),
+                                Some(SubjectRefAst::Player(
+                                    PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent
+                                ))
+                            )))
                         && let Some((n, "creatures")) = parse_attack_count_prefix(after_you.trim())
                     {
                         grouping = TriggerGrouping::OneOrMoreTogether;
@@ -8365,9 +8527,11 @@ pub(super) fn lower_trigger_event(
                         f,
                         FilterAllow {
                             controller: true,
+                            flags: true,
                             ..FilterAllow::NONE
                         },
-                    ) && matches!(f.controller, None | Some(ControllerRelation::You)) =>
+                    ) && matches!(f.controller, None | Some(ControllerRelation::You))
+                        && (f.flags.is_empty() || f.flags == AstFilterFlags::EXCLUDE_SELF) =>
                 {
                     false
                 }
@@ -9388,6 +9552,43 @@ pub(super) fn lower_trigger_event(
                         TriggerGrouping::OneOrMoreTogether,
                     ));
                 }
+                "one or more creatures you control fight or become blocked" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::StatusChanged {
+                                subject: ObjectFilter::creature().controlled(),
+                                kind: StatusTriggerKind::Fought,
+                            },
+                            TriggerEvent::BlocksOrBlocked {
+                                subject: ObjectFilter::creature().controlled(),
+                                kind: BlockTriggerKind::BecomesBlocked {
+                                    capture_defender: false,
+                                },
+                            },
+                        ]),
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "an opponent is dealt damage by a red instant or sorcery spell you control or by a red planeswalker you control" =>
+                {
+                    return Ok((
+                        TriggerEvent::DealsDamage {
+                            source: ObjectFilter::Either(
+                                ObjectClause::any()
+                                    .any_types(CardTypeMask::INSTANT.union(CardTypeMask::SORCERY))
+                                    .controlled()
+                                    .with_color(ObjectColorFilter::has(Color::Red)),
+                                ObjectClause::any()
+                                    .any_types(CardTypeMask::PLANESWALKER)
+                                    .controlled()
+                                    .with_color(ObjectColorFilter::has(Color::Red)),
+                            ),
+                            recipient: DamageTriggerRecipient::Opponent,
+                            combat_only: false,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
                 _ => {}
             }
             if let Some(after_play) = low.strip_prefix("you play ")
@@ -9760,6 +9961,7 @@ pub(super) fn lower_trigger_event(
                 }
                 "scry_to_bottom" | "scry_bottom" => PlayerTriggerAction::ScryToBottom,
                 "waterbend" | "waterbends" | "you waterbend" => PlayerTriggerAction::Waterbended,
+                "earthbend" | "earthbends" | "you earthbend" => PlayerTriggerAction::Earthbent,
                 "finish_voting" | "players finish voting" => PlayerTriggerAction::FinishedVoting,
                 "own_spell_countered"
                 | "a spell you've cast is countered"
@@ -12541,6 +12743,13 @@ fn try_lower_specialized_trigger_condition(
                     left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
                         OpponentTurnStat::CreatureEntered,
                     )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "~ was cast using web-slinging" | "they were cast using web-slinging" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::PaidAlternative),
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(1),
                 })))

@@ -67,7 +67,11 @@ pub(super) fn lower_static(
                         layout: "normal",
                         faces: vec![FaceInput {
                             name: "Synthetic",
-                            type_line: "Creature",
+                            type_line: if looks_like_loyalty_ability(cleaned) {
+                                "Planeswalker"
+                            } else {
+                                "Creature"
+                            },
                             oracle_text: cleaned,
                         }],
                     },
@@ -283,7 +287,11 @@ pub(super) fn lower_static(
                         layout: "normal",
                         faces: vec![spellwake_oracle_compiler::FaceInput {
                             name: "~",
-                            type_line: "Creature",
+                            type_line: if looks_like_loyalty_ability(cleaned) {
+                                "Planeswalker"
+                            } else {
+                                "Creature"
+                            },
                             oracle_text: cleaned,
                         }],
                     },
@@ -360,9 +368,26 @@ pub(super) fn lower_static(
             let entry_tap = program.permanent().and_then(|p| p.entry_tap);
             let mut parts = Vec::new();
             let mut has_color_part = false;
+            let mut effective_grant_keywords: Vec<String> = grant_keywords.clone();
             if let Some(desc) = set_types {
+                let mut desc_type_slice: &str = desc.as_str();
+                if effective_grant_keywords.is_empty()
+                    && let Some((lhs_ty, rhs_kw)) = desc_type_slice
+                        .split_once(" and has ")
+                        .or_else(|| desc_type_slice.split_once(" and have "))
+                {
+                    let compiler_vocab = cached_compiler_vocab(vocabulary);
+                    if let Some(parsed_kws) = spellwake_oracle_compiler::filter::parse_keyword_list(
+                        rhs_kw.trim(),
+                        &compiler_vocab,
+                    ) && !parsed_kws.is_empty()
+                    {
+                        desc_type_slice = lhs_ty.trim();
+                        effective_grant_keywords = parsed_kws;
+                    }
+                }
                 let type_parts = parse_static_type_and_color_parts_with_entry(
-                    desc,
+                    desc_type_slice,
                     *additive_types,
                     entry_tap,
                     vocabulary,
@@ -379,46 +404,61 @@ pub(super) fn lower_static(
                 if has_color_part {
                     return Err("oracle:unsupported-layer-color");
                 }
-                let mut colors = BTreeSet::new();
-                let mut saw_colorless = false;
-                for raw_tok in color_str
-                    .replace(" and ", " ")
-                    .replace(',', " ")
-                    .split_whitespace()
-                {
-                    match raw_tok.to_ascii_lowercase().as_str() {
-                        "white" => {
-                            colors.insert(Color::White);
+                let color_clean = color_str.trim().trim_end_matches('.').trim();
+                let colors = if color_clean.eq_ignore_ascii_case("all colors") {
+                    BTreeSet::from([
+                        Color::White,
+                        Color::Blue,
+                        Color::Black,
+                        Color::Red,
+                        Color::Green,
+                    ])
+                } else {
+                    let mut parsed_colors = BTreeSet::new();
+                    let mut saw_colorless = false;
+                    for raw_tok in color_clean
+                        .replace(" and ", " ")
+                        .replace(',', " ")
+                        .split_whitespace()
+                    {
+                        match raw_tok.to_ascii_lowercase().as_str() {
+                            "white" => {
+                                parsed_colors.insert(Color::White);
+                            }
+                            "blue" => {
+                                parsed_colors.insert(Color::Blue);
+                            }
+                            "black" => {
+                                parsed_colors.insert(Color::Black);
+                            }
+                            "red" => {
+                                parsed_colors.insert(Color::Red);
+                            }
+                            "green" => {
+                                parsed_colors.insert(Color::Green);
+                            }
+                            "colorless" => {
+                                saw_colorless = true;
+                            }
+                            "a" | "an" => {}
+                            _ => return Err("oracle:unsupported-layer-color"),
                         }
-                        "blue" => {
-                            colors.insert(Color::Blue);
-                        }
-                        "black" => {
-                            colors.insert(Color::Black);
-                        }
-                        "red" => {
-                            colors.insert(Color::Red);
-                        }
-                        "green" => {
-                            colors.insert(Color::Green);
-                        }
-                        "colorless" => {
-                            saw_colorless = true;
-                        }
-                        "a" | "an" => {}
-                        _ => return Err("oracle:unsupported-layer-color"),
                     }
-                }
-                if colors.is_empty() && !saw_colorless {
-                    return Err("oracle:unsupported-layer-color");
-                }
+                    if parsed_colors.is_empty() && !saw_colorless {
+                        return Err("oracle:unsupported-layer-color");
+                    }
+                    parsed_colors
+                };
                 parts.push(StaticPart::Color(ColorOperation::Set(
                     StaticColorOperand::Literal(colors),
                 )));
             }
-            if *lose_all_abilities || !grant_keywords.is_empty() || !lose_keywords.is_empty() {
+            if *lose_all_abilities
+                || !effective_grant_keywords.is_empty()
+                || !lose_keywords.is_empty()
+            {
                 let (special_parts, rem_kws) =
-                    partition_static_keyword_grants(grant_keywords, vocabulary, ids);
+                    partition_static_keyword_grants(&effective_grant_keywords, vocabulary, ids);
                 parts.extend(special_parts);
                 if *lose_all_abilities || !rem_kws.is_empty() || !lose_keywords.is_empty() {
                     let mut change = if !rem_kws.is_empty() {
@@ -438,18 +478,24 @@ pub(super) fn lower_static(
                 }
             }
             if let Some((p_raw, t_raw)) = base_pt {
-                let p: i64 = p_raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| "oracle:unsupported-layer-pt")?;
-                let t: i64 = t_raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| "oracle:unsupported-layer-pt")?;
-                parts.push(StaticPart::SetPT(NumericPair {
-                    power: NumericExpression::Literal(p.into()),
-                    toughness: NumericExpression::Literal(t.into()),
-                }));
+                if p_raw.trim().eq_ignore_ascii_case("its mana value")
+                    && t_raw.trim().eq_ignore_ascii_case("its mana value")
+                {
+                    parts.push(StaticPart::SetPTToOwnManaValue);
+                } else {
+                    let p: i64 = p_raw
+                        .trim()
+                        .parse()
+                        .map_err(|_| "oracle:unsupported-layer-pt")?;
+                    let t: i64 = t_raw
+                        .trim()
+                        .parse()
+                        .map_err(|_| "oracle:unsupported-layer-pt")?;
+                    parts.push(StaticPart::SetPT(NumericPair {
+                        power: NumericExpression::Literal(p.into()),
+                        toughness: NumericExpression::Literal(t.into()),
+                    }));
+                }
             }
             if parts.is_empty() {
                 return Err("oracle:empty-layer-effect");
@@ -5090,6 +5136,138 @@ pub(super) fn lower_static(
             vocabulary,
             ids,
         ),
+        StaticAbilityAst::InheritAbilities {
+            subject,
+            source_filter,
+            activated_only,
+            condition,
+        } if !is_spell => {
+            if !*activated_only || !source_filter.extra_zones.is_empty() {
+                return Err("oracle:unsupported-static");
+            }
+            let effective_cond = match condition.as_deref() {
+                Some(ConditionAst::SubjectInZone {
+                    subject: cond_subj,
+                    zone: ZoneFilter::Battlefield,
+                }) if matches!(cond_subj.as_ref(), SubjectRefAst::SelfObject) => None,
+                other => other,
+            };
+            let (zone, inner_filter, loyalty_only) = if (source_filter.flags.0
+                & AstFilterFlags::EXILED_WITH_SELF.0)
+                != 0
+                && matches!(source_filter.zone, None | Some(ZoneFilter::Exile))
+                && source_filter.owner.is_none()
+                && source_filter.controller.is_none()
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                inner.flags = AstFilterFlags(inner.flags.0 & !AstFilterFlags::EXILED_WITH_SELF.0);
+                (StaticZone::LinkedExile, inner, false)
+            } else if source_filter.zone == Some(ZoneFilter::YourGraveyard)
+                && source_filter.controller.is_none()
+                && matches!(
+                    source_filter.owner,
+                    None | Some(ControllerRelation::You | ControllerRelation::OwnerYou)
+                )
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                inner.owner = None;
+                (StaticZone::OwnGraveyard, inner, false)
+            } else if matches!(
+                source_filter.zone,
+                Some(ZoneFilter::AllGraveyards | ZoneFilter::AnyGraveyard)
+            ) && source_filter.controller.is_none()
+                && source_filter.owner.is_none()
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                (StaticZone::AllGraveyards, inner, false)
+            } else if source_filter.zone == Some(ZoneFilter::YourHand)
+                && source_filter.controller.is_none()
+                && matches!(
+                    source_filter.owner,
+                    None | Some(ControllerRelation::You | ControllerRelation::OwnerYou)
+                )
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                inner.owner = None;
+                (StaticZone::OwnHand, inner, false)
+            } else if source_filter.zone == Some(ZoneFilter::Exile)
+                && matches!(
+                    source_filter.owner,
+                    Some(ControllerRelation::You | ControllerRelation::OwnerYou)
+                )
+                && source_filter.controller.is_none()
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                inner.owner = None;
+                (StaticZone::OwnExile, inner, false)
+            } else if matches!(source_filter.zone, None | Some(ZoneFilter::Battlefield))
+                && source_filter.controller == Some(ControllerRelation::You)
+                && source_filter.owner.is_none()
+                && !source_filter.any_card
+                && !source_filter.any_spell
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                inner.controller = None;
+                let loyalty_only = inner.any_types == AstCardTypeMask::PLANESWALKER;
+                (StaticZone::ControlledBattlefield, inner, loyalty_only)
+            } else if matches!(source_filter.zone, None | Some(ZoneFilter::Battlefield))
+                && source_filter.owner.is_none()
+                && !source_filter.any_card
+                && !source_filter.any_spell
+                && matches!(
+                    source_filter.controller,
+                    None | Some(ControllerRelation::Opponent | ControllerRelation::Opponents)
+                )
+                && (!source_filter.any_types.is_empty() || !source_filter.subtypes.is_empty())
+            {
+                let mut inner = source_filter.as_ref().clone();
+                inner.zone = None;
+                let loyalty_only = inner.any_types == AstCardTypeMask::PLANESWALKER;
+                (StaticZone::AnyBattlefield, inner, loyalty_only)
+            } else {
+                return Err("oracle:unsupported-static");
+            };
+            let obj_filter = if is_unrestricted_filter(&inner_filter) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&inner_filter, vocabulary)
+                    .map_err(|_| "oracle:unsupported-static")?
+            };
+            if ValueExpr::count_battlefield(obj_filter)
+                .validate_world_expr(vocabulary)
+                .is_err()
+            {
+                return Err("oracle:unsupported-static");
+            }
+            let mut selectors =
+                lower_static_permanent_selectors_with_context(subject, effective_cond, vocabulary)?;
+            for sel in &mut selectors {
+                if let Some(cond) = effective_cond {
+                    apply_static_selector_condition(sel, cond, vocabulary)?;
+                }
+            }
+            for selector in selectors {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector,
+                        parts: StaticParts(vec![StaticPart::InheritZoneAbilities {
+                            zone,
+                            filter: Box::new(obj_filter),
+                            loyalty_only,
+                        }]),
+                    },
+                )?;
+            }
+            Ok(())
+        }
         StaticAbilityAst::DeckConstructionRule(text) => {
             let low = text.trim().to_ascii_lowercase();
             if low.contains("a deck can have any number of cards named")
@@ -5949,6 +6127,12 @@ fn numeric_expr_has_pt_dependency(expr: &NumericExpression) -> bool {
                 || selector.max_toughness.is_some()
         }
         NumericExpression::Eval(ve) => value_expr_has_pt_dependency(ve),
+        NumericExpression::Add(lhs, rhs) => {
+            numeric_expr_has_pt_dependency(lhs) || numeric_expr_has_pt_dependency(rhs)
+        }
+        NumericExpression::Scale { expr, .. } | NumericExpression::Cap { expr, .. } => {
+            numeric_expr_has_pt_dependency(expr)
+        }
         _ => false,
     }
 }
@@ -6897,6 +7081,54 @@ fn lower_static_source_condition_ext(
                 _ => None,
             }
         }
+        ConditionAst::ZoneObjectCount { filter, op, value }
+            if filter.zone == Some(ZoneFilter::Exile)
+                && filter.extra_zones.is_empty()
+                && filter.controller.is_none()
+                && matches!(
+                    filter.owner,
+                    None | Some(ControllerRelation::You | ControllerRelation::OwnerYou)
+                ) =>
+        {
+            let owner = if filter.owner.is_some() {
+                Some(ResolvingPlayer::Controller)
+            } else {
+                None
+            };
+            let mut cleaned = filter.as_ref().clone();
+            cleaned.zone = None;
+            cleaned.owner = None;
+            for pred in &mut cleaned.predicates {
+                if let spellwake_oracle_compiler::ast::FilterPredicateAst::StateQualification(q) =
+                    pred
+                    && q.trim().eq_ignore_ascii_case("has_adventure")
+                {
+                    *pred = spellwake_oracle_compiler::ast::FilterPredicateAst::HasAbilityKind {
+                        kind: "adventure".to_string(),
+                        negated: false,
+                    };
+                }
+            }
+            let obj = if is_unrestricted_filter(&cleaned) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&cleaned, vocabulary).ok()?
+            };
+            let rc = ResolutionCondition {
+                left: ValueExpr::Count {
+                    zone: ValueZone::Exile(owner),
+                    filter: Box::new(obj),
+                    controller_scope: None,
+                },
+                comparison: static_lower_compare_op(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            };
+            if rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok() {
+                Some(StaticSourceCondition::Eval(Box::new(rc)))
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -7689,6 +7921,10 @@ fn apply_static_selector_condition(
     }
     sel.source_condition = saved_sc;
     if sel.controller == ControllerSelector::SourceItself || !condition_contains_anaphora(cond) {
+        if let Some(sc) = lower_static_source_condition_ext(cond, vocabulary) {
+            and_selector_source_condition(sel, sc);
+            return Ok(());
+        }
         let mut tmp_builder = BodyBuilder::new();
         if let Ok(rc) = lower_resolution_condition(cond, &mut tmp_builder, vocabulary, false, None)
             && tmp_builder.target == BodyTarget::None
@@ -10598,7 +10834,11 @@ fn lower_paired_static(
                         layout: "normal",
                         faces: vec![spellwake_oracle_compiler::FaceInput {
                             name: "~",
-                            type_line: "Creature",
+                            type_line: if looks_like_loyalty_ability(cleaned) {
+                                "Planeswalker"
+                            } else {
+                                "Creature"
+                            },
                             oracle_text: cleaned,
                         }],
                     },
@@ -10708,9 +10948,26 @@ fn lower_paired_static(
             let entry_tap = program.permanent().and_then(|p| p.entry_tap);
             let mut parts = Vec::new();
             let mut has_color_part = false;
+            let mut effective_grant_keywords: Vec<String> = grant_keywords.clone();
             if let Some(desc) = set_types {
+                let mut desc_type_slice: &str = desc.as_str();
+                if effective_grant_keywords.is_empty()
+                    && let Some((lhs_ty, rhs_kw)) = desc_type_slice
+                        .split_once(" and has ")
+                        .or_else(|| desc_type_slice.split_once(" and have "))
+                {
+                    let compiler_vocab = cached_compiler_vocab(vocabulary);
+                    if let Some(parsed_kws) = spellwake_oracle_compiler::filter::parse_keyword_list(
+                        rhs_kw.trim(),
+                        &compiler_vocab,
+                    ) && !parsed_kws.is_empty()
+                    {
+                        desc_type_slice = lhs_ty.trim();
+                        effective_grant_keywords = parsed_kws;
+                    }
+                }
                 let type_parts = parse_static_type_and_color_parts_with_entry(
-                    desc,
+                    desc_type_slice,
                     *additive_types,
                     entry_tap,
                     vocabulary,
@@ -10727,46 +10984,61 @@ fn lower_paired_static(
                 if has_color_part {
                     return Err("oracle:unsupported-layer-color");
                 }
-                let mut colors = BTreeSet::new();
-                let mut saw_colorless = false;
-                for raw_tok in color_str
-                    .replace(" and ", " ")
-                    .replace(',', " ")
-                    .split_whitespace()
-                {
-                    match raw_tok.to_ascii_lowercase().as_str() {
-                        "white" => {
-                            colors.insert(Color::White);
+                let color_clean = color_str.trim().trim_end_matches('.').trim();
+                let colors = if color_clean.eq_ignore_ascii_case("all colors") {
+                    BTreeSet::from([
+                        Color::White,
+                        Color::Blue,
+                        Color::Black,
+                        Color::Red,
+                        Color::Green,
+                    ])
+                } else {
+                    let mut parsed_colors = BTreeSet::new();
+                    let mut saw_colorless = false;
+                    for raw_tok in color_clean
+                        .replace(" and ", " ")
+                        .replace(',', " ")
+                        .split_whitespace()
+                    {
+                        match raw_tok.to_ascii_lowercase().as_str() {
+                            "white" => {
+                                parsed_colors.insert(Color::White);
+                            }
+                            "blue" => {
+                                parsed_colors.insert(Color::Blue);
+                            }
+                            "black" => {
+                                parsed_colors.insert(Color::Black);
+                            }
+                            "red" => {
+                                parsed_colors.insert(Color::Red);
+                            }
+                            "green" => {
+                                parsed_colors.insert(Color::Green);
+                            }
+                            "colorless" => {
+                                saw_colorless = true;
+                            }
+                            "a" | "an" => {}
+                            _ => return Err("oracle:unsupported-layer-color"),
                         }
-                        "blue" => {
-                            colors.insert(Color::Blue);
-                        }
-                        "black" => {
-                            colors.insert(Color::Black);
-                        }
-                        "red" => {
-                            colors.insert(Color::Red);
-                        }
-                        "green" => {
-                            colors.insert(Color::Green);
-                        }
-                        "colorless" => {
-                            saw_colorless = true;
-                        }
-                        "a" | "an" => {}
-                        _ => return Err("oracle:unsupported-layer-color"),
                     }
-                }
-                if colors.is_empty() && !saw_colorless {
-                    return Err("oracle:unsupported-layer-color");
-                }
+                    if parsed_colors.is_empty() && !saw_colorless {
+                        return Err("oracle:unsupported-layer-color");
+                    }
+                    parsed_colors
+                };
                 parts.push(StaticPart::Color(ColorOperation::Set(
                     StaticColorOperand::Literal(colors),
                 )));
             }
-            if *lose_all_abilities || !grant_keywords.is_empty() || !lose_keywords.is_empty() {
+            if *lose_all_abilities
+                || !effective_grant_keywords.is_empty()
+                || !lose_keywords.is_empty()
+            {
                 let (special_parts, rem_kws) =
-                    partition_static_keyword_grants(grant_keywords, vocabulary, ids);
+                    partition_static_keyword_grants(&effective_grant_keywords, vocabulary, ids);
                 parts.extend(special_parts);
                 if *lose_all_abilities || !rem_kws.is_empty() || !lose_keywords.is_empty() {
                     let mut change = if !rem_kws.is_empty() {
@@ -10786,18 +11058,24 @@ fn lower_paired_static(
                 }
             }
             if let Some((p_raw, t_raw)) = base_pt {
-                let p: i64 = p_raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| "oracle:unsupported-layer-pt")?;
-                let t: i64 = t_raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| "oracle:unsupported-layer-pt")?;
-                parts.push(StaticPart::SetPT(NumericPair {
-                    power: NumericExpression::Literal(p.into()),
-                    toughness: NumericExpression::Literal(t.into()),
-                }));
+                if p_raw.trim().eq_ignore_ascii_case("its mana value")
+                    && t_raw.trim().eq_ignore_ascii_case("its mana value")
+                {
+                    parts.push(StaticPart::SetPTToOwnManaValue);
+                } else {
+                    let p: i64 = p_raw
+                        .trim()
+                        .parse()
+                        .map_err(|_| "oracle:unsupported-layer-pt")?;
+                    let t: i64 = t_raw
+                        .trim()
+                        .parse()
+                        .map_err(|_| "oracle:unsupported-layer-pt")?;
+                    parts.push(StaticPart::SetPT(NumericPair {
+                        power: NumericExpression::Literal(p.into()),
+                        toughness: NumericExpression::Literal(t.into()),
+                    }));
+                }
             }
             if parts.is_empty() {
                 return Err("oracle:empty-layer-effect");
@@ -10945,6 +11223,29 @@ fn lower_damage_recipients(
     }
 }
 
+fn looks_like_loyalty_ability(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some((prefix, _)) = trimmed.split_once(':') else {
+        return false;
+    };
+    let core = prefix
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim()
+        .replace('\u{2212}', "-");
+    if core.is_empty() || core.len() > 6 {
+        return false;
+    }
+    if core == "0" || core.eq_ignore_ascii_case("-x") {
+        return true;
+    }
+    let Some(digits) = core.strip_prefix('+').or_else(|| core.strip_prefix('-')) else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn lower_single_granted_ability(
     ability: &AbilityAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -11052,6 +11353,34 @@ fn lower_single_granted_ability(
                 grouping,
                 body: exec_body,
             })))
+        }
+        AbilityAst::Loyalty { delta, body } => {
+            let trimmed = delta.trim().replace('\u{2212}', "-");
+            let (loyalty, variable_loyalty): (Option<i32>, bool) =
+                if trimmed.eq_ignore_ascii_case("-x") {
+                    (Some(0), true)
+                } else {
+                    let n: i32 = trimmed
+                        .strip_prefix('+')
+                        .unwrap_or(&trimmed)
+                        .parse()
+                        .map_err(|_| "oracle:bad-loyalty-delta")?;
+                    (Some(n), false)
+                };
+            let (exec_body, loyalty_res) = lower_activated_body(body, vocabulary, ids)?;
+            if loyalty_res.is_some() {
+                return Err("oracle:unsupported-grant-ability-text");
+            }
+            Ok(StaticPart::GrantLoyalty {
+                ability: Box::new(ActivatedAbility {
+                    id: ActivatedAbilityId(0),
+                    mana_cost: ManaCost::free(),
+                    source_cost: SourceCost::None,
+                    body: exec_body,
+                }),
+                loyalty,
+                variable_loyalty,
+            })
         }
         _ => Err("oracle:unsupported-grant-ability-text"),
     }
@@ -11519,6 +11848,15 @@ fn static_part_to_resolved_part_spec(part: StaticPart) -> Result<ResolvedPartSpe
             ability,
             restriction,
         }),
+        StaticPart::GrantLoyalty {
+            ability,
+            loyalty,
+            variable_loyalty,
+        } => Ok(ResolvedPartSpec::GrantLoyalty {
+            ability,
+            loyalty,
+            variable_loyalty,
+        }),
         StaticPart::GrantAnyColorMana => Ok(ResolvedPartSpec::GrantAnyColorMana),
         StaticPart::GrantFixedColorMana(color) => Ok(ResolvedPartSpec::GrantFixedColorMana(color)),
         StaticPart::GrantMana(m) => Ok(ResolvedPartSpec::GrantMana(m)),
@@ -11715,7 +12053,11 @@ fn lower_granted_static_parts(
                         layout: "normal",
                         faces: vec![spellwake_oracle_compiler::FaceInput {
                             name: "~",
-                            type_line: "Creature",
+                            type_line: if looks_like_loyalty_ability(cleaned) {
+                                "Planeswalker"
+                            } else {
+                                "Creature"
+                            },
                             oracle_text: cleaned,
                         }],
                     },
@@ -11860,39 +12202,51 @@ fn lower_granted_static_parts(
                 if has_color_part {
                     return Err("oracle:unsupported-grant-ability-text");
                 }
-                let mut colors = BTreeSet::new();
-                let mut saw_colorless = false;
-                for raw_tok in color_str
-                    .replace(" and ", " ")
-                    .replace(',', " ")
-                    .split_whitespace()
-                {
-                    match raw_tok.to_ascii_lowercase().as_str() {
-                        "white" => {
-                            colors.insert(Color::White);
+                let color_clean = color_str.trim().trim_end_matches('.').trim();
+                let colors = if color_clean.eq_ignore_ascii_case("all colors") {
+                    BTreeSet::from([
+                        Color::White,
+                        Color::Blue,
+                        Color::Black,
+                        Color::Red,
+                        Color::Green,
+                    ])
+                } else {
+                    let mut parsed_colors = BTreeSet::new();
+                    let mut saw_colorless = false;
+                    for raw_tok in color_clean
+                        .replace(" and ", " ")
+                        .replace(',', " ")
+                        .split_whitespace()
+                    {
+                        match raw_tok.to_ascii_lowercase().as_str() {
+                            "white" => {
+                                parsed_colors.insert(Color::White);
+                            }
+                            "blue" => {
+                                parsed_colors.insert(Color::Blue);
+                            }
+                            "black" => {
+                                parsed_colors.insert(Color::Black);
+                            }
+                            "red" => {
+                                parsed_colors.insert(Color::Red);
+                            }
+                            "green" => {
+                                parsed_colors.insert(Color::Green);
+                            }
+                            "colorless" => {
+                                saw_colorless = true;
+                            }
+                            "a" | "an" => {}
+                            _ => return Err("oracle:unsupported-grant-ability-text"),
                         }
-                        "blue" => {
-                            colors.insert(Color::Blue);
-                        }
-                        "black" => {
-                            colors.insert(Color::Black);
-                        }
-                        "red" => {
-                            colors.insert(Color::Red);
-                        }
-                        "green" => {
-                            colors.insert(Color::Green);
-                        }
-                        "colorless" => {
-                            saw_colorless = true;
-                        }
-                        "a" | "an" => {}
-                        _ => return Err("oracle:unsupported-grant-ability-text"),
                     }
-                }
-                if colors.is_empty() && !saw_colorless {
-                    return Err("oracle:unsupported-grant-ability-text");
-                }
+                    if parsed_colors.is_empty() && !saw_colorless {
+                        return Err("oracle:unsupported-grant-ability-text");
+                    }
+                    parsed_colors
+                };
                 parts.push(StaticPart::Color(ColorOperation::Set(
                     StaticColorOperand::Literal(colors),
                 )));
@@ -11919,18 +12273,24 @@ fn lower_granted_static_parts(
                 }
             }
             if let Some((p_raw, t_raw)) = base_pt {
-                let p: i64 = p_raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| "oracle:unsupported-grant-ability-text")?;
-                let t: i64 = t_raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| "oracle:unsupported-grant-ability-text")?;
-                parts.push(StaticPart::SetPT(NumericPair {
-                    power: NumericExpression::Literal(p.into()),
-                    toughness: NumericExpression::Literal(t.into()),
-                }));
+                if p_raw.trim().eq_ignore_ascii_case("its mana value")
+                    && t_raw.trim().eq_ignore_ascii_case("its mana value")
+                {
+                    parts.push(StaticPart::SetPTToOwnManaValue);
+                } else {
+                    let p: i64 = p_raw
+                        .trim()
+                        .parse()
+                        .map_err(|_| "oracle:unsupported-grant-ability-text")?;
+                    let t: i64 = t_raw
+                        .trim()
+                        .parse()
+                        .map_err(|_| "oracle:unsupported-grant-ability-text")?;
+                    parts.push(StaticPart::SetPT(NumericPair {
+                        power: NumericExpression::Literal(p.into()),
+                        toughness: NumericExpression::Literal(t.into()),
+                    }));
+                }
             }
             Ok(())
         }
@@ -12466,6 +12826,7 @@ fn parse_static_type_and_color_parts_with_entry(
     let raw_low_full = raw.to_ascii_lowercase();
     let color_additive = raw_low_full.contains("in addition to its other colors")
         || raw_low_full.contains("in addition to their other colors");
+    let mut additive = additive;
     let mut clean = raw
         .replace(" in addition to its other types", "")
         .replace(" in addition to their other types", "")
@@ -12475,11 +12836,43 @@ fn parse_static_type_and_color_parts_with_entry(
         .replace(" in addition to their other land types", "")
         .replace(" in addition to its other colors", "")
         .replace(" in addition to their other colors", "");
+    let clean_trimmed_low = clean
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+    for keep_suffix in [
+        " that are still lands",
+        " that's still a land",
+        " that is still a land",
+        ". it's still a land",
+        ". it is still a land",
+        ". they're still lands",
+        " that are still artifacts",
+        " that's still an artifact",
+        " that is still an artifact",
+        ". it's still an artifact",
+        ". they're still artifacts",
+    ] {
+        if let Some(prefix) = clean_trimmed_low.strip_suffix(keep_suffix) {
+            clean = prefix.trim().to_string();
+            additive = true;
+            break;
+        }
+    }
     let low_entry = clean
         .trim()
         .trim_end_matches('.')
         .trim()
         .to_ascii_lowercase();
+    if low_entry == "no longer snow" {
+        return Ok(vec![StaticPart::Type(StaticTypeChange {
+            supertypes: TypeOperation::Remove(BTreeSet::from([Supertype::Snow])),
+            types: TypeOperation::Keep,
+            subtypes: SubtypeOperation::Keep,
+            land_subtypes: SubtypeOperation::Keep,
+        })]);
+    }
     if matches!(
         low_entry.as_str(),
         "lose_all_creature_types" | "loses all creature types" | "lose all creature types"
@@ -12754,6 +13147,16 @@ fn parse_static_type_and_color_parts_with_entry(
                         other
                             .strip_suffix("es")
                             .and_then(|stem| vocabulary.resolve_label(&title_case_type_token(stem)))
+                    })
+                    .or_else(|| {
+                        other.strip_suffix("ies").and_then(|stem| {
+                            vocabulary
+                                .resolve_label(&title_case_type_token(&format!("{stem}y")))
+                                .or_else(|| {
+                                    vocabulary
+                                        .resolve_label(&title_case_type_token(&format!("{stem}ie")))
+                                })
+                        })
                     })
                 {
                     creature_subtypes.insert(ct);
@@ -14911,6 +15314,8 @@ fn parse_activated_cost_anaphora(
         "ninjutsu" => Some(ActivatedCostScope::Ninjutsu),
         "unearth" => Some(ActivatedCostScope::Unearth),
         "encore" => Some(ActivatedCostScope::Encore),
+        "exhaust" => Some(ActivatedCostScope::Exhaust),
+        "power-up" => Some(ActivatedCostScope::PowerUp),
         _ => None,
     };
     if let Some(prefix) = raw_low
@@ -14973,10 +15378,31 @@ fn parse_activated_cost_anaphora(
             PlayerRelation::AnyParticipant,
         )),
         "activated abilities of enchanted permanent"
-        | "activated abilities of equipped permanent" => Some((
+        | "activated abilities of equipped permanent"
+        | "enchanted permanent's activated abilities"
+        | "equipped permanent's activated abilities" => Some((
             ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::Clause(
                 ObjectClause::permanent().attached_to_self(),
             ))),
+            PlayerRelation::AnyParticipant,
+        )),
+        "enchanted artifact's activated abilities"
+        | "activated abilities of enchanted artifact" => Some((
+            ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::Clause(
+                ObjectClause::artifact().attached_to_self(),
+            ))),
+            PlayerRelation::AnyParticipant,
+        )),
+        "enchanted creature's activated abilities" | "equipped creature's activated abilities" => {
+            Some((
+                ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::Clause(
+                    ObjectClause::creature().attached_to_self(),
+                ))),
+                PlayerRelation::AnyParticipant,
+            ))
+        }
+        "~'s activated abilities" => Some((
+            ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::self_object())),
             PlayerRelation::AnyParticipant,
         )),
         "activated abilities of ~"
@@ -15041,23 +15467,9 @@ fn parse_activated_cost_anaphora(
         .split_once(" that target ")
         .or_else(|| raw_low.split_once(" that targets "))
     {
-        let controller_opt = match actor_part.trim() {
-            "abilities you activate" | "activated abilities you activate" => {
-                Some(PlayerRelation::Controller)
-            }
-            "abilities your opponents activate"
-            | "abilities opponents activate"
-            | "activated abilities your opponents activate"
-            | "activated abilities opponents activate" => Some(PlayerRelation::Opponent),
-            "abilities"
-            | "activated abilities"
-            | "abilities players activate"
-            | "activated abilities players activate" => Some(PlayerRelation::AnyParticipant),
-            _ => None,
-        };
-        if let Some(controller) = controller_opt {
-            let target_clean = target_part.trim().trim_end_matches('.').trim();
-            let obj_opt = match target_clean {
+        let parse_target_obj = |raw_tgt: &str| -> Option<ObjectFilter> {
+            let target_clean = raw_tgt.trim().trim_end_matches('.').trim();
+            match target_clean {
                 "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment"
                 | "this planeswalker" => Some(ObjectFilter::self_object()),
                 "enchanted creature" | "equipped creature" => Some(ObjectFilter::Clause(
@@ -15094,13 +15506,129 @@ fn parse_activated_cost_anaphora(
                         .and_then(|parsed| lower_object_filter(&parsed, vocabulary).ok())
                 }
                 _ => None,
-            };
-            if let Some(obj) = obj_opt {
-                return Some((ActivatedCostScope::Targeting(Box::new(obj)), controller));
+            }
+        };
+        let actor_trim = actor_part.trim();
+        let equip_controller_opt = match actor_trim {
+            "equip abilities you activate" => Some(PlayerRelation::Controller),
+            "equip abilities your opponents activate" | "equip abilities opponents activate" => {
+                Some(PlayerRelation::Opponent)
+            }
+            "equip abilities" | "equip abilities players activate" => {
+                Some(PlayerRelation::AnyParticipant)
+            }
+            _ => None,
+        };
+        if let Some(controller) = equip_controller_opt
+            && let Some(obj) = parse_target_obj(target_part)
+        {
+            return Some((
+                ActivatedCostScope::EquipTargeting(Box::new(obj)),
+                controller,
+            ));
+        }
+        let controller_opt = match actor_trim {
+            "abilities you activate" | "activated abilities you activate" => {
+                Some(PlayerRelation::Controller)
+            }
+            "abilities your opponents activate"
+            | "abilities opponents activate"
+            | "activated abilities your opponents activate"
+            | "activated abilities opponents activate" => Some(PlayerRelation::Opponent),
+            "abilities"
+            | "activated abilities"
+            | "abilities players activate"
+            | "activated abilities players activate" => Some(PlayerRelation::AnyParticipant),
+            _ => None,
+        };
+        if let Some(controller) = controller_opt
+            && let Some(obj) = parse_target_obj(target_part)
+        {
+            return Some((ActivatedCostScope::Targeting(Box::new(obj)), controller));
+        }
+        if let Some(src_raw) = actor_trim.strip_prefix("activated abilities of ") {
+            let src_clean = src_raw.trim();
+            if !src_clean.is_empty()
+                && !src_clean.contains("card")
+                && !src_clean.contains("graveyard")
+                && !src_clean.contains("hand")
+                && !src_clean.contains("exile")
+                && !src_clean.contains("source")
+                && !src_clean.contains("unless")
+                && !src_clean.contains("first")
+                && let Some(tgt_obj) = parse_target_obj(target_part)
+            {
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                if let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+                    src_clean,
+                    &compiler_vocab,
+                ) && parsed.zone.is_none()
+                    && parsed.owner.is_none()
+                    && !parsed.any_card
+                    && !parsed.any_spell
+                    && (!parsed.any_types.is_empty()
+                        || !parsed.subtypes.is_empty()
+                        || parsed.any_permanent
+                        || parsed.token.is_some())
+                    && let Ok(src_obj) = lower_object_filter(&parsed, vocabulary)
+                {
+                    let controller = match parsed.controller {
+                        Some(ControllerRelation::You) => PlayerRelation::Controller,
+                        Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
+                            PlayerRelation::Opponent
+                        }
+                        None => PlayerRelation::AnyParticipant,
+                        _ => return None,
+                    };
+                    return Some((
+                        ActivatedCostScope::PermanentAndTargeting {
+                            source: Box::new(src_obj),
+                            target: Box::new(tgt_obj),
+                        },
+                        controller,
+                    ));
+                }
             }
         }
     }
     if let Some(rest) = raw_low.strip_prefix("activated abilities of ") {
+        let rest_trim = rest.trim();
+        if let Some(card_part) = rest_trim.strip_suffix(" in your graveyard") {
+            let card_clean = card_part.trim();
+            let obj_opt = if matches!(card_clean, "cards" | "card") {
+                Some(ObjectFilter::any())
+            } else if !card_clean.is_empty()
+                && !card_clean.contains("source")
+                && !card_clean.contains("target")
+                && !card_clean.contains("unless")
+                && !card_clean.contains("first")
+            {
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                spellwake_oracle_compiler::filter::parse_object_filter(card_clean, &compiler_vocab)
+                    .ok()
+                    .filter(|parsed| {
+                        parsed.zone.is_none()
+                            && parsed.controller.is_none()
+                            && parsed.owner.is_none()
+                            && !parsed.any_spell
+                    })
+                    .and_then(|parsed| {
+                        if is_unrestricted_filter(&parsed) {
+                            Some(ObjectFilter::any())
+                        } else {
+                            lower_object_filter(&parsed, vocabulary).ok()
+                        }
+                    })
+            } else {
+                None
+            };
+            if let Some(obj) = obj_opt {
+                return Some((
+                    ActivatedCostScope::GraveyardCardFilter(Box::new(obj)),
+                    PlayerRelation::Controller,
+                ));
+            }
+        }
         let rest = rest.trim();
         if !rest.is_empty()
             && !rest.contains("card")
@@ -16126,18 +16654,11 @@ fn lower_pt_delta_pair_with_context(
                             scale_value_expr((**ve).clone(), coeff),
                         ))),
                         _ if coeff == 1 => Ok(base.clone()),
-                        _ => {
-                            if let Ok(ve) =
-                                lower_static_value_expr(scale_expr, expr_ctx, vocabulary)
-                                && ve.is_world_evaluable()
-                            {
-                                Ok(NumericExpression::Eval(Box::new(scale_value_expr(
-                                    ve, coeff,
-                                ))))
-                            } else {
-                                Err("oracle:unsupported-scaled-static-pt")
-                            }
-                        }
+                        _ => Ok(NumericExpression::Scale {
+                            expr: Box::new(base.clone()),
+                            multiplier: coeff.into(),
+                            offset: 0.into(),
+                        }),
                     }
                 };
                 Ok((scale_one(p_num)?, scale_one(t_num)?))
@@ -16152,19 +16673,39 @@ fn lower_pt_delta_pair_with_context(
             let Some(scale_expr) = scale else {
                 return Err("oracle:non-numeric-pt-delta");
             };
-            let ve = lower_static_value_expr(scale_expr, expr_ctx, vocabulary)
-                .map_err(|_| "oracle:unsupported-scaled-static-pt")?;
-            if !ve.is_world_evaluable() {
-                return Err("oracle:unsupported-scaled-static-pt");
+            if let Ok(ve) = lower_static_value_expr(scale_expr, expr_ctx, vocabulary)
+                && ve.is_world_evaluable()
+            {
+                let resolve_term = |term: PtDeltaTerm| -> NumericExpression {
+                    match term {
+                        PtDeltaTerm::Literal(n) => NumericExpression::Literal(n.into()),
+                        PtDeltaTerm::ScaledX(k) => {
+                            if k == 0 {
+                                NumericExpression::Literal(0.into())
+                            } else {
+                                NumericExpression::Eval(Box::new(scale_value_expr(ve.clone(), k)))
+                            }
+                        }
+                    }
+                };
+                return Ok((resolve_term(p_term), resolve_term(t_term)));
             }
+            let base = lower_numeric_expr_with_context(scale_expr, expr_ctx, vocabulary)
+                .map_err(|_| "oracle:unsupported-scaled-static-pt")?;
             let resolve_term = |term: PtDeltaTerm| -> NumericExpression {
                 match term {
                     PtDeltaTerm::Literal(n) => NumericExpression::Literal(n.into()),
                     PtDeltaTerm::ScaledX(k) => {
                         if k == 0 {
                             NumericExpression::Literal(0.into())
+                        } else if k == 1 {
+                            base.clone()
                         } else {
-                            NumericExpression::Eval(Box::new(scale_value_expr(ve.clone(), k)))
+                            NumericExpression::Scale {
+                                expr: Box::new(base.clone()),
+                                multiplier: k.into(),
+                                offset: 0.into(),
+                            }
                         }
                     }
                 }
@@ -16184,6 +16725,23 @@ fn lower_numeric_expr_with_context(
         ValueExprAst::Const(n) => Ok(NumericExpression::Literal(i64::from(*n).into())),
         ValueExprAst::Count(f) => {
             if f.zone == Some(ZoneFilter::YourGraveyard)
+                && f.any_types.is_empty()
+                && f.required_keywords.len() == 1
+                && f.required_keywords[0].eq_ignore_ascii_case("cycling")
+                && filter_only_has(
+                    f,
+                    FilterAllow {
+                        zone: true,
+                        req_keywords: true,
+                        ..FilterAllow::NONE
+                    },
+                )
+            {
+                return Ok(NumericExpression::PlayerStat(
+                    StaticPlayerStat::OwnGraveyardWithCycling,
+                ));
+            }
+            if f.zone == Some(ZoneFilter::YourGraveyard)
                 && filter_only_has(
                     f,
                     FilterAllow {
@@ -16196,6 +16754,23 @@ fn lower_numeric_expr_with_context(
                 let types = lower_card_type_mask(f.any_types)?;
                 return Ok(NumericExpression::ZoneCount {
                     zone: StaticZone::OwnGraveyard,
+                    types,
+                });
+            }
+            if matches!(
+                f.zone,
+                Some(ZoneFilter::AllGraveyards | ZoneFilter::AnyGraveyard)
+            ) && filter_only_has(
+                f,
+                FilterAllow {
+                    types: true,
+                    zone: true,
+                    ..FilterAllow::NONE
+                },
+            ) {
+                let types = lower_card_type_mask(f.any_types)?;
+                return Ok(NumericExpression::ZoneCount {
+                    zone: StaticZone::AllGraveyards,
                     types,
                 });
             }
@@ -16214,6 +16789,50 @@ fn lower_numeric_expr_with_context(
                     zone: StaticZone::OwnHand,
                     types,
                 });
+            }
+            if f.zone == Some(ZoneFilter::Exile)
+                && matches!(
+                    f.owner,
+                    Some(ControllerRelation::You | ControllerRelation::OwnerYou)
+                )
+            {
+                let mut stripped = f.as_ref().clone();
+                stripped.owner = None;
+                if filter_only_has(
+                    &stripped,
+                    FilterAllow {
+                        types: true,
+                        zone: true,
+                        ..FilterAllow::NONE
+                    },
+                ) {
+                    let types = lower_card_type_mask(f.any_types)?;
+                    return Ok(NumericExpression::ZoneCount {
+                        zone: StaticZone::OwnExile,
+                        types,
+                    });
+                }
+            }
+            if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                && matches!(f.zone, None | Some(ZoneFilter::Exile))
+            {
+                let mut stripped = f.as_ref().clone();
+                stripped.flags =
+                    AstFilterFlags(stripped.flags.0 & !AstFilterFlags::EXILED_WITH_SELF.0);
+                if filter_only_has(
+                    &stripped,
+                    FilterAllow {
+                        types: true,
+                        zone: true,
+                        ..FilterAllow::NONE
+                    },
+                ) {
+                    let types = lower_card_type_mask(f.any_types)?;
+                    return Ok(NumericExpression::ZoneCount {
+                        zone: StaticZone::LinkedExile,
+                        types,
+                    });
+                }
             }
             if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
                 && let Ok(selector) = lower_static_filter_to_permanent_selector_with_host(
@@ -16279,6 +16898,12 @@ fn lower_numeric_expr_with_context(
             {
                 return Ok(NumericExpression::Eval(Box::new(ve)));
             }
+            if let (Ok(na), Ok(nb)) = (
+                lower_numeric_expr_with_context(a, expr_ctx, vocabulary),
+                lower_numeric_expr_with_context(b, expr_ctx, vocabulary),
+            ) {
+                return Ok(NumericExpression::Add(Box::new(na), Box::new(nb)));
+            }
             Err("oracle:unsupported-numeric-expr")
         }
         ValueExprAst::Sub(a, b) => {
@@ -16303,6 +16928,19 @@ fn lower_numeric_expr_with_context(
                 && ve.is_world_evaluable()
             {
                 return Ok(NumericExpression::Eval(Box::new(ve)));
+            }
+            if let (Ok(na), Ok(nb)) = (
+                lower_numeric_expr_with_context(a, expr_ctx, vocabulary),
+                lower_numeric_expr_with_context(b, expr_ctx, vocabulary),
+            ) {
+                return Ok(NumericExpression::Add(
+                    Box::new(na),
+                    Box::new(NumericExpression::Scale {
+                        expr: Box::new(nb),
+                        multiplier: (-1_i64).into(),
+                        offset: 0.into(),
+                    }),
+                ));
             }
             Err("oracle:unsupported-numeric-expr")
         }
@@ -16348,6 +16986,16 @@ fn lower_numeric_expr_with_context(
             {
                 return Ok(NumericExpression::Eval(Box::new(ve)));
             }
+            if let (ValueExprAst::Const(k), other) | (other, ValueExprAst::Const(k)) =
+                (a.as_ref(), b.as_ref())
+                && let Ok(inner) = lower_numeric_expr_with_context(other, expr_ctx, vocabulary)
+            {
+                return Ok(NumericExpression::Scale {
+                    expr: Box::new(inner),
+                    multiplier: i64::from(*k).into(),
+                    offset: 0.into(),
+                });
+            }
             Err("oracle:unsupported-numeric-expr")
         }
         ValueExprAst::PlayerStat {
@@ -16376,6 +17024,11 @@ fn lower_numeric_expr_with_context(
                 return Ok(NumericExpression::AttachedAurasAndEquipment {
                     multiplier: 1.into(),
                 });
+            }
+            if norm == "unspent mana you have" {
+                return Ok(NumericExpression::PlayerStat(
+                    StaticPlayerStat::TotalUnspentMana,
+                ));
             }
             if let Some(mana_kind) = match norm.as_str() {
                 "unspent white mana you have" => Some(ManaType::White),
@@ -16407,6 +17060,29 @@ fn lower_numeric_expr_with_context(
             subject,
             counter_kind,
         } => {
+            if let SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) =
+                subject.as_ref()
+                && f.any_types == AstCardTypeMask::CREATURE
+                && f.controller == Some(ControllerRelation::You)
+                && f.flags == AstFilterFlags::EXCLUDE_SELF
+            {
+                let mut stripped = f.as_ref().clone();
+                stripped.flags = AstFilterFlags::EMPTY;
+                if filter_only_has(
+                    &stripped,
+                    FilterAllow {
+                        types: true,
+                        controller: true,
+                        zone: true,
+                        ..FilterAllow::NONE
+                    },
+                ) && let Some(kind) = parse_static_counter_kind(counter_kind)?
+                {
+                    return Ok(NumericExpression::PlayerStat(
+                        StaticPlayerStat::OtherControlledCreatureCounters(kind),
+                    ));
+                }
+            }
             let Some(subj_ref) = resolve_static_counter_subject(subject.as_ref(), expr_ctx.anchor)
             else {
                 return Err("oracle:unsupported-numeric-expr");
@@ -16829,6 +17505,7 @@ fn lower_loses_all_other_abilities(
                         StaticPart::GrantTrigger(_)
                         | StaticPart::GrantActivated(_)
                         | StaticPart::GrantActivatedRestricted { .. }
+                        | StaticPart::GrantLoyalty { .. }
                         | StaticPart::GrantAnyColorMana
                         | StaticPart::GrantFixedColorMana(_)
                         | StaticPart::GrantMana(_)
@@ -16838,6 +17515,7 @@ fn lower_loses_all_other_abilities(
                             ab_has_grant = true;
                         }
                         StaticPart::InheritCounteredCreatureAbilities
+                        | StaticPart::InheritZoneAbilities { .. }
                         | StaticPart::InheritExiledCreatureAbilities => {
                             ab_has_inherit = true;
                         }
@@ -16928,6 +17606,7 @@ fn lower_loses_all_other_abilities(
                                 StaticPart::GrantTrigger(_)
                                     | StaticPart::GrantActivated(_)
                                     | StaticPart::GrantActivatedRestricted { .. }
+                                    | StaticPart::GrantLoyalty { .. }
                                     | StaticPart::GrantAnyColorMana
                                     | StaticPart::GrantFixedColorMana(_)
                                     | StaticPart::GrantMana(_)

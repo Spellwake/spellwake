@@ -1306,6 +1306,93 @@ impl EffectWindow {
                             })
                         })
                     }
+                    ActivatedCostScope::EquipTargeting(filter) => {
+                        let is_equip = selected.body.instructions.iter().any(|op| {
+                            matches!(
+                                op,
+                                Instruction::Attach(crate::attachment::AttachAbility::Equip)
+                            )
+                        });
+                        if !is_equip {
+                            false
+                        } else {
+                            let target_obj = match &origin {
+                                ActivationOrigin::Targeted(crate::targets::TargetRef::Object(
+                                    id,
+                                )) => Some(*id),
+                                _ => None,
+                            };
+                            target_obj.is_some_and(|tid| {
+                                evaluated.get(tid).is_some_and(|tv| {
+                                    tv.zone == ObjectZone::Battlefield
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            tv,
+                                            rule_ctrl,
+                                            rule_source,
+                                            &BTreeSet::new(),
+                                            &evaluated,
+                                        )
+                                })
+                            })
+                        }
+                    }
+                    ActivatedCostScope::PermanentAndTargeting {
+                        source: src_filter,
+                        target: tgt_filter,
+                    } => {
+                        let src_ok = current.zone == ObjectZone::Battlefield
+                            && self.matches_object_filter(
+                                **src_filter,
+                                current,
+                                rule_ctrl,
+                                rule_source,
+                                &BTreeSet::new(),
+                                &evaluated,
+                            );
+                        if !src_ok {
+                            false
+                        } else {
+                            let target_obj = match &origin {
+                                ActivationOrigin::Targeted(crate::targets::TargetRef::Object(
+                                    id,
+                                )) => Some(*id),
+                                _ => None,
+                            };
+                            target_obj.is_some_and(|tid| {
+                                evaluated.get(tid).is_some_and(|tv| {
+                                    tv.zone == ObjectZone::Battlefield
+                                        && self.matches_object_filter(
+                                            **tgt_filter,
+                                            tv,
+                                            rule_ctrl,
+                                            rule_source,
+                                            &BTreeSet::new(),
+                                            &evaluated,
+                                        )
+                                })
+                            })
+                        }
+                    }
+                    ActivatedCostScope::Exhaust => matches!(
+                        restriction,
+                        Some(crate::activated::ActivationRestriction::Exhaust)
+                    ),
+                    ActivatedCostScope::PowerUp => matches!(
+                        restriction,
+                        Some(crate::activated::ActivationRestriction::PowerUp)
+                    ),
+                    ActivatedCostScope::GraveyardCardFilter(filter) => {
+                        current.zone == ObjectZone::Graveyard(rule_ctrl)
+                            && self.matches_object_filter(
+                                **filter,
+                                current,
+                                rule_ctrl,
+                                rule_source,
+                                &BTreeSet::new(),
+                                &evaluated,
+                            )
+                    }
                 }
             };
             let controller_matches =

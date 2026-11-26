@@ -724,6 +724,19 @@ pub enum ActivatedCostScope {
     Loyalty,
     /// Activated abilities that target a permanent matching `ObjectFilter`.
     Targeting(Box<crate::program::ObjectFilter>),
+    /// Equip abilities targeting a creature matching `ObjectFilter` (e.g. Strong Back, Dwarven Mauler).
+    EquipTargeting(Box<crate::program::ObjectFilter>),
+    /// Activated abilities of permanents matching `source` that target a permanent matching `target`.
+    PermanentAndTargeting {
+        source: Box<crate::program::ObjectFilter>,
+        target: Box<crate::program::ObjectFilter>,
+    },
+    /// Exhaust abilities (`ActivationRestriction::Exhaust`, e.g. Boom Scholar).
+    Exhaust,
+    /// Power-up abilities (`ActivationRestriction::PowerUp`, e.g. Hulk, Gamma Goliath).
+    PowerUp,
+    /// Activated abilities of cards in controller's graveyard matching `ObjectFilter` (e.g. Embalmer's Tools).
+    GraveyardCardFilter(Box<crate::program::ObjectFilter>),
 }
 
 /// Event predicate matched by a generalized trigger multiplier (CR 603.2d).
@@ -1782,7 +1795,8 @@ impl StaticContinuousAbility {
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
                 }
                 StaticPart::GrantActivated(ability)
-                | StaticPart::GrantActivatedRestricted { ability, .. } => {
+                | StaticPart::GrantActivatedRestricted { ability, .. }
+                | StaticPart::GrantLoyalty { ability, .. } => {
                     if let StaticPart::GrantActivatedRestricted { restriction, .. } = part {
                         restriction
                             .validate(vocabulary)
@@ -1932,6 +1946,7 @@ impl StaticContinuousAbility {
                 }
                 StaticPart::Names(_)
                 | StaticPart::InheritCounteredCreatureAbilities
+                | StaticPart::InheritZoneAbilities { .. }
                 | StaticPart::InheritExiledCreatureAbilities
                 | StaticPart::ControlSourceController
                 | StaticPart::Color(_)

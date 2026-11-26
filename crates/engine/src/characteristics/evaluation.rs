@@ -1983,6 +1983,43 @@ fn numeric(
                     })
                     .count(),
             ),
+            StaticZone::AllGraveyards => RulesInteger::from_usize(
+                objects
+                    .values()
+                    .filter(|card| {
+                        matches!(card.zone, ObjectZone::Graveyard(_))
+                            && types.matches_any(&card.current_types)
+                    })
+                    .count(),
+            ),
+            StaticZone::AnyBattlefield => RulesInteger::from_usize(
+                battlefield
+                    .iter()
+                    .filter(|id| types.matches_any(&objects[id].current_types))
+                    .count(),
+            ),
+            StaticZone::OwnExile => RulesInteger::from_usize(
+                objects
+                    .values()
+                    .filter(|card| {
+                        card.zone == ObjectZone::Exile
+                            && card.owner == controller
+                            && types.matches_any(&card.current_types)
+                    })
+                    .count(),
+            ),
+            StaticZone::LinkedExile => RulesInteger::from_usize(
+                world.state.imprinted_cards.get(&source).map_or(0, |ids| {
+                    ids.iter()
+                        .filter(|id| {
+                            objects.get(id).is_some_and(|card| {
+                                card.zone == ObjectZone::Exile
+                                    && types.matches_any(&card.current_types)
+                            })
+                        })
+                        .count()
+                }),
+            ),
         },
         NumericExpression::Counters {
             source: linked,
@@ -2035,6 +2072,11 @@ fn numeric(
                 .get(&(controller, *kind))
                 .cloned()
                 .unwrap_or_else(|| 0.into()),
+            StaticPlayerStat::TotalUnspentMana => world
+                .mana
+                .iter()
+                .filter(|((seat, _), _)| *seat == controller)
+                .fold(RulesInteger::from(0), |acc, (_, amt)| acc.plus(amt)),
             StaticPlayerStat::HalfHighestOpponentLife => world
                 .life
                 .and_then(|life| {
@@ -2058,6 +2100,32 @@ fn numeric(
                 })
                 .max()
                 .unwrap_or_else(|| 0.into()),
+            StaticPlayerStat::OtherControlledCreatureCounters(kind) => battlefield
+                .iter()
+                .filter(|id| **id != source)
+                .filter(|id| {
+                    let obj = &objects[id];
+                    obj.controller == Some(controller) && obj.is_creature()
+                })
+                .fold(RulesInteger::from(0), |acc, id| {
+                    acc.plus(&world.state.permanent_counter_count(*id, *kind))
+                }),
+            StaticPlayerStat::OwnGraveyardWithCycling => RulesInteger::from_usize(
+                objects
+                    .values()
+                    .filter(|card| {
+                        card.zone == ObjectZone::Graveyard(controller)
+                            && card.printed_text.activated.iter().any(|ab| {
+                                matches!(
+                                    ab.source_cost,
+                                    crate::activated::SourceCost::HandDiscardSelf(
+                                        crate::activated::HandDiscardKeyword::Cycling
+                                    )
+                                )
+                            })
+                    })
+                    .count(),
+            ),
         },
         NumericExpression::AttachedAurasAndEquipment { multiplier } => RulesInteger::from_usize(
             battlefield
@@ -2114,6 +2182,52 @@ fn numeric(
             };
             super::eval_world_value_expr(&ctx, expr)
         }
+        NumericExpression::Add(lhs, rhs) => {
+            let a = numeric(
+                world,
+                lhs,
+                source,
+                controller,
+                objects,
+                battlefield,
+                name_rules,
+            );
+            let b = numeric(
+                world,
+                rhs,
+                source,
+                controller,
+                objects,
+                battlefield,
+                name_rules,
+            );
+            a.plus(&b)
+        }
+        NumericExpression::Scale {
+            expr,
+            multiplier,
+            offset,
+        } => numeric(
+            world,
+            expr,
+            source,
+            controller,
+            objects,
+            battlefield,
+            name_rules,
+        )
+        .times(multiplier)
+        .plus(offset),
+        NumericExpression::Cap { expr, max } => numeric(
+            world,
+            expr,
+            source,
+            controller,
+            objects,
+            battlefield,
+            name_rules,
+        )
+        .min(max.clone()),
     }
 }
 
@@ -2576,6 +2690,15 @@ fn generate(
                             ability: ability.clone(),
                             restriction: restriction.clone(),
                         },
+                        StaticPart::GrantLoyalty {
+                            ability,
+                            loyalty,
+                            variable_loyalty,
+                        } => ResolvedPart::GrantLoyalty {
+                            ability: ability.clone(),
+                            loyalty: *loyalty,
+                            variable_loyalty: *variable_loyalty,
+                        },
                         StaticPart::GrantTrigger(ability) => {
                             ResolvedPart::GrantTrigger(ability.clone())
                         }
@@ -2635,7 +2758,8 @@ fn generate(
                             ResolvedPart::GrantRestriction(restriction.clone())
                         }
                         StaticPart::InheritExiledCreatureAbilities
-                        | StaticPart::InheritCounteredCreatureAbilities => {
+                        | StaticPart::InheritCounteredCreatureAbilities
+                        | StaticPart::InheritZoneAbilities { .. } => {
                             return Err(CharacteristicInvariantError::NoEligibleComponent);
                         }
                     });
@@ -2952,6 +3076,91 @@ fn generate(
                                 ),
                             ))
                         }
+                        StaticPart::InheritZoneAbilities {
+                            zone,
+                            filter,
+                            loyalty_only,
+                        } => {
+                            let ctx = super::WorldEvalCtx {
+                                active_player: world.active_player,
+                                step: world.step,
+                                participants: world.participants,
+                                life: world.life,
+                                combat: world.combat,
+                                cards: world.cards,
+                                programs: world.programs,
+                                state: world.state,
+                                objects,
+                                source,
+                                controller,
+                                name_rules: world.name_rules,
+                                trigger_subject: None,
+                                related_player: None,
+                                defending_player: defending_player_for_source(
+                                    world.combat,
+                                    objects,
+                                    source,
+                                ),
+                            };
+                            let linked_ids: BTreeSet<ObjectId> = if *zone == StaticZone::LinkedExile
+                            {
+                                world
+                                    .state
+                                    .imprinted_cards
+                                    .get(&source)
+                                    .map(|v| v.iter().copied().collect())
+                                    .unwrap_or_default()
+                            } else {
+                                BTreeSet::new()
+                            };
+                            let donors: Vec<&ObjectCharacteristics> = objects
+                                .values()
+                                .filter(|card| {
+                                    card.object != source
+                                        && match zone {
+                                            StaticZone::ControlledBattlefield => {
+                                                card.zone == ObjectZone::Battlefield
+                                                    && card.controller == Some(controller)
+                                            }
+                                            StaticZone::AnyBattlefield => {
+                                                card.zone == ObjectZone::Battlefield
+                                            }
+                                            StaticZone::OwnGraveyard => {
+                                                card.zone == ObjectZone::Graveyard(controller)
+                                            }
+                                            StaticZone::AllGraveyards => {
+                                                matches!(card.zone, ObjectZone::Graveyard(_))
+                                            }
+                                            StaticZone::OwnHand => {
+                                                card.zone == ObjectZone::Hand(controller)
+                                            }
+                                            StaticZone::OwnExile => {
+                                                card.zone == ObjectZone::Exile
+                                                    && card.owner == controller
+                                            }
+                                            StaticZone::LinkedExile => {
+                                                card.zone == ObjectZone::Exile
+                                                    && linked_ids.contains(&card.object)
+                                            }
+                                        }
+                                        && super::world_eval::matches_world_object_filter(
+                                            &ctx, **filter, card,
+                                        )
+                                })
+                                .collect();
+                            let mut inherited = super::inheritance::inherit_activated_abilities(
+                                source,
+                                ability.id(),
+                                donors,
+                            );
+                            if *loyalty_only {
+                                inherited.activated.retain(|_, (_, terms)| {
+                                    terms.loyalty.is_some() || terms.variable_loyalty
+                                });
+                                inherited.mana.clear();
+                            }
+                            ResolvedPart::InheritedAbilities(Box::new(inherited))
+                        }
                         StaticPart::GrantActivated(ability) => {
                             ResolvedPart::GrantActivated(ability.clone())
                         }
@@ -2961,6 +3170,15 @@ fn generate(
                         } => ResolvedPart::GrantActivatedRestricted {
                             ability: ability.clone(),
                             restriction: restriction.clone(),
+                        },
+                        StaticPart::GrantLoyalty {
+                            ability,
+                            loyalty,
+                            variable_loyalty,
+                        } => ResolvedPart::GrantLoyalty {
+                            ability: ability.clone(),
+                            loyalty: *loyalty,
+                            variable_loyalty: *variable_loyalty,
                         },
                         StaticPart::GrantTrigger(ability) => {
                             ResolvedPart::GrantTrigger(ability.clone())
@@ -3161,6 +3379,22 @@ fn apply_part(
                     restriction: Some((**restriction).clone()),
                     loyalty: None,
                     variable_loyalty: false,
+                    origin: super::ActivationOriginPath::direct(ability.id, Some(key)),
+                },
+            );
+        }
+        ResolvedPart::GrantLoyalty {
+            ability,
+            loyalty,
+            variable_loyalty,
+        } => {
+            object.granted_activated.insert(key, (**ability).clone());
+            object.inherited_activation_terms.insert(
+                key,
+                super::ActivationTerms {
+                    restriction: None,
+                    loyalty: *loyalty,
+                    variable_loyalty: *variable_loyalty,
                     origin: super::ActivationOriginPath::direct(ability.id, Some(key)),
                 },
             );

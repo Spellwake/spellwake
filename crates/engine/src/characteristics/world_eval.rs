@@ -1113,7 +1113,7 @@ fn matches_world_clause(
     static_clause.matches_static_characteristics(p, &excluded, || object_mana_value(ctx, p))
 }
 
-fn matches_world_object_filter(
+pub(super) fn matches_world_object_filter(
     ctx: &WorldEvalCtx<'_>,
     filter: ObjectFilter,
     p: &ObjectCharacteristics,

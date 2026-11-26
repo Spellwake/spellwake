@@ -1021,7 +1021,7 @@ pub(in super::super) fn lower_animate_or_set_pt(
         }
         return Ok(());
     }
-    let parse_pt_expr = |raw: &str| -> Result<ValueExpr, &'static str> {
+    let parse_pt_expr = |raw: &str, b: &mut BodyBuilder| -> Result<ValueExpr, &'static str> {
         let s = raw.trim();
         if let Ok(n) = s.parse::<i64>() {
             return Ok(ValueExpr::literal(n));
@@ -1029,6 +1029,7 @@ pub(in super::super) fn lower_animate_or_set_pt(
         if s.eq_ignore_ascii_case("x") {
             return if let Some(bx) = bound_x {
                 lower_value_expr(bx, vocabulary)
+                    .or_else(|_| lower_value_expr_in_context(bx, b, in_trigger, vocabulary))
             } else {
                 Ok(ValueExpr::chosen_x())
             };
@@ -1037,56 +1038,108 @@ pub(in super::super) fn lower_animate_or_set_pt(
             s,
             &cached_compiler_vocab(vocabulary),
         ) {
-            return lower_value_expr(resolve_x(&ast_e, bound_x), vocabulary);
+            let resolved = resolve_x(&ast_e, bound_x);
+            return lower_value_expr(resolved, vocabulary)
+                .or_else(|_| lower_value_expr_in_context(resolved, b, in_trigger, vocabulary));
         }
         Err("oracle:animate-non-const-pt")
     };
-    let mut inline_pt_expr: Option<ValueExpr> = None;
+    let mut inline_pt_pair: Option<(ValueExpr, ValueExpr)> = None;
     let mut inline_kws: Vec<String> = Vec::new();
     let mut effective_desc = description;
+    let p_trim = power.trim();
+    let t_trim = toughness.trim();
     if let Some(desc) = description {
-        let desc_low = desc.to_ascii_lowercase();
-        for pat in [
-            " with base power and toughness each equal to ",
-            " with base power and toughness equal to ",
-            " with power and toughness each equal to ",
-            " with power and toughness equal to ",
-        ] {
-            if let Some(idx) = desc_low.find(pat) {
-                let ty_part = desc[..idx].trim();
-                let tail = desc[idx + pat.len()..].trim().trim_end_matches('.');
-                let tail_low = tail.to_ascii_lowercase();
-                let (val_raw, kw_tail) = [" and gains ", " and gain ", " and has ", " and have "]
-                    .iter()
-                    .find_map(|sep| {
-                        tail_low.find(sep).map(|k_idx| {
-                            (tail[..k_idx].trim(), Some(tail[k_idx + sep.len()..].trim()))
-                        })
-                    })
-                    .unwrap_or((tail, None));
-                let val_expr = parse_pt_expr(val_raw)?;
-                if let Some(kw_raw) = kw_tail {
-                    for piece in kw_raw.split(',').flat_map(|seg| seg.split(" and ")) {
-                        let k = piece.trim();
-                        if !k.is_empty() {
-                            inline_kws.push(k.to_string());
+        let desc_trimmed = desc.trim().trim_end_matches('.');
+        let desc_low = desc_trimmed.to_ascii_lowercase();
+        if p_trim.eq_ignore_ascii_case("x")
+            && t_trim.eq_ignore_ascii_case("x")
+            && let Some(rhs_raw) = desc_low.strip_prefix("equal to ")
+        {
+            let rhs = rhs_raw.trim();
+            let pt_subj_raw = rhs
+                .strip_prefix("the power and toughness of ")
+                .or_else(|| rhs.strip_suffix("'s power and toughness"))
+                .or_else(|| rhs.strip_suffix("'s base power and toughness"));
+            if let Some(sraw) = pt_subj_raw
+                && let Ok(src_subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
+                    sraw.trim(),
+                    &cached_compiler_vocab(vocabulary),
+                )
+            {
+                let p_ast = ValueExprAst::ObjectStat {
+                    subject: Box::new(src_subj.clone()),
+                    stat: StatKind::Power,
+                };
+                let t_ast = ValueExprAst::ObjectStat {
+                    subject: Box::new(src_subj),
+                    stat: StatKind::Toughness,
+                };
+                let p_expr = lower_value_expr_in_context(&p_ast, builder, in_trigger, vocabulary)?;
+                let t_expr = lower_value_expr_in_context(&t_ast, builder, in_trigger, vocabulary)?;
+                inline_pt_pair = Some((p_expr, t_expr));
+                effective_desc = None;
+            } else {
+                let val_expr = parse_pt_expr(rhs, builder)?;
+                inline_pt_pair = Some((val_expr.clone(), val_expr));
+                effective_desc = None;
+            }
+        } else if p_trim.eq_ignore_ascii_case("x")
+            && t_trim.eq_ignore_ascii_case("x")
+            && let Some(where_x) = desc_low.strip_prefix("x/x, where x is ")
+        {
+            let val_expr = parse_pt_expr(where_x.trim(), builder)?;
+            inline_pt_pair = Some((val_expr.clone(), val_expr));
+            effective_desc = None;
+        } else if p_trim.eq_ignore_ascii_case("x")
+            && t_trim.eq_ignore_ascii_case("x")
+            && desc_low == "x/x"
+        {
+            let val_expr = parse_pt_expr("x", builder)?;
+            inline_pt_pair = Some((val_expr.clone(), val_expr));
+            effective_desc = None;
+        } else {
+            for pat in [
+                " with base power and toughness each equal to ",
+                " with base power and toughness equal to ",
+                " with power and toughness each equal to ",
+                " with power and toughness equal to ",
+            ] {
+                if let Some(idx) = desc_low.find(pat) {
+                    let ty_part = desc_trimmed[..idx].trim();
+                    let tail = desc_trimmed[idx + pat.len()..].trim().trim_end_matches('.');
+                    let tail_low = tail.to_ascii_lowercase();
+                    let (val_raw, kw_tail) =
+                        [" and gains ", " and gain ", " and has ", " and have "]
+                            .iter()
+                            .find_map(|sep| {
+                                tail_low.find(sep).map(|k_idx| {
+                                    (tail[..k_idx].trim(), Some(tail[k_idx + sep.len()..].trim()))
+                                })
+                            })
+                            .unwrap_or((tail, None));
+                    let val_expr = parse_pt_expr(val_raw, builder)?;
+                    if let Some(kw_raw) = kw_tail {
+                        for piece in kw_raw.split(',').flat_map(|seg| seg.split(" and ")) {
+                            let k = piece.trim();
+                            if !k.is_empty() {
+                                inline_kws.push(k.to_string());
+                            }
                         }
                     }
+                    inline_pt_pair = Some((val_expr.clone(), val_expr));
+                    effective_desc = (!ty_part.is_empty()).then_some(ty_part);
+                    break;
                 }
-                inline_pt_expr = Some(val_expr);
-                effective_desc = (!ty_part.is_empty()).then_some(ty_part);
-                break;
             }
         }
     }
-    let p_trim = power.trim();
-    let t_trim = toughness.trim();
     let omit_pt = (p_trim.is_empty() || p_trim.eq_ignore_ascii_case("keep"))
         && (t_trim.is_empty() || t_trim.eq_ignore_ascii_case("keep"));
-    let pt_part: Option<ResolvedPartSpec> = if let Some(val) = inline_pt_expr {
+    let mut pt_part: Option<ResolvedPartSpec> = if let Some((p_val, t_val)) = inline_pt_pair {
         Some(ResolvedPartSpec::SetPTExpr {
-            power: Box::new(val.clone()),
-            toughness: Box::new(val),
+            power: Box::new(p_val),
+            toughness: Box::new(t_val),
         })
     } else if omit_pt {
         None
@@ -1097,8 +1150,8 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 toughness: t.into(),
             }),
             _ => ResolvedPartSpec::SetPTExpr {
-                power: Box::new(parse_pt_expr(power)?),
-                toughness: Box::new(parse_pt_expr(toughness)?),
+                power: Box::new(parse_pt_expr(power, builder)?),
+                toughness: Box::new(parse_pt_expr(toughness, builder)?),
             },
         })
     };
@@ -1116,7 +1169,12 @@ pub(in super::super) fn lower_animate_or_set_pt(
         let mut colors = BTreeSet::new();
         let mut explicit_colorless = false;
         let mut add_colors = false;
+        let mut chosen_color = false;
+        let mut chosen_basic_land_type = false;
         let mut loses_all_abilities = false;
+        let mut cant_be_blocked = false;
+        let mut remove_equipment = false;
+        let mut suppressed_kws: BTreeSet<KeywordAbility> = BTreeSet::new();
         let mut supertypes = BTreeSet::new();
         let mut card_types = BTreeSet::new();
         let mut land_subtypes = BTreeSet::new();
@@ -1253,8 +1311,105 @@ pub(in super::super) fn lower_animate_or_set_pt(
         }
         if strip_phrase_ci(&mut clean, "loses all abilities")
             || strip_phrase_ci(&mut clean, "lose all abilities")
+            || strip_phrase_ci(&mut clean, "has no abilities")
+            || strip_phrase_ci(&mut clean, "have no abilities")
         {
             loses_all_abilities = true;
+        }
+        for phrase in [
+            "and can't be blocked this turn",
+            "and can't be blocked",
+            "can't be blocked this turn",
+            "can't be blocked",
+        ] {
+            if strip_phrase_ci(&mut clean, phrase) {
+                cant_be_blocked = true;
+            }
+        }
+        for phrase in [
+            "that's no longer an equipment",
+            "that isn't an equipment",
+            "isn't an equipment",
+            "no longer an equipment",
+        ] {
+            if strip_phrase_ci(&mut clean, phrase) {
+                remove_equipment = true;
+            }
+        }
+        {
+            let c_low = clean.to_ascii_lowercase();
+            for pat in [" and loses ", " and lose ", " loses ", " lose "] {
+                if let Some(idx) = c_low.find(pat) {
+                    let tail = clean[idx + pat.len()..].trim().trim_end_matches('.').trim();
+                    if let Some(kw) = lower_keyword_ability_name(tail) {
+                        suppressed_kws.insert(kw);
+                        clean.truncate(idx);
+                        break;
+                    }
+                }
+            }
+        }
+        {
+            let c_low = clean.to_ascii_lowercase();
+            if let Some(idx) = c_low.find(" with base power and toughness ") {
+                let tail = clean[idx + " with base power and toughness ".len()..]
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim();
+                let pt_tok = tail.split_whitespace().next().unwrap_or("");
+                if let Some((p_raw, t_raw)) = pt_tok.split_once('/')
+                    && let (Ok(p), Ok(t)) = (p_raw.parse::<i64>(), t_raw.parse::<i64>())
+                {
+                    if pt_part.is_none() {
+                        pt_part = Some(ResolvedPartSpec::SetPT(PowerToughness {
+                            power: p.into(),
+                            toughness: t.into(),
+                        }));
+                    }
+                    let rest_after_pt = tail[pt_tok.len()..].trim();
+                    let head = clean[..idx].trim();
+                    clean = if rest_after_pt.is_empty() {
+                        head.to_string()
+                    } else {
+                        format!("{head} {rest_after_pt}")
+                    };
+                }
+            }
+        }
+        {
+            let c_low = clean
+                .trim()
+                .trim_end_matches('.')
+                .trim()
+                .to_ascii_lowercase();
+            if matches!(c_low.as_str(), "the chosen color" | "that color")
+                && builder.instructions.iter().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::ChooseValue {
+                            domain: spellwake_engine::program::ResolutionChoiceDomain::Color,
+                            ..
+                        }
+                    )
+                })
+            {
+                chosen_color = true;
+                clean.clear();
+            } else if matches!(
+                c_low.as_str(),
+                "that type" | "the chosen type" | "the chosen basic land type"
+            ) && builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::ChooseValue {
+                        domain: spellwake_engine::program::ResolutionChoiceDomain::BasicLandType,
+                        ..
+                    }
+                )
+            }) {
+                chosen_basic_land_type = true;
+                clean.clear();
+            }
         }
         for phrase in [
             "until end of turn",
@@ -1469,13 +1624,20 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 }
             }
         }
+        if chosen_basic_land_type {
+            parts.push(ResolvedPartSpec::ChosenBasicLandType { add: add_types });
+        }
         if !supertypes.is_empty()
             || !card_types.is_empty()
             || !subtypes.is_empty()
             || !land_subtypes.is_empty()
             || !artifact_subtypes.is_empty()
             || !enchantment_subtypes.is_empty()
+            || remove_equipment
         {
+            if remove_equipment && !artifact_subtypes.is_empty() {
+                return Err("oracle:unsupported-animate-desc");
+            }
             let super_op = if supertypes.is_empty() {
                 TypeOperation::Keep
             } else if add_types {
@@ -1510,10 +1672,13 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 types: types_op,
                 subtypes: sub_op,
             };
-            if artifact_subtypes.is_empty() && enchantment_subtypes.is_empty() {
+            if artifact_subtypes.is_empty() && enchantment_subtypes.is_empty() && !remove_equipment
+            {
                 parts.push(ResolvedPartSpec::Type(base));
             } else {
-                let art_op = if artifact_subtypes.is_empty() {
+                let art_op = if remove_equipment {
+                    SubtypeOperation::Remove(BTreeSet::from([ArtifactSubtype::Equipment]))
+                } else if artifact_subtypes.is_empty() {
                     SubtypeOperation::Keep
                 } else if add_types {
                     SubtypeOperation::Add(artifact_subtypes)
@@ -1534,7 +1699,9 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 });
             }
         }
-        if !colors.is_empty() {
+        if chosen_color {
+            parts.push(ResolvedPartSpec::ChosenColor { add: add_colors });
+        } else if !colors.is_empty() {
             parts.push(ResolvedPartSpec::Color(if add_colors {
                 ColorOperation::Add(colors)
             } else {
@@ -1545,7 +1712,11 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 ColorOperation::Set(BTreeSet::new()),
             ));
         }
-        if loses_all_abilities || !extra_kws.is_empty() || !keywords.is_empty() {
+        if loses_all_abilities
+            || !extra_kws.is_empty()
+            || !keywords.is_empty()
+            || !suppressed_kws.is_empty()
+        {
             let mut merged: Vec<String> = keywords.to_vec();
             merged.extend(extra_kws);
             let mut ab_change = if !merged.is_empty() {
@@ -1556,7 +1727,15 @@ pub(in super::super) fn lower_animate_or_set_pt(
             if loses_all_abilities {
                 ab_change.removal = Some(AbilityRemoval::All);
             }
+            if !suppressed_kws.is_empty() {
+                ab_change.suppressed_keywords.extend(suppressed_kws);
+            }
             parts.push(ResolvedPartSpec::Abilities(ab_change));
+        }
+        if cant_be_blocked {
+            parts.push(ResolvedPartSpec::BlockingRestriction(
+                BlockingRestriction::CannotBeBlocked,
+            ));
         }
     } else if !keywords.is_empty() || !inline_kws.is_empty() {
         let mut merged: Vec<String> = keywords.to_vec();
@@ -1594,7 +1773,29 @@ pub(in super::super) fn lower_animate_or_set_pt(
             Instruction::MoveSubject {
                 destination: SubjectDestination::Battlefield { .. },
                 ..
-            }
+            } | Instruction::SelectZoneCardsToZone {
+                destination: SubjectDestination::Battlefield { .. },
+                ..
+            } | Instruction::MoveGraveyardGroupOwned {
+                destination: SubjectDestination::Battlefield { .. },
+                ..
+            } | Instruction::MoveLastMovedFiltered {
+                destination: SubjectDestination::Battlefield { .. },
+                ..
+            } | Instruction::ReturnLinkedExile {
+                destination: SubjectDestination::Battlefield { .. },
+                ..
+            } | Instruction::ReturnOwnGraveyardCreatureToBattlefield
+                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
+                | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
+                | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
+                | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
+                | Instruction::ReturnChosenXGraveyardCreatures
+                | Instruction::ReturnGraveyardTargetsTapped(_)
+                | Instruction::ReturnSourceGraveyardToBattlefield { .. }
+                | Instruction::ReturnExiledTargetCohort { .. }
+                | Instruction::ReturnCardsDestroyedThisWay
+                | Instruction::ReturnCapturedDyingCreature
         )
     });
     match subject {
@@ -1753,8 +1954,10 @@ pub(in super::super) fn lower_animate_or_set_pt(
             });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_)
-            if builder.target == BodyTarget::None && in_trigger && !self_pronoun_valid =>
+        SubjectRefAst::Anaphora(raw)
+            if builder.target == BodyTarget::None
+                && in_trigger
+                && (!self_pronoun_valid || !is_self_anaphora(raw)) =>
         {
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::TriggerSubject),
@@ -1776,7 +1979,7 @@ pub(in super::super) fn lower_animate_or_set_pt(
             });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_) if builder.target == BodyTarget::None && has_last_moved => {
+        SubjectRefAst::Anaphora(_) if !has_perm_target && has_last_moved => {
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::LastMoved),
                 parts: spec,

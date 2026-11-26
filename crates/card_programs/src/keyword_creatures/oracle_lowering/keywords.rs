@@ -2827,8 +2827,9 @@ pub(super) fn parse_protection_keywords(
             ProtectionFromQuality::Everything,
         )]);
     }
+    let normalized_full = low_full.replace(" /from ", " and from ");
     let mut out = Vec::new();
-    for part in low_full.split(" and ") {
+    for part in normalized_full.split(" and ") {
         let word = part
             .trim()
             .strip_prefix("from ")

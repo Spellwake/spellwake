@@ -485,6 +485,15 @@ pub(super) fn lower_tokens_copies_instruction(
                 },
                 _ => return Err("oracle:unsupported-token-controller"),
             };
+            let precompiled_quoted = if compiled_abilities.is_none() {
+                try_precompile_token_quoted_abilities(token, vocabulary)
+            } else {
+                None
+            };
+            let (eff_token, eff_compiled_abilities) = match &precompiled_quoted {
+                Some((clean_tok, compiled_face)) => (clean_tok, Some(compiled_face)),
+                None => (token, compiled_abilities),
+            };
             let (mut creation, attacking) =
                 if let TokenSpecAst::Predefined {
                     name,
@@ -521,8 +530,8 @@ pub(super) fn lower_tokens_copies_instruction(
                     tapped,
                     attacking,
                     named,
-                } = token
-                    && let Some(face) = compiled_abilities
+                } = eff_token
+                    && let Some(face) = eff_compiled_abilities
                     && (power.trim() == "*" || power.trim().is_empty())
                     && (toughness.trim() == "*" || toughness.trim().is_empty())
                     && face
@@ -550,7 +559,7 @@ pub(super) fn lower_tokens_copies_instruction(
                         ids,
                         bound_x,
                         Some((builder, in_trigger)),
-                        compiled_abilities,
+                        eff_compiled_abilities,
                     )?;
                     if !creation.definition.program().continuous.iter().any(|ab| {
                         matches!(ab, StaticContinuousAbility::CharacteristicDefining { .. })
@@ -570,7 +579,7 @@ pub(super) fn lower_tokens_copies_instruction(
                     tapped,
                     attacking,
                     named,
-                } = token
+                } = eff_token
                     && ((power.trim().eq_ignore_ascii_case("x")
                         && toughness.trim().parse::<i64>().is_ok())
                         || (toughness.trim().eq_ignore_ascii_case("x")
@@ -626,24 +635,22 @@ pub(super) fn lower_tokens_copies_instruction(
                         ids,
                         bound_x,
                         Some((builder, in_trigger)),
-                        compiled_abilities,
+                        eff_compiled_abilities,
                     )?;
                     creation.base_size = Some(TokenSize::AtCreationPair {
                         power: Box::new(p_expr),
                         toughness: Box::new(t_expr),
                     });
                     (creation, is_attacking)
-                } else if compiled_abilities.is_none()
-                    && let Some((clean_tok, compiled_face)) =
-                        try_precompile_token_quoted_abilities(token, vocabulary)
+                } else if let Some((clean_tok, compiled_face)) = &precompiled_quoted
                     && let Ok(res) = lower_token_spec_with_abilities(
-                        &clean_tok,
+                        clean_tok,
                         recipients,
                         vocabulary,
                         ids,
                         bound_x,
                         Some((builder, in_trigger)),
-                        Some(&compiled_face),
+                        Some(compiled_face),
                     )
                 {
                     res

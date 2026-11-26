@@ -1733,6 +1733,18 @@ pub enum TemporaryRuleKind {
         filter: ObjectFilter,
         generic: u16,
     },
+    /// Affected players can cast at most `max_more` additional spells this turn (e.g. Irencrag Feat).
+    CastMaxMoreSpellsThisTurn {
+        players: AffectedPlayers,
+        max_more: u8,
+    },
+    /// The next spell matching `spell_filter` cast by `player` costs {1} less for each controlled
+    /// permanent matching `affinity_filter` (e.g. Don & Raph, Hard Science).
+    NextSpellAffinity {
+        player: ResolvingPlayer,
+        spell_filter: ObjectFilter,
+        affinity_filter: ObjectFilter,
+    },
     /// Temporary flash permission for spells matching `filter` cast by `player`.
     FilteredFlash {
         player: ResolvingPlayer,
@@ -5578,6 +5590,18 @@ impl Instruction {
                 | TemporaryRuleKind::TemporaryStatic(_)
                 | TemporaryRuleKind::OneShotEventReplacement(_)
                 | TemporaryRuleKind::ConditionalTemporaryStatic { .. } => false,
+                TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, .. } => {
+                    is_target_affected(*players)
+                }
+                TemporaryRuleKind::NextSpellAffinity {
+                    player,
+                    spell_filter,
+                    affinity_filter,
+                } => {
+                    is_target_player(*player)
+                        || filter_uses_target(spell_filter)
+                        || filter_uses_target(affinity_filter)
+                }
             },
             Self::GrantCardPlayPermission {
                 player, subject, ..
@@ -7240,6 +7264,12 @@ impl ExecutableBody {
         self
     }
 
+    /// True when 0 or 1 permanent target may be chosen ("up to one target ...").
+    #[must_use]
+    pub fn is_up_to_one_target(&self) -> bool {
+        self.up_to_one_target
+    }
+
     /// Require the spell's chosen X to equal the number of permanent/graveyard targets chosen.
     pub fn with_x_target_count(mut self) -> Self {
         self.x_target_count = true;
@@ -7331,19 +7361,7 @@ impl ExecutableBody {
                     | BodyTarget::SinglePlaneswalker
                     | BodyTarget::FilteredPermanent(_)
             );
-            let has_safe_consumer = self.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::Fight { .. }
-                        | Instruction::AffectPermanentTargets { .. }
-                        | Instruction::DealDamageFrom { .. }
-                        | Instruction::AttachPermanent { .. }
-                        | Instruction::UnattachSubject { .. }
-                        | Instruction::TransferAllCountersFromTriggeringLki { .. }
-                )
-            });
             if !valid_target
-                || !has_safe_consumer
                 || self.graveyard_target_bounds.is_some()
                 || self.x_target_count
                 || self.up_to_x_target_count
@@ -10320,6 +10338,8 @@ impl ExecutableBody {
                                                 p,
                                                 StaticPart::InheritExiledCreatureAbilities
                                                     | StaticPart::InheritCounteredCreatureAbilities
+                                                    | StaticPart::InheritZoneAbilities { .. }
+                                                    | StaticPart::GrantLoyalty { .. }
                                             )
                                             })
                                     }
@@ -13609,6 +13629,22 @@ impl ExecutableBody {
                             }
                             _ => None,
                         }
+                    }
+                    TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, .. } => {
+                        players.validate(context, self.target, facts.definitely_exiled_target)?
+                    }
+                    TemporaryRuleKind::NextSpellAffinity {
+                        player,
+                        spell_filter,
+                        affinity_filter,
+                    } => {
+                        spell_filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        affinity_filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        player.validate(context, self.target, facts.definitely_exiled_target)?
                     }
                     TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
                         subject

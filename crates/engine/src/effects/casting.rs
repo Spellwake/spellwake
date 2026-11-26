@@ -798,6 +798,25 @@ impl EffectWindow {
                     == Some(crate::attachment::AttachmentKind::Equipment));
         self.check_chosen_name_cast_restriction(current_spell, &current)?;
         if self.temporary_rules.iter().any(|active| {
+            if let crate::program::TemporaryRuleKind::CastMaxMoreSpellsThisTurn { max_more, .. } =
+                &active.rule
+                && active.resolved_players.contains(&actor)
+            {
+                let baseline = active
+                    .spell_cast_baselines
+                    .get(&actor)
+                    .copied()
+                    .unwrap_or(0);
+                let cast_now = self
+                    .characteristics
+                    .spells_cast_this_turn
+                    .get(&actor)
+                    .copied()
+                    .unwrap_or(0);
+                if cast_now >= baseline.saturating_add(u16::from(*max_more)) {
+                    return true;
+                }
+            }
             if let crate::program::TemporaryRuleKind::CantCastSpells { filter, .. } = &active.rule {
                 if !active.resolved_players.contains(&actor) {
                     return false;
@@ -2436,6 +2455,43 @@ impl EffectWindow {
                     ) =>
                 {
                     cost.generic = cost.generic.plus(&i64::from(*generic).into());
+                }
+                crate::program::TemporaryRuleKind::NextSpellAffinity {
+                    spell_filter,
+                    affinity_filter,
+                    ..
+                } if !active.consumed
+                    && active.resolved_players.contains(&actor)
+                    && self.matches_object_filter(
+                        *spell_filter,
+                        current_spell,
+                        active.controller,
+                        active.source_object,
+                        &BTreeSet::new(),
+                        &current,
+                    ) =>
+                {
+                    let count = current
+                        .objects
+                        .values()
+                        .filter(|p| {
+                            p.zone == ObjectZone::Battlefield
+                                && p.controller == Some(actor)
+                                && self.matches_object_filter(
+                                    *affinity_filter,
+                                    p,
+                                    actor,
+                                    active.source_object,
+                                    &BTreeSet::new(),
+                                    &current,
+                                )
+                        })
+                        .count();
+                    cost.generic = cost
+                        .generic
+                        .minus(&RulesInteger::from_usize(count))
+                        .max(0.into());
+                    consumed_temp_rules.push(rule_idx);
                 }
                 _ => {}
             }
