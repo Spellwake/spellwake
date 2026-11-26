@@ -674,6 +674,36 @@ fn oracle_lowering_corpus_coverage_audit() {
         })
         .collect();
 
+    // Optional deterministic evidence for before/after whole-card set comparisons.
+    if let Some(path) = std::env::var_os("SPELLWAKE_COVERAGE_SNAPSHOT") {
+        let cards: BTreeMap<_, _> = inventory
+            .cards
+            .iter()
+            .filter(|card| card.required_by_base_formats)
+            .map(|card| {
+                let id = card.oracle_id.as_ref().expect("required card Oracle ID");
+                (
+                    id.clone(),
+                    serde_json::json!({
+                        "name": card.name,
+                        "bound": bound_ids.contains(id),
+                        "standalone_valid": oracle_ok_ids.contains(id),
+                    }),
+                )
+            })
+            .collect();
+        assert_eq!(
+            cards.len(),
+            total_required,
+            "one row per required Oracle ID"
+        );
+        serde_json::to_writer_pretty(
+            File::create(path).expect("create coverage snapshot"),
+            &cards,
+        )
+        .expect("write coverage snapshot");
+    }
+
     eprintln!("=== ORACLE LOWERING CORPUS AUDIT ===");
     eprintln!(
         "Profile::Current total bound: {total_bound} / {total_required} ({:.2}%)",
@@ -2132,4 +2162,25 @@ fn pass_e12_filter_and_chooser_fidelity() {
         Some(spellwake_engine::land::EntryTap::Always)
     );
     assert!(!twc_prog.entry_counter_abilities.is_empty());
+}
+
+#[test]
+#[ignore = "uses saved dated Scryfall corpus and vocabulary"]
+fn wave10_source_action_catalogue_regression() {
+    let (inventory, vocabulary, _) = current_catalogue();
+    for name in [
+        "Nezumi Graverobber // Nighteyes the Desecrator",
+        "Dormant Grove // Gnarled Grovestrider",
+        "Hadana's Climb // Winged Temple of Orazca",
+        "Mysterious Tome // Chilling Chronicle",
+        "Nezumi Shortfang // Stabwhisker the Odious",
+    ] {
+        let card = inventory
+            .cards
+            .iter()
+            .find(|card| card.name == name)
+            .expect("pinned card exists");
+        let result = compile_with_inventory_reason(card, inventory, &vocabulary);
+        assert!(result.is_ok(), "{name}: {:?}", result.err());
+    }
 }

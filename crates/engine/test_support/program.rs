@@ -1664,6 +1664,7 @@ enum ConditionValueWire {
     KickerCount { index: usize },
     Literal { value: RulesInteger },
     ControllerLife {},
+    PlayerIsActivePlayer { player: ResolvingPlayerWire },
     ControllerLifeAboveStarting {},
     RevealedTopHasType { first: String, second: String },
     ControllerExperienceCounters {},
@@ -1700,6 +1701,9 @@ impl ConditionValueWire {
             }
             Self::Bargained => ValueExpr::event(EventValueKind::Bargained),
             Self::KickerCount { index } => ValueExpr::event(EventValueKind::KickerCount(index)),
+            Self::PlayerIsActivePlayer { player } => {
+                ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player.into()))
+            }
             Self::ControllerLife {} => ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
             Self::ControllerLifeAboveStarting {} => {
                 ValueExpr::PlayerStat(PlayerStatExpr::ControllerLifeAboveStarting)
@@ -1836,6 +1840,7 @@ impl LifeAdjustmentWire {
 #[derive(Deserialize)]
 #[serde(tag = "tag", deny_unknown_fields)]
 enum Amount {
+    PlayerIsActivePlayer { player: ResolvingPlayerWire },
     AbilitySourceCounters { kind: String },
     AbilitySourcePower {},
     GreatestControlledCreaturePower {},
@@ -1907,6 +1912,9 @@ enum LookCount {
 impl Amount {
     fn native(self, vocabulary: &CreatureTypeVocabulary) -> Result<ValueExpr, String> {
         Ok(match self {
+            Self::PlayerIsActivePlayer { player } => {
+                ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player.into()))
+            }
             Self::AbilitySourceCounters { kind } => ValueExpr::counters(
                 CounterSubjectRef::AbilitySource,
                 Some(
@@ -9942,6 +9950,9 @@ fn single_color_in_filter(filter: ObjectColorFilter) -> Option<Color> {
 
 pub fn instruction_amount(value: &ValueExpr) -> Value {
     match value {
+        ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player)) => {
+            json!({"tag":"PlayerIsActivePlayer","player":format!("{player:?}")})
+        }
         ValueExpr::CounterCount {
             subject: CounterSubjectRef::AbilitySource,
             kind: Some(kind),
@@ -10380,6 +10391,9 @@ pub fn resolution_condition(value: &ResolutionCondition) -> Value {
             }
             ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsMonarch) => {
                 json!({"tag":"ControllerIsMonarch"})
+            }
+            ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(player)) => {
+                json!({"tag":"PlayerIsActivePlayer","player":format!("{player:?}")})
             }
             ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer) => {
                 json!({"tag":"ControllerIsActivePlayer"})
@@ -14151,6 +14165,33 @@ pub fn token_member(value: &Value) -> Result<spellwake_engine::token::TokenBatch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wave10_player_turn_condition_and_amount_codec_preserve_roles() {
+        let vocabulary = super::super::creature_types::synthetic_vocabulary();
+        for role in [
+            ResolvingPlayer::Controller,
+            ResolvingPlayer::UniqueRelatedPlayer,
+            ResolvingPlayer::TargetPlayer,
+        ] {
+            let expr = ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(role));
+            let encoded = instruction_amount(&expr);
+            let decoded: Amount = serde_json::from_value(encoded.clone()).unwrap();
+            assert_eq!(decoded.native(&vocabulary).unwrap(), expr);
+            let condition = ResolutionCondition {
+                left: expr,
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            };
+            let decoded: ResolutionConditionWire =
+                serde_json::from_value(resolution_condition(&condition)).unwrap();
+            assert_eq!(decoded.native(&vocabulary).unwrap(), condition);
+            let mut invalid = encoded;
+            invalid["unexpected"] = json!(true);
+            assert!(serde_json::from_value::<Amount>(invalid.clone()).is_err());
+            assert!(serde_json::from_value::<ConditionValueWire>(invalid).is_err());
+        }
+    }
 
     fn definition() -> Value {
         json!({"names":[],"supertypes":[],"land_subtypes":[],"card_types":["Instant"],"creature_subtypes":[],"kind":{"tag":"Spell","casting_cost":{"generic":"0","required":{}},"body":{"target":{"tag":"None"},"instructions":[{"op":"ChooseCreatureType","into":"0","excluding":[]},{"op":"DrawController","amount":{"tag":"ControlledPermanentsOfChosenType","chosen":"0"}}]}},"color_indicator":null,"effect_defined_colors":null,"mana":[],"activated":[],"triggered":[],"continuous":null})

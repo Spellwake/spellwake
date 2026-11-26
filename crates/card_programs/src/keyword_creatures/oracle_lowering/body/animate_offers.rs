@@ -436,7 +436,8 @@ pub(super) fn rewrite_offer_chosen_to_loop_ve(ve: &mut ValueExpr) {
             ..
         } => rewrite_offer_chosen_to_loop_rp(rp),
         ValueExpr::PlayerStat(ps) => match ps {
-            PlayerStatExpr::PlayerLife(rp)
+            PlayerStatExpr::PlayerIsActivePlayer(rp)
+            | PlayerStatExpr::PlayerLife(rp)
             | PlayerStatExpr::PlayerHandSize(rp)
             | PlayerStatExpr::PlayerLibrarySize(rp)
             | PlayerStatExpr::PlayerGraveyardSize(rp)

@@ -9658,3 +9658,79 @@ pub(super) fn lower_trigger_condition(
         }
     }
 }
+
+#[cfg(test)]
+mod wave10_turn_condition_tests {
+    use super::*;
+
+    #[test]
+    fn glademuse_and_price_of_glory_lower_complete_off_turn_triggers() {
+        let vocab = CreatureTypeVocabulary::new("test-vocab".into(), [0; 32], vec!["Beast".into()])
+            .unwrap();
+        for (name, type_line, mana_cost, pt, oracle_text) in [
+            (
+                "Glademuse",
+                "Creature \u{2014} Beast",
+                "{2}{G}",
+                Some(("2", "4")),
+                "Whenever a player casts a spell, if it's not their turn, that player draws a card.",
+            ),
+            (
+                "Price of Glory",
+                "Enchantment",
+                "{2}{R}",
+                None,
+                "Whenever a player taps a land for mana, if it's not that player's turn, destroy that land.",
+            ),
+        ] {
+            let card = InventoryCard {
+                scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+                oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+                name: name.into(),
+                layout: "normal".into(),
+                faces: vec![spellwake_content::CatalogFace {
+                    name: name.into(),
+                    type_line: Some(type_line.into()),
+                    oracle_text: Some(oracle_text.into()),
+                    mana_cost: Some(mana_cost.into()),
+                    power: pt.map(|(power, _)| power.into()),
+                    toughness: pt.map(|(_, toughness)| toughness.into()),
+                }],
+                legalities: BTreeMap::new(),
+                eligible_formats: vec![],
+                required_by_base_formats: true,
+                program_evidence: "test",
+            };
+            let program = compile_with_reason(&card, &vocab)
+                .unwrap_or_else(|reason| panic!("{name}: {reason}"));
+            assert_eq!(program.triggered.len(), 1);
+            assert!(matches!(
+                program.triggered[0].condition.intervening_if,
+                Some(TriggerCondition::Not(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn related_player_turn_condition_preserves_negation_and_role() {
+        let vocab = CreatureTypeVocabulary::new("test-vocab".into(), [0; 32], vec!["Human".into()])
+            .unwrap();
+        let turn = ConditionAst::IsPlayersTurn(PlayerRefAst::ThatPlayer);
+        let expected = TriggerCondition::Eval(Box::new(ResolutionCondition {
+            left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(
+                ResolvingPlayer::UniqueRelatedPlayer,
+            )),
+            comparison: Comparison::Equal,
+            right: ValueExpr::literal(1),
+        }));
+        assert_eq!(lower_trigger_condition(&turn, &vocab), Ok(expected.clone()));
+        assert_eq!(
+            lower_trigger_condition(&ConditionAst::Not(Box::new(turn.clone())), &vocab),
+            Ok(TriggerCondition::Not(Box::new(expected)))
+        );
+        assert!(
+            lower_resolution_condition(&turn, &mut BodyBuilder::new(), &vocab, false, None)
+                .is_err()
+        );
+    }
+}

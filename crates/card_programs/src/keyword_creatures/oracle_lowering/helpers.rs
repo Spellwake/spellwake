@@ -3052,7 +3052,8 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
             _ => false,
         },
         ValueExpr::PlayerStat(ps) => match ps {
-            PlayerStatExpr::PlayerLife(r)
+            PlayerStatExpr::PlayerIsActivePlayer(r)
+            | PlayerStatExpr::PlayerLife(r)
             | PlayerStatExpr::PlayerHandSize(r)
             | PlayerStatExpr::PlayerLibrarySize(r)
             | PlayerStatExpr::PlayerGraveyardSize(r)

@@ -3070,7 +3070,8 @@ fn value_expr_needs_cast_source(expr: &ValueExpr) -> bool {
         }
         ValueExpr::DistinctManaValuesInGraveyard(p)
         | ValueExpr::PlayerStat(
-            PlayerStatExpr::PlayerLife(p)
+            PlayerStatExpr::PlayerIsActivePlayer(p)
+            | PlayerStatExpr::PlayerLife(p)
             | PlayerStatExpr::PlayerHandSize(p)
             | PlayerStatExpr::PlayerLibrarySize(p)
             | PlayerStatExpr::PlayerGraveyardSize(p)

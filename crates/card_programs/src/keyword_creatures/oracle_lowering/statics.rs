@@ -778,12 +778,14 @@ pub(super) fn lower_static(
                 );
             }
             // Battlefield permanent discounting spells
-            if is_spell || per.is_some() || scale_expr.is_some() {
+            if is_spell {
                 return Err("oracle:unsupported-cost-modifier");
             }
             let generic_n =
                 parse_generic_mana_amount(delta).ok_or("oracle:non-generic-discount")?;
-            let amount = NonZeroU8::new(generic_n).ok_or("oracle:zero-discount")?;
+            let unit = NonZeroU8::new(generic_n).ok_or("oracle:zero-discount")?;
+            let amount =
+                lower_static_spell_discount_amount(unit, per.as_deref(), scale_expr.as_deref())?;
             let (any_player, matching) = lower_spell_subject_filter(subject, vocabulary)?;
             push_conditional_static(
                 program,
@@ -792,7 +794,7 @@ pub(super) fn lower_static(
                     modifier: SpellCostModifier::Discount {
                         any_player,
                         matching,
-                        amount: SpellDiscount::Fixed(amount),
+                        amount,
                     },
                 },
                 condition.as_deref(),
@@ -13091,5 +13093,107 @@ fn lower_cant_be_blocked_except_by_any(
             }
         }
         _ => None,
+    }
+}
+
+/// Preserve the engine's live cost-discount quantities instead of snapshotting them at resolution.
+fn lower_static_spell_discount_amount(
+    unit: NonZeroU8,
+    per: Option<&ObjectFilterAst>,
+    scale: Option<&ValueExprAst>,
+) -> Result<SpellDiscount, &'static str> {
+    match (per, scale) {
+        (None, None) => Ok(SpellDiscount::Fixed(unit)),
+        (Some(filter), None)
+            if unit.get() == 1
+                && lower_cast_cost_count(filter)
+                    == Ok(CastCostCount::ControlledCreaturesWithPlusOneCounters) =>
+        {
+            Ok(SpellDiscount::ControlledCreaturesWithPlusOneCounters)
+        }
+        (
+            None,
+            Some(ValueExprAst::CounterCount {
+                subject,
+                counter_kind,
+            }),
+        ) if unit.get() == 1
+            && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+            && counter_kind.eq_ignore_ascii_case("+1/+1") =>
+        {
+            Ok(SpellDiscount::SourcePlusOneCounters)
+        }
+        (
+            None,
+            Some(ValueExprAst::PlayerCounterCount {
+                player: PlayerRefAst::You,
+                counter_kind,
+            }),
+        ) if counter_kind.eq_ignore_ascii_case("experience") => {
+            Ok(SpellDiscount::PerExperienceCounter(unit))
+        }
+        _ => Err("oracle:unsupported-cost-modifier"),
+    }
+}
+
+#[cfg(test)]
+mod wave10_discount_tests {
+    use super::*;
+
+    #[test]
+    fn wave10_static_discount_reads_source_plus_counters_only() {
+        let unit = NonZeroU8::new(1).unwrap();
+        let source = ValueExprAst::CounterCount {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            counter_kind: "+1/+1".into(),
+        };
+        assert_eq!(
+            lower_static_spell_discount_amount(unit, None, Some(&source)),
+            Ok(SpellDiscount::SourcePlusOneCounters)
+        );
+        assert!(
+            lower_static_spell_discount_amount(NonZeroU8::new(2).unwrap(), None, Some(&source))
+                .is_err()
+        );
+        let oil = ValueExprAst::CounterCount {
+            subject: Box::new(SubjectRefAst::SelfObject),
+            counter_kind: "oil".into(),
+        };
+        assert!(lower_static_spell_discount_amount(unit, None, Some(&oil)).is_err());
+    }
+
+    #[test]
+    fn wave10_static_discount_preserves_experience_multiplier_and_player() {
+        let unit = NonZeroU8::new(2).unwrap();
+        let experience = ValueExprAst::PlayerCounterCount {
+            player: PlayerRefAst::You,
+            counter_kind: "experience".into(),
+        };
+        assert_eq!(
+            lower_static_spell_discount_amount(unit, None, Some(&experience)),
+            Ok(SpellDiscount::PerExperienceCounter(unit))
+        );
+        let other_player = ValueExprAst::PlayerCounterCount {
+            player: PlayerRefAst::TargetPlayer,
+            counter_kind: "experience".into(),
+        };
+        assert!(lower_static_spell_discount_amount(unit, None, Some(&other_player)).is_err());
+    }
+
+    #[test]
+    fn wave10_static_discount_counts_creatures_not_counter_quantity() {
+        let unit = NonZeroU8::new(1).unwrap();
+        let mut creatures = ObjectFilterAst {
+            any_types: AstCardTypeMask::CREATURE,
+            controller: Some(ControllerRelation::You),
+            counter_kind: Some("+1/+1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            lower_static_spell_discount_amount(unit, Some(&creatures), None),
+            Ok(SpellDiscount::ControlledCreaturesWithPlusOneCounters)
+        );
+        creatures.tapped = Some(true);
+        assert!(lower_static_spell_discount_amount(unit, Some(&creatures), None).is_err());
     }
 }

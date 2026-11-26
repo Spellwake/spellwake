@@ -1995,6 +1995,9 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     .max();
                 i64::from(max.is_some_and(|(_, ours)| ours)).into()
             }
+            PlayerStatExpr::PlayerIsActivePlayer(role) => {
+                i64::from(resolve_world_player(ctx, *role) == Some(ctx.active_player)).into()
+            }
             PlayerStatExpr::ControllerIsActivePlayer => {
                 i64::from(ctx.active_player == ctx.controller).into()
             }

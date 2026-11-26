@@ -521,6 +521,24 @@ pub(super) fn lower_zone_moves_instruction(
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
+                if raw
+                    .trim()
+                    .eq_ignore_ascii_case("all cards from target player's hand and graveyard") =>
+            {
+                let player = lower_resolving_player_in_context(
+                    PlayerRefAst::TargetPlayer,
+                    builder,
+                    in_trigger,
+                )?;
+                // Both zones belong to one target and move in one simultaneous batch.
+                builder.instructions.push(Instruction::ExileGroupFromZone {
+                    players: AffectedPlayers::One(player),
+                    zone: SourceZoneFilter::HandOrGraveyard,
+                    filter: Box::new(ObjectFilter::any()),
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
                 if matches!(
                     raw.trim().to_ascii_lowercase().as_str(),
                     "your hand"
@@ -7845,6 +7863,87 @@ pub(super) fn resolve_graveyard_group_players(
             } else {
                 Ok(None)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod wave10_zone_tests {
+    use super::*;
+
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new("wave10-zone".into(), [0; 32], vec!["Human".into()])
+            .expect("test vocabulary")
+    }
+
+    fn exile(raw: &str) -> InstructionAst {
+        InstructionAst::Exile {
+            actor: None,
+            subject: Box::new(SubjectRefAst::Anaphora(raw.into())),
+            random: false,
+            face_down: false,
+            into_pile: false,
+        }
+    }
+
+    #[test]
+    fn wave10_identity_crisis_preserves_one_target_and_simultaneous_zones() {
+        let card = InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("0abe0584-d876-4827-972b-589da53dbe96".into()),
+            name: "Identity Crisis".into(),
+            layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: "Identity Crisis".into(),
+                type_line: Some("Sorcery".into()),
+                oracle_text: Some(
+                    "Exile all cards from target player's hand and graveyard.".into(),
+                ),
+                mana_cost: Some("{2}{W}{W}{B}{B}".into()),
+                power: None,
+                toughness: None,
+            }],
+            legalities: BTreeMap::new(),
+            eligible_formats: Vec::new(),
+            required_by_base_formats: true,
+            program_evidence: "test",
+        };
+        let program = compile_with_reason(&card, &vocabulary()).expect("Identity Crisis lowers");
+        let ProgramKind::Spell(spell) = program.kind else {
+            panic!("expected spell");
+        };
+        assert_eq!(spell.body.target, BodyTarget::SinglePlayer);
+        assert_eq!(
+            spell.body.instructions,
+            vec![Instruction::ExileGroupFromZone {
+                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                zone: SourceZoneFilter::HandOrGraveyard,
+                filter: Box::new(ObjectFilter::any()),
+            }]
+        );
+    }
+
+    #[test]
+    fn wave10_combined_zone_exile_rejects_unrepresented_qualifiers() {
+        for raw in [
+            "all creature cards from target player's hand and graveyard",
+            "all cards from target player's hand and graveyard except lands",
+            "all cards from each player's hand and graveyard",
+        ] {
+            let mut builder = BodyBuilder::new();
+            assert!(
+                lower_zone_moves_instruction(
+                    &exile(raw),
+                    &mut builder,
+                    &vocabulary(),
+                    &mut LoweringIds::default(),
+                    false,
+                    false,
+                    None,
+                )
+                .is_err(),
+                "must preserve qualifier: {raw}"
+            );
         }
     }
 }

@@ -14091,8 +14091,9 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::TransformSource => {
-                    if self.target != BodyTarget::None {
-                        return Err(DefinitionError::OperandFamily);
+                    // This operand reads the captured ability source, independently of targets.
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
                     }
                     None
                 }
@@ -14112,7 +14113,7 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::BecomePreparedSource => {
-                    if self.target != BodyTarget::None || !context.has_source() {
+                    if !context.has_source() {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     None

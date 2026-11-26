@@ -2087,6 +2087,14 @@ impl EffectWindow {
                         });
                     Ok(i64::from(creatures.max().is_some_and(|(_, c)| c)).into())
                 }
+                PlayerStatExpr::PlayerIsActivePlayer(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(i64::from(self.window.active_player() == seat).into())
+                }
                 PlayerStatExpr::ControllerIsActivePlayer => {
                     Ok(i64::from(self.window.active_player() == controller).into())
                 }

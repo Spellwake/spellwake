@@ -2117,6 +2117,13 @@ pub(in super::super) fn lower_resolution_condition(
                 comparison: Comparison::Equal,
                 right: ValueExpr::literal(0),
             }),
+            PlayerRefAst::ThatPlayer if in_trigger => Ok(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerIsActivePlayer(
+                    ResolvingPlayer::UniqueRelatedPlayer,
+                )),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            }),
             _ => Err("oracle:unsupported-if-condition"),
         },
         ConditionAst::ZoneChangeThisTurn {

@@ -243,6 +243,8 @@ pub enum PlayerStatExpr {
     NoMonarch,
     ControlsGreatestCreature,
     ControllerIsActivePlayer,
+    /// `1` when the resolved player is the active player, otherwise `0`.
+    PlayerIsActivePlayer(ResolvingPlayer),
     ControllerIsAttacking,
     ControllerIsDefending,
     ControllerSpeed,
@@ -870,7 +872,8 @@ impl ValueExpr {
             ),
             Self::PlayerStat(stat) => match stat {
                 PlayerStatExpr::CardsShortOfHandSize(_) => false,
-                PlayerStatExpr::PlayerLife(p)
+                PlayerStatExpr::PlayerIsActivePlayer(p)
+                | PlayerStatExpr::PlayerLife(p)
                 | PlayerStatExpr::PlayerHandSize(p)
                 | PlayerStatExpr::PlayerLibrarySize(p)
                 | PlayerStatExpr::PlayerGraveyardSize(p)
@@ -1055,7 +1058,8 @@ impl ValueExpr {
             ),
             Self::PlayerStat(stat) => match stat {
                 PlayerStatExpr::CardsShortOfHandSize(_) => false,
-                PlayerStatExpr::PlayerLife(p)
+                PlayerStatExpr::PlayerIsActivePlayer(p)
+                | PlayerStatExpr::PlayerLife(p)
                 | PlayerStatExpr::PlayerHandSize(p)
                 | PlayerStatExpr::PlayerLibrarySize(p)
                 | PlayerStatExpr::PlayerGraveyardSize(p)
@@ -1364,7 +1368,8 @@ impl ValueExpr {
                     )
                 };
                 match stat {
-                    PlayerStatExpr::PlayerLife(r)
+                    PlayerStatExpr::PlayerIsActivePlayer(r)
+                    | PlayerStatExpr::PlayerLife(r)
                     | PlayerStatExpr::PlayerHandSize(r)
                     | PlayerStatExpr::PlayerLibrarySize(r)
                     | PlayerStatExpr::PlayerGraveyardSize(r)
@@ -1578,7 +1583,8 @@ impl ValueExpr {
                 }
             }
             Self::PlayerStat(stat) => match stat {
-                PlayerStatExpr::PlayerLife(r)
+                PlayerStatExpr::PlayerIsActivePlayer(r)
+                | PlayerStatExpr::PlayerLife(r)
                 | PlayerStatExpr::PlayerHandSize(r)
                 | PlayerStatExpr::PlayerLibrarySize(r)
                 | PlayerStatExpr::PlayerGraveyardSize(r)
@@ -2364,6 +2370,26 @@ impl ValueExpr {
                     }
                     _ => Ok(()),
                 },
+                PlayerStatExpr::PlayerIsActivePlayer(role) => {
+                    // Target-dependent roles are checked against the actual body target by
+                    // required_operand_family. Other roles must exist in this entry context.
+                    if matches!(
+                        role,
+                        ResolvingPlayer::TargetPlayer
+                            | ResolvingPlayer::TargetController
+                            | ResolvingPlayer::TargetOwner
+                            | ResolvingPlayer::TargetSpellController
+                    ) {
+                        Ok(())
+                    } else {
+                        role.validate(
+                            context,
+                            super::BodyTarget::None,
+                            facts.definitely_exiled_target,
+                        )
+                        .map(|_| ())
+                    }
+                }
                 PlayerStatExpr::PlayerLife(role)
                 | PlayerStatExpr::PlayerHandSize(role)
                 | PlayerStatExpr::PlayerLibrarySize(role)

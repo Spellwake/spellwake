@@ -88,6 +88,24 @@ pub(super) fn lower_restrictions_statics_instruction(
                     };
                     let flt_obj = flt_opt.unwrap_or_else(ObjectFilter::any);
                     match effect.as_ref() {
+                        StaticAbilityAst::GrantKeywords {
+                            subject,
+                            keywords,
+                            condition: None,
+                            paired_rule: None,
+                        } if matches!(subject.as_ref(), SubjectRefAst::Group(inner) if inner == filter)
+                            && matches!(keywords.as_slice(), [keyword] if keyword.eq_ignore_ascii_case("flash")) =>
+                        {
+                            builder.instructions.push(Instruction::CreateTemporaryRule {
+                                rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                                    player: ResolvingPlayer::Controller,
+                                    filter: flt_obj,
+                                    next_only: true,
+                                }),
+                                duration: dur,
+                            });
+                            return Ok(());
+                        }
                         StaticAbilityAst::PlayOrCastPermission {
                             permission,
                             condition: None,
@@ -960,14 +978,26 @@ pub(super) fn lower_restrictions_statics_instruction(
                         });
                     if rule_low.contains("can't cast")
                         || rule_low == "cant_cast_spells"
+                        || rule_low == "cantcast:filter"
                         || is_cant_cast_nonland
                     {
                         let players = match subject.as_deref() {
                             Some(SubjectRefAst::Player(p)) => {
                                 lower_affected_players_in_context(*p, builder, in_trigger)?
                             }
+                            Some(SubjectRefAst::TargetPlayer {
+                                opponent_only,
+                                count: TargetCountAst::Exact(1),
+                            }) => {
+                                builder.bind_target(if *opponent_only {
+                                    BodyTarget::SingleOpponent
+                                } else {
+                                    BodyTarget::SinglePlayer
+                                })?;
+                                AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                            }
                             None => AffectedPlayers::EachOpponent,
-                            _ => AffectedPlayers::EachPlayer,
+                            _ => return Err("oracle:unsupported-temp-static"),
                         };
                         let flt = filter
                             .as_deref()
@@ -977,7 +1007,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 if is_unrestricted_filter(&inner) {
                                     Ok(None)
                                 } else {
-                                    lower_object_filter(f, vocabulary).map(Some)
+                                    lower_object_filter(&inner, vocabulary).map(Some)
                                 }
                             })
                             .transpose()?
@@ -3236,6 +3266,29 @@ pub(super) fn lower_restrictions_statics_instruction(
             }
             Err("oracle:unsupported-when-you-next")
         }
+        InstructionAst::ScopedDuration {
+            duration: DurationAst::UntilEndOfTurn,
+            body,
+        } if matches!(body.as_slice(), [InstructionAst::RetainManaUntilEndOfTurn]) => {
+            // This clause refers to the mana just produced, not all mana in the player's pool.
+            // Reuse the sequence folder, but reject its global-retention fallback without a producer.
+            let mut trial = builder.clone();
+            let mut trial_ids = LoweringIds::default();
+            lower_instruction_seq(
+                body,
+                &mut trial,
+                vocabulary,
+                &mut trial_ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            if trial.instructions.len() != builder.instructions.len() {
+                return Err("oracle:unsupported-scoped-duration");
+            }
+            *builder = trial;
+            Ok(())
+        }
         InstructionAst::ScopedDuration { duration, body } if !body.is_empty() => {
             let mut rewritten = Vec::with_capacity(body.len());
             for ins in body {
@@ -4560,6 +4613,13 @@ pub(super) fn rewrite_instruction_duration(
     dur: &DurationAst,
 ) -> Option<InstructionAst> {
     match ins {
+        // Delayed event lowering already uses an end-of-turn expiry. Other lifetimes
+        // must remain unsupported until they are carried explicitly into that lowering.
+        InstructionAst::DelayedEventTrigger { .. }
+            if matches!(dur, DurationAst::UntilEndOfTurn) =>
+        {
+            Some(ins.clone())
+        }
         InstructionAst::PutCounters {
             subject,
             counter_kind,
@@ -5161,5 +5221,293 @@ pub(super) fn parse_cant_be_target_colors(raw: &str) -> Option<(ColorMask, bool)
         None
     } else {
         Some((mask, spells_only))
+    }
+}
+
+#[cfg(test)]
+mod wave10_static_tests {
+    use super::*;
+
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new(
+            "wave10-static-tests".into(),
+            [0; 32],
+            vec!["Giant".into(), "Human".into()],
+        )
+        .expect("test vocabulary")
+    }
+
+    fn lower(ability: StaticAbilityAst) -> Result<BodyBuilder, &'static str> {
+        let mut builder = BodyBuilder::new();
+        lower_restrictions_statics_instruction(
+            &InstructionAst::TemporaryStatic {
+                static_ability: Box::new(ability),
+                duration: DurationAst::UntilEndOfTurn,
+            },
+            &mut builder,
+            &vocabulary(),
+            &mut LoweringIds::default(),
+            false,
+            false,
+            None,
+        )?;
+        Ok(builder)
+    }
+
+    fn casting_lock(subject: SubjectRefAst, filter: ObjectFilterAst) -> StaticAbilityAst {
+        StaticAbilityAst::RuleOrCombatRestriction {
+            subject: Some(Box::new(subject)),
+            rule: "CantCast:filter".into(),
+            filter: Some(Box::new(filter)),
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn wave10_cast_lock_keeps_target_player_and_spell_filter() {
+        let filter = ObjectFilterAst {
+            any_spell: true,
+            any_types: AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY),
+            ..Default::default()
+        };
+        let builder = lower(casting_lock(
+            SubjectRefAst::Player(PlayerRefAst::TargetPlayer),
+            filter,
+        ))
+        .expect("filtered casting restriction");
+        assert_eq!(builder.target, BodyTarget::SinglePlayer);
+        let [Instruction::CreateTemporaryRule { rule, duration }] = builder.instructions.as_slice()
+        else {
+            panic!("expected one temporary rule");
+        };
+        assert_eq!(*duration, ResolvedDuration::UntilEndOfTurn);
+        assert_eq!(
+            rule.as_ref(),
+            &TemporaryRuleKind::CantCastSpells {
+                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                filter: Some(ObjectFilter::Clause(
+                    ObjectClause::any()
+                        .any_types(CardTypeMask::INSTANT.union(CardTypeMask::SORCERY))
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn wave10_cast_lock_does_not_widen_unknown_subject_to_all_players() {
+        assert!(
+            lower(casting_lock(
+                SubjectRefAst::SelfObject,
+                ObjectFilterAst::default(),
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wave10_cast_lock_preserves_explicit_opponent_target() {
+        let builder = lower(casting_lock(
+            SubjectRefAst::TargetPlayer {
+                opponent_only: true,
+                count: TargetCountAst::Exact(1),
+            },
+            ObjectFilterAst {
+                any_spell: true,
+                ..Default::default()
+            },
+        ))
+        .expect("opponent casting restriction");
+        assert_eq!(builder.target, BodyTarget::SingleOpponent);
+        assert!(matches!(builder.instructions.as_slice(),
+            [Instruction::CreateTemporaryRule { rule, .. }]
+                if matches!(rule.as_ref(), TemporaryRuleKind::CantCastSpells {
+                    players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    filter: None,
+                })
+        ));
+    }
+
+    fn next_flash(filter: ObjectFilterAst, effect_filter: ObjectFilterAst) -> StaticAbilityAst {
+        StaticAbilityAst::NextSpellModifier {
+            filter: Box::new(filter),
+            effect: Box::new(StaticAbilityAst::GrantKeywords {
+                subject: Box::new(SubjectRefAst::Group(Box::new(effect_filter))),
+                keywords: vec!["flash".into()],
+                condition: None,
+                paired_rule: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn wave10_next_flash_preserves_creature_filter_and_consumption() {
+        let filter = ObjectFilterAst {
+            any_types: AstCardTypeMask::CREATURE,
+            ..Default::default()
+        };
+        let builder = lower(next_flash(filter.clone(), filter)).expect("next creature flash");
+        assert!(matches!(builder.instructions.as_slice(),
+            [Instruction::CreateTemporaryRule { rule, .. }]
+                if matches!(rule.as_ref(), TemporaryRuleKind::FilteredFlash {
+                    player: ResolvingPlayer::Controller,
+                    filter,
+                    next_only: true,
+                } if *filter == ObjectFilter::creature())
+        ));
+        assert!(
+            lower(next_flash(
+                ObjectFilterAst::default(),
+                ObjectFilterAst {
+                    any_types: AstCardTypeMask::CREATURE,
+                    ..Default::default()
+                }
+            ))
+            .is_err()
+        );
+    }
+    #[test]
+    fn wave10_scouts_warning_lowers_flash_and_draw_together() {
+        let card = InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            name: "Scout's Warning".into(),
+            layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: "Scout's Warning".into(),
+                type_line: Some("Instant".into()),
+                oracle_text: Some("The next creature spell you cast this turn can be cast as though it had flash.\nDraw a card.".into()),
+                mana_cost: Some("{W}".into()),
+                power: None,
+                toughness: None,
+            }],
+            legalities: BTreeMap::new(),
+            eligible_formats: Vec::new(),
+            required_by_base_formats: true,
+            program_evidence: "test",
+        };
+        compile_with_reason(&card, &vocabulary()).expect("Scout's Warning whole-card lowering");
+    }
+    #[test]
+    fn wave10_scoped_retention_folds_only_prior_mana_production() {
+        let instruction = InstructionAst::ScopedDuration {
+            duration: DurationAst::UntilEndOfTurn,
+            body: vec![InstructionAst::RetainManaUntilEndOfTurn],
+        };
+        let mut builder = BodyBuilder::new();
+        builder
+            .instructions
+            .push(Instruction::AddMana(EffectManaYield::Fixed(
+                BTreeMap::from([(ManaType::White, 3.into())]),
+            )));
+        lower_restrictions_statics_instruction(
+            &instruction,
+            &mut builder,
+            &vocabulary(),
+            &mut LoweringIds::default(),
+            true,
+            true,
+            None,
+        )
+        .expect("scoped producer retention");
+        assert!(matches!(builder.instructions.as_slice(),
+            [Instruction::AddMana(EffectManaYield::RetainedUntilCleanup(inner))]
+                if matches!(inner.as_ref(), EffectManaYield::Fixed(amount)
+                    if amount == &BTreeMap::from([(ManaType::White, 3.into())]))
+        ));
+        let mut no_producer = BodyBuilder::new();
+        assert!(
+            lower_restrictions_statics_instruction(
+                &instruction,
+                &mut no_producer,
+                &vocabulary(),
+                &mut LoweringIds::default(),
+                true,
+                true,
+                None
+            )
+            .is_err()
+        );
+        assert!(no_producer.instructions.is_empty());
+        let mut extended = instruction;
+        if let InstructionAst::ScopedDuration { duration, .. } = &mut extended {
+            *duration = DurationAst::UntilYourNextTurn;
+        }
+        assert!(
+            lower_restrictions_statics_instruction(
+                &extended,
+                &mut builder,
+                &vocabulary(),
+                &mut LoweringIds::default(),
+                true,
+                true,
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wave10_colossal_plow_retains_its_three_white_mana() {
+        let card = InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            name: "Colossal Plow".into(),
+            layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: "Colossal Plow".into(),
+                type_line: Some("Artifact \u{2014} Vehicle".into()),
+                oracle_text: Some("Whenever this Vehicle attacks, add {W}{W}{W} and you gain 3 life. Until end of turn, you don't lose this mana as steps and phases end.\nCrew 6".into()),
+                mana_cost: Some("{2}".into()),
+                power: Some("6".into()),
+                toughness: Some("3".into()),
+            }],
+            legalities: BTreeMap::new(),
+            eligible_formats: Vec::new(),
+            required_by_base_formats: true,
+            program_evidence: "test",
+        };
+        let program =
+            compile_with_reason(&card, &vocabulary()).expect("Colossal Plow whole-card lowering");
+        assert!(
+            program.triggered[0]
+                .body
+                .instructions
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Instruction::AddMana(EffectManaYield::RetainedUntilCleanup(_))
+                ))
+        );
+    }
+    #[test]
+    fn wave10_mountain_titan_delayed_trigger_keeps_end_of_turn_expiry() {
+        let card = InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            name: "Mountain Titan".into(),
+            layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: "Mountain Titan".into(),
+                type_line: Some("Creature \u{2014} Giant".into()),
+                oracle_text: Some("{1}{R}{R}: Until end of turn, whenever you cast a black spell, put a +1/+1 counter on this creature.".into()),
+                mana_cost: Some("{2}{B}{R}".into()),
+                power: Some("2".into()),
+                toughness: Some("2".into()),
+            }],
+            legalities: BTreeMap::new(),
+            eligible_formats: Vec::new(),
+            required_by_base_formats: true,
+            program_evidence: "test",
+        };
+        let program =
+            compile_with_reason(&card, &vocabulary()).expect("Mountain Titan whole-card lowering");
+        assert!(matches!(
+            program.activated[0].body.instructions.as_slice(),
+            [Instruction::ScheduleDelayedEventTrigger {
+                expires: ResolvedDuration::UntilEndOfTurn,
+                once: false,
+                ..
+            }]
+        ));
     }
 }
