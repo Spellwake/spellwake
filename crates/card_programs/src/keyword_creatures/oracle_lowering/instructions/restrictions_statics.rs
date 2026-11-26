@@ -5400,6 +5400,60 @@ mod wave10_static_tests {
         compile_with_reason(&card, &vocabulary()).expect("Scout's Warning whole-card lowering");
     }
     #[test]
+    fn retained_restricted_mana_preserves_both_clause_orders() {
+        let producer = InstructionAst::AddMana {
+            player: PlayerRefAst::You,
+            mana: ManaSpecAst::Fixed("{W}{W}{W}".into()),
+        };
+        let restriction = InstructionAst::ManaSpendRestriction(
+            "Spend this mana only to cast creature spells".into(),
+        );
+        let retention = InstructionAst::ScopedDuration {
+            duration: DurationAst::UntilEndOfTurn,
+            body: vec![InstructionAst::RetainManaUntilEndOfTurn],
+        };
+        let expected = vec![Instruction::AddMana(EffectManaYield::RetainedUntilCleanup(
+            Box::new(EffectManaYield::RestrictedFixed {
+                bundle: BTreeMap::from([(ManaType::White, 3.into())]),
+                restriction: ManaRestriction::CreatureSpell,
+            }),
+        ))];
+        for clauses in [
+            [restriction.clone(), retention.clone()],
+            [retention, restriction],
+        ] {
+            let sequence = [producer.clone(), clauses[0].clone(), clauses[1].clone()];
+            let mut builder = BodyBuilder::new();
+            lower_instruction_seq(
+                &sequence,
+                &mut builder,
+                &vocabulary(),
+                &mut LoweringIds::default(),
+                false,
+                false,
+                None,
+            )
+            .expect("restriction and retention compose in either order");
+            assert_eq!(builder.instructions, expected);
+            assert_eq!(builder.target, BodyTarget::None);
+
+            let mut no_producer = BodyBuilder::new();
+            assert!(
+                lower_instruction_seq(
+                    &clauses,
+                    &mut no_producer,
+                    &vocabulary(),
+                    &mut LoweringIds::default(),
+                    false,
+                    false,
+                    None,
+                )
+                .is_err()
+            );
+            assert!(no_producer.instructions.is_empty());
+        }
+    }
+    #[test]
     fn wave10_scoped_retention_folds_only_prior_mana_production() {
         let instruction = InstructionAst::ScopedDuration {
             duration: DurationAst::UntilEndOfTurn,
