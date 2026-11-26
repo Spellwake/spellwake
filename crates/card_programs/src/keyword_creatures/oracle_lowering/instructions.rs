@@ -25324,6 +25324,7 @@ fn effect_mana_yield_uses_chosen_x(yield_spec: &EffectManaYield) -> bool {
         EffectManaYield::RetainedUntilCleanup(inner) => effect_mana_yield_uses_chosen_x(inner),
         EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
         | EffectManaYield::Counted { amount, .. }
+        | EffectManaYield::RestrictedCounted { amount, .. }
         | EffectManaYield::Split { amount, .. }
         | EffectManaYield::RestrictedChoice { amount, .. }
         | EffectManaYield::Choice { amount, .. }
@@ -33102,6 +33103,7 @@ fn rewrite_chosen_to_loop_mana_yield(yield_kind: &mut EffectManaYield) {
         EffectManaYield::RetainedUntilCleanup(inner) => rewrite_chosen_to_loop_mana_yield(inner),
         EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
         | EffectManaYield::Counted { amount, .. }
+        | EffectManaYield::RestrictedCounted { amount, .. }
         | EffectManaYield::Split { amount, .. }
         | EffectManaYield::RestrictedChoice { amount, .. }
         | EffectManaYield::Choice { amount, .. }

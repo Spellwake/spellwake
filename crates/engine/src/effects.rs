@@ -4735,12 +4735,12 @@ impl EffectWindow {
                     crate::mana::ManaRestriction::CreatureSpellOrAbility => spell_view.is_some_and(|value| value.has_type(CardType::Creature)),
                     crate::mana::ManaRestriction::ColoredSpellWithoutX => spell_view.is_some_and(|value| !value.current_colors.is_empty()) && matches!(spell.kind(), StackKind::CardSpell(object) if self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols == 0)),
                     crate::mana::ManaRestriction::SpellWithMinManaValue(min) => match spell.kind() {
-                        StackKind::CardSpell(object) => self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into()),
+                        StackKind::CardSpell(object) => self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(*min).into()),
                         _ => false,
                     },
                     crate::mana::ManaRestriction::CreatureSpellWithMinManaValue(min) => {
                         spell_view.is_some_and(|value| value.has_type(CardType::Creature))
-                            && matches!(spell.kind(), StackKind::CardSpell(object) if self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into()))
+                            && matches!(spell.kind(), StackKind::CardSpell(object) if self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(*min).into()))
                     }
                     crate::mana::ManaRestriction::HistoricSpell => spell_view.is_some_and(|value| {
                         value.has_type(CardType::Artifact)
@@ -4766,19 +4766,238 @@ impl EffectWindow {
                     }),
                     crate::mana::ManaRestriction::SpellWithMinManaValueOrX(min) => match spell.kind() {
                         StackKind::CardSpell(object) => {
-                            self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into())
+                            self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(*min).into())
                                 || self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0)
                         }
                         _ => false,
                     },
                     crate::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(min) => {
                         spell_view.is_some_and(|value| value.has_type(CardType::Creature))
-                            && matches!(spell.kind(), StackKind::CardSpell(object) if self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into()) || self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0))
+                            && matches!(spell.kind(), StackKind::CardSpell(object) if self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(*min).into()) || self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0))
                     }
                     crate::mana::ManaRestriction::CreatureOrEnchantmentSpell => spell_view.is_some_and(|value| {
                         value.has_type(CardType::Creature) || value.has_type(CardType::Enchantment)
                     }),
+                    crate::mana::ManaRestriction::Predicate(pred) => {
+                        self.predicate_allows_spell(pred, spell, spell_view, actor, cost)
+                    }
         })
+    }
+    fn predicate_allows_spell(
+        &self,
+        pred: &crate::mana::ManaSpendPredicate,
+        spell: &crate::stack_window::StackEntry,
+        spell_view: Option<&ObjectCharacteristics>,
+        actor: SeatId,
+        cost: &ManaCost,
+    ) -> bool {
+        if pred.allow_any_spell {
+            return true;
+        }
+        if pred.allow_cost_containing_colorless
+            && cost
+                .required
+                .get(&ManaType::Colourless)
+                .is_some_and(RulesInteger::is_positive)
+        {
+            return true;
+        }
+        if pred.allow_cost_containing_x
+            && matches!(
+                spell.kind(),
+                StackKind::CardSpell(object)
+                    if self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0)
+            )
+        {
+            return true;
+        }
+        pred.spell_clauses
+            .iter()
+            .any(|clause| self.spell_matches_mana_clause(clause, spell, spell_view, actor))
+    }
+    fn spell_matches_mana_clause(
+        &self,
+        clause: &crate::mana::SpellManaClause,
+        spell: &crate::stack_window::StackEntry,
+        spell_view: Option<&ObjectCharacteristics>,
+        actor: SeatId,
+    ) -> bool {
+        use crate::mana::{ManaSpellKeyword, SpellCastMode, SpellColorRule};
+        if let Some(card_type) = clause.card_type
+            && !spell_view.is_some_and(|v| v.has_type(card_type))
+        {
+            return false;
+        }
+        if let Some(excluded) = clause.exclude_card_type
+            && !spell_view.is_some_and(|v| !v.has_type(excluded))
+        {
+            return false;
+        }
+        if let Some(supertype) = clause.supertype
+            && !spell_view.is_some_and(|v| v.current_supertypes.contains(&supertype))
+        {
+            return false;
+        }
+        if let Some(creature_type) = clause.creature_type
+            && !spell_view.is_some_and(|v| v.current_creature_subtypes.contains(&creature_type))
+        {
+            return false;
+        }
+        if let Some(artifact_subtype) = clause.artifact_subtype
+            && !spell_view.is_some_and(|v| v.current_artifact_subtypes.contains(&artifact_subtype))
+        {
+            return false;
+        }
+        if let Some(enchantment_subtype) = clause.enchantment_subtype
+            && !spell_view.is_some_and(|v| {
+                v.current_enchantment_subtypes
+                    .contains(&enchantment_subtype)
+            })
+        {
+            return false;
+        }
+        if clause.is_aura
+            && !spell_view.is_some_and(|v| {
+                matches!(
+                    v.attachment_kind,
+                    Some(crate::attachment::AttachmentKind::Aura(_))
+                )
+            })
+        {
+            return false;
+        }
+        if let Some(spell_subtype) = clause.spell_subtype
+            && !spell_view.is_some_and(|v| v.current_spell_subtypes.contains(&spell_subtype))
+        {
+            return false;
+        }
+        if let Some(pw_subtype) = clause.planeswalker_subtype
+            && !spell_view.is_some_and(|v| v.current_planeswalker_subtypes.contains(&pw_subtype))
+        {
+            return false;
+        }
+        if let Some(color_rule) = clause.color_rule {
+            let color_ok = spell_view.is_some_and(|v| match color_rule {
+                SpellColorRule::Colorless => v.current_colors.is_empty(),
+                SpellColorRule::Colored => !v.current_colors.is_empty(),
+                SpellColorRule::ExactColor(c) => v.current_colors.contains(&c),
+                SpellColorRule::MonocoloredOf(c) => {
+                    v.current_colors.len() == 1 && v.current_colors.contains(&c)
+                }
+                SpellColorRule::Multicolored => v.current_colors.len() >= 2,
+                SpellColorRule::ExactColorCount(n) => v.current_colors.len() == usize::from(n),
+            });
+            if !color_ok {
+                return false;
+            }
+        }
+        if let Some(kw) = clause.keyword {
+            let kw_ok = match kw {
+                ManaSpellKeyword::Devoid => spell_view.is_some_and(|v| {
+                    v.keywords.contains(&KeywordAbility::Devoid)
+                        || v.printed_text
+                            .printed_keywords
+                            .contains(&KeywordAbility::Devoid)
+                }),
+                ManaSpellKeyword::Freerunning => matches!(
+                    spell.kind(),
+                    StackKind::CardSpell(obj)
+                        if self.copiable_program(*obj).is_some_and(|p| {
+                            matches!(
+                                p.conditional_cost,
+                                Some(crate::program::ConditionalCastCost::Freerunning(_))
+                            )
+                        })
+                ),
+                ManaSpellKeyword::Foretell => spell_view.is_some_and(|v| {
+                    matches!(
+                        v.printed_text.exile_action,
+                        Some(crate::program::ExileAction::Foretell(_))
+                    )
+                }),
+                ManaSpellKeyword::Flashback => matches!(
+                    spell.kind(),
+                    StackKind::CardSpell(obj)
+                        if self.copiable_program(*obj).is_some_and(|p| p.flashback.is_some())
+                ),
+                ManaSpellKeyword::Disturb => matches!(
+                    spell.kind(),
+                    StackKind::CardSpell(obj)
+                        if self.copiable_program(*obj).is_some_and(|p| p.disturb.is_some())
+                ),
+            };
+            if !kw_ok {
+                return false;
+            }
+        }
+        if let Some(mode) = clause.cast_mode {
+            let mode_ok = match mode {
+                SpellCastMode::FaceDown => matches!(
+                    spell.kind(),
+                    StackKind::CardSpell(obj)
+                        if self.window.cards().get(*obj).is_some_and(|c| c.face_down().is_some())
+                ),
+                SpellCastMode::Kicked => !spell.kicker_choices().is_empty(),
+                SpellCastMode::Disturb => {
+                    spell.cast_from_graveyard
+                        && spell.cast_summary().paid_alternative
+                        && matches!(
+                            spell.kind(),
+                            StackKind::CardSpell(obj)
+                                if self.copiable_program(*obj).is_some_and(|p| p.disturb.is_some())
+                        )
+                }
+                SpellCastMode::FromGraveyard => spell.cast_from_graveyard,
+                SpellCastMode::FromExile => spell.cast_summary().cast_from_exile,
+                SpellCastMode::NotFromHand => !spell.cast_from_hand_of(actor),
+                SpellCastMode::NotOwned => matches!(
+                    spell.kind(),
+                    StackKind::CardSpell(obj)
+                        if self.window.cards().get(*obj).is_some_and(|c| c.owner() != actor)
+                ),
+                SpellCastMode::SecondSpellThisTurn => {
+                    self.characteristics
+                        .spells_cast_this_turn
+                        .get(&actor)
+                        .copied()
+                        .unwrap_or(0)
+                        == 1
+                }
+            };
+            if !mode_ok {
+                return false;
+            }
+        }
+        if clause.no_abilities {
+            let has_no_abilities = spell_view.is_some_and(|v| {
+                v.keywords.is_empty()
+                    && v.abilities.activated.is_empty()
+                    && v.abilities.mana.is_empty()
+                    && v.abilities.triggered.is_empty()
+                    && v.abilities.continuous.is_none()
+                    && v.abilities.additional_battlefield_abilities.is_empty()
+                    && v.abilities.zone_replacements.is_empty()
+                    && v.abilities.attack_requirement.is_none()
+                    && v.abilities.additional_attack_requirements.is_empty()
+                    && v.abilities.entry_tap.is_none()
+                    && !v.abilities.entry_counter_abilities
+                    && v.abilities.face_up.is_empty()
+            });
+            if !has_no_abilities {
+                return false;
+            }
+        }
+        if let Some(min_mv) = clause.min_mana_value {
+            let mv_ok = matches!(
+                spell.kind(),
+                StackKind::CardSpell(obj)
+                    if self.stack_spell_mana_value(*obj).is_ok_and(|mv| mv >= i64::from(min_mv).into())
+            );
+            if !mv_ok {
+                return false;
+            }
+        }
+        true
     }
     fn prepare_restricted_mana_payment(
         &self,
@@ -4786,19 +5005,22 @@ impl EffectWindow {
         selected: Option<&ManaPayment>,
         actor: SeatId,
         restricted: &[crate::mana::RestrictedManaSpend],
-        permits: impl Fn(crate::mana::ManaRestriction) -> bool,
+        permits: impl Fn(&crate::mana::ManaRestriction) -> bool,
     ) -> Result<Vec<ManaSpend>, EffectError> {
         let mut chosen = BTreeMap::new();
         for item in restricted {
             if !item.amount.is_positive()
                 || chosen
-                    .insert((item.mana_type, item.restriction), item.amount.clone())
+                    .insert(
+                        (item.mana_type, item.restriction.clone()),
+                        item.amount.clone(),
+                    )
                     .is_some()
                 || self
                     .restricted_mana
-                    .get(&(actor, item.mana_type, item.restriction))
+                    .get(&(actor, item.mana_type, item.restriction.clone()))
                     .is_none_or(|available| available < &item.amount)
-                || !permits(item.restriction)
+                || !permits(&item.restriction)
             {
                 return Err(EffectError::InvalidManaPayment(
                     ManaPaymentError::MissingRequired,
@@ -4833,13 +5055,107 @@ impl EffectWindow {
                     ManaPaymentError::WrongTotal,
                 ));
             }
+            let no_generic = chosen
+                .iter()
+                .filter(|((color, rule), _)| *color == kind && rule.disallows_generic())
+                .fold(RulesInteger::from(0), |sum, (_, amount)| sum.plus(amount));
+            if no_generic.is_positive() {
+                let required_of_kind = cost
+                    .required
+                    .get(&kind)
+                    .cloned()
+                    .unwrap_or_else(|| 0.into());
+                if no_generic > required_of_kind {
+                    return Err(EffectError::InvalidManaPayment(
+                        ManaPaymentError::WrongTotal,
+                    ));
+                }
+            }
         }
         Ok(spend)
     }
+    fn prepare_special_action_mana_payment(
+        &self,
+        cost: &ManaCost,
+        selected: Option<&ManaPayment>,
+        actor: SeatId,
+        action: crate::mana::ManaSpecialAction,
+    ) -> Result<(Vec<ManaSpend>, Vec<crate::mana::RestrictedManaSpend>), EffectError> {
+        let mut compatible: BTreeMap<ManaType, Vec<(crate::mana::ManaRestriction, RulesInteger)>> =
+            BTreeMap::new();
+        for ((seat, kind, rule), amount) in &self.restricted_mana {
+            if *seat == actor && amount.is_positive() && rule.permits_special_action(action) {
+                compatible
+                    .entry(*kind)
+                    .or_default()
+                    .push((rule.clone(), amount.clone()));
+            }
+        }
+        let spend = prepare_payment(cost, selected, |kind| {
+            let extra = compatible.get(&kind).map_or_else(
+                || RulesInteger::from(0),
+                |rows| {
+                    rows.iter()
+                        .fold(RulesInteger::from(0), |sum, (_, amt)| sum.plus(amt))
+                },
+            );
+            self.unrestricted_mana(actor, kind).plus(&extra)
+        })
+        .map_err(|error| match error {
+            ManaPaymentError::InsufficientMana => EffectError::InsufficientMana,
+            ManaPaymentError::PaymentRequired => EffectError::ManaPaymentRequired,
+            other => EffectError::InvalidManaPayment(other),
+        })?;
+        let mut restricted_used = Vec::new();
+        for row in &spend {
+            let unrestricted = self.unrestricted_mana(actor, row.mana_type);
+            if row.amount > unrestricted {
+                let mut deficit = row.amount.minus(&unrestricted);
+                let required_of_kind = cost
+                    .required
+                    .get(&row.mana_type)
+                    .cloned()
+                    .unwrap_or_else(|| 0.into());
+                let mut no_generic_used = RulesInteger::from(0);
+                if let Some(rows) = compatible.get(&row.mana_type) {
+                    for (rule, available) in rows {
+                        if !deficit.is_positive() {
+                            break;
+                        }
+                        let cap = if rule.disallows_generic() {
+                            let rem_req = required_of_kind.minus(&no_generic_used).max(0.into());
+                            available.clone().min(rem_req)
+                        } else {
+                            available.clone()
+                        };
+                        let take = deficit.clone().min(cap);
+                        if take.is_positive() {
+                            if rule.disallows_generic() {
+                                no_generic_used = no_generic_used.plus(&take);
+                            }
+                            deficit = deficit.minus(&take);
+                            restricted_used.push(crate::mana::RestrictedManaSpend {
+                                mana_type: row.mana_type,
+                                restriction: rule.clone(),
+                                amount: take,
+                            });
+                        }
+                    }
+                }
+                if deficit.is_positive() {
+                    return Err(EffectError::InsufficientMana);
+                }
+            }
+        }
+        Ok((spend, restricted_used))
+    }
     fn restriction_allows_ability(
         &self,
-        rule: crate::mana::ManaRestriction,
+        rule: &crate::mana::ManaRestriction,
         source: &ObjectCharacteristics,
+        cost: &ManaCost,
+        has_x_cost: bool,
+        kind: Option<crate::mana::AbilitySpendKind>,
     ) -> bool {
         match rule {
             crate::mana::ManaRestriction::ArtifactSpellOrAbility
@@ -4853,16 +5169,53 @@ impl EffectWindow {
             crate::mana::ManaRestriction::EquipmentOrEquipAbility => source
                 .current_artifact_subtypes
                 .contains(&crate::program::ArtifactSubtype::Equipment),
-            crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(kind)) => {
-                source.is_creature() && source.current_creature_subtypes.contains(&kind)
+            crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(ct)) => {
+                source.is_creature() && source.current_creature_subtypes.contains(ct)
             }
             crate::mana::ManaRestriction::ColorlessEldraziSpellOrAbility => self
                 .creature_vocabulary
                 .resolve_label("Eldrazi")
-                .is_some_and(|kind| {
+                .is_some_and(|ct| {
                     source.current_colors.is_empty()
-                        && source.current_creature_subtypes.contains(&kind)
+                        && source.current_creature_subtypes.contains(&ct)
                 }),
+            crate::mana::ManaRestriction::Predicate(pred) => {
+                if pred.allow_any_ability {
+                    return true;
+                }
+                if pred.allow_cost_containing_colorless
+                    && cost
+                        .required
+                        .get(&ManaType::Colourless)
+                        .is_some_and(RulesInteger::is_positive)
+                {
+                    return true;
+                }
+                if pred.allow_cost_containing_x && has_x_cost {
+                    return true;
+                }
+                pred.ability_clauses.iter().any(|clause| {
+                    if let Some(card_type) = clause.source_card_type
+                        && !source.has_type(card_type)
+                    {
+                        return false;
+                    }
+                    if let Some(ct) = clause.source_creature_type
+                        && !source.current_creature_subtypes.contains(&ct)
+                    {
+                        return false;
+                    }
+                    if clause.source_colorless && !source.current_colors.is_empty() {
+                        return false;
+                    }
+                    if let Some(req_kind) = clause.kind
+                        && kind != Some(req_kind)
+                    {
+                        return false;
+                    }
+                    true
+                })
+            }
             _ => false,
         }
     }
@@ -4878,7 +5231,7 @@ impl EffectWindow {
         restricted: &[crate::mana::RestrictedManaSpend],
     ) -> Result<(), EffectError> {
         for item in restricted {
-            let key = (actor, item.mana_type, item.restriction);
+            let key = (actor, item.mana_type, item.restriction.clone());
             let amount = self
                 .restricted_mana
                 .get(&key)
@@ -5284,8 +5637,8 @@ impl EffectWindow {
                 (recipient, *mana_type),
                 self.mana(recipient, *mana_type).plus(amount),
             );
-            if let Some(rule) = restriction {
-                let key = (recipient, *mana_type, rule);
+            if let Some(ref rule) = restriction {
+                let key = (recipient, *mana_type, rule.clone());
                 let previous = self
                     .restricted_mana
                     .get(&key)
@@ -5613,12 +5966,11 @@ impl EffectWindow {
             entry,
             &payment.restricted_mana,
         )?;
-        if payment.restricted_mana.iter().any(|allocation| {
-            matches!(
-                allocation.restriction,
-                crate::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(_)
-            )
-        }) {
+        if payment
+            .restricted_mana
+            .iter()
+            .any(|allocation| allocation.restriction.makes_spell_uncounterable())
+        {
             self.window.mark_protected_by_spent_mana(entry)?;
         }
         if sunburst {

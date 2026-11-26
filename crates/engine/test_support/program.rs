@@ -10735,6 +10735,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                 spellwake_engine::program::EffectManaYield::Fixed(produced) => json!({"op":"AddFixedMana","produced":mana_values(produced)}),
                 spellwake_engine::program::EffectManaYield::RestrictedChoice { colors, .. } => json!({"op":"AddRestrictedManaChoice","colors":colors.iter().map(|color|format!("{color:?}")).collect::<Vec<_>>()}),
                 spellwake_engine::program::EffectManaYield::RestrictedFixed { bundle, restriction } => json!({"op":"AddRestrictedFixedMana","produced":mana_values(bundle),"restriction":format!("{restriction:?}")}),
+                spellwake_engine::program::EffectManaYield::RestrictedCounted { kind, amount, restriction } => json!({"op":"AddRestrictedCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount),"restriction":format!("{restriction:?}")}),
                 spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(kind) => json!({"op":"AddCombatDamageManaUntilCleanup","kind":format!("{kind:?}")}),
                 spellwake_engine::program::EffectManaYield::RetainedUntilEndOfCombat { kind, amount } => json!({"op":"AddRetainedUntilEndOfCombatMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),
                 spellwake_engine::program::EffectManaYield::Counted { kind, amount } => json!({"op":"AddCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),

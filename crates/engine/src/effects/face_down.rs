@@ -218,16 +218,31 @@ impl EffectWindow {
             rule.map(FaceUpAbility::cost)
         }
         .ok_or(EffectError::UnknownActivatedAbility)?;
-        let spend = self.prepare_mana_payment(price, payment, actor)?;
+        let face_up_action = if prospective.is_creature() {
+            crate::mana::ManaSpecialAction::TurnCreatureFaceUp
+        } else {
+            crate::mana::ManaSpecialAction::TurnFaceUp
+        };
+        let (spend, restricted_spend) = self
+            .prepare_special_action_mana_payment(price, payment, actor, face_up_action)
+            .or_else(|_| {
+                self.prepare_special_action_mana_payment(
+                    price,
+                    payment,
+                    actor,
+                    crate::mana::ManaSpecialAction::TurnFaceUp,
+                )
+            })?;
         let before = self.rules_snapshot(turn)?;
         let mut next = self.clone();
         next.window = next.window.record_turn_face_up(actor, object)?;
         next.spend_mana_lots(
             actor,
             &spend,
-            &[],
+            &restricted_spend,
             payment.map(|allocation| &allocation.from_lots),
         )?;
+        next.debit_restricted_mana(actor, &restricted_spend)?;
         next.debit_mana(actor, &spend);
         let mega = matches!(rule, Some(FaceUpAbility::Megamorph(_)));
         let counters = PowerToughnessCounters {

@@ -99,6 +99,7 @@ mod body;
 mod filters;
 mod helpers;
 mod instructions;
+mod interactive;
 mod keywords;
 mod replacements;
 mod statics;

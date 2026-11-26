@@ -143,7 +143,7 @@ pub fn production(value: &ManaProductionRecord) -> Value {
     if let Some(recipient) = value.recipient {
         result["recipient"] = json!(recipient.0);
     }
-    if let Some(restriction) = value.restriction {
+    if let Some(ref restriction) = value.restriction {
         result["restriction"] = json!(format!("{restriction:?}"));
     }
     result

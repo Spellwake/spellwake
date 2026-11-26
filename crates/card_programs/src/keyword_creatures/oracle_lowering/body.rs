@@ -20762,6 +20762,46 @@ pub(super) fn lower_instruction_seq(
                 continue;
             }
         }
+        // Fold ManaSpendRestriction onto a preceding AddMana / AddManaForPlayer or impulse play permission.
+        if let InstructionAst::ManaSpendRestriction(r) = &ins[i] {
+            if let Some(restriction) = parse_mana_restriction(r, vocabulary) {
+                let mut patched = false;
+                for op in builder.instructions.iter_mut().rev() {
+                    if interactive::restrict_mana_in_instruction(op, &restriction) {
+                        patched = true;
+                        break;
+                    }
+                    if matches!(
+                        op,
+                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                    ) {
+                        break;
+                    }
+                }
+                if patched {
+                    i += 1;
+                    continue;
+                }
+            } else if is_any_color_spend_restriction(&ins[i]) {
+                let mut patched = false;
+                for op in builder.instructions.iter_mut().rev() {
+                    if interactive::patch_any_color_cast_permission(op) {
+                        patched = true;
+                        break;
+                    }
+                    if matches!(
+                        op,
+                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                    ) {
+                        break;
+                    }
+                }
+                if patched {
+                    i += 1;
+                    continue;
+                }
+            }
+        }
         // Fold RetainManaUntilEndOfTurn (or retention ManaSpendRestriction) onto prior straight-line AddMana
         if is_mana_retention_instruction(&ins[i]) {
             let mut patched = false;

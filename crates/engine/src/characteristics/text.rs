@@ -302,6 +302,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     other => other,
                 };
                 if let crate::program::EffectManaYield::Counted { amount, .. }
+                | crate::program::EffectManaYield::RestrictedCounted { amount, .. }
+                | crate::program::EffectManaYield::RestrictedChoice { amount, .. }
                 | crate::program::EffectManaYield::RetainedUntilEndOfCombat {
                     amount, ..
                 }

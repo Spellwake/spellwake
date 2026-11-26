@@ -1450,3 +1450,209 @@ fn energy_counter_myriad_keyword_and_extended_counter_kinds_project_cleanly() {
         "Myriad must not project as Annihilator"
     );
 }
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn predicate_restricted_mana_projects_enforces_atomically_and_round_trips_wire() {
+    use crate::player_wire::{
+        ManaColor, ManaSpend, PlayerManaRestriction, PlayerPayment, PlayerRestrictedManaSpend,
+        RulesCount,
+    };
+    use spellwake_engine::{
+        mana::{ManaRestriction, ManaSpendPredicate, SpellManaClause},
+        object_identity::ObjectZone,
+        program::{EffectManaYield, Supertype},
+    };
+
+    let rc = |n: &str| RulesCount::try_from(n.to_owned()).unwrap();
+
+    // 1. Jegantha-style disallow_generic predicate + Legendary-only predicate.
+    let mut no_generic_pred = ManaSpendPredicate {
+        allow_any_spell: true,
+        disallow_generic: true,
+        ..Default::default()
+    };
+    no_generic_pred.canonicalize();
+    let no_generic_rule = ManaRestriction::Predicate(no_generic_pred);
+
+    let mut legendary_pred = ManaSpendPredicate {
+        spell_clauses: vec![SpellManaClause {
+            supertype: Some(Supertype::Legendary),
+            ..Default::default()
+        }],
+        makes_spell_uncounterable: true,
+        ..Default::default()
+    };
+    legendary_pred.canonicalize();
+    let legendary_rule = ManaRestriction::Predicate(legendary_pred);
+
+    let producer = instant(
+        BodyTarget::None,
+        vec![
+            Instruction::AddMana(EffectManaYield::RestrictedFixed {
+                bundle: [(ManaType::Red, 2.into())].into(),
+                restriction: no_generic_rule,
+            }),
+            Instruction::AddMana(EffectManaYield::RestrictedFixed {
+                bundle: [(ManaType::Green, 1.into())].into(),
+                restriction: legendary_rule,
+            }),
+        ],
+    );
+    // Costs {1}{R}: cannot be paid with 2 no-generic {R} because generic {1} cannot use disallow_generic mana.
+    let mut generic_red_cost = ManaCost::free();
+    generic_red_cost.generic = 1.into();
+    generic_red_cost.required.insert(ManaType::Red, 1.into());
+    let mut nonlegendary_creature =
+        Program::creature(Some(generic_red_cost), 2.into(), 2.into(), BTreeSet::new());
+    nonlegendary_creature.card_types.insert(CardType::Creature);
+
+    // Legendary creature costing {G}: payable by legendary_rule {G}.
+    let mut green_cost = ManaCost::free();
+    green_cost.required.insert(ManaType::Green, 1.into());
+    let mut legendary_creature =
+        Program::creature(Some(green_cost), 2.into(), 2.into(), BTreeSet::new());
+    legendary_creature.supertypes.insert(Supertype::Legendary);
+
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, producer),
+        card(2, A, ObjectDestination::Hand, nonlegendary_creature),
+        card(3, A, ObjectDestination::Hand, legendary_creature),
+    ]);
+    let cast_prod = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let funded = resolve(&cast_prod);
+
+    // Verify wire projection includes both predicate restricted mana entries.
+    let mut view = scope(&funded, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    let seat_a = snap
+        .players
+        .iter()
+        .find(|s| s.seat_id == viewer_a())
+        .unwrap();
+    assert_eq!(seat_a.restricted_mana.len(), 2);
+    let red_wire = seat_a
+        .restricted_mana
+        .iter()
+        .find(|r| r.color == ManaColor::Red)
+        .expect("red predicate mana");
+    assert!(red_wire.restriction == PlayerManaRestriction::Predicate);
+    assert!(red_wire.predicate.as_ref().unwrap().disallow_generic);
+    let green_wire = seat_a
+        .restricted_mana
+        .iter()
+        .find(|r| r.color == ManaColor::Green)
+        .expect("green predicate mana");
+    assert!(green_wire.restriction == PlayerManaRestriction::Predicate);
+    assert!(
+        green_wire
+            .predicate
+            .as_ref()
+            .unwrap()
+            .makes_spell_uncounterable
+    );
+
+    // Atomic rejection: trying to spend 2 no-generic {R} on {1}{R} must fail without mutating state.
+    let bad_payment = PlayerPayment {
+        from_lots: BTreeMap::new(),
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        spend: vec![ManaSpend {
+            color: ManaColor::Red,
+            amount: rc("2"),
+        }],
+        restricted_mana: vec![PlayerRestrictedManaSpend {
+            color: ManaColor::Red,
+            restriction: PlayerManaRestriction::Predicate,
+            creature_type: None,
+            min_mana_value: None,
+            predicate: red_wire.predicate.clone(),
+            amount: rc("2"),
+        }],
+    };
+    let mut bad_view = scope(&funded, viewer_a());
+    let bad_handle = bad_view
+        .issue(NativeReference::Object(object(&funded, 2)))
+        .unwrap();
+    let bad_intent = command(
+        &bad_view,
+        PlayerAction::CastUntargeted {
+            source: bad_handle.clone(),
+            payment: Some(bad_payment),
+        },
+    );
+    let _ = rejected_proposal(&bad_view, &bad_intent);
+
+    // Atomic rejection on malformed empty wire predicate.
+    let malformed = command(
+        &bad_view,
+        PlayerAction::CastUntargeted {
+            source: bad_handle,
+            payment: Some(PlayerPayment {
+                from_lots: BTreeMap::new(),
+                graveyard_permission: None,
+                use_granted_flashback: false,
+                exile_cast_type: None,
+                alternative_cost_source: None,
+                spend: vec![ManaSpend {
+                    color: ManaColor::Green,
+                    amount: rc("1"),
+                }],
+                restricted_mana: vec![PlayerRestrictedManaSpend {
+                    color: ManaColor::Green,
+                    restriction: PlayerManaRestriction::Predicate,
+                    creature_type: None,
+                    min_mana_value: None,
+                    predicate: Some(crate::player_wire::PlayerManaPredicate::default()),
+                    amount: rc("1"),
+                }],
+            }),
+        },
+    );
+    let _ = rejected_proposal(&bad_view, &malformed);
+
+    // Legal spend: casting legendary creature with legendary-predicate {G} succeeds.
+    let good_payment = PlayerPayment {
+        from_lots: BTreeMap::new(),
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        spend: vec![ManaSpend {
+            color: ManaColor::Green,
+            amount: rc("1"),
+        }],
+        restricted_mana: vec![PlayerRestrictedManaSpend {
+            color: ManaColor::Green,
+            restriction: PlayerManaRestriction::Predicate,
+            creature_type: None,
+            min_mana_value: None,
+            predicate: green_wire.predicate.clone(),
+            amount: rc("1"),
+        }],
+    };
+    let cast_leg = bridged(&funded, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&funded, 3)))
+            .unwrap(),
+        payment: Some(good_payment),
+    });
+    let resolved = resolve(&cast_leg);
+    assert_eq!(
+        resolved
+            .execution()
+            .window()
+            .cards()
+            .get(object(&resolved, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+}

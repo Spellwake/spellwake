@@ -2271,6 +2271,12 @@ pub enum EffectManaYield {
         bundle: BTreeMap<crate::mana::ManaType, RulesInteger>,
         restriction: crate::mana::ManaRestriction,
     },
+    /// Add `amount` mana of `kind` restricted to `restriction`.
+    RestrictedCounted {
+        kind: crate::mana::ManaType,
+        amount: ValueExpr,
+        restriction: crate::mana::ManaRestriction,
+    },
     /// Choose a color from `colors` and add `amount` unrestricted mana of that color.
     Choice {
         colors: BTreeSet<crate::mana::ManaType>,
@@ -2300,6 +2306,8 @@ impl EffectManaYield {
         match self {
             Self::RetainedUntilCleanup(inner) => inner.uses_target(),
             Self::Counted { amount, .. }
+            | Self::RestrictedCounted { amount, .. }
+            | Self::RestrictedChoice { amount, .. }
             | Self::RetainedUntilEndOfCombat { amount, .. }
             | Self::Split { amount, .. }
             | Self::Choice { amount, .. }
@@ -9418,14 +9426,7 @@ impl ExecutableBody {
                         } => {
                             if colors.is_empty()
                                 || colors.contains(&crate::mana::ManaType::Colourless)
-                                || matches!(
-                                    restriction,
-                                    crate::mana::ManaRestriction::CreatureSpellOfType(Some(k))
-                                        | crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(
-                                            Some(k)
-                                        )
-                                        if vocabulary.label(*k).is_none()
-                                )
+                                || !restriction.valid_authored(vocabulary)
                             {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -9449,18 +9450,22 @@ impl ExecutableBody {
                         } => {
                             if bundle.is_empty()
                                 || bundle.values().any(|amt| !amt.is_positive())
-                                || matches!(
-                                    restriction,
-                                    crate::mana::ManaRestriction::CreatureSpellOfType(Some(k))
-                                        | crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(
-                                            Some(k)
-                                        )
-                                        if vocabulary.label(*k).is_none()
-                                )
+                                || !restriction.valid_authored(vocabulary)
                             {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             None
+                        }
+                        EffectManaYield::RestrictedCounted {
+                            amount,
+                            restriction,
+                            ..
+                        } => {
+                            if !restriction.valid_authored(vocabulary) {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                            amount.required_operand_family(self.target)?
                         }
                         EffectManaYield::Counted { amount, .. }
                         | EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
@@ -16575,6 +16580,29 @@ pub enum Supertype {
     Ongoing,
     Snow,
     World,
+}
+impl Supertype {
+    /// Stable printed supertype word.
+    pub const fn wire_label(self) -> &'static str {
+        match self {
+            Self::Basic => "Basic",
+            Self::Legendary => "Legendary",
+            Self::Ongoing => "Ongoing",
+            Self::Snow => "Snow",
+            Self::World => "World",
+        }
+    }
+    /// Parse an exact supertype label.
+    pub fn from_wire_label(label: &str) -> Option<Self> {
+        match label {
+            "Basic" => Some(Self::Basic),
+            "Legendary" => Some(Self::Legendary),
+            "Ongoing" => Some(Self::Ongoing),
+            "Snow" => Some(Self::Snow),
+            "World" => Some(Self::World),
+            _ => None,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermanentDefinition {

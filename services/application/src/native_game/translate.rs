@@ -258,11 +258,217 @@ fn restricted_payment(
                     crate::player_wire::PlayerManaRestriction::CreatureOrEnchantmentSpell => {
                         spellwake_engine::mana::ManaRestriction::CreatureOrEnchantmentSpell
                     }
+                    crate::player_wire::PlayerManaRestriction::Predicate => {
+                        let pred = entry
+                            .predicate
+                            .as_ref()
+                            .ok_or(NativeBridgeError::InvalidIntent)?;
+                        spellwake_engine::mana::ManaRestriction::Predicate(
+                            translate_mana_predicate(pred, vocabulary)?,
+                        )
+                    }
                 },
                 amount: entry.amount.as_rules_integer().clone(),
             })
         })
         .collect()
+}
+
+fn translate_mana_color_from_wire(
+    color: crate::player_wire::ManaColor,
+) -> Result<spellwake_engine::characteristics::Color, NativeBridgeError> {
+    match color {
+        crate::player_wire::ManaColor::White => Ok(spellwake_engine::characteristics::Color::White),
+        crate::player_wire::ManaColor::Blue => Ok(spellwake_engine::characteristics::Color::Blue),
+        crate::player_wire::ManaColor::Black => Ok(spellwake_engine::characteristics::Color::Black),
+        crate::player_wire::ManaColor::Red => Ok(spellwake_engine::characteristics::Color::Red),
+        crate::player_wire::ManaColor::Green => Ok(spellwake_engine::characteristics::Color::Green),
+        crate::player_wire::ManaColor::Colourless => Err(NativeBridgeError::InvalidIntent),
+    }
+}
+
+fn translate_card_type_from_wire(
+    kind: crate::player_wire::PlayerCardType,
+) -> spellwake_engine::program::CardType {
+    match kind {
+        crate::player_wire::PlayerCardType::Battle => spellwake_engine::program::CardType::Battle,
+        crate::player_wire::PlayerCardType::Planeswalker => {
+            spellwake_engine::program::CardType::Planeswalker
+        }
+        crate::player_wire::PlayerCardType::Land => spellwake_engine::program::CardType::Land,
+        crate::player_wire::PlayerCardType::Artifact => {
+            spellwake_engine::program::CardType::Artifact
+        }
+        crate::player_wire::PlayerCardType::Creature => {
+            spellwake_engine::program::CardType::Creature
+        }
+        crate::player_wire::PlayerCardType::Enchantment => {
+            spellwake_engine::program::CardType::Enchantment
+        }
+        crate::player_wire::PlayerCardType::Kindred => spellwake_engine::program::CardType::Kindred,
+        crate::player_wire::PlayerCardType::Instant => spellwake_engine::program::CardType::Instant,
+        crate::player_wire::PlayerCardType::Sorcery => spellwake_engine::program::CardType::Sorcery,
+    }
+}
+
+fn translate_mana_predicate(
+    pred: &crate::player_wire::PlayerManaPredicate,
+    vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+) -> Result<spellwake_engine::mana::ManaSpendPredicate, NativeBridgeError> {
+    use crate::player_wire::{
+        PlayerAbilitySpendKind, PlayerManaSpecialAction, PlayerManaSpellKeyword, PlayerSpellCastMode,
+        PlayerSpellColorRule,
+    };
+    use spellwake_engine::mana::{
+        AbilityManaClause, AbilitySpendKind, ManaSpecialAction, ManaSpellKeyword,
+        ManaSpendPredicate, SpellCastMode, SpellColorRule, SpellManaClause,
+    };
+    let spell_clauses = pred
+        .spell_clauses
+        .iter()
+        .map(|c| {
+            Ok(SpellManaClause {
+                card_type: c.card_type.map(translate_card_type_from_wire),
+                exclude_card_type: c.exclude_card_type.map(translate_card_type_from_wire),
+                supertype: c
+                    .supertype
+                    .as_deref()
+                    .map(|s| {
+                        spellwake_engine::program::Supertype::from_wire_label(s)
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                creature_type: c
+                    .creature_type
+                    .as_ref()
+                    .map(|l| {
+                        vocabulary
+                            .resolve_label(l.as_str())
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                artifact_subtype: c
+                    .artifact_subtype
+                    .as_deref()
+                    .map(|s| {
+                        spellwake_engine::program::ArtifactSubtype::from_wire_label(s)
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                enchantment_subtype: c
+                    .enchantment_subtype
+                    .as_deref()
+                    .map(|s| {
+                        spellwake_engine::program::EnchantmentSubtype::from_wire_label(s)
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                is_aura: c.is_aura,
+                spell_subtype: c
+                    .spell_subtype
+                    .as_deref()
+                    .map(|s| {
+                        spellwake_engine::program::SpellSubtype::from_wire_label(s)
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                planeswalker_subtype: c
+                    .planeswalker_subtype
+                    .as_deref()
+                    .map(|s| {
+                        spellwake_engine::program::PlaneswalkerSubtype::from_label(s)
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                color_rule: c
+                    .color_rule
+                    .map(|r| match r {
+                        PlayerSpellColorRule::Colorless => Ok(SpellColorRule::Colorless),
+                        PlayerSpellColorRule::Colored => Ok(SpellColorRule::Colored),
+                        PlayerSpellColorRule::ExactColor { color } => {
+                            Ok(SpellColorRule::ExactColor(translate_mana_color_from_wire(
+                                color,
+                            )?))
+                        }
+                        PlayerSpellColorRule::MonocoloredOf { color } => Ok(
+                            SpellColorRule::MonocoloredOf(translate_mana_color_from_wire(color)?),
+                        ),
+                        PlayerSpellColorRule::Multicolored => Ok(SpellColorRule::Multicolored),
+                        PlayerSpellColorRule::ExactColorCount { count } => {
+                            Ok(SpellColorRule::ExactColorCount(count))
+                        }
+                    })
+                    .transpose()?,
+                keyword: c.keyword.map(|k| match k {
+                    PlayerManaSpellKeyword::Devoid => ManaSpellKeyword::Devoid,
+                    PlayerManaSpellKeyword::Freerunning => ManaSpellKeyword::Freerunning,
+                    PlayerManaSpellKeyword::Foretell => ManaSpellKeyword::Foretell,
+                    PlayerManaSpellKeyword::Flashback => ManaSpellKeyword::Flashback,
+                    PlayerManaSpellKeyword::Disturb => ManaSpellKeyword::Disturb,
+                }),
+                cast_mode: c.cast_mode.map(|m| match m {
+                    PlayerSpellCastMode::FaceDown => SpellCastMode::FaceDown,
+                    PlayerSpellCastMode::Kicked => SpellCastMode::Kicked,
+                    PlayerSpellCastMode::Disturb => SpellCastMode::Disturb,
+                    PlayerSpellCastMode::FromGraveyard => SpellCastMode::FromGraveyard,
+                    PlayerSpellCastMode::FromExile => SpellCastMode::FromExile,
+                    PlayerSpellCastMode::NotFromHand => SpellCastMode::NotFromHand,
+                    PlayerSpellCastMode::NotOwned => SpellCastMode::NotOwned,
+                    PlayerSpellCastMode::SecondSpellThisTurn => SpellCastMode::SecondSpellThisTurn,
+                }),
+                no_abilities: c.no_abilities,
+                min_mana_value: c.min_mana_value,
+            })
+        })
+        .collect::<Result<Vec<_>, NativeBridgeError>>()?;
+    let ability_clauses = pred
+        .ability_clauses
+        .iter()
+        .map(|c| {
+            Ok(AbilityManaClause {
+                source_card_type: c.source_card_type.map(translate_card_type_from_wire),
+                source_creature_type: c
+                    .source_creature_type
+                    .as_ref()
+                    .map(|l| {
+                        vocabulary
+                            .resolve_label(l.as_str())
+                            .ok_or(NativeBridgeError::InvalidIntent)
+                    })
+                    .transpose()?,
+                source_colorless: c.source_colorless,
+                kind: c.kind.map(|k| match k {
+                    PlayerAbilitySpendKind::Equip => AbilitySpendKind::Equip,
+                    PlayerAbilitySpendKind::PowerUp => AbilitySpendKind::PowerUp,
+                    PlayerAbilitySpendKind::GainClassLevel => AbilitySpendKind::GainClassLevel,
+                }),
+            })
+        })
+        .collect::<Result<Vec<_>, NativeBridgeError>>()?;
+    let special_actions = pred
+        .special_actions
+        .iter()
+        .map(|a| match a {
+            PlayerManaSpecialAction::Foretell => ManaSpecialAction::Foretell,
+            PlayerManaSpecialAction::TurnFaceUp => ManaSpecialAction::TurnFaceUp,
+            PlayerManaSpecialAction::TurnCreatureFaceUp => ManaSpecialAction::TurnCreatureFaceUp,
+            PlayerManaSpecialAction::UnlockDoor => ManaSpecialAction::UnlockDoor,
+            PlayerManaSpecialAction::CumulativeUpkeep => ManaSpecialAction::CumulativeUpkeep,
+        })
+        .collect();
+    let mut out = ManaSpendPredicate {
+        allow_any_spell: pred.allow_any_spell,
+        spell_clauses,
+        allow_any_ability: pred.allow_any_ability,
+        ability_clauses,
+        special_actions,
+        makes_spell_uncounterable: pred.makes_spell_uncounterable,
+        disallow_generic: pred.disallow_generic,
+        allow_cost_containing_colorless: pred.allow_cost_containing_colorless,
+        allow_cost_containing_x: pred.allow_cost_containing_x,
+    };
+    out.canonicalize();
+    Ok(out)
 }
 fn bundle(
     value: &PlayerPayment,
