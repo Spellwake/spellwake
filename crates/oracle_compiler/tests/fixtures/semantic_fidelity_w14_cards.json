@@ -1,0 +1,206 @@
+[
+  {
+    "oracle_id": "a00e5eb6-b916-4cd6-8ff2-c02f4929abc7",
+    "name": "Delirium",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Delirium",
+        "type_line": "Instant",
+        "oracle_text": "Cast this spell only during an opponent's turn.\nTap target creature that player controls. That creature deals damage equal to its power to the player. Prevent all combat damage that would be dealt to and dealt by the creature this turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "a2019c23-09b8-4b0f-8b91-d8137804cb95",
+    "name": "Flash Conscription",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Flash Conscription",
+        "type_line": "Instant",
+        "oracle_text": "Untap target creature and gain control of it until end of turn. That creature gains haste until end of turn. If {W} was spent to cast this spell, the creature gains \"Whenever this creature deals combat damage, you gain that much life\" until end of turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "e9b4e857-39e5-4a06-89ad-3dd94b3f252a",
+    "name": "Paralyze",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Paralyze",
+        "type_line": "Enchantment \u2014 Aura",
+        "oracle_text": "Enchant creature\nWhen this Aura enters, tap enchanted creature.\nEnchanted creature doesn't untap during its controller's untap step.\nAt the beginning of the upkeep of enchanted creature's controller, that player may pay {4}. If the player does, untap the creature."
+      }
+    ]
+  },
+  {
+    "oracle_id": "20eff2ce-f26d-48a2-8a1f-435a7e2968c8",
+    "name": "Boros Fury-Shield",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Boros Fury-Shield",
+        "type_line": "Instant",
+        "oracle_text": "Prevent all combat damage that would be dealt by target attacking or blocking creature this turn. If {R} was spent to cast this spell, Boros Fury-Shield deals damage to that creature's controller equal to the creature's power."
+      }
+    ]
+  },
+  {
+    "oracle_id": "1e46c709-5278-44f3-9f0e-f71bd9558339",
+    "name": "Soul Transfer",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Soul Transfer",
+        "type_line": "Sorcery",
+        "oracle_text": "Choose one. If you control an artifact and an enchantment as you cast this spell, you may choose both instead.\n\u2022 Exile target creature or planeswalker.\n\u2022 Return target creature or planeswalker card from your graveyard to your hand."
+      }
+    ]
+  },
+  {
+    "oracle_id": "0b085c90-95df-4823-ba67-9eb398b1ec94",
+    "name": "Raka Sanctuary",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Raka Sanctuary",
+        "type_line": "Enchantment",
+        "oracle_text": "At the beginning of your upkeep, if you control a white or blue permanent, this enchantment deals 1 damage to target creature. If you control a white permanent and a blue permanent, this enchantment deals 3 damage instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "5a23c734-cbfb-419a-9bf1-126cb07fe427",
+    "name": "Of One Mind",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Of One Mind",
+        "type_line": "Sorcery",
+        "oracle_text": "This spell costs {2} less to cast if you control a Human creature and a non-Human creature.\nDraw two cards."
+      }
+    ]
+  },
+  {
+    "oracle_id": "32fbb638-ab14-4e8b-a07a-d4c44e3496f2",
+    "name": "Urza's Tower",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Urza's Tower",
+        "type_line": "Land \u2014 Urza's Tower",
+        "oracle_text": "{T}: Add {C}. If you control an Urza's Mine and an Urza's Power-Plant, add {C}{C}{C} instead."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3decbc45-3e79-455f-9d62-878ee31b458d",
+    "name": "Pit Imp",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Pit Imp",
+        "type_line": "Creature \u2014 Imp",
+        "oracle_text": "Flying\n{B}: This creature gets +1/+0 until end of turn. Activate no more than twice each turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "3c9535a2-7995-42de-a56f-0a445f2dd697",
+    "name": "Manaforge Cinder",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Manaforge Cinder",
+        "type_line": "Creature \u2014 Elemental Shaman",
+        "oracle_text": "{1}: Add {B} or {R}. Activate no more than three times each turn."
+      }
+    ]
+  },
+  {
+    "oracle_id": "5542afeb-285f-4889-9d09-46ce20d0d189",
+    "name": "Lesser Werewolf",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Lesser Werewolf",
+        "type_line": "Creature \u2014 Werewolf",
+        "oracle_text": "{B}: If this creature's power is 1 or more, it gets -1/-0 until end of turn and put a -0/-1 counter on target creature blocking or blocked by this creature. Activate only during the declare blockers step."
+      }
+    ]
+  },
+  {
+    "oracle_id": "5c326102-005d-463c-b9f7-14b034b66baa",
+    "name": "Awakening of Vitu-Ghazi",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Awakening of Vitu-Ghazi",
+        "type_line": "Instant",
+        "oracle_text": "Put nine +1/+1 counters on target land you control. It becomes a legendary 0/0 Elemental creature with haste named Vitu-Ghazi. It's still a land."
+      }
+    ]
+  },
+  {
+    "oracle_id": "2a108899-76b4-4f85-8a59-91838fc26f4a",
+    "name": "Rageform",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Rageform",
+        "type_line": "Enchantment",
+        "oracle_text": "When this enchantment enters, it becomes an Aura with enchant creature. Manifest the top card of your library and attach this enchantment to it. (To manifest a card, put it onto the battlefield face down as a 2/2 creature. Turn it face up any time for its mana cost if it's a creature card.)\nEnchanted creature has double strike. (It deals both first-strike and regular combat damage.)"
+      }
+    ]
+  },
+  {
+    "oracle_id": "124c3af4-8545-479a-b44c-446da1c8b535",
+    "name": "Woodcaller Automaton",
+    "layout": "prototype",
+    "faces": [
+      {
+        "name": "Woodcaller Automaton",
+        "type_line": "Artifact Creature \u2014 Construct",
+        "oracle_text": "Prototype {2}{G}{G} \u2014 3/3 (You may cast this spell with different mana cost, color, and size. It keeps its abilities and types.)\nWhen this creature enters, if you cast it, untap target land you control. It becomes a Treefolk creature with haste and base power and toughness equal to this creature's power and toughness. It's still a land."
+      }
+    ]
+  },
+  {
+    "oracle_id": "23b2de61-a29c-4a32-b38c-408c723727ce",
+    "name": "Agency Outfitter",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Agency Outfitter",
+        "type_line": "Creature \u2014 Sphinx Detective",
+        "oracle_text": "Flying\nWhen this creature enters, you may search your graveyard, hand and/or library for a card named Magnifying Glass and/or a card named Thinking Cap and put them onto the battlefield. If you search your library this way, shuffle."
+      }
+    ]
+  },
+  {
+    "oracle_id": "88939cb3-5f61-4857-95cb-9446c6c1f1aa",
+    "name": "Alpine Houndmaster",
+    "layout": "normal",
+    "faces": [
+      {
+        "name": "Alpine Houndmaster",
+        "type_line": "Creature \u2014 Human Warrior",
+        "oracle_text": "When this creature enters, you may search your library for a card named Alpine Watchdog and/or a card named Igneous Cur, reveal them, put them into your hand, then shuffle.\nWhenever this creature attacks, it gets +X/+0 until end of turn, where X is the number of other attacking creatures."
+      }
+    ]
+  },
+  {
+    "oracle_id": "47a8f3a8-253b-4df9-9cfc-ff7df65d850c",
+    "name": "Forging the Tyrite Sword",
+    "layout": "saga",
+    "faces": [
+      {
+        "name": "Forging the Tyrite Sword",
+        "type_line": "Enchantment \u2014 Saga",
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore counter. Sacrifice after III.)\nI, II \u2014 Create a Treasure token.\nIII \u2014 Search your library for a card named Halvar, God of Battle or an Equipment card, reveal it, put it into your hand, then shuffle."
+      }
+    ]
+  }
+]
