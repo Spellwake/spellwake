@@ -174,6 +174,8 @@ pub struct SupportedAppearance {
     >,
     pub copiable_power_toughness: Option<PrintedPowerToughness>,
     pub battlefield_counters: Option<PowerToughnessCounters>,
+    /// Exact map of every positive permanent counter kind on this object on the battlefield (LKI).
+    pub battlefield_all_counters: Option<BTreeMap<crate::effects::CounterKind, RulesInteger>>,
     /// All counter kinds on the battlefield incarnation at the captured cut.
     pub battlefield_total_counters: Option<RulesInteger>,
     pub battlefield_marked_damage: Option<RulesInteger>,
@@ -247,6 +249,7 @@ impl SupportedAppearance {
             granted_combat_keywords: BTreeMap::new(),
             copiable_power_toughness: None,
             battlefield_counters: None,
+            battlefield_all_counters: None,
             battlefield_total_counters: None,
             battlefield_marked_damage: None,
             current_power_toughness: None,
@@ -2103,6 +2106,8 @@ impl RulesView<'_> {
             battlefield_total_counters: battlefield
                 .then(|| self.characteristics.total_permanent_counters(object)),
             battlefield_counters: battlefield.then(|| self.characteristics.counters(object)),
+            battlefield_all_counters: battlefield
+                .then(|| self.characteristics.all_permanent_counters(object)),
             battlefield_marked_damage: battlefield
                 .then(|| self.marks.get(&object).cloned().unwrap_or_else(|| 0.into())),
             current_power_toughness: current

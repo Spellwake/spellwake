@@ -249,7 +249,7 @@ pub(super) fn lower_search_library_group(
                 Err("oracle:dynamic-search-count")
                     if (*up_to || !is_unrestricted_filter(filter))
                         && !*any_number
-                        && secondary_filter.is_none()
+                        && (secondary_filter.is_none() || *secondary_is_or)
                         && rest_to_zone.is_none()
                         && follow_up.is_empty() =>
                 {
@@ -274,8 +274,8 @@ pub(super) fn lower_search_library_group(
                         false,
                         &SearchLibraryExtra {
                             extra_zones: extra_zones.as_slice(),
-                            secondary_filter: None,
-                            secondary_is_or: false,
+                            secondary_filter: secondary_filter.as_deref(),
+                            secondary_is_or: *secondary_is_or,
                             where_x: None,
                             rest_to_zone: None,
                             modifier: modifier.as_ref(),
@@ -1025,12 +1025,19 @@ pub(super) fn lower_search_library_group(
             unless_pay,
             unless_action: None,
         } => {
+            if unless_pay.is_none()
+                && let Some(ops) = try_lower_counter_matching_stack_objects(target, vocabulary)?
+            {
+                builder.instructions.extend(ops);
+                return Ok(());
+            }
             if in_trigger
                 && builder.target == BodyTarget::None
-                && matches!(target.as_ref(), SubjectRefAst::Anaphora(raw) if matches!(
-                    raw.trim().to_ascii_lowercase().as_str(),
-                    "that spell" | "that spell or ability" | "that ability" | "it"
-                ))
+                && (matches!(target.as_ref(), SubjectRefAst::TriggerSubject)
+                    || matches!(target.as_ref(), SubjectRefAst::Anaphora(raw) if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "that spell" | "that spell or ability" | "that ability" | "it"
+                    )))
             {
                 if let Some(cost_atom) = unless_pay {
                     match cost_atom {
@@ -1584,13 +1591,15 @@ pub(super) fn lower_search_library_group(
             subject,
             duration,
         } => {
+            let eff_subject =
+                unwrap_in_zone_subject(subject).unwrap_or_else(|| (**subject).clone());
             if let SubjectRefAst::TargetObject {
                 filter,
                 count: TargetCountAst::Exact(1),
-            } = subject.as_ref()
+            } = &eff_subject
                 && filter.any_spell
             {
-                let bt = lower_target_subject(subject, vocabulary)?;
+                let bt = lower_target_subject(&eff_subject, vocabulary)?;
                 builder.bind_target(bt)?;
                 builder.instructions.push(Instruction::GainControlOfSpell);
                 return Ok(());
@@ -1599,14 +1608,96 @@ pub(super) fn lower_search_library_group(
             let parts = ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                 spellwake_engine::characteristics::ControlRecipient::ResolvingController,
             )]);
-            match subject.as_ref() {
-                SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
-                    builder
-                        .instructions
-                        .push(Instruction::CreateContinuousEffect {
-                            parts,
-                            duration: dur,
-                        });
+            match &eff_subject {
+                s if (self_pronoun_valid || in_trigger)
+                    && is_self_pronoun(s, builder, self_pronoun_valid) =>
+                {
+                    builder.instructions.push(Instruction::ChangeAbilitySource {
+                        parts,
+                        duration: dur,
+                    });
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+                    if let Some((minimum, maximum)) =
+                        builder.instructions.iter().rev().find_map(|op| match op {
+                            Instruction::AffectPermanentTargets {
+                                minimum, maximum, ..
+                            } => Some((*minimum, *maximum)),
+                            _ => None,
+                        })
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::AffectPermanentTargets {
+                                minimum,
+                                maximum,
+                                action: PermanentTargetAction::Modify {
+                                    parts,
+                                    duration: dur,
+                                },
+                            });
+                    } else {
+                        builder
+                            .instructions
+                            .push(Instruction::CreateContinuousEffect {
+                                parts,
+                                duration: dur,
+                            });
+                    }
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && last_instruction_created_tokens(&builder.instructions) =>
+                {
+                    builder.instructions.push(Instruction::ChangeGroup {
+                        group: Box::new(EffectSubject::CreatedTokens),
+                        parts,
+                        duration: dur,
+                    });
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && last_instruction_moved_object(&builder.instructions) =>
+                {
+                    builder.instructions.push(Instruction::ChangeGroup {
+                        group: Box::new(EffectSubject::LastMoved),
+                        parts,
+                        duration: dur,
+                    });
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && let Some(obj) = builder.last_group_filter =>
+                {
+                    builder.instructions.push(Instruction::ChangeGroup {
+                        group: Box::new(EffectSubject::Matching(obj)),
+                        parts,
+                        duration: dur,
+                    });
+                    Ok(())
+                }
+                SubjectRefAst::TriggerSubject if in_trigger => {
+                    builder.instructions.push(Instruction::ChangeGroup {
+                        group: Box::new(EffectSubject::TriggerSubject),
+                        parts,
+                        duration: dur,
+                    });
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if in_trigger
+                        && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                        && builder.target == BodyTarget::None =>
+                {
+                    builder.instructions.push(Instruction::ChangeGroup {
+                        group: Box::new(EffectSubject::TriggerSubject),
+                        parts,
+                        duration: dur,
+                    });
                     Ok(())
                 }
                 SubjectRefAst::AttachedHost(_) => {
@@ -1619,11 +1710,179 @@ pub(super) fn lower_search_library_group(
                     });
                     Ok(())
                 }
-                SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
-                    if f.zone.is_none() =>
+                SubjectRefAst::TargetObject { filter, count }
+                    if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                        && !filter.any_spell
+                        && !filter.is_ability =>
                 {
-                    let obj = lower_object_filter(f, vocabulary)?;
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
+                    match count {
+                        TargetCountAst::Exact(1) => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::CreateContinuousEffect {
+                                    parts,
+                                    duration: dur,
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::Exact(n) if *n >= 2 => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: *n,
+                                    maximum: *n,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::UpTo(n) if *n > 0 => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: 0,
+                                    maximum: *n,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::ChosenX | TargetCountAst::UpToX if !in_trigger => {
+                            builder.bind_target(bt)?;
+                            if *count == TargetCountAst::UpToX {
+                                builder.up_to_x_target_count = true;
+                            } else {
+                                builder.x_target_count = true;
+                            }
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: 0,
+                                    maximum: u16::MAX,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::AnyNumber => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: 0,
+                                    maximum: u16::MAX,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        _ => Err("oracle:unsupported-target-subject"),
+                    }
+                }
+                SubjectRefAst::TargetOneOf { options, count } => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    match count {
+                        TargetCountAst::Exact(1) => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::CreateContinuousEffect {
+                                    parts,
+                                    duration: dur,
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::Exact(n) if *n >= 2 => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: *n,
+                                    maximum: *n,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::UpTo(n) if *n > 0 => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: 0,
+                                    maximum: *n,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::ChosenX | TargetCountAst::UpToX if !in_trigger => {
+                            builder.bind_target(bt)?;
+                            if *count == TargetCountAst::UpToX {
+                                builder.up_to_x_target_count = true;
+                            } else {
+                                builder.x_target_count = true;
+                            }
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: 0,
+                                    maximum: u16::MAX,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        TargetCountAst::AnyNumber => {
+                            builder.bind_target(bt)?;
+                            builder
+                                .instructions
+                                .push(Instruction::AffectPermanentTargets {
+                                    minimum: 0,
+                                    maximum: u16::MAX,
+                                    action: PermanentTargetAction::Modify {
+                                        parts,
+                                        duration: dur,
+                                    },
+                                });
+                            Ok(())
+                        }
+                        _ => Err("oracle:unsupported-target-subject"),
+                    }
+                }
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                {
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.zone = None;
+                    let obj =
+                        lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
                     bind_filter_player_target(builder, &obj)?;
+                    builder.last_group_filter = Some(obj);
                     builder.instructions.push(Instruction::ChangeGroup {
                         group: Box::new(EffectSubject::Matching(obj)),
                         parts,
@@ -1632,7 +1891,7 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 _ => {
-                    let bt = lower_target_subject(subject, vocabulary)?;
+                    let bt = lower_target_subject(&eff_subject, vocabulary)?;
                     builder.bind_target(bt)?;
                     builder
                         .instructions
@@ -1717,7 +1976,9 @@ pub(super) fn lower_search_library_group(
             } else {
                 lower_resolving_player_in_context(*controller, builder, in_trigger)?
             };
-            let eff_subj = match subject.as_ref() {
+            let eff_subject =
+                unwrap_in_zone_subject(subject).unwrap_or_else(|| (**subject).clone());
+            let eff_subj = match &eff_subject {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
                     EffectSubject::AbilitySource
                 }
@@ -1743,11 +2004,33 @@ pub(super) fn lower_search_library_group(
                 {
                     EffectSubject::TargetObject
                 }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && last_instruction_created_tokens(&builder.instructions) =>
+                {
+                    EffectSubject::CreatedTokens
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && last_instruction_moved_object(&builder.instructions) =>
+                {
+                    EffectSubject::LastMoved
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && let Some(obj) = builder.last_group_filter =>
+                {
+                    EffectSubject::Matching(obj)
+                }
                 SubjectRefAst::TargetObject {
                     filter,
                     count: TargetCountAst::Exact(1),
-                } if filter.zone.is_none() => {
-                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                    let mut f_clean = filter.as_ref().clone();
+                    f_clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &f_clean, builder, in_trigger, vocabulary,
+                    )?;
                     builder.bind_target(bt)?;
                     EffectSubject::TargetObject
                 }
@@ -1762,9 +2045,12 @@ pub(super) fn lower_search_library_group(
                     EffectSubject::TargetObject
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
-                    if f.zone.is_none() =>
+                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
                 {
-                    let obj = lower_object_filter(f, vocabulary)?;
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.zone = None;
+                    let obj =
+                        lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
                     bind_filter_player_target(builder, &obj)?;
                     builder.last_group_filter = Some(obj);
                     EffectSubject::Matching(obj)
@@ -2562,45 +2848,88 @@ pub(super) fn lower_search_library_group(
                 lower_resolving_player_in_context(*player, builder, in_trigger)?
             };
             let dur_low = duration.trim().to_ascii_lowercase();
-            let (impulse_dur, resolved_dur) = if dur_low == "until_end_of_next_turn"
-                || dur_low.contains("end of your next turn")
-                || dur_low.contains("untilendofnextturn")
-                || dur_low.contains("untilyournextturn")
+            let (impulse_dur, resolved_dur, any_color) =
+                parse_grant_cast_duration(&dur_low, *player)
+                    .ok_or("oracle:unsupported-grant-cast-duration")?;
+            let dur_core = strip_any_color_suffix(&dur_low);
+            let is_exile_top_anaphora = matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(a) if matches!(
+                    a.trim().to_ascii_lowercase().as_str(),
+                    "it" | "them"
+                        | "that card"
+                        | "those cards"
+                        | "the exiled card"
+                        | "the exiled cards"
+                        | "cards exiled this way"
+                        | "a card exiled this way"
+                )
+            );
+            if *player == PlayerRefAst::You
+                && count_limit.is_none()
+                && is_exile_top_anaphora
+                && dur_core != "now"
             {
-                (
-                    spellwake_engine::program::ImpulsePlayDuration::UntilEndOfNextTurn,
-                    ResolvedDuration::ThroughControllerNextTurn,
-                )
-            } else if dur_low == "while_exiled"
-                || dur_low.contains("remains exiled")
-                || dur_low.contains("remain exiled")
-                || dur_low == "permanent"
-            {
-                (
-                    spellwake_engine::program::ImpulsePlayDuration::WhileExiled,
-                    ResolvedDuration::NoStatedDuration,
-                )
-            } else if dur_low == "until_next_exile" || dur_low.contains("until you exile another") {
-                (
-                    spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource,
-                    ResolvedDuration::NoStatedDuration,
-                )
-            } else if dur_low.is_empty()
-                || dur_low == "this_turn"
-                || dur_low == "until_end_of_turn"
-                || dur_low == "now"
-                || dur_low.contains("this turn")
-                || dur_low.contains("end of turn")
-                || dur_low.contains("untilendofturn")
-            {
-                (
-                    spellwake_engine::program::ImpulsePlayDuration::ThisTurn,
-                    ResolvedDuration::UntilEndOfTurn,
-                )
-            } else {
-                return Err("oracle:unsupported-grant-cast-duration");
-            };
-            let any_color = dur_low.contains("any color") || dur_low.contains("any type");
+                match builder.instructions.last_mut() {
+                    Some(last @ Instruction::ExileLibraryTop { .. }) => {
+                        if let Instruction::ExileLibraryTop {
+                            player: lib_p,
+                            amount,
+                        } = *last
+                        {
+                            *last = Instruction::ExileTopPlay {
+                                count: ValueExpr::literal(i64::from(amount)),
+                                library_owner: AffectedPlayers::One(lib_p),
+                                duration: impulse_dur,
+                                cast_only: *cast_only,
+                                free: *free,
+                                any_color,
+                                face_down: false,
+                                grant_play: true,
+                            };
+                            return Ok(());
+                        }
+                    }
+                    Some(Instruction::ExileTopPlay {
+                        duration: slot_dur,
+                        cast_only: slot_cast_only,
+                        free: slot_free,
+                        any_color: slot_any_color,
+                        grant_play: slot_grant_play,
+                        ..
+                    }) if !*slot_grant_play => {
+                        *slot_dur = impulse_dur;
+                        *slot_cast_only = *cast_only;
+                        *slot_free = *free;
+                        *slot_any_color = any_color;
+                        *slot_grant_play = true;
+                        return Ok(());
+                    }
+                    Some(last @ Instruction::ExileLibraryTopLinked { .. }) => {
+                        if let Instruction::ExileLibraryTopLinked {
+                            player: lib_p,
+                            amount,
+                            face_down,
+                            ..
+                        } = last.clone()
+                            && amount != ValueExpr::literal(1)
+                        {
+                            *last = Instruction::ExileTopPlay {
+                                count: amount,
+                                library_owner: AffectedPlayers::One(lib_p),
+                                duration: impulse_dur,
+                                cast_only: *cast_only,
+                                free: *free,
+                                any_color,
+                                face_down,
+                                grant_play: true,
+                            };
+                            return Ok(());
+                        }
+                    }
+                    _ => {}
+                }
+            }
             let emitted_op = match subject.as_ref() {
                 SubjectRefAst::TargetObject {
                     count: TargetCountAst::Exact(1),
@@ -2654,6 +2983,21 @@ pub(super) fn lower_search_library_group(
                         any_color,
                     }
                 }
+                SubjectRefAst::Anaphora(_)
+                    if count_limit.is_none()
+                        && (last_instruction_moved_object(&builder.instructions)
+                            || (has_prior_moved_object(&builder.instructions)
+                                && !has_checked_revealed_top_strict(&builder.instructions))) =>
+                {
+                    Instruction::GrantCardPlayPermission {
+                        player: rp,
+                        subject: MoveSubjectRef::LastMoved,
+                        duration: impulse_dur,
+                        cast_only: *cast_only,
+                        free: *free,
+                        any_color,
+                    }
+                }
                 SubjectRefAst::Anaphora(raw)
                     if count_limit.is_none()
                         && in_trigger
@@ -2679,15 +3023,18 @@ pub(super) fn lower_search_library_group(
                     }
                 }
                 SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                    let resolved_dur =
+                        resolved_dur.ok_or("oracle:unsupported-grant-cast-duration")?;
                     let mut inner = f.as_ref().clone();
                     let is_linked_exile = (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0;
+                    let last_moved_match = !is_linked_exile
+                        && dur_core != "now"
+                        && strip_last_moved_for_grant_play(&mut inner, &builder.instructions);
                     let zone =
                         if is_linked_exile && matches!(f.zone, None | Some(ZoneFilter::Exile)) {
                             inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
                             SourceZoneFilter::LinkedExile
-                        } else if dur_low != "now"
-                            && strip_last_moved_predicates(&mut inner, &builder.instructions)
-                        {
+                        } else if last_moved_match {
                             SourceZoneFilter::LastMoved
                         } else {
                             match f.zone {
@@ -2732,18 +3079,38 @@ pub(super) fn lower_search_library_group(
                         Some(spellwake_oracle_compiler::ast::CountLimitAst::UpTo(_)) => true,
                         None => matches!(subject.as_ref(), SubjectRefAst::Group(_)),
                     };
-                    Instruction::CreateTemporaryRule {
-                        rule: Box::new(TemporaryRuleKind::ZoneCastPermission {
+                    let use_last_moved_perm = last_moved_match
+                        && dur_core != "now"
+                        && resolved_dur != ResolvedDuration::UntilControllerNextTurn
+                        && (!once
+                            || (!*cast_only
+                                && count_limit.is_none()
+                                && last_moved_producer_is_single_or_bulk_play(
+                                    &builder.instructions,
+                                )));
+                    if use_last_moved_perm {
+                        Instruction::GrantLastMovedPlayPermission {
                             player: rp,
-                            zone,
-                            filter: flt,
-                            cast_only: *cast_only,
+                            filter: flt.map(Box::new),
+                            duration: resolved_dur,
                             free: *free,
+                            cast_only: *cast_only,
                             any_color,
-                            once,
-                            sorcery_only: false,
-                        }),
-                        duration: resolved_dur,
+                        }
+                    } else {
+                        Instruction::CreateTemporaryRule {
+                            rule: Box::new(TemporaryRuleKind::ZoneCastPermission {
+                                player: rp,
+                                zone,
+                                filter: flt,
+                                cast_only: *cast_only,
+                                free: *free,
+                                any_color,
+                                once,
+                                sorcery_only: false,
+                            }),
+                            duration: resolved_dur,
+                        }
                     }
                 }
                 _ => return Err("oracle:unsupported-grant-cast"),
@@ -2835,10 +3202,14 @@ pub(super) fn lower_search_library_group(
                     bound_x,
                 )?;
                 let flash_dur = match builder.instructions.get(start_len) {
-                    Some(Instruction::CreateTemporaryRule { duration, .. }) => *duration,
+                    Some(Instruction::CreateTemporaryRule { duration, .. })
+                    | Some(Instruction::GrantLastMovedPlayPermission { duration, .. }) => *duration,
                     Some(Instruction::ForEachPlayer { body, .. }) => {
                         match body.instructions.first() {
-                            Some(Instruction::CreateTemporaryRule { duration, .. }) => *duration,
+                            Some(Instruction::CreateTemporaryRule { duration, .. })
+                            | Some(Instruction::GrantLastMovedPlayPermission {
+                                duration, ..
+                            }) => *duration,
                             _ => return Err("oracle:unsupported-modified-cast-permission"),
                         }
                     }
@@ -3181,6 +3552,302 @@ pub(super) fn lower_search_library_group(
     }
 }
 
+type CounterStackMatchSpec = (Option<Box<SpellFilter>>, bool, bool, bool);
+
+fn lower_single_counter_matching_filter(
+    f: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<Option<CounterStackMatchSpec>, &'static str> {
+    if !f.any_spell && !f.is_ability && f.zone != Some(ZoneFilter::Stack) {
+        return Ok(None);
+    }
+    let opponents_only = match f.controller {
+        None => false,
+        Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => true,
+        _ => return Ok(None),
+    };
+    let (include_spells, include_abilities) = if f.is_ability && f.any_spell {
+        (true, true)
+    } else if f.is_ability {
+        (false, true)
+    } else {
+        (true, false)
+    };
+    let mut inner = f.clone();
+    inner.any_spell = false;
+    inner.is_ability = false;
+    inner.controller = None;
+    inner.flags.0 &= !AstFilterFlags::EXCLUDE_SELF.0;
+    if inner.zone == Some(ZoneFilter::Stack) {
+        inner.zone = None;
+    }
+    let filter = if is_unrestricted_filter(&inner) {
+        None
+    } else {
+        let sf = lower_spell_filter(&inner, vocabulary)?;
+        if sf.cast_zone != spellwake_engine::program::SpellCastZoneFilter::Any
+            || sf.target_shape != spellwake_engine::program::SpellTargetShape::Any
+            || sf.ordinal_this_turn.is_some()
+            || sf.special != spellwake_engine::program::SpellSpecialFilter::None
+            || sf.object.has_target_player()
+            || sf.object.has_related_player()
+        {
+            return Ok(None);
+        }
+        Some(Box::new(sf))
+    };
+    Ok(Some((
+        filter,
+        include_spells,
+        include_abilities,
+        opponents_only,
+    )))
+}
+
+fn try_lower_counter_matching_stack_objects(
+    target: &SubjectRefAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<Option<Vec<Instruction>>, &'static str> {
+    match target {
+        SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => {
+            if let Some((filter, include_spells, include_abilities, opponents_only)) =
+                lower_single_counter_matching_filter(f, vocabulary)?
+            {
+                Ok(Some(vec![Instruction::CounterMatchingStackObjects {
+                    filter,
+                    include_spells,
+                    include_abilities,
+                    opponents_only,
+                }]))
+            } else {
+                Ok(None)
+            }
+        }
+        SubjectRefAst::Compound(items) if !items.is_empty() => {
+            let mut specs = Vec::with_capacity(items.len());
+            for item in items {
+                let (SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)) =
+                    item
+                else {
+                    return Ok(None);
+                };
+                let Some(spec) = lower_single_counter_matching_filter(f, vocabulary)? else {
+                    return Ok(None);
+                };
+                specs.push(spec);
+            }
+            if specs.len() == 2
+                && specs[0].0 == specs[1].0
+                && specs[0].3 == specs[1].3
+                && ((specs[0].1 && !specs[0].2 && !specs[1].1 && specs[1].2)
+                    || (!specs[0].1 && specs[0].2 && specs[1].1 && !specs[1].2))
+            {
+                let (filter, _, _, opponents_only) = specs.remove(0);
+                return Ok(Some(vec![Instruction::CounterMatchingStackObjects {
+                    filter,
+                    include_spells: true,
+                    include_abilities: true,
+                    opponents_only,
+                }]));
+            }
+            Ok(Some(
+                specs
+                    .into_iter()
+                    .map(
+                        |(filter, include_spells, include_abilities, opponents_only)| {
+                            Instruction::CounterMatchingStackObjects {
+                                filter,
+                                include_spells,
+                                include_abilities,
+                                opponents_only,
+                            }
+                        },
+                    )
+                    .collect(),
+            ))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool) -> bool {
+    match op {
+        Instruction::ExileLibraryTop { .. }
+        | Instruction::ExileLibraryTopLinked { .. }
+        | Instruction::ExileGroupFromZone { .. }
+        | Instruction::ExileFromZone { .. }
+        | Instruction::ExileSubjectUntilSourceLeaves { .. }
+        | Instruction::ExileTopForPlay { .. } => true,
+        Instruction::MoveSubject { destination, .. }
+        | Instruction::MoveLastMovedFiltered { destination, .. }
+        | Instruction::SelectZoneCardsToZone { destination, .. }
+        | Instruction::MoveGraveyardGroupOwned { destination, .. } => {
+            !expected_exile_only || matches!(destination, SubjectDestination::Exile { .. })
+        }
+        Instruction::MoveGroup { destination, .. } => {
+            !expected_exile_only || *destination == PublicZoneDestination::Exile
+        }
+        Instruction::LookTopChooseExt { keep_dest, .. }
+        | Instruction::RevealUntilMatchExt {
+            match_dest: keep_dest,
+            ..
+        } => {
+            !expected_exile_only
+                || matches!(
+                    keep_dest,
+                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
+                )
+        }
+        Instruction::ForEachPlayer { body, .. } => body
+            .instructions
+            .iter()
+            .rev()
+            .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
+        Instruction::Mill { .. }
+        | Instruction::MillEachPlayer(_)
+        | Instruction::Discard { .. }
+        | Instruction::DiscardFiltered { .. }
+        | Instruction::DiscardOneAtRandom(_)
+        | Instruction::DiscardUpTo { .. }
+        | Instruction::DiscardUpToExt { .. } => !expected_exile_only,
+        _ => false,
+    }
+}
+
+fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruction]) -> bool {
+    if strip_last_moved_predicates(filter, ops) {
+        return true;
+    }
+    if matches!(
+        filter.zone,
+        Some(
+            ZoneFilter::OpponentHand
+                | ZoneFilter::OpponentsHands
+                | ZoneFilter::TargetOpponentHand
+                | ZoneFilter::TargetPlayerHand
+        )
+    ) {
+        return false;
+    }
+    let classify_exile_only =
+        |pred: &spellwake_oracle_compiler::ast::FilterPredicateAst| -> Option<bool> {
+            use spellwake_oracle_compiler::ast::{FilterPredicateAst, PriorActionRefKind};
+            match pred {
+                FilterPredicateAst::PriorActionZoneRef { kind } => {
+                    match kind.trim().to_ascii_lowercase().as_str() {
+                        "from_among_those"
+                        | "from_among_those_cards"
+                        | "among_them"
+                        | "among them"
+                        | "from_among_them"
+                        | "from among them"
+                        | "among_those"
+                        | "among those"
+                        | "among_those_cards"
+                        | "among those cards" => Some(false),
+                        "exiled_this_way"
+                        | "among_the_cards_exiled_this_way"
+                        | "among the cards exiled this way"
+                        | "cards_exiled_this_way"
+                        | "from_among_the_cards_exiled_this_way"
+                        | "from among the cards exiled this way"
+                        | "from_among_those_cards_exiled_this_way" => Some(true),
+                        _ => None,
+                    }
+                }
+                FilterPredicateAst::AffectedByPriorAction(PriorActionRefKind::ExiledThisWay) => {
+                    Some(true)
+                }
+                FilterPredicateAst::StateQualification(raw)
+                    if raw.trim().eq_ignore_ascii_case("exiled this way") =>
+                {
+                    Some(true)
+                }
+                _ => None,
+            }
+        };
+    let mut matched = false;
+    let mut require_exile = false;
+    for pred in &filter.predicates {
+        if let Some(exile_only) = classify_exile_only(pred) {
+            matched = true;
+            require_exile |= exile_only;
+        }
+    }
+    if !matched {
+        return false;
+    }
+    let mut found_producer = false;
+    for op in ops.iter().rev() {
+        if is_grant_play_last_moved_producer(op, require_exile) {
+            found_producer = true;
+            break;
+        }
+        match op {
+            Instruction::DrawController { .. }
+            | Instruction::DrawEachPlayer { .. }
+            | Instruction::DrawPlayer { .. }
+            | Instruction::DrawTargetPlayer { .. }
+            | Instruction::DrawRelatedPlayer
+            | Instruction::Scry { .. }
+            | Instruction::Surveil { .. }
+            | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::GrantLastMovedPlayPermission { .. }
+            | Instruction::GrantCardPlayPermission { .. }
+            | Instruction::OptionalEffect { .. }
+            | Instruction::OptionalSequence { .. }
+            | Instruction::BranchIfFalse { .. }
+            | Instruction::Jump { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::AdjustControllerLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
+            | Instruction::GainControllerLife { .. }
+            | Instruction::AddMana(_)
+            | Instruction::AddManaForPlayer { .. } => continue,
+            _ => return false,
+        }
+    }
+    if !found_producer {
+        return false;
+    }
+    filter
+        .predicates
+        .retain(|pred| classify_exile_only(pred).is_none());
+    filter.zone = None;
+    true
+}
+
+fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
+    for op in ops.iter().rev() {
+        match op {
+            Instruction::ExileGroupFromZone { .. }
+            | Instruction::ExileFromZone { .. }
+            | Instruction::MoveGroup {
+                destination: PublicZoneDestination::Exile,
+                ..
+            } => return true,
+            Instruction::ExileLibraryTop { amount, .. } => {
+                return *amount == 1;
+            }
+            Instruction::DrawController { .. }
+            | Instruction::DrawEachPlayer { .. }
+            | Instruction::DrawPlayer { .. }
+            | Instruction::DrawTargetPlayer { .. }
+            | Instruction::DrawRelatedPlayer
+            | Instruction::Scry { .. }
+            | Instruction::Surveil { .. }
+            | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::BindResolutionX(_) => continue,
+            _ => return false,
+        }
+    }
+    false
+}
+
 fn lower_counter_unless_dynamic_mana(
     cost_atom: &CostAtomAst,
     builder: &BodyBuilder,
@@ -3290,4 +3957,122 @@ pub(super) fn strip_grant_kw_trailing_note(raw: &str) -> String {
         }
     }
     trimmed.to_owned()
+}
+
+fn strip_any_color_suffix(dur_low: &str) -> &str {
+    let mut s = dur_low.trim();
+    while let Some(rest) = s
+        .strip_suffix(" any color")
+        .or_else(|| s.strip_suffix(" any type"))
+    {
+        s = rest.trim();
+    }
+    s
+}
+
+fn parse_grant_cast_duration(
+    dur_low: &str,
+    player: PlayerRefAst,
+) -> Option<(
+    spellwake_engine::program::ImpulsePlayDuration,
+    Option<ResolvedDuration>,
+    bool,
+)> {
+    use spellwake_engine::program::ImpulsePlayDuration;
+    let any_color = dur_low.contains("any color") || dur_low.contains("any type");
+    let core = strip_any_color_suffix(dur_low);
+    let is_you = player == PlayerRefAst::You;
+    // Check "end of ... next end step" before generic "next end step" so both remain distinct.
+    if core == "until_end_of_next_end_step"
+        || (is_you && core.contains("end of your next end step"))
+        || (!is_you
+            && (core.contains("end of their next end step")
+                || core.contains("end of that player's next end step")))
+    {
+        return Some((ImpulsePlayDuration::UntilEndOfNextEndStep, None, any_color));
+    }
+    if core == "until_next_end_step"
+        || (is_you
+            && (core == "until_your_next_end_step"
+                || core == "until_your_next_step"
+                || core.contains("your next end step")))
+        || (!is_you
+            && (core == "until_their_next_end_step"
+                || core.contains("their next end step")
+                || core.contains("that player's next end step")))
+    {
+        return Some((ImpulsePlayDuration::UntilNextEndStep, None, any_color));
+    }
+    if core == "until_next_upkeep"
+        || (is_you && (core == "until_your_next_upkeep" || core.contains("your next upkeep")))
+        || (!is_you
+            && (core == "until_their_next_upkeep"
+                || core.contains("their next upkeep")
+                || core.contains("that player's next upkeep")))
+    {
+        return Some((ImpulsePlayDuration::UntilNextUpkeep, None, any_color));
+    }
+    // Under CR 502.4 no player receives priority during the untap step, so for card play/cast
+    // permissions "until your next turn" and "until the beginning of your next upkeep" share the
+    // exact same legal play windows as UntilNextUpkeep, while temporary cast rules use
+    // ResolvedDuration::UntilControllerNextTurn.
+    if is_you && matches!(core, "until_your_next_turn" | "until your next turn") {
+        return Some((
+            ImpulsePlayDuration::UntilNextUpkeep,
+            Some(ResolvedDuration::UntilControllerNextTurn),
+            any_color,
+        ));
+    }
+    if is_you
+        && (core == "until_end_of_next_turn"
+            || core.contains("end of your next turn")
+            || core.contains("untilendofnextturn")
+            || core.contains("untilyournextturn"))
+    {
+        return Some((
+            ImpulsePlayDuration::UntilEndOfNextTurn,
+            Some(ResolvedDuration::ThroughControllerNextTurn),
+            any_color,
+        ));
+    }
+    if !is_you
+        && (core == "until_end_of_players_next_turn"
+            || core.contains("end of that player's next turn")
+            || core.contains("end of their next turn"))
+    {
+        return Some((ImpulsePlayDuration::UntilEndOfNextTurn, None, any_color));
+    }
+    if core == "while_exiled"
+        || core.contains("remains exiled")
+        || core.contains("remain exiled")
+        || core == "permanent"
+    {
+        return Some((
+            ImpulsePlayDuration::WhileExiled,
+            Some(ResolvedDuration::NoStatedDuration),
+            any_color,
+        ));
+    }
+    if core == "until_next_exile" || core.contains("until you exile another") {
+        return Some((
+            ImpulsePlayDuration::UntilNextFromSource,
+            Some(ResolvedDuration::NoStatedDuration),
+            any_color,
+        ));
+    }
+    if core.is_empty()
+        || core == "this_turn"
+        || core == "until_end_of_turn"
+        || core == "now"
+        || core.contains("this turn")
+        || core.contains("end of turn")
+        || core.contains("untilendofturn")
+    {
+        return Some((
+            ImpulsePlayDuration::ThisTurn,
+            Some(ResolvedDuration::UntilEndOfTurn),
+            any_color,
+        ));
+    }
+    None
 }

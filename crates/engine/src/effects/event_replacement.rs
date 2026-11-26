@@ -26,6 +26,7 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         | Instruction::GainControllerLife { .. }
         | Instruction::AdjustControllerLife { .. }
         | Instruction::AdjustPlayersLife { .. }
+        | Instruction::SetPlayersLife { .. }
         | Instruction::DrainOpponents(_)
         | Instruction::DrawController { .. }
         | Instruction::DrawPlayer { .. }
@@ -1229,6 +1230,13 @@ impl EffectWindow {
                     let map = seats.into_iter().map(|s| (s, adj.clone())).collect();
                     self.adjust_players_at_cut(synthetic_entry, synthetic_index, map, append)?;
                 }
+                Instruction::SetPlayersLife { players, amount } => {
+                    let val = self.resolve_inline_value_expr(rep, &amount, event_amount)?;
+                    let seats = self.resolve_replacement_players(players, rep)?;
+                    let adj = LifeAdjustment::Set(val);
+                    let map = seats.into_iter().map(|s| (s, adj.clone())).collect();
+                    self.adjust_players_at_cut(synthetic_entry, synthetic_index, map, append)?;
+                }
                 Instruction::DrainOpponents(amount) => {
                     let val = self
                         .resolve_inline_value_expr(rep, &amount, event_amount)?
@@ -1774,26 +1782,8 @@ impl EffectWindow {
                                             }
                                             continue;
                                         }
-                                        let mapped_duration = match duration {
-                                            crate::program::ImpulsePlayDuration::ThisTurn => {
-                                                CardPlayDuration::ThroughTurn
-                                            }
-                                            crate::program::ImpulsePlayDuration::UntilEndOfNextTurn => {
-                                                if self.window.active_player() == rep.controller {
-                                                    CardPlayDuration::ThroughNextOwnTurnSkipCurrent(
-                                                        rep.controller,
-                                                    )
-                                                } else {
-                                                    CardPlayDuration::ThroughNextOwnTurn(
-                                                        rep.controller,
-                                                    )
-                                                }
-                                            }
-                                            crate::program::ImpulsePlayDuration::WhileExiled
-                                            | crate::program::ImpulsePlayDuration::UntilNextFromSource => {
-                                                CardPlayDuration::WhileInZone
-                                            }
-                                        };
+                                        let mapped_duration = self
+                                            .map_impulse_play_duration(duration, rep.controller);
                                         self.card_play_permissions.insert(CardPlayPermission {
                                             zone: CardPlayZone::Exile,
                                             object: exiled_id,

@@ -490,6 +490,55 @@ pub(super) fn lower_static(
                     idx += 2;
                     continue;
                 }
+                if !is_spell
+                    && let StaticAbilityAst::PlayOrCastPermission {
+                        cast_only,
+                        filter,
+                        permission,
+                        condition,
+                    } = &items[idx]
+                    && let Some(StaticAbilityAst::FollowUp(ins)) = items.get(idx + 1)
+                    && let Some(pay_life_mv) = extract_cast_this_way_alt_cost_followup(ins)
+                    && let Some(res) = try_lower_play_or_cast_with_alt_cost(
+                        permission,
+                        *cast_only,
+                        filter,
+                        condition.as_deref(),
+                        false,
+                        pay_life_mv,
+                        program,
+                        vocabulary,
+                        ids,
+                    )
+                {
+                    res?;
+                    idx += 2;
+                    continue;
+                }
+                if !is_spell
+                    && let StaticAbilityAst::PlayOrCastPermission {
+                        cast_only,
+                        filter,
+                        permission,
+                        condition,
+                    } = &items[idx]
+                    && let Some(StaticAbilityAst::FollowUp(ins)) = items.get(idx + 1)
+                    && extract_cast_this_way_flash_followup(ins)
+                    && let Some(res) = try_lower_play_or_cast_with_flash(
+                        permission,
+                        *cast_only,
+                        filter,
+                        condition.as_deref(),
+                        false,
+                        program,
+                        vocabulary,
+                        ids,
+                    )
+                {
+                    res?;
+                    idx += 2;
+                    continue;
+                }
                 let mut cur = items[idx].clone();
                 if let Some(prev) = prev_subject.as_ref() {
                     resolve_static_anaphora_subject(&mut cur, prev);
@@ -1065,18 +1114,13 @@ pub(super) fn lower_static(
             }
             if !is_spell
                 && *cast_only
-                && matches!(
-                    p_low.as_str(),
-                    "from your hand without paying their mana costs"
-                        | "from your hand without paying its mana cost"
-                        | "without paying their mana costs"
-                        | "without paying its mana cost"
-                )
-                && let Some((modifier, rem_cond)) = try_lower_free_matching_permission(
+                && let Some(pay_life_mv) = classify_direct_alt_cast_permission(&p_low)
+                && let Some((modifier, rem_cond)) = try_lower_alt_matching_permission(
                     &p_low,
                     filter,
                     condition.as_deref(),
                     false,
+                    pay_life_mv,
                     vocabulary,
                 )
             {
@@ -1087,6 +1131,126 @@ pub(super) fn lower_static(
                         modifier,
                     },
                     rem_cond,
+                    vocabulary,
+                );
+            }
+            if !is_spell
+                && let Some((base_perm, pay_life_mv)) = strip_cast_this_way_alt_cost_suffix(&p_low)
+                && let Some(res) = try_lower_play_or_cast_with_alt_cost(
+                    base_perm,
+                    *cast_only,
+                    filter,
+                    condition.as_deref(),
+                    false,
+                    pay_life_mv,
+                    program,
+                    vocabulary,
+                    ids,
+                )
+            {
+                return res;
+            }
+            if !is_spell
+                && let Some(base_perm) = strip_cast_this_way_flash_suffix(&p_low)
+                && let Some(res) = try_lower_play_or_cast_with_flash(
+                    base_perm,
+                    *cast_only,
+                    filter,
+                    condition.as_deref(),
+                    false,
+                    program,
+                    vocabulary,
+                    ids,
+                )
+            {
+                return res;
+            }
+            if !is_spell
+                && *cast_only
+                && p_low == "any_player_free_flash"
+                && filter.controller.is_none()
+            {
+                let matching = lower_spell_filter(filter, vocabulary)?;
+                if !spell_filter_supported_by_cast_alt_cost(&matching) {
+                    return Err("oracle:unsupported-cast-permission");
+                }
+                let mut probe = program.clone();
+                push_conditional_static(
+                    &mut probe,
+                    StaticContinuousAbility::CostModifier {
+                        id: ids.static_id(),
+                        modifier: SpellCostModifier::AlternativeForMatching {
+                            filter: matching,
+                            mana: ManaCost::free(),
+                            once_each_turn: false,
+                            own_turn_only: false,
+                            pay_life_mv: false,
+                            each_player: true,
+                        },
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                )?;
+                push_conditional_static(
+                    &mut probe,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::Flash {
+                            any_player: true,
+                            matching,
+                        },
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                )?;
+                *program = probe;
+                return Ok(());
+            }
+            if !is_spell
+                && *cast_only
+                && p_low == "first_each_turn_flash"
+                && matches!(filter.controller, None | Some(ControllerRelation::You))
+            {
+                let mut stripped_f = filter.as_ref().clone();
+                stripped_f.controller = None;
+                let matching = lower_spell_filter(&stripped_f, vocabulary)?;
+                if !spell_filter_supported_by_ordinal_this_turn(&matching) {
+                    return Err("oracle:unsupported-cast-permission");
+                }
+                let matching = matching.ordinal_this_turn(NonZeroU32::MIN);
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::Flash {
+                            any_player: false,
+                            matching,
+                        },
+                    },
+                    condition.as_deref(),
+                    vocabulary,
+                );
+            }
+            if !is_spell
+                && *cast_only
+                && let Some((timing_cond, inner_perm)) = split_leading_flash_timing_prefix(&p_low)
+                && let Some((any_player, matching)) =
+                    parse_flash_permission_clause(inner_perm, filter, vocabulary)
+            {
+                let combined_cond = match condition.as_deref() {
+                    Some(c) => ConditionAst::And(Box::new(timing_cond), Box::new(c.clone())),
+                    None => timing_cond,
+                };
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::Flash {
+                            any_player,
+                            matching,
+                        },
+                    },
+                    Some(&combined_cond),
                     vocabulary,
                 );
             }
@@ -5023,18 +5187,13 @@ fn lower_once_per_turn_static(
             }
             if !is_spell
                 && *cast_only
-                && matches!(
-                    p_low.as_str(),
-                    "from your hand without paying their mana costs"
-                        | "from your hand without paying its mana cost"
-                        | "without paying their mana costs"
-                        | "without paying its mana cost"
-                )
-                && let Some((mut modifier, rem_cond)) = try_lower_free_matching_permission(
+                && let Some(pay_life_mv) = classify_direct_alt_cast_permission(&p_low)
+                && let Some((mut modifier, rem_cond)) = try_lower_alt_matching_permission(
                     &p_low,
                     filter,
                     condition.as_deref(),
                     true,
+                    pay_life_mv,
                     vocabulary,
                 )
             {
@@ -5055,6 +5214,36 @@ fn lower_once_per_turn_static(
                     rem_cond,
                     vocabulary,
                 );
+            }
+            if !is_spell
+                && let Some((base_perm, pay_life_mv)) = strip_cast_this_way_alt_cost_suffix(&p_low)
+            {
+                let own_turn_cond;
+                let effective_cond = if force_own_turn_only {
+                    own_turn_cond = match condition.as_deref() {
+                        Some(c) => ConditionAst::And(
+                            Box::new(ConditionAst::IsYourTurn),
+                            Box::new(c.clone()),
+                        ),
+                        None => ConditionAst::IsYourTurn,
+                    };
+                    Some(&own_turn_cond)
+                } else {
+                    condition.as_deref()
+                };
+                if let Some(res) = try_lower_play_or_cast_with_alt_cost(
+                    base_perm,
+                    *cast_only,
+                    filter,
+                    effective_cond,
+                    true,
+                    pay_life_mv,
+                    program,
+                    vocabulary,
+                    ids,
+                ) {
+                    return res;
+                }
             }
             if !is_spell
                 && let Some((mut perm, rem_cond)) = try_lower_library_top_filtered_permission(
@@ -5226,34 +5415,59 @@ fn lower_once_per_turn_static(
                         ..
                     }
                 )
-                && spell_filter.any_types == AstCardTypeMask::ENCHANTMENT
                 && matches!(
                     spell_filter.controller,
                     None | Some(ControllerRelation::You)
                 )
-                && filter_only_has(
-                    spell_filter,
-                    FilterAllow {
-                        types: true,
-                        controller: true,
-                        ..FilterAllow::NONE
-                    },
-                )
             {
-                let (_, rem_cond) = split_is_your_turn_condition(condition.as_deref());
-                return push_conditional_static(
-                    program,
-                    StaticContinuousAbility::CostModifier {
-                        id: ids.static_id(),
-                        modifier: SpellCostModifier::PayLifeForEnchantmentOwnTurnOnce,
-                    },
-                    if force_own_turn_only {
-                        rem_cond
-                    } else {
-                        condition.as_deref()
-                    },
-                    vocabulary,
-                );
+                if spell_filter.any_types == AstCardTypeMask::ENCHANTMENT
+                    && filter_only_has(
+                        spell_filter,
+                        FilterAllow {
+                            types: true,
+                            controller: true,
+                            ..FilterAllow::NONE
+                        },
+                    )
+                {
+                    let (_, rem_cond) = split_is_your_turn_condition(condition.as_deref());
+                    return push_conditional_static(
+                        program,
+                        StaticContinuousAbility::CostModifier {
+                            id: ids.static_id(),
+                            modifier: SpellCostModifier::PayLifeForEnchantmentOwnTurnOnce,
+                        },
+                        if force_own_turn_only {
+                            rem_cond
+                        } else {
+                            condition.as_deref()
+                        },
+                        vocabulary,
+                    );
+                }
+                let mut stripped = spell_filter.clone();
+                stripped.controller = None;
+                let sf = lower_spell_filter(&stripped, vocabulary)?;
+                if spell_filter_supported_by_cast_alt_cost(&sf) {
+                    let (cond_own_turn, rem_cond) =
+                        split_is_your_turn_condition(condition.as_deref());
+                    return push_conditional_static(
+                        program,
+                        StaticContinuousAbility::CostModifier {
+                            id: ids.static_id(),
+                            modifier: SpellCostModifier::AlternativeForMatching {
+                                filter: sf,
+                                mana: ManaCost::free(),
+                                once_each_turn: true,
+                                own_turn_only: force_own_turn_only || cond_own_turn,
+                                pay_life_mv: true,
+                                each_player: false,
+                            },
+                        },
+                        rem_cond,
+                        vocabulary,
+                    );
+                }
             }
             let alt_mana = if is_free_cost {
                 Some(ManaCost::free())
@@ -5279,6 +5493,8 @@ fn lower_once_per_turn_static(
                             mana,
                             once_each_turn: true,
                             own_turn_only: own_turn_only || force_own_turn_only,
+                            pay_life_mv: false,
+                            each_player: false,
                         },
                     },
                     rem_cond,
@@ -5311,7 +5527,7 @@ fn push_damage_modify_rules(
     }
     let cond_sc = match condition {
         Some(cond) => Some(
-            lower_static_source_condition(cond, vocabulary)
+            lower_static_source_condition_ext(cond, vocabulary)
                 .ok_or("oracle:unsupported-static-cond")?,
         ),
         None => None,
@@ -5863,6 +6079,42 @@ fn lower_alternative_cast_cost(
                 vocabulary,
             );
         }
+        if let [CostAtomAst::PayLife(val)] = cost
+            && matches!(
+                val.as_ref(),
+                ValueExprAst::ObjectStat {
+                    stat: StatKind::ManaValue,
+                    ..
+                }
+            )
+            && matches!(
+                spell_filter.controller,
+                None | Some(ControllerRelation::You)
+            )
+        {
+            let mut stripped = spell_filter.clone();
+            stripped.controller = None;
+            let sf = lower_spell_filter(&stripped, vocabulary)?;
+            if spell_filter_supported_by_cast_alt_cost(&sf) {
+                let (own_turn_only, rem_cond) = split_is_your_turn_condition(condition);
+                return push_conditional_static(
+                    program,
+                    StaticContinuousAbility::CostModifier {
+                        id: ids.static_id(),
+                        modifier: SpellCostModifier::AlternativeForMatching {
+                            filter: sf,
+                            mana: ManaCost::free(),
+                            once_each_turn: false,
+                            own_turn_only,
+                            pay_life_mv: true,
+                            each_player: false,
+                        },
+                    },
+                    rem_cond,
+                    vocabulary,
+                );
+            }
+        }
         if let Some(mana) = extract_fixed_alternative_mana_cost(cost)
             && matches!(
                 spell_filter.controller,
@@ -5882,6 +6134,8 @@ fn lower_alternative_cast_cost(
                         mana,
                         once_each_turn: false,
                         own_turn_only,
+                        pay_life_mv: false,
+                        each_player: false,
                     },
                 },
                 rem_cond,
@@ -6181,7 +6435,7 @@ fn lower_conditional_replacement(
             lower_replacement(&conditioned, program, vocabulary, ids)
         }
         _ => {
-            let sc = lower_static_source_condition(condition, vocabulary)
+            let sc = lower_static_source_condition_ext(condition, vocabulary)
                 .ok_or("oracle:unsupported-static")?;
             let prev_cont_id = program.continuous.as_ref().map(StaticContinuousAbility::id);
             let prev_add_len = program.additional_battlefield_abilities.len();
@@ -6224,6 +6478,140 @@ fn push_attack_requirement(program: &mut Program, req: AttackRequirement) {
     }
 }
 
+fn lower_static_source_condition_ext(
+    cond: &ConditionAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<StaticSourceCondition> {
+    if let Some(sc) = lower_static_source_condition(cond, vocabulary) {
+        return Some(sc);
+    }
+    match cond {
+        ConditionAst::Not(inner) => Some(StaticSourceCondition::Not(Box::new(
+            lower_static_source_condition_ext(inner, vocabulary)?,
+        ))),
+        ConditionAst::And(a, b) => Some(StaticSourceCondition::And(
+            Box::new(lower_static_source_condition_ext(a, vocabulary)?),
+            Box::new(lower_static_source_condition_ext(b, vocabulary)?),
+        )),
+        ConditionAst::Or(a, b) => Some(StaticSourceCondition::Or(
+            Box::new(lower_static_source_condition_ext(a, vocabulary)?),
+            Box::new(lower_static_source_condition_ext(b, vocabulary)?),
+        )),
+        ConditionAst::IsPhaseOrStep {
+            player:
+                Some(
+                    p @ (PlayerRefAst::AnyOpponent
+                    | PlayerRefAst::EachOpponent
+                    | PlayerRefAst::EachOtherPlayer
+                    | PlayerRefAst::AnyPlayer
+                    | PlayerRefAst::EachPlayer),
+                ),
+            phase,
+            first_only: false,
+        } => {
+            use spellwake_engine::program::PhaseCheck;
+            let ph = phase
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .replace('_', " ");
+            let stat = match ph.as_str() {
+                "untap" | "untap step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::Untap,
+                    player: None,
+                }),
+                "upkeep" | "upkeep step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::Upkeep,
+                    player: None,
+                }),
+                "draw" | "draw step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::Draw,
+                    player: None,
+                }),
+                "precombat main" | "precombat main phase" | "first main phase" => {
+                    Some(PlayerStatExpr::IsInStep {
+                        step: Step::PrecombatMain,
+                        player: None,
+                    })
+                }
+                "beginning of combat" | "beginning of combat step" => {
+                    Some(PlayerStatExpr::IsInStep {
+                        step: Step::BeginningCombat,
+                        player: None,
+                    })
+                }
+                "declare attackers" | "declare attackers step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::DeclareAttackers,
+                    player: None,
+                }),
+                "declare blockers" | "declare blockers step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::DeclareBlockers,
+                    player: None,
+                }),
+                "combat damage" | "combat damage step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::CombatDamage,
+                    player: None,
+                }),
+                "end of combat" | "end of combat step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::EndCombat,
+                    player: None,
+                }),
+                "postcombat main" | "postcombat main phase" | "second main phase" => {
+                    Some(PlayerStatExpr::IsInStep {
+                        step: Step::PostcombatMain,
+                        player: None,
+                    })
+                }
+                "end" | "end step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::End,
+                    player: None,
+                }),
+                "cleanup" | "cleanup step" => Some(PlayerStatExpr::IsInStep {
+                    step: Step::Cleanup,
+                    player: None,
+                }),
+                "beginning" | "beginning phase" => Some(PlayerStatExpr::IsInPhase {
+                    phase: PhaseCheck::Beginning,
+                    player: None,
+                }),
+                "main" | "main phase" => Some(PlayerStatExpr::IsInPhase {
+                    phase: PhaseCheck::Main,
+                    player: None,
+                }),
+                "combat" | "combat phase" => Some(PlayerStatExpr::IsInPhase {
+                    phase: PhaseCheck::Combat,
+                    player: None,
+                }),
+                "ending" | "ending phase" => Some(PlayerStatExpr::IsInPhase {
+                    phase: PhaseCheck::Ending,
+                    player: None,
+                }),
+                _ => None,
+            }?;
+            let rc = ResolutionCondition {
+                left: ValueExpr::PlayerStat(stat),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            };
+            if !rc.is_world_evaluable() || rc.validate_world(vocabulary).is_err() {
+                return None;
+            }
+            let step_cond = StaticSourceCondition::Eval(Box::new(rc));
+            match p {
+                PlayerRefAst::AnyOpponent
+                | PlayerRefAst::EachOpponent
+                | PlayerRefAst::EachOtherPlayer => Some(StaticSourceCondition::And(
+                    Box::new(StaticSourceCondition::OpponentsTurn),
+                    Box::new(step_cond),
+                )),
+                PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => Some(step_cond),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 fn push_conditional_static(
     program: &mut Program,
     ability: StaticContinuousAbility,
@@ -6232,7 +6620,7 @@ fn push_conditional_static(
 ) -> Result<(), &'static str> {
     let sc = match condition {
         Some(cond) => Some(
-            lower_static_source_condition(cond, vocabulary)
+            lower_static_source_condition_ext(cond, vocabulary)
                 .ok_or("oracle:unsupported-static-cond")?,
         ),
         None => None,
@@ -7093,8 +7481,6 @@ fn lower_spell_keyword_grant(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Result<(), &'static str> {
-    use spellwake_engine::program::SpellCastZoneFilter;
-
     if keywords.is_empty() || f.any_types == AstCardTypeMask::LAND {
         return Err("oracle:unsupported-spell-keyword-grant");
     }
@@ -7258,19 +7644,18 @@ fn lower_spell_keyword_grant(
     }
 
     for kw in resolved {
-        let permission =
-            if kw == KeywordAbility::Flash && matching.cast_zone == SpellCastZoneFilter::Any {
-                CastPermissionRule::Flash {
-                    any_player,
-                    matching,
-                }
-            } else {
-                CastPermissionRule::GrantSpellKeyword {
-                    any_player,
-                    matching,
-                    keyword: kw,
-                }
-            };
+        let permission = if kw == KeywordAbility::Flash {
+            CastPermissionRule::Flash {
+                any_player,
+                matching,
+            }
+        } else {
+            CastPermissionRule::GrantSpellKeyword {
+                any_player,
+                matching,
+                keyword: kw,
+            }
+        };
         push_conditional_static(
             program,
             StaticContinuousAbility::CastPermission {
@@ -7659,9 +8044,33 @@ fn try_lower_first_spell_permission(
     ids: &mut LoweringIds,
 ) -> Option<Result<(), &'static str>> {
     let body = p_low.strip_prefix("the first ")?;
-    let before_free = body.strip_suffix(" may be cast without paying its mana cost")?;
-    let (each_player, subj_own_turn) = if let Some((_, tail)) = before_free.split_once(" you cast")
+    let (before_alt, free, pay_life_mv, discount, also_flash) = if let Some(b) =
+        body.strip_suffix(" may be cast without paying its mana cost")
     {
+        (b, true, false, 0u8, false)
+    } else if let Some(b) = body
+        .strip_suffix(
+            " may be cast by paying life equal to its mana value rather than paying its mana cost",
+        )
+        .or_else(|| {
+            body.strip_suffix(
+                " may be cast by paying life equal to its mana value rather than pay its mana cost",
+            )
+        })
+    {
+        (b, false, true, 0u8, false)
+    } else {
+        let b = body.strip_suffix(" can be cast as though it had flash")?;
+        if let Some((head, cost_tail)) = b.rsplit_once(" costs ")
+            && let Some(delta_raw) = cost_tail.strip_suffix(" less to cast and")
+            && let Some(n) = parse_generic_mana_amount(delta_raw.trim()).filter(|&n| n > 0)
+        {
+            (head, false, false, n, true)
+        } else {
+            (b, false, false, 0u8, true)
+        }
+    };
+    let (each_player, subj_own_turn) = if let Some((_, tail)) = before_alt.split_once(" you cast") {
         let own_turn = match tail.trim() {
             "" | "each turn" => false,
             "during each of your turns" | "on each of your turns" | "during your turn" => true,
@@ -7671,9 +8080,9 @@ fn try_lower_first_spell_permission(
             return None;
         }
         (false, own_turn)
-    } else if let Some((_, tail)) = before_free
+    } else if let Some((_, tail)) = before_alt
         .split_once(" each player casts")
-        .or_else(|| before_free.split_once(" a player casts"))
+        .or_else(|| before_alt.split_once(" a player casts"))
     {
         let own_turn = match tail.trim() {
             "" | "each turn" => false,
@@ -7690,34 +8099,462 @@ fn try_lower_first_spell_permission(
     let mut stripped = filter.clone();
     stripped.controller = None;
     let sf = lower_spell_filter(&stripped, vocabulary).ok()?;
+    if !spell_filter_supported_by_cast_alt_cost(&sf) {
+        return None;
+    }
+    if also_flash
+        && (!spell_filter_supported_by_ordinal_this_turn(&sf) || (each_player && subj_own_turn))
+    {
+        return None;
+    }
     let (cond_own_turn, rem_cond) = if each_player {
         (false, condition)
     } else {
         split_is_your_turn_condition(condition)
     };
-    Some(push_conditional_static(
-        program,
+    let mut probe = program.clone();
+    if (free || pay_life_mv || discount > 0)
+        && let Err(err) = push_conditional_static(
+            &mut probe,
+            StaticContinuousAbility::CostModifier {
+                id: ids.static_id(),
+                modifier: SpellCostModifier::FirstSpellRule {
+                    filter: sf,
+                    own_turn_only: cond_own_turn || subj_own_turn,
+                    each_player,
+                    free,
+                    pay_life_mv,
+                    discount,
+                },
+            },
+            rem_cond,
+            vocabulary,
+        )
+    {
+        return Some(Err(err));
+    }
+    if also_flash {
+        let flash_cond_owned;
+        let flash_cond = if cond_own_turn || subj_own_turn {
+            flash_cond_owned = match rem_cond {
+                Some(c) => {
+                    ConditionAst::And(Box::new(ConditionAst::IsYourTurn), Box::new(c.clone()))
+                }
+                None => ConditionAst::IsYourTurn,
+            };
+            Some(&flash_cond_owned)
+        } else {
+            rem_cond
+        };
+        if let Err(err) = push_conditional_static(
+            &mut probe,
+            StaticContinuousAbility::CastPermission {
+                id: ids.static_id(),
+                permission: CastPermissionRule::Flash {
+                    any_player: each_player,
+                    matching: sf.ordinal_this_turn(NonZeroU32::MIN),
+                },
+            },
+            flash_cond,
+            vocabulary,
+        ) {
+            return Some(Err(err));
+        }
+    }
+    *program = probe;
+    Some(Ok(()))
+}
+
+fn spell_filter_supported_by_cast_alt_cost(sf: &SpellFilter) -> bool {
+    use spellwake_engine::program::{SpellSpecialFilter, SpellTargetShape};
+    const ALLOWED_FLAGS: ObjectFilterFlags = ObjectFilterFlags::HISTORIC
+        .union(ObjectFilterFlags::NON_HISTORIC)
+        .union(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+        .union(ObjectFilterFlags::SADDLED)
+        .union(ObjectFilterFlags::HAS_ADVENTURE)
+        .union(ObjectFilterFlags::HAS_X_IN_COST)
+        .union(ObjectFilterFlags::HAS_TOXIC)
+        .union(ObjectFilterFlags::NO_ABILITIES)
+        .union(ObjectFilterFlags::COMMANDER_ONLY)
+        .union(ObjectFilterFlags::NOT_COMMANDER)
+        .union(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE);
+    if sf.target_shape != SpellTargetShape::Any || sf.ordinal_this_turn.is_some() {
+        return false;
+    }
+    match sf.special {
+        SpellSpecialFilter::AuraOrEquipment | SpellSpecialFilter::ChosenEntryCreatureType => {
+            return sf.object == ObjectFilter::any();
+        }
+        SpellSpecialFilter::None => {}
+        SpellSpecialFilter::AboveExperience | SpellSpecialFilter::CopyableInstruction => {
+            return false;
+        }
+    }
+    let clause_ok = |c: ObjectClause| {
+        matches!(
+            c.subtypes,
+            SubtypeFilter::Any
+                | SubtypeFilter::Has(_)
+                | SubtypeFilter::Lacks(_)
+                | SubtypeFilter::AnyOf(_)
+                | SubtypeFilter::NoneOf(_)
+                | SubtypeFilter::AnyOfList(_)
+                | SubtypeFilter::AllOfList(_)
+                | SubtypeFilter::NoneOfList(_)
+                | SubtypeFilter::Land(_)
+                | SubtypeFilter::NotLand(_)
+                | SubtypeFilter::Enchantment(_)
+                | SubtypeFilter::Spell(_)
+                | SubtypeFilter::Artifact(_)
+                | SubtypeFilter::Planeswalker(_)
+                | SubtypeFilter::Aura
+                | SubtypeFilter::AnyLandMask(_)
+                | SubtypeFilter::NotLandMask(_)
+        ) && c.controller == ControllerFilter::Any
+            && c.owner == ControllerFilter::Any
+            && c.source_relation == SourceRelation::Any
+            && c.combat == CombatFilter::Any
+            && matches!(c.power, PowerFilter::Any | PowerFilter::AtLeast(_))
+            && c.toughness == ToughnessFilter::Any
+            && matches!(
+                c.mana_value,
+                ManaValueFilter::Any
+                    | ManaValueFilter::AtMost(_)
+                    | ManaValueFilter::AtLeast(_)
+                    | ManaValueFilter::Equal(_)
+                    | ManaValueFilter::Even
+                    | ManaValueFilter::Odd
+            )
+            && c.keyword.is_none()
+            && c.forbidden_keyword.is_none()
+            && c.tapped.is_none()
+            && c.token.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
+            && ALLOWED_FLAGS.union(c.flags) == ALLOWED_FLAGS
+    };
+    match sf.object {
+        ObjectFilter::Clause(c) => clause_ok(c),
+        ObjectFilter::Either(a, b) => clause_ok(a) && clause_ok(b),
+    }
+}
+
+fn classify_direct_alt_cast_permission(p_low: &str) -> Option<bool> {
+    match p_low {
+        "from your hand without paying their mana costs"
+        | "from your hand without paying its mana cost"
+        | "without paying their mana costs"
+        | "without paying its mana cost" => Some(false),
+        "from your hand by paying life equal to its mana value rather than paying its mana cost"
+        | "from your hand by paying life equal to its mana value rather than pay its mana cost"
+        | "from your hand by paying life equal to their mana values rather than paying their mana costs"
+        | "from your hand by paying life equal to their mana values rather than pay their mana costs"
+        | "by paying life equal to its mana value rather than paying its mana cost"
+        | "by paying life equal to its mana value rather than pay its mana cost"
+        | "by paying life equal to their mana values rather than paying their mana costs"
+        | "by paying life equal to their mana values rather than pay their mana costs" => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+fn strip_cast_this_way_alt_cost_suffix(p_low: &str) -> Option<(&str, bool)> {
+    for suffix in [
+        ". if you cast a spell this way, pay life equal to its mana value rather than pay its mana cost",
+        ". if you cast a spell this way, pay life equal to its mana value rather than paying its mana cost",
+        ". if you cast a spell this way, you pay life equal to its mana value rather than pay its mana cost",
+        ". if you cast a spell this way, you pay life equal to its mana value rather than paying its mana cost",
+        ". if you cast a spell this way, pay life equal to that spell's mana value rather than pay its mana cost",
+        ". if you cast a spell this way, pay life equal to that spell's mana value rather than paying its mana cost",
+        ". if you cast a spell this way, you pay life equal to that spell's mana value rather than pay its mana cost",
+        ". if you cast a spell this way, you pay life equal to that spell's mana value rather than paying its mana cost",
+    ] {
+        if let Some(prefix) = p_low.strip_suffix(suffix) {
+            return Some((prefix.trim(), true));
+        }
+    }
+    for suffix in [
+        ". if you cast a spell this way, you cast it without paying its mana cost",
+        ". if you cast a spell this way, you may cast it without paying its mana cost",
+    ] {
+        if let Some(prefix) = p_low.strip_suffix(suffix) {
+            return Some((prefix.trim(), false));
+        }
+    }
+    None
+}
+
+fn extract_cast_this_way_alt_cost_followup(ins: &[InstructionAst]) -> Option<bool> {
+    let [
+        InstructionAst::GrantCastPermission {
+            player: PlayerRefAst::You,
+            cast_only: true,
+            subject,
+            free,
+            duration,
+            count_limit: None,
+            alt_cost,
+        },
+    ] = ins
+    else {
+        return None;
+    };
+    if !duration.eq_ignore_ascii_case("now") {
+        return None;
+    }
+    let SubjectRefAst::Anaphora(raw) = subject.as_ref() else {
+        return None;
+    };
+    let subj_low = raw.trim().to_ascii_lowercase();
+    match (*free, alt_cost) {
+        (true, None) if matches!(subj_low.as_str(), "that spell" | "it") => Some(false),
+        (false, Some(spellwake_oracle_compiler::ast::AltCastCostAst::PayLifeEqualToManaValue))
+            if matches!(subj_low.as_str(), "that spell" | "it") =>
+        {
+            Some(true)
+        }
+        // clauses.rs emits free=false, alt_cost=None, subject="that spell" solely for
+        // "if you cast a spell this way, pay life equal to its mana value rather than pay its mana cost".
+        (false, None) if subj_low == "that spell" => Some(true),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_lower_play_or_cast_with_alt_cost(
+    base_perm_raw: &str,
+    cast_only: bool,
+    filter: &ObjectFilterAst,
+    condition: Option<&ConditionAst>,
+    once_each_turn: bool,
+    pay_life_mv: bool,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<Result<(), &'static str>> {
+    let base_low = base_perm_raw
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+
+    let (perm_rule, rem_cond, alt_filter, alt_once, alt_own_turn) = if let Some((perm, rem_c)) =
+        try_lower_library_top_filtered_permission(
+            &base_low,
+            cast_only,
+            filter,
+            once_each_turn,
+            condition,
+            vocabulary,
+        ) {
+        let (sf, once, own_turn) = match &perm {
+            CastPermissionRule::PlayLibraryTopFiltered {
+                filter: obj,
+                once_each_turn: o,
+                own_turn_only: own,
+                ..
+            } => (SpellFilter::from_object(**obj).from_own_library(), *o, *own),
+            _ => return None,
+        };
+        (perm, rem_c, sf, once, own_turn)
+    } else if !once_each_turn
+        && matches!(
+            base_low.as_str(),
+            "from the top of your library"
+                | "from the top of your library at any time"
+                | "you may play lands and cast spells from the top of your library"
+                | "you may cast instant and sorcery spells from the top of your library"
+        )
+        && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+    {
+        let (own_turn, rem_c) = split_is_your_turn_condition(condition);
+        if filter.any_card || is_unrestricted_filter(filter) {
+            let perm = CastPermissionRule::PlayLibraryTop(if cast_only {
+                LibraryTopPermission::Nonland
+            } else {
+                LibraryTopPermission::All
+            });
+            (
+                perm,
+                rem_c,
+                SpellFilter::any().from_own_library(),
+                false,
+                own_turn,
+            )
+        } else if filter_only_has(
+            filter,
+            FilterAllow {
+                types: true,
+                zone: true,
+                ..FilterAllow::NONE
+            },
+        ) && filter.any_types != AstCardTypeMask::LAND
+        {
+            let (perm, sf) = if filter.any_types == AstCardTypeMask::CREATURE {
+                (
+                    CastPermissionRule::PlayLibraryTop(LibraryTopPermission::Creature),
+                    SpellFilter::creature().from_own_library(),
+                )
+            } else if filter.any_types == AstCardTypeMask::ARTIFACT {
+                (
+                    CastPermissionRule::PlayLibraryTop(LibraryTopPermission::Artifact),
+                    SpellFilter::of_type(CardType::Artifact).from_own_library(),
+                )
+            } else if filter.any_types == AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY) {
+                (
+                    CastPermissionRule::PlayLibraryTop(LibraryTopPermission::InstantOrSorcery),
+                    SpellFilter::instant_or_sorcery().from_own_library(),
+                )
+            } else {
+                let mut inner = filter.clone();
+                inner.zone = None;
+                let obj = lower_object_filter(&inner, vocabulary).ok()?;
+                (
+                    CastPermissionRule::PlayLibraryTopMatching {
+                        lands_allowed: !cast_only,
+                        filter: Box::new(obj),
+                    },
+                    SpellFilter::from_object(obj).from_own_library(),
+                )
+            };
+            (perm, rem_c, sf, false, own_turn)
+        } else {
+            let mut inner = filter.clone();
+            inner.zone = None;
+            let obj = lower_object_filter(&inner, vocabulary).ok()?;
+            (
+                CastPermissionRule::PlayLibraryTopMatching {
+                    lands_allowed: !cast_only,
+                    filter: Box::new(obj),
+                },
+                rem_c,
+                SpellFilter::from_object(obj).from_own_library(),
+                false,
+                own_turn,
+            )
+        }
+    } else if !once_each_turn
+        && !cast_only
+        && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+        && (filter.any_card || is_unrestricted_filter(filter))
+        && let Some(flt_raw) = base_low
+            .strip_prefix("you may play lands and cast ")
+            .and_then(|rest| rest.strip_suffix(" from the top of your library"))
+        && let Some(obj) = parse_library_top_cast_filter(flt_raw.trim(), vocabulary)
+    {
+        let (own_turn, rem_c) = split_is_your_turn_condition(condition);
+        (
+            CastPermissionRule::PlayLibraryTopMatching {
+                lands_allowed: true,
+                filter: Box::new(obj),
+            },
+            rem_c,
+            SpellFilter::from_object(obj).from_own_library(),
+            false,
+            own_turn,
+        )
+    } else if !once_each_turn
+        && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+        && (filter.any_card || is_unrestricted_filter(filter))
+        && let Some(head) = base_low
+            .strip_suffix(" from the top of your library")
+            .or_else(|| base_low.strip_suffix(" from the top of your library at any time"))
+        && !head.contains("without paying")
+        && !head.contains(" by ")
+        && let Some((lands_allowed, obj, false)) = parse_play_or_cast_clause(head, vocabulary)
+    {
+        let (own_turn, rem_c) = split_is_your_turn_condition(condition);
+        (
+            CastPermissionRule::PlayLibraryTopMatching {
+                lands_allowed,
+                filter: Box::new(obj),
+            },
+            rem_c,
+            SpellFilter::from_object(obj).from_own_library(),
+            false,
+            own_turn,
+        )
+    } else if let Some((perm, rem_c)) = try_lower_graveyard_matching_permission_ext(
+        &base_low,
+        cast_only,
+        filter,
+        once_each_turn,
+        condition,
+        vocabulary,
+    ) {
+        let (sf, once, own_turn) = match &perm {
+            CastPermissionRule::GraveyardMatching {
+                filter: obj,
+                once_each_turn: o,
+                ..
+            } => (SpellFilter::from_object(**obj).from_graveyard(), *o, false),
+            CastPermissionRule::GraveyardMatchingOwnTurn {
+                filter: obj,
+                once_each_turn: o,
+                ..
+            } => (SpellFilter::from_object(**obj).from_graveyard(), *o, true),
+            _ => return None,
+        };
+        (perm, rem_c, sf, once, own_turn)
+    } else {
+        return None;
+    };
+
+    if !spell_filter_supported_by_cast_alt_cost(&alt_filter) {
+        return None;
+    }
+
+    let mut probe = program.clone();
+    let perm_cond = if alt_own_turn
+        && matches!(
+            perm_rule,
+            CastPermissionRule::PlayLibraryTop(_)
+                | CastPermissionRule::PlayLibraryTopMatching { .. }
+        ) {
+        condition
+    } else {
+        rem_cond
+    };
+    if let Err(err) = push_conditional_static(
+        &mut probe,
+        StaticContinuousAbility::CastPermission {
+            id: ids.static_id(),
+            permission: perm_rule,
+        },
+        perm_cond,
+        vocabulary,
+    ) {
+        return Some(Err(err));
+    }
+    if let Err(err) = push_conditional_static(
+        &mut probe,
         StaticContinuousAbility::CostModifier {
             id: ids.static_id(),
-            modifier: SpellCostModifier::FirstSpellRule {
-                filter: sf,
-                own_turn_only: cond_own_turn || subj_own_turn,
-                each_player,
-                free: true,
-                pay_life_mv: false,
-                discount: 0,
+            modifier: SpellCostModifier::AlternativeForMatching {
+                filter: alt_filter,
+                mana: ManaCost::free(),
+                once_each_turn: alt_once,
+                own_turn_only: alt_own_turn,
+                pay_life_mv,
+                each_player: false,
             },
         },
         rem_cond,
         vocabulary,
-    ))
+    ) {
+        return Some(Err(err));
+    }
+    *program = probe;
+    Some(Ok(()))
 }
 
-fn try_lower_free_matching_permission<'a>(
+fn try_lower_alt_matching_permission<'a>(
     p_low: &str,
     filter: &ObjectFilterAst,
     condition: Option<&'a ConditionAst>,
     once_each_turn: bool,
+    pay_life_mv: bool,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<(SpellCostModifier, Option<&'a ConditionAst>)> {
     if !matches!(filter.controller, None | Some(ControllerRelation::You)) {
@@ -7740,6 +8577,9 @@ fn try_lower_free_matching_permission<'a>(
         stripped.zone = Some(ZoneFilter::YourHand);
     }
     let sf = lower_spell_filter(&stripped, vocabulary).ok()?;
+    if !spell_filter_supported_by_cast_alt_cost(&sf) {
+        return None;
+    }
     let (own_turn_only, rem_cond) = split_is_your_turn_condition(condition);
     Some((
         SpellCostModifier::AlternativeForMatching {
@@ -7747,9 +8587,404 @@ fn try_lower_free_matching_permission<'a>(
             mana: ManaCost::free(),
             once_each_turn,
             own_turn_only,
+            pay_life_mv,
+            each_player: false,
         },
         rem_cond,
     ))
+}
+
+fn spell_filter_supported_by_ordinal_this_turn(sf: &SpellFilter) -> bool {
+    use spellwake_engine::program::{SingleSubtype, SpellSpecialFilter, SpellTargetShape};
+    if sf.target_shape != SpellTargetShape::Any || sf.special != SpellSpecialFilter::None {
+        return false;
+    }
+    let clause_ok = |c: ObjectClause| {
+        let subtypes_ok = match c.subtypes {
+            SubtypeFilter::Any
+            | SubtypeFilter::Has(_)
+            | SubtypeFilter::Lacks(_)
+            | SubtypeFilter::AnyOf(_)
+            | SubtypeFilter::NoneOf(_) => true,
+            SubtypeFilter::AnyOfList(list)
+            | SubtypeFilter::AllOfList(list)
+            | SubtypeFilter::NoneOfList(list) => list
+                .iter()
+                .all(|item| matches!(item, SingleSubtype::Creature(_))),
+            _ => false,
+        };
+        c.exact_name.is_none()
+            && subtypes_ok
+            && c.controller == ControllerFilter::Any
+            && c.owner == ControllerFilter::Any
+            && c.source_relation == SourceRelation::Any
+            && c.combat == CombatFilter::Any
+            && c.power == PowerFilter::Any
+            && c.toughness == ToughnessFilter::Any
+            && c.mana_value == ManaValueFilter::Any
+            && c.keyword.is_none()
+            && c.forbidden_keyword.is_none()
+            && c.tapped.is_none()
+            && c.token.is_none()
+            && c.required_counter_kind.is_none()
+            && c.forbidden_counter_kind.is_none()
+            && ObjectFilterFlags::HISTORIC.union(c.flags) == ObjectFilterFlags::HISTORIC
+    };
+    match sf.object {
+        ObjectFilter::Clause(c) => clause_ok(c),
+        ObjectFilter::Either(a, b) => clause_ok(a) && clause_ok(b),
+    }
+}
+
+fn split_leading_flash_timing_prefix(p_low: &str) -> Option<(ConditionAst, &str)> {
+    for (pref, cond) in [
+        (
+            "during each opponent's end step, ",
+            ConditionAst::IsPhaseOrStep {
+                player: Some(PlayerRefAst::EachOpponent),
+                phase: "end step".to_string(),
+                first_only: false,
+            },
+        ),
+        (
+            "during an opponent's end step, ",
+            ConditionAst::IsPhaseOrStep {
+                player: Some(PlayerRefAst::AnyOpponent),
+                phase: "end step".to_string(),
+                first_only: false,
+            },
+        ),
+        (
+            "during opponents' end steps, ",
+            ConditionAst::IsPhaseOrStep {
+                player: Some(PlayerRefAst::EachOpponent),
+                phase: "end step".to_string(),
+                first_only: false,
+            },
+        ),
+        (
+            "during each opponent's turn, ",
+            ConditionAst::Not(Box::new(ConditionAst::IsYourTurn)),
+        ),
+        (
+            "during opponents' turns, ",
+            ConditionAst::Not(Box::new(ConditionAst::IsYourTurn)),
+        ),
+        ("during each of your turns, ", ConditionAst::IsYourTurn),
+        ("during your turn, ", ConditionAst::IsYourTurn),
+    ] {
+        if let Some(rest) = p_low.strip_prefix(pref) {
+            return Some((cond, rest.trim()));
+        }
+    }
+    None
+}
+
+fn parse_flash_permission_clause(
+    inner_perm: &str,
+    filter: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<(bool, SpellFilter)> {
+    let unrestricted_outer = filter.any_card || is_unrestricted_filter(filter);
+    if !unrestricted_outer {
+        return None;
+    }
+    if inner_perm == "you may cast spells as though they had flash" {
+        return Some((false, SpellFilter::any()));
+    }
+    if inner_perm == "any player may cast spells as though they had flash" {
+        return Some((true, SpellFilter::any()));
+    }
+    let (any_player, flt_raw) = if let Some(rest) = inner_perm
+        .strip_prefix("you may cast ")
+        .and_then(|s| s.strip_suffix(" as though they had flash"))
+    {
+        (false, rest.trim())
+    } else {
+        let rest = inner_perm
+            .strip_prefix("any player may cast ")
+            .and_then(|s| s.strip_suffix(" as though they had flash"))?;
+        (true, rest.trim())
+    };
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let mut parsed =
+        spellwake_oracle_compiler::filter::parse_object_filter(flt_raw, &compiler_vocab).ok()?;
+    if !any_player && parsed.controller == Some(ControllerRelation::You) {
+        parsed.controller = None;
+    } else if parsed.controller.is_some() {
+        return None;
+    }
+    let matching = lower_spell_filter(&parsed, vocabulary).ok()?;
+    if !spell_filter_supported_by_cast_alt_cost(&matching) {
+        return None;
+    }
+    Some((any_player, matching))
+}
+
+fn strip_cast_this_way_flash_suffix(p_low: &str) -> Option<&str> {
+    for suffix in [
+        ". if you cast a spell this way, you may cast it as though it had flash",
+        ". if you cast a spell this way, cast it as though it had flash",
+        ". if you cast a spell this way, it may be cast as though it had flash",
+    ] {
+        if let Some(prefix) = p_low.strip_suffix(suffix) {
+            return Some(prefix.trim());
+        }
+    }
+    None
+}
+
+fn extract_cast_this_way_flash_followup(ins: &[InstructionAst]) -> bool {
+    let [
+        InstructionAst::IfCondition {
+            condition,
+            then_body,
+        },
+    ] = ins
+    else {
+        return false;
+    };
+    let ConditionAst::PriorActionOccurred {
+        action,
+        subject_filter,
+        min_count: 1,
+    } = condition.as_ref()
+    else {
+        return false;
+    };
+    if action != "cast_this_way" {
+        return false;
+    }
+    if let Some(sf) = subject_filter.as_deref()
+        && !(sf.any_spell && is_unrestricted_filter(sf))
+    {
+        return false;
+    }
+    let inner = match then_body.as_slice() {
+        [InstructionAst::Optional(inner)] => inner.as_slice(),
+        other => other,
+    };
+    matches!(
+        inner,
+        [InstructionAst::TemporaryStatic {
+            static_ability,
+            duration: DurationAst::Instant,
+        }] if matches!(
+            static_ability.as_ref(),
+            StaticAbilityAst::GrantKeywords {
+                subject,
+                keywords,
+                condition: None,
+                paired_rule: None,
+            } if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(r)
+                    if matches!(r.trim().to_ascii_lowercase().as_str(), "it" | "that spell")
+            ) && keywords.len() == 1
+                && keywords[0].trim().eq_ignore_ascii_case("flash")
+        )
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_lower_play_or_cast_with_flash(
+    base_perm_raw: &str,
+    cast_only: bool,
+    filter: &ObjectFilterAst,
+    condition: Option<&ConditionAst>,
+    once_each_turn: bool,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<Result<(), &'static str>> {
+    let base_low = base_perm_raw
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+
+    let (perm_rule, rem_cond, flash_filter, flash_own_turn) = if let Some((perm, rem_c)) =
+        try_lower_library_top_filtered_permission(
+            &base_low,
+            cast_only,
+            filter,
+            once_each_turn,
+            condition,
+            vocabulary,
+        ) {
+        let (sf, own_turn) = match &perm {
+            CastPermissionRule::PlayLibraryTopFiltered {
+                filter: obj,
+                own_turn_only: own,
+                ..
+            } => (SpellFilter::from_object(**obj).from_own_library(), *own),
+            _ => return None,
+        };
+        (perm, rem_c, sf, own_turn)
+    } else if !once_each_turn
+        && matches!(
+            base_low.as_str(),
+            "from the top of your library"
+                | "from the top of your library at any time"
+                | "you may play lands and cast spells from the top of your library"
+                | "you may cast instant and sorcery spells from the top of your library"
+        )
+        && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+    {
+        let (own_turn, rem_c) = split_is_your_turn_condition(condition);
+        if filter.any_card || is_unrestricted_filter(filter) {
+            let perm = CastPermissionRule::PlayLibraryTop(if cast_only {
+                LibraryTopPermission::Nonland
+            } else {
+                LibraryTopPermission::All
+            });
+            (perm, rem_c, SpellFilter::any().from_own_library(), own_turn)
+        } else if filter_only_has(
+            filter,
+            FilterAllow {
+                types: true,
+                zone: true,
+                ..FilterAllow::NONE
+            },
+        ) && filter.any_types != AstCardTypeMask::LAND
+        {
+            let (perm, sf) = if filter.any_types == AstCardTypeMask::CREATURE {
+                (
+                    CastPermissionRule::PlayLibraryTop(LibraryTopPermission::Creature),
+                    SpellFilter::creature().from_own_library(),
+                )
+            } else if filter.any_types == AstCardTypeMask::ARTIFACT {
+                (
+                    CastPermissionRule::PlayLibraryTop(LibraryTopPermission::Artifact),
+                    SpellFilter::of_type(CardType::Artifact).from_own_library(),
+                )
+            } else if filter.any_types == AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY) {
+                (
+                    CastPermissionRule::PlayLibraryTop(LibraryTopPermission::InstantOrSorcery),
+                    SpellFilter::instant_or_sorcery().from_own_library(),
+                )
+            } else {
+                let mut inner = filter.clone();
+                inner.zone = None;
+                let obj = lower_object_filter(&inner, vocabulary).ok()?;
+                (
+                    CastPermissionRule::PlayLibraryTopMatching {
+                        lands_allowed: !cast_only,
+                        filter: Box::new(obj),
+                    },
+                    SpellFilter::from_object(obj).from_own_library(),
+                )
+            };
+            (perm, rem_c, sf, own_turn)
+        } else {
+            let mut inner = filter.clone();
+            inner.zone = None;
+            let obj = lower_object_filter(&inner, vocabulary).ok()?;
+            (
+                CastPermissionRule::PlayLibraryTopMatching {
+                    lands_allowed: !cast_only,
+                    filter: Box::new(obj),
+                },
+                rem_c,
+                SpellFilter::from_object(obj).from_own_library(),
+                own_turn,
+            )
+        }
+    } else if !once_each_turn
+        && !cast_only
+        && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+        && (filter.any_card || is_unrestricted_filter(filter))
+        && let Some(flt_raw) = base_low
+            .strip_prefix("you may play lands and cast ")
+            .and_then(|rest| rest.strip_suffix(" from the top of your library"))
+        && let Some(obj) = parse_library_top_cast_filter(flt_raw.trim(), vocabulary)
+    {
+        let (own_turn, rem_c) = split_is_your_turn_condition(condition);
+        (
+            CastPermissionRule::PlayLibraryTopMatching {
+                lands_allowed: true,
+                filter: Box::new(obj),
+            },
+            rem_c,
+            SpellFilter::from_object(obj).from_own_library(),
+            own_turn,
+        )
+    } else if !once_each_turn
+        && matches!(filter.zone, None | Some(ZoneFilter::YourLibrary))
+        && (filter.any_card || is_unrestricted_filter(filter))
+        && let Some(head) = base_low
+            .strip_suffix(" from the top of your library")
+            .or_else(|| base_low.strip_suffix(" from the top of your library at any time"))
+        && !head.contains("without paying")
+        && !head.contains(" by ")
+        && let Some((lands_allowed, obj, false)) = parse_play_or_cast_clause(head, vocabulary)
+    {
+        let (own_turn, rem_c) = split_is_your_turn_condition(condition);
+        (
+            CastPermissionRule::PlayLibraryTopMatching {
+                lands_allowed,
+                filter: Box::new(obj),
+            },
+            rem_c,
+            SpellFilter::from_object(obj).from_own_library(),
+            own_turn,
+        )
+    } else {
+        return None;
+    };
+
+    if !spell_filter_supported_by_cast_alt_cost(&flash_filter) {
+        return None;
+    }
+
+    let mut probe = program.clone();
+    let perm_cond = if flash_own_turn
+        && matches!(
+            perm_rule,
+            CastPermissionRule::PlayLibraryTop(_)
+                | CastPermissionRule::PlayLibraryTopMatching { .. }
+        ) {
+        condition
+    } else {
+        rem_cond
+    };
+    if let Err(err) = push_conditional_static(
+        &mut probe,
+        StaticContinuousAbility::CastPermission {
+            id: ids.static_id(),
+            permission: perm_rule,
+        },
+        perm_cond,
+        vocabulary,
+    ) {
+        return Some(Err(err));
+    }
+    let flash_cond_owned;
+    let flash_cond = if flash_own_turn {
+        flash_cond_owned = match rem_cond {
+            Some(c) => ConditionAst::And(Box::new(ConditionAst::IsYourTurn), Box::new(c.clone())),
+            None => ConditionAst::IsYourTurn,
+        };
+        Some(&flash_cond_owned)
+    } else {
+        rem_cond
+    };
+    if let Err(err) = push_conditional_static(
+        &mut probe,
+        StaticContinuousAbility::CastPermission {
+            id: ids.static_id(),
+            permission: CastPermissionRule::Flash {
+                any_player: false,
+                matching: flash_filter,
+            },
+        },
+        flash_cond,
+        vocabulary,
+    ) {
+        return Some(Err(err));
+    }
+    *program = probe;
+    Some(Ok(()))
 }
 
 fn is_valid_cast_extra_cost(cost: &ExtraActivationCost) -> bool {
@@ -9114,6 +10349,144 @@ fn lower_paired_static(
                         id: ids.static_id(),
                         selector: sel,
                         parts: StaticParts(vec![StaticPart::BlockingRestriction(br.clone())]),
+                    },
+                )?;
+            }
+            Ok(())
+        }
+        StaticAbilityAst::ContinuousLayerEffect {
+            set_types,
+            additive_types,
+            base_pt,
+            set_colors,
+            grant_keywords,
+            lose_keywords,
+            lose_all_abilities,
+            condition,
+            ..
+        } => {
+            let entry_tap = program.permanent().and_then(|p| p.entry_tap);
+            let mut parts = Vec::new();
+            let mut has_color_part = false;
+            if let Some(desc) = set_types {
+                let type_parts = parse_static_type_and_color_parts_with_entry(
+                    desc,
+                    *additive_types,
+                    entry_tap,
+                    vocabulary,
+                )?;
+                if type_parts
+                    .iter()
+                    .any(|part| matches!(part, StaticPart::Color(_)))
+                {
+                    has_color_part = true;
+                }
+                parts.extend(type_parts);
+            }
+            if let Some(color_str) = set_colors {
+                if has_color_part {
+                    return Err("oracle:unsupported-layer-color");
+                }
+                let mut colors = BTreeSet::new();
+                let mut saw_colorless = false;
+                for raw_tok in color_str
+                    .replace(" and ", " ")
+                    .replace(',', " ")
+                    .split_whitespace()
+                {
+                    match raw_tok.to_ascii_lowercase().as_str() {
+                        "white" => {
+                            colors.insert(Color::White);
+                        }
+                        "blue" => {
+                            colors.insert(Color::Blue);
+                        }
+                        "black" => {
+                            colors.insert(Color::Black);
+                        }
+                        "red" => {
+                            colors.insert(Color::Red);
+                        }
+                        "green" => {
+                            colors.insert(Color::Green);
+                        }
+                        "colorless" => {
+                            saw_colorless = true;
+                        }
+                        "a" | "an" => {}
+                        _ => return Err("oracle:unsupported-layer-color"),
+                    }
+                }
+                if colors.is_empty() && !saw_colorless {
+                    return Err("oracle:unsupported-layer-color");
+                }
+                parts.push(StaticPart::Color(ColorOperation::Set(
+                    StaticColorOperand::Literal(colors),
+                )));
+            }
+            if *lose_all_abilities || !grant_keywords.is_empty() || !lose_keywords.is_empty() {
+                let (special_parts, rem_kws) = partition_static_keyword_grants(grant_keywords, ids);
+                parts.extend(special_parts);
+                if *lose_all_abilities || !rem_kws.is_empty() || !lose_keywords.is_empty() {
+                    let mut change = if !rem_kws.is_empty() {
+                        lower_ability_change_with_ids(&rem_kws, vocabulary, ids)?
+                    } else {
+                        AbilityChange::default()
+                    };
+                    if *lose_all_abilities {
+                        change.removal = Some(AbilityRemoval::All);
+                    }
+                    if !lose_keywords.is_empty() {
+                        change
+                            .suppressed_keywords
+                            .extend(lower_keyword_list_with_vocab(lose_keywords, vocabulary)?);
+                    }
+                    parts.push(StaticPart::Abilities(change));
+                }
+            }
+            if let Some((p_raw, t_raw)) = base_pt {
+                let p: i64 = p_raw
+                    .trim()
+                    .parse()
+                    .map_err(|_| "oracle:unsupported-layer-pt")?;
+                let t: i64 = t_raw
+                    .trim()
+                    .parse()
+                    .map_err(|_| "oracle:unsupported-layer-pt")?;
+                parts.push(StaticPart::SetPT(NumericPair {
+                    power: NumericExpression::Literal(p.into()),
+                    toughness: NumericExpression::Literal(t.into()),
+                }));
+            }
+            if parts.is_empty() {
+                return Err("oracle:empty-layer-effect");
+            }
+            let extra_sc = match condition {
+                Some(cond) => Some(
+                    lower_static_source_condition_ext(cond, vocabulary)
+                        .ok_or("oracle:unsupported-static-cond")?,
+                ),
+                None => None,
+            };
+            for sel in outer_selectors {
+                let mut sel = sel.clone();
+                if let Some(sc) = &extra_sc {
+                    sel.source_condition = Some(match sel.source_condition.take() {
+                        Some(prev) => {
+                            spellwake_engine::characteristics::StaticSourceCondition::And(
+                                Box::new(prev),
+                                Box::new(sc.clone()),
+                            )
+                        }
+                        None => sc.clone(),
+                    });
+                }
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector: sel,
+                        parts: StaticParts(parts.clone()),
                     },
                 )?;
             }
@@ -10575,7 +11948,23 @@ fn emit_granted_ability_face_for_selectors(
         push_granted_keyword_strings(&mut base_parts, &kw_names, vocabulary, ids)?;
     }
     let mut conditional_entries: Vec<(ConditionAst, Vec<StaticPart>)> = Vec::new();
+    let mut untap_during_other_players = false;
     for st in &compiled_face.statics {
+        if let StaticAbilityAst::RuleOrCombatRestriction {
+            subject,
+            rule,
+            filter: None,
+            condition: None,
+        } = st
+            && rule == "UntapEachOtherUntapStep"
+            && matches!(subject.as_deref(), None | Some(SubjectRefAst::SelfObject))
+            && selectors
+                .iter()
+                .all(|sel| selector_guaranteed_source_controller(sel, program))
+        {
+            untap_during_other_players = true;
+            continue;
+        }
         if let Some((uncond_st, cond)) = strip_granted_static_condition(st) {
             let mut cond_parts = Vec::new();
             lower_granted_static_parts(&uncond_st, vocabulary, ids, &mut cond_parts)?;
@@ -10590,10 +11979,21 @@ fn emit_granted_ability_face_for_selectors(
     for ability in &compiled_face.abilities {
         base_parts.push(lower_single_granted_ability(ability, vocabulary, ids)?);
     }
-    if base_parts.is_empty() && conditional_entries.is_empty() {
+    if base_parts.is_empty() && conditional_entries.is_empty() && !untap_during_other_players {
         return Err("oracle:unsupported-grant-ability-text");
     }
     for selector in selectors {
+        if untap_during_other_players {
+            push_static_ability(
+                program,
+                StaticContinuousAbility::UntapRule {
+                    id: ids.static_id(),
+                    rule: StaticUntapRule::UntapMatchingDuringOtherPlayersUntap(Box::new(
+                        selector.clone(),
+                    )),
+                },
+            )?;
+        }
         for part in &base_parts {
             push_static_ability(
                 program,
@@ -12082,6 +13482,10 @@ pub(super) fn lower_blocking_restriction(rule: &str) -> Option<BlockingRestricti
         | "must_be_blocked_if_able"
         | "mustbeblocked" => Some(BlockingRestriction::MustBeBlocked),
         "allableblock" => Some(BlockingRestriction::AllDefendingCreaturesMustBlock),
+        "blocks each combat if able"
+        | "block each combat if able"
+        | "blockseachcombatifable"
+        | "blocks_each_combat_if_able" => Some(BlockingRestriction::MustBlockEachCombatIfAble),
         "minblockers:three or more creatures" => Some(BlockingRestriction::AtLeastThreeBlockers),
         other => {
             if parse_block_additional_count(other) == Some(1) {
@@ -13167,6 +14571,37 @@ fn parse_activated_cost_anaphora(
             ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::permanent())),
             PlayerRelation::AnyParticipant,
         )),
+        "activated abilities of enchanted creature"
+        | "activated abilities of equipped creature" => Some((
+            ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::Clause(
+                ObjectClause::creature().attached_to_self(),
+            ))),
+            PlayerRelation::AnyParticipant,
+        )),
+        "activated abilities of enchanted permanent"
+        | "activated abilities of equipped permanent" => Some((
+            ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::Clause(
+                ObjectClause::permanent().attached_to_self(),
+            ))),
+            PlayerRelation::AnyParticipant,
+        )),
+        "activated abilities of ~"
+        | "activated abilities of this creature"
+        | "activated abilities of this permanent"
+        | "activated abilities of this artifact"
+        | "activated abilities of this enchantment" => Some((
+            ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::self_object())),
+            PlayerRelation::AnyParticipant,
+        )),
+        "activated abilities of sources with the chosen name"
+        | "activated abilities of sources with the chosen name unless they're mana abilities" => {
+            Some((
+                ActivatedCostScope::PermanentFilter(Box::new(
+                    ObjectFilter::any().with_flags(ObjectFilterFlags::MATCHES_CHOSEN_NAME),
+                )),
+                PlayerRelation::AnyParticipant,
+            ))
+        }
         "activated abilities of artifacts" => Some((
             ActivatedCostScope::PermanentFilter(Box::new(ObjectFilter::artifact())),
             PlayerRelation::AnyParticipant,
@@ -13188,10 +14623,88 @@ fn parse_activated_cost_anaphora(
         "activated abilities" | "activated abilities that aren't mana abilities" => {
             Some((ActivatedCostScope::Any, PlayerRelation::AnyParticipant))
         }
+        "loyalty abilities of planeswalkers you control" | "loyalty abilities you activate" => {
+            Some((ActivatedCostScope::Loyalty, PlayerRelation::Controller))
+        }
+        "loyalty abilities of planeswalkers your opponents control"
+        | "loyalty abilities of planeswalkers opponents control"
+        | "loyalty abilities your opponents activate"
+        | "loyalty abilities opponents activate" => {
+            Some((ActivatedCostScope::Loyalty, PlayerRelation::Opponent))
+        }
+        "loyalty abilities"
+        | "loyalty abilities of planeswalkers"
+        | "planeswalkers' loyalty abilities"
+        | "loyalty abilities players activate" => {
+            Some((ActivatedCostScope::Loyalty, PlayerRelation::AnyParticipant))
+        }
         _ => None,
     };
     if exact.is_some() {
         return exact;
+    }
+    if let Some((actor_part, target_part)) = raw_low
+        .split_once(" that target ")
+        .or_else(|| raw_low.split_once(" that targets "))
+    {
+        let controller_opt = match actor_part.trim() {
+            "abilities you activate" | "activated abilities you activate" => {
+                Some(PlayerRelation::Controller)
+            }
+            "abilities your opponents activate"
+            | "abilities opponents activate"
+            | "activated abilities your opponents activate"
+            | "activated abilities opponents activate" => Some(PlayerRelation::Opponent),
+            "abilities"
+            | "activated abilities"
+            | "abilities players activate"
+            | "activated abilities players activate" => Some(PlayerRelation::AnyParticipant),
+            _ => None,
+        };
+        if let Some(controller) = controller_opt {
+            let target_clean = target_part.trim().trim_end_matches('.').trim();
+            let obj_opt = match target_clean {
+                "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment"
+                | "this planeswalker" => Some(ObjectFilter::self_object()),
+                "enchanted creature" | "equipped creature" => Some(ObjectFilter::Clause(
+                    ObjectClause::creature().attached_to_self(),
+                )),
+                "enchanted permanent" | "equipped permanent" => Some(ObjectFilter::Clause(
+                    ObjectClause::permanent().attached_to_self(),
+                )),
+                other
+                    if !other.is_empty()
+                        && !other.contains("card")
+                        && !other.contains("graveyard")
+                        && !other.contains("hand")
+                        && !other.contains("exile")
+                        && !other.contains("spell")
+                        && !other.contains("player")
+                        && !other.starts_with("you")
+                        && !other.contains(" or you")
+                        && !other.contains("you or ") =>
+                {
+                    let compiler_vocab = cached_compiler_vocab(vocabulary);
+                    spellwake_oracle_compiler::filter::parse_object_filter(other, &compiler_vocab)
+                        .ok()
+                        .filter(|parsed| {
+                            parsed.zone.is_none()
+                                && parsed.owner.is_none()
+                                && !parsed.any_card
+                                && !parsed.any_spell
+                                && (!parsed.any_types.is_empty()
+                                    || !parsed.subtypes.is_empty()
+                                    || parsed.any_permanent
+                                    || parsed.token.is_some())
+                        })
+                        .and_then(|parsed| lower_object_filter(&parsed, vocabulary).ok())
+                }
+                _ => None,
+            };
+            if let Some(obj) = obj_opt {
+                return Some((ActivatedCostScope::Targeting(Box::new(obj)), controller));
+            }
+        }
     }
     if let Some(rest) = raw_low.strip_prefix("activated abilities of ") {
         let rest = rest.trim();
@@ -13204,7 +14717,6 @@ fn parse_activated_cost_anaphora(
             && !rest.contains("target")
             && !rest.contains("unless")
             && !rest.contains("first")
-            && !rest.contains("other ")
         {
             let compiler_vocab = cached_compiler_vocab(vocabulary);
             if let Ok(parsed) =
@@ -14011,20 +15523,137 @@ fn lower_static_value_expr(
                         },
                     ));
                 }
-                "life you gained this turn" => {
+                "life you gained this turn"
+                | "1 life you gained this turn"
+                | "life you've gained this turn"
+                | "1 life you've gained this turn" => {
                     return Ok(ValueExpr::PlayerStat(
                         PlayerStatExpr::ControllerLifeGainedThisTurn,
                     ));
                 }
-                "life you lost this turn" => {
+                "life you lost this turn"
+                | "1 life you lost this turn"
+                | "life you've lost this turn"
+                | "1 life you've lost this turn" => {
                     return Ok(ValueExpr::PlayerStat(
                         PlayerStatExpr::ControllerLifeLostThisTurn,
+                    ));
+                }
+                "1 life your opponents have lost this turn"
+                | "life your opponents have lost this turn"
+                | "1 life your opponents lost this turn"
+                | "life your opponents lost this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::OpponentsLifeLostThisTurn,
                     ));
                 }
                 "card you've discarded this turn" | "card you discarded this turn" => {
                     return Ok(ValueExpr::PlayerStat(
                         PlayerStatExpr::ControllerDiscardedThisTurn,
                     ));
+                }
+                "card that left your graveyard this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::CardsLeftGraveyardThisTurn,
+                    ));
+                }
+                "card put into your graveyard this turn"
+                | "card that entered your graveyard this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::CardsEnteredGraveyardThisTurn,
+                    ));
+                }
+                "creature that died this turn" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::CreaturesDiedThisTurn));
+                }
+                "creature you control that died this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::ControlledCreatureDiedThisTurn,
+                    ));
+                }
+                "permanent you sacrificed this turn" | "permanent you've sacrificed this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::ControllerSacrificedThisTurn,
+                    ));
+                }
+                "permanent that left the battlefield under your control this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::PermanentLeftBattlefieldThisTurn,
+                    ));
+                }
+                "nonland permanent that left the battlefield under your control this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn,
+                    ));
+                }
+                "token you created this turn" | "token you've created this turn" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::CreatedTokensThisTurn));
+                }
+                "land you played this turn" | "land you've played this turn" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn));
+                }
+                "land that entered the battlefield under your control this turn"
+                | "land that entered under your control this turn" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::LandsEnteredThisTurn(
+                        ResolvingPlayer::Controller,
+                    )));
+                }
+                "noncreature spell you've cast this turn"
+                | "noncreature spell you cast this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::CastNoncreatureSpellsThisTurn,
+                    ));
+                }
+                "spell you've cast from your hand this turn"
+                | "spell you cast from your hand this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::CastSpellsFromHandThisTurn,
+                    ));
+                }
+                "other spell you've cast this turn" | "other spell you cast this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::OtherSpellsCastThisTurn,
+                    ));
+                }
+                "instant and sorcery spell you've cast this turn"
+                | "instant or sorcery spell you've cast this turn"
+                | "instant and sorcery spell you cast this turn"
+                | "instant or sorcery spell you cast this turn" => {
+                    return Ok(ValueExpr::Add(
+                        Box::new(ValueExpr::PlayerStat(
+                            PlayerStatExpr::CastSpellTypeThisTurn(CardType::Instant),
+                        )),
+                        Box::new(ValueExpr::PlayerStat(
+                            PlayerStatExpr::CastSpellTypeThisTurn(CardType::Sorcery),
+                        )),
+                    ));
+                }
+                "time you've rolled a die this turn"
+                | "die you've rolled this turn"
+                | "die you rolled this turn" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::DiceRolledThisTurn));
+                }
+                "dungeon you've completed" | "dungeon you completed" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::CompletedDungeons));
+                }
+                "creature attacking you" => {
+                    return Ok(ValueExpr::CountAttackingController);
+                }
+                "other creature you control with a +1/+1 counter on it" => {
+                    return Ok(ValueExpr::count_battlefield(ObjectFilter::Clause(
+                        ObjectClause::creature()
+                            .controlled()
+                            .other_than_ability_source()
+                            .with_flags(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER),
+                    )));
+                }
+                "other creature you control with a counter on it" => {
+                    return Ok(ValueExpr::count_battlefield(ObjectFilter::Clause(
+                        ObjectClause::creature()
+                            .controlled()
+                            .other_than_ability_source()
+                            .with_flags(ObjectFilterFlags::WITH_ANY_COUNTER),
+                    )));
                 }
                 "card in your opponents' hands"
                 | "card in opponents' hands"
@@ -14353,6 +15982,19 @@ fn lower_numeric_expr_with_context(
                 return Ok(NumericExpression::AttachedAurasAndEquipment {
                     multiplier: 1.into(),
                 });
+            }
+            if let Some(mana_kind) = match norm.as_str() {
+                "unspent white mana you have" => Some(ManaType::White),
+                "unspent blue mana you have" => Some(ManaType::Blue),
+                "unspent black mana you have" => Some(ManaType::Black),
+                "unspent red mana you have" => Some(ManaType::Red),
+                "unspent green mana you have" => Some(ManaType::Green),
+                "unspent colorless mana you have" => Some(ManaType::Colourless),
+                _ => None,
+            } {
+                return Ok(NumericExpression::PlayerStat(StaticPlayerStat::ManaInPool(
+                    mana_kind,
+                )));
             }
             if let Some(clause) = lower_other_controlled_creature_clause(&norm) {
                 return Ok(NumericExpression::Eval(Box::new(

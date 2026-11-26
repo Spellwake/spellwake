@@ -3225,6 +3225,7 @@ impl EffectWindow {
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
             | Instruction::AdjustPlayersLife { .. }
+            | Instruction::SetPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -3519,10 +3520,14 @@ impl EffectWindow {
             | Instruction::DrawGame
             | Instruction::TurnFaceUpSubject { .. }
             | Instruction::TurnFaceDownSubject { .. }
+            | Instruction::TransformSubject { .. }
             | Instruction::EmpowerJace { .. }
             | Instruction::AddOneOfEachCounterKindOnSubject { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::MoveLastMovedFiltered { .. }
+            | Instruction::CounterMatchingStackObjects { .. }
+            | Instruction::ReturnLinkedExile { .. }
+            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::RegenerateSubject { .. }

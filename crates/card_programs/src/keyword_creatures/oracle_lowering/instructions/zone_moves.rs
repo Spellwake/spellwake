@@ -257,32 +257,45 @@ pub(super) fn lower_zone_moves_instruction(
             _ => Err("oracle:unsupported-destroy"),
         },
         InstructionAst::ModifyPreviousDestroyNoRegen => {
-            match builder.instructions.last_mut() {
-                Some(last @ Instruction::DestroyTarget) => {
-                    *last = Instruction::DestroyTargetWithoutRegeneration;
+            if let Some(last) = builder.instructions.last_mut()
+                && try_upgrade_destroy_no_regen(last)
+            {
+                return Ok(());
+            }
+            if let Some(last) = builder.instructions.last()
+                && is_damage_instruction_for_no_regen(last)
+            {
+                if in_trigger || self_pronoun_valid {
+                    builder.instructions.push(Instruction::ChangeGroup {
+                        group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+                            ObjectClause {
+                                any_types: CardTypeMask::CREATURE,
+                                flags: ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN,
+                                ..ObjectClause::any()
+                            },
+                        ))),
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                            BlockingRestriction::CannotBeRegenerated,
+                        )]),
+                        duration: ResolvedDuration::UntilEndOfTurn,
+                    });
                     return Ok(());
                 }
-                Some(Instruction::DestroyCapturedCombatCreature { no_regeneration })
-                | Some(Instruction::DestroySubject {
-                    no_regeneration, ..
-                }) => {
-                    *no_regeneration = true;
+                if matches!(
+                    last,
+                    Instruction::Damage { .. } | Instruction::DamageAmount(_)
+                ) && is_permanent_body_target(builder.target)
+                {
+                    builder
+                        .instructions
+                        .push(Instruction::CreateContinuousEffect {
+                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                                BlockingRestriction::CannotBeRegenerated,
+                            )]),
+                            duration: ResolvedDuration::UntilEndOfTurn,
+                        });
                     return Ok(());
                 }
-                Some(Instruction::DestroyChosen {
-                    allow_regeneration, ..
-                }) => {
-                    *allow_regeneration = false;
-                    return Ok(());
-                }
-                Some(Instruction::DestroyGroup(filter)) => {
-                    let cloned = filter.clone();
-                    if let Some(last) = builder.instructions.last_mut() {
-                        *last = Instruction::DestroyGroupWithoutRegeneration(cloned);
-                        return Ok(());
-                    }
-                }
-                _ => {}
             }
             Err("oracle:unsupported-no-regen-modifier")
         }
@@ -2776,6 +2789,24 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                            && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                            && from_zone
+                                .as_deref()
+                                .is_none_or(|z| z.to_ascii_lowercase().contains("exile"))
+                            && (in_trigger || self_pronoun_valid) =>
+                    {
+                        return lower_linked_exile_group_move(
+                            f,
+                            SubjectDestination::Library(pl),
+                            false,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            "oracle:unsupported-return-dest",
+                        );
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                         if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
                             && from_zone
                                 .as_deref()
@@ -3044,8 +3075,13 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: count @ (TargetCountAst::ChosenX | TargetCountAst::AnyNumber),
-                    } if *count != TargetCountAst::ChosenX || !in_trigger => {
+                        count:
+                            count @ (TargetCountAst::ChosenX
+                            | TargetCountAst::UpToX
+                            | TargetCountAst::AnyNumber),
+                    } if !matches!(count, TargetCountAst::ChosenX | TargetCountAst::UpToX)
+                        || !in_trigger =>
+                    {
                         let gy_zone = filter.zone.or_else(|| {
                             from_zone.as_deref().and_then(|z| {
                                 let zl = z.to_ascii_lowercase();
@@ -3083,6 +3119,8 @@ pub(super) fn lower_zone_moves_instruction(
                                 builder.graveyard_target_bounds = Some((0, usize::MAX));
                                 if *count == TargetCountAst::ChosenX {
                                     builder.x_target_count = true;
+                                } else if *count == TargetCountAst::UpToX {
+                                    builder.up_to_x_target_count = true;
                                 }
                                 builder
                                     .instructions
@@ -3095,6 +3133,8 @@ pub(super) fn lower_zone_moves_instruction(
                                 builder.graveyard_target_bounds = Some((0, usize::MAX));
                                 if *count == TargetCountAst::ChosenX {
                                     builder.x_target_count = true;
+                                } else if *count == TargetCountAst::UpToX {
+                                    builder.up_to_x_target_count = true;
                                 }
                                 builder.instructions.push(Instruction::MoveSubject {
                                     subject: MoveSubjectRef::TargetObject,
@@ -3107,6 +3147,8 @@ pub(super) fn lower_zone_moves_instruction(
                             builder.bind_target(bt)?;
                             if *count == TargetCountAst::ChosenX {
                                 builder.x_target_count = true;
+                            } else if *count == TargetCountAst::UpToX {
+                                builder.up_to_x_target_count = true;
                             }
                             builder
                                 .instructions
@@ -3148,6 +3190,19 @@ pub(super) fn lower_zone_moves_instruction(
                         });
                         Ok(())
                     }
+                    SubjectRefAst::Anaphora(raw)
+                        if is_linked_exile_anaphora(raw)
+                            && (in_trigger || self_pronoun_valid)
+                            && builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions) =>
+                    {
+                        builder.instructions.push(Instruction::ReturnLinkedExile {
+                            destination: SubjectDestination::Hand,
+                            only_first: is_singular_linked_exile_anaphora(raw),
+                        });
+                        Ok(())
+                    }
                     SubjectRefAst::Anaphora(_) if in_trigger => {
                         builder.instructions.push(Instruction::MoveSubject {
                             subject: MoveSubjectRef::TriggeringObject,
@@ -3166,6 +3221,11 @@ pub(super) fn lower_zone_moves_instruction(
                             ObjectFilter::any()
                         } else {
                             lower_object_filter(&inner, vocabulary)?
+                        };
+                        let obj = if in_trigger || self_pronoun_valid {
+                            obj.with_flags(ObjectFilterFlags::EXILED_WITH_SELF)
+                        } else {
+                            obj
                         };
                         builder
                             .instructions
@@ -3345,6 +3405,24 @@ pub(super) fn lower_zone_moves_instruction(
                         )? =>
                     {
                         Ok(())
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                            && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                            && from_zone
+                                .as_deref()
+                                .is_none_or(|z| z.to_ascii_lowercase().contains("exile"))
+                            && (in_trigger || self_pronoun_valid) =>
+                    {
+                        lower_linked_exile_group_move(
+                            f,
+                            SubjectDestination::Hand,
+                            false,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            "oracle:unsupported-return-hand",
+                        )
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                         if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
@@ -3701,32 +3779,22 @@ pub(super) fn lower_zone_moves_instruction(
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
-                        if !is_transformed
-                            && counter.is_none()
-                            && !attach_to_self
-                            && !bf_flags.attacking
-                            && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
                             && matches!(f.zone, None | Some(ZoneFilter::Exile))
                             && from_zone
                                 .as_deref()
                                 .is_none_or(|z| z.to_ascii_lowercase().contains("exile"))
-                            && builder.target == BodyTarget::None
                             && (in_trigger || self_pronoun_valid) =>
                     {
-                        let mut inner = f.as_ref().clone();
-                        inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
-                        inner.zone = None;
-                        if !is_unrestricted_filter(&inner) {
-                            return Err("oracle:unsupported-return-bf");
-                        }
-                        builder
-                            .instructions
-                            .push(Instruction::ReturnCardsExiledWithLinkExt {
-                                group: spellwake_engine::program::LinkedExileGroup::SourceLinked,
-                                under_controller_control: !bf_flags.under_owner_control,
-                                tapped: enters_tapped,
-                            });
-                        Ok(())
+                        lower_linked_exile_group_move(
+                            f,
+                            bf_dest,
+                            false,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            "oracle:unsupported-return-bf",
+                        )
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                         if !is_transformed
@@ -3784,7 +3852,19 @@ pub(super) fn lower_zone_moves_instruction(
                         });
                         Ok(())
                     }
-                    SubjectRefAst::Anaphora(_) => {
+                    SubjectRefAst::Anaphora(raw) => {
+                        if is_linked_exile_anaphora(raw)
+                            && (in_trigger || self_pronoun_valid)
+                            && builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions)
+                        {
+                            builder.instructions.push(Instruction::ReturnLinkedExile {
+                                destination: bf_dest,
+                                only_first: is_singular_linked_exile_anaphora(raw),
+                            });
+                            return Ok(());
+                        }
                         let subj_ref = if builder.target != BodyTarget::None
                             && !matches!(
                                 builder.target,
@@ -3930,6 +4010,51 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                     _ => Err("oracle:unsupported-return-bf"),
                 }
+            } else if !has_bf_only_mods
+                && matches!(
+                    dest.as_str(),
+                    "graveyard"
+                        | "your graveyard"
+                        | "owner's graveyard"
+                        | "its owner's graveyard"
+                        | "their owner's graveyard"
+                        | "their owners' graveyards"
+                )
+            {
+                match subject.as_ref() {
+                    SubjectRefAst::Anaphora(raw)
+                        if is_linked_exile_anaphora(raw)
+                            && (in_trigger || self_pronoun_valid)
+                            && builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions) =>
+                    {
+                        builder.instructions.push(Instruction::ReturnLinkedExile {
+                            destination: SubjectDestination::Graveyard,
+                            only_first: is_singular_linked_exile_anaphora(raw),
+                        });
+                        Ok(())
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                            && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                            && from_zone
+                                .as_deref()
+                                .is_none_or(|z| z.to_ascii_lowercase().contains("exile"))
+                            && (in_trigger || self_pronoun_valid) =>
+                    {
+                        lower_linked_exile_group_move(
+                            f,
+                            SubjectDestination::Graveyard,
+                            false,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            "oracle:unsupported-return-dest",
+                        )
+                    }
+                    _ => Err("oracle:unsupported-return-dest"),
+                }
             } else {
                 Err("oracle:unsupported-return-dest")
             }
@@ -4005,7 +4130,27 @@ pub(super) fn lower_zone_moves_instruction(
                     Some(ZoneFilter::YourGraveyard | ZoneFilter::ThatPlayerGraveyard) => {
                         Some(SourceZoneFilter::Graveyard)
                     }
+                    Some(ZoneFilter::TargetPlayerGraveyard)
+                        if *actor_player == PlayerRefAst::TargetPlayer =>
+                    {
+                        Some(SourceZoneFilter::Graveyard)
+                    }
+                    Some(ZoneFilter::TargetOpponentGraveyard)
+                        if *actor_player == PlayerRefAst::TargetOpponent =>
+                    {
+                        Some(SourceZoneFilter::Graveyard)
+                    }
                     Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand) => {
+                        Some(SourceZoneFilter::Hand)
+                    }
+                    Some(ZoneFilter::TargetPlayerHand)
+                        if *actor_player == PlayerRefAst::TargetPlayer =>
+                    {
+                        Some(SourceZoneFilter::Hand)
+                    }
+                    Some(ZoneFilter::TargetOpponentHand)
+                        if *actor_player == PlayerRefAst::TargetOpponent =>
+                    {
                         Some(SourceZoneFilter::Hand)
                     }
                     Some(ZoneFilter::YourHandOrGraveyard) => {
@@ -4042,6 +4187,50 @@ pub(super) fn lower_zone_moves_instruction(
                 }
             };
             match subject.as_ref() {
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                    if count.is_none()
+                        && !*up_to
+                        && !*any_number
+                        && *actor_player == PlayerRefAst::EachPlayer
+                        && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                        && from_zone
+                            .as_deref()
+                            .is_none_or(|z| z.to_ascii_lowercase().contains("exile"))
+                        && (in_trigger || self_pronoun_valid) =>
+                {
+                    let owner_dest = match destination {
+                        SubjectDestination::Battlefield {
+                            tapped,
+                            attacking,
+                            transformed,
+                            with_counter,
+                            attach_to_self,
+                            ..
+                        } => SubjectDestination::Battlefield {
+                            tapped,
+                            attacking,
+                            transformed,
+                            under_owner_control: true,
+                            with_counter,
+                            attach_to_self,
+                        },
+                        other => other,
+                    };
+                    lower_linked_exile_group_move(
+                        f,
+                        owner_dest,
+                        true,
+                        builder,
+                        vocabulary,
+                        in_trigger,
+                        if to_hand {
+                            "oracle:unsupported-return-hand"
+                        } else {
+                            "oracle:unsupported-return-bf"
+                        },
+                    )
+                }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                     if count.is_none()
                         && !*up_to
@@ -4358,6 +4547,18 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw) => {
+                        if is_linked_exile_anaphora(raw)
+                            && (in_trigger || self_pronoun_valid)
+                            && builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions)
+                        {
+                            builder.instructions.push(Instruction::ReturnLinkedExile {
+                                destination: bf_dest,
+                                only_first: is_singular_linked_exile_anaphora(raw),
+                            });
+                            return Ok(());
+                        }
                         let subj_ref = if builder.target != BodyTarget::None
                             && !matches!(
                                 builder.target,
@@ -4411,28 +4612,19 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
-                        if !attacking
-                            && !bf_flags.transformed
-                            && !bf_flags.attach_to_self
-                            && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
                             && matches!(f.zone, None | Some(ZoneFilter::Exile))
-                            && builder.target == BodyTarget::None
                             && (in_trigger || self_pronoun_valid) =>
                     {
-                        let mut inner = f.as_ref().clone();
-                        inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
-                        inner.zone = None;
-                        if !filter_only_has(&inner, FilterAllow::NONE) {
-                            return Err("oracle:unsupported-move-zone");
-                        }
-                        builder
-                            .instructions
-                            .push(Instruction::ReturnCardsExiledWithLinkExt {
-                                group: spellwake_engine::program::LinkedExileGroup::SourceLinked,
-                                under_controller_control: !bf_flags.under_owner_control,
-                                tapped: enters_tapped,
-                            });
-                        return Ok(());
+                        return lower_linked_exile_group_move(
+                            f,
+                            bf_dest,
+                            false,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            "oracle:unsupported-move-zone",
+                        );
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                         if !bf_flags.under_owner_control
@@ -5508,6 +5700,23 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                        if pd != PublicZoneDestination::Exile
+                            && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                            && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                            && (in_trigger || self_pronoun_valid)
+                            && let Some(sd) = subj_dest_from_pd(pd) =>
+                    {
+                        return lower_linked_exile_group_move(
+                            f,
+                            sd,
+                            false,
+                            builder,
+                            vocabulary,
+                            in_trigger,
+                            "oracle:unsupported-move-zone",
+                        );
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f)
                         if pd == PublicZoneDestination::Hand
                             && classify_graveyard_group(f.zone, None).is_some() =>
                     {
@@ -5590,6 +5799,21 @@ pub(super) fn lower_zone_moves_instruction(
                         builder.instructions.push(Instruction::MoveGroup {
                             group: Box::new(group_obj),
                             destination: pd,
+                        });
+                        return Ok(());
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if pd != PublicZoneDestination::Exile
+                            && is_linked_exile_anaphora(raw)
+                            && (in_trigger || self_pronoun_valid)
+                            && builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions)
+                            && let Some(sd) = subj_dest_from_pd(pd) =>
+                    {
+                        builder.instructions.push(Instruction::ReturnLinkedExile {
+                            destination: sd,
+                            only_first: is_singular_linked_exile_anaphora(raw),
                         });
                         return Ok(());
                     }
@@ -6551,8 +6775,56 @@ pub(super) fn lower_zone_moves_instruction(
                 .push(Instruction::ShuffleOwnGraveyardIntoLibrary);
             Ok(())
         }
+        InstructionAst::ShuffleGraveyardIntoLibrary { player } => {
+            if let Some(players) = try_group_affected_players(*player) {
+                push_for_each_player(
+                    players,
+                    vec![
+                        Instruction::MoveGraveyardGroupOwned {
+                            players: AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
+                            filter: Box::new(ObjectFilter::any()),
+                            destination: SubjectDestination::Library(LibraryPlacement::Bottom),
+                        },
+                        Instruction::ShufflePlayerLibrary(ResolvingPlayer::LoopPlayer),
+                    ],
+                    builder,
+                );
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            builder
+                .instructions
+                .push(Instruction::MoveGraveyardGroupOwned {
+                    players: AffectedPlayers::One(rp),
+                    filter: Box::new(ObjectFilter::any()),
+                    destination: SubjectDestination::Library(LibraryPlacement::Bottom),
+                });
+            builder
+                .instructions
+                .push(Instruction::ShufflePlayerLibrary(rp));
+            Ok(())
+        }
         InstructionAst::PhaseOut { subject } => match subject.as_ref() {
             s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+                builder
+                    .instructions
+                    .push(Instruction::PhaseOut(PhasingSubject::Source));
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+                builder
+                    .instructions
+                    .push(Instruction::PhaseOut(PhasingSubject::Target));
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
+                if (in_trigger || self_pronoun_valid || builder.has_source)
+                    && builder.target == BodyTarget::None
+                    && matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "he" | "she" | "him" | "her"
+                    ) =>
+            {
                 builder
                     .instructions
                     .push(Instruction::PhaseOut(PhasingSubject::Source));
@@ -6562,11 +6834,45 @@ pub(super) fn lower_zone_moves_instruction(
                 filter,
                 count: TargetCountAst::Exact(1),
             } if filter.zone.is_none() => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                let bt = lower_battlefield_body_target_in_context(
+                    filter, builder, in_trigger, vocabulary,
+                )?;
                 builder.bind_target(bt)?;
                 builder
                     .instructions
                     .push(Instruction::PhaseOut(PhasingSubject::Target));
+                Ok(())
+            }
+            SubjectRefAst::TargetObject {
+                filter,
+                count: TargetCountAst::UpTo(1),
+            } if filter.zone.is_none() && builder.target == BodyTarget::None => {
+                let bt = lower_battlefield_body_target_in_context(
+                    filter, builder, in_trigger, vocabulary,
+                )?;
+                builder.bind_target(bt)?;
+                builder.up_to_one_target = true;
+                builder
+                    .instructions
+                    .push(Instruction::PhaseOut(PhasingSubject::Target));
+                Ok(())
+            }
+            SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                if f.zone.is_none()
+                    && f.controller == Some(ControllerRelation::You)
+                    && f.any_types == AstCardTypeMask::LAND
+                    && filter_only_has(
+                        f,
+                        FilterAllow {
+                            types: true,
+                            controller: true,
+                            ..FilterAllow::NONE
+                        },
+                    ) =>
+            {
+                builder
+                    .instructions
+                    .push(Instruction::PhaseOut(PhasingSubject::ControlledLands));
                 Ok(())
             }
             _ => Err("oracle:unsupported-phase-out"),
@@ -8055,12 +8361,205 @@ pub(super) fn parse_return_with_counter_local(
     Ok(Some((ck, qty)))
 }
 
+fn can_upgrade_destroy_no_regen(op: &Instruction) -> bool {
+    match op {
+        Instruction::DestroyTarget
+        | Instruction::DestroyCapturedCombatCreature { .. }
+        | Instruction::DestroySubject { .. }
+        | Instruction::DestroyCapturedDamageSource
+        | Instruction::DestroyChosen { .. }
+        | Instruction::DestroyGroup(_) => true,
+        Instruction::FixedTargetClause(body) => body
+            .instructions
+            .last()
+            .is_some_and(can_upgrade_destroy_no_regen),
+        Instruction::ChooseOption { options, .. } => {
+            !options.is_empty()
+                && options.iter().all(|branch| {
+                    branch
+                        .body
+                        .instructions
+                        .last()
+                        .is_some_and(can_upgrade_destroy_no_regen)
+                })
+        }
+        _ => false,
+    }
+}
+
+fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
+    match op {
+        Instruction::DestroyTarget => {
+            *op = Instruction::DestroyTargetWithoutRegeneration;
+            true
+        }
+        Instruction::DestroyCapturedCombatCreature { no_regeneration }
+        | Instruction::DestroySubject {
+            no_regeneration, ..
+        } => {
+            *no_regeneration = true;
+            true
+        }
+        Instruction::DestroyCapturedDamageSource => {
+            *op = Instruction::DestroySubject {
+                subject: Box::new(EffectSubject::TriggerSubject),
+                no_regeneration: true,
+            };
+            true
+        }
+        Instruction::DestroyChosen {
+            allow_regeneration, ..
+        } => {
+            *allow_regeneration = false;
+            true
+        }
+        Instruction::DestroyGroup(filter) => {
+            let cloned = filter.clone();
+            *op = Instruction::DestroyGroupWithoutRegeneration(cloned);
+            true
+        }
+        Instruction::FixedTargetClause(body) => body
+            .instructions
+            .last_mut()
+            .is_some_and(try_upgrade_destroy_no_regen),
+        Instruction::ChooseOption { options, .. } => {
+            if options.is_empty()
+                || !options.iter().all(|branch| {
+                    branch
+                        .body
+                        .instructions
+                        .last()
+                        .is_some_and(can_upgrade_destroy_no_regen)
+                })
+            {
+                return false;
+            }
+            for branch in options {
+                if let Some(last) = branch.body.instructions.last_mut() {
+                    try_upgrade_destroy_no_regen(last);
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_damage_instruction_for_no_regen(op: &Instruction) -> bool {
+    matches!(
+        op,
+        Instruction::Damage { .. }
+            | Instruction::DamageAmount(_)
+            | Instruction::DamageAmountThenExileIfDies(_)
+            | Instruction::DamageGroup { .. }
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DamageOpponentsAmount(_)
+            | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageOrderedTargets { .. }
+            | Instruction::DamageFromPower(_)
+            | Instruction::DamageFromGrantingPermanent { .. }
+            | Instruction::DamageDamagedPlayersCreatures
+            | Instruction::DamageTargetControllersCreatures { .. }
+            | Instruction::DamageCapturedBlocker(_)
+            | Instruction::DamageCreatureAtSpellMastery { .. }
+            | Instruction::DealDamageFrom { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::AffectPermanentTargets {
+                action: PermanentTargetAction::Damage(_),
+                ..
+            }
+            | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::DivideDamageExprAmongTargets { .. }
+            | Instruction::CreatureDealsPowerDamageToOther { .. }
+    )
+}
+
+fn is_linked_exile_anaphora(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "the exiled card"
+            | "the exiled cards"
+            | "that exiled card"
+            | "those exiled cards"
+            | "each exiled card"
+            | "all exiled cards"
+            | "all of the exiled cards"
+            | "each of the exiled cards"
+            | "the card exiled with ~"
+            | "the cards exiled with ~"
+            | "cards exiled with ~"
+            | "all cards exiled with ~"
+            | "each card exiled with ~"
+    )
+}
+
+fn is_singular_linked_exile_anaphora(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "the exiled card" | "that exiled card" | "the card exiled with ~"
+    )
+}
+
+fn lower_linked_exile_group_move(
+    f: &ObjectFilterAst,
+    destination: SubjectDestination,
+    strip_owner_that_player: bool,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    err_tag: &'static str,
+) -> Result<(), &'static str> {
+    let mut inner = f.clone();
+    inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+    inner.zone = None;
+    if strip_owner_that_player
+        && matches!(
+            inner.controller,
+            Some(ControllerRelation::OwnerThatPlayer | ControllerRelation::ThatPlayer)
+        )
+    {
+        inner.controller = None;
+    }
+    if is_unrestricted_filter(&inner) {
+        builder.instructions.push(Instruction::ReturnLinkedExile {
+            destination,
+            only_first: false,
+        });
+        return Ok(());
+    }
+    let obj = lower_object_filter_in_context(&inner, builder, in_trigger, vocabulary)?;
+    if obj.has_target_player() || obj.uses_target_permanent() {
+        return Err(err_tag);
+    }
+    let linked_obj = obj.with_flags(ObjectFilterFlags::EXILED_WITH_SELF);
+    let count_expr = ValueExpr::Count {
+        zone: ValueZone::Exile(None),
+        filter: Box::new(linked_obj),
+        controller_scope: None,
+    };
+    builder
+        .instructions
+        .push(Instruction::SelectZoneCardsToZone {
+            player: ResolvingPlayer::Controller,
+            source_zone: SourceZoneFilter::LinkedExile,
+            filter: Box::new(linked_obj),
+            min: count_expr.clone(),
+            max: count_expr,
+            destination,
+            reveal: false,
+        });
+    Ok(())
+}
+
 fn is_moved_object_instruction(op: &Instruction) -> bool {
     matches!(
         op,
         Instruction::MoveSubject { .. }
             | Instruction::MoveLastMovedFiltered { .. }
             | Instruction::ChooseOneLastMoved { .. }
+            | Instruction::ReturnLinkedExile { .. }
+            | Instruction::ReturnCardsExiledWithLink(_)
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::ManifestTop { .. }
             | Instruction::SelectZoneCardsToZone { .. }
             | Instruction::ChooseObjects { .. }

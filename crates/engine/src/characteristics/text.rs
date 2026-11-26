@@ -361,6 +361,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::PutNamedCounterOnTarget { amount, .. }
             | Instruction::PutCountersOnSubject { amount, .. }
             | Instruction::AdjustPlayersLife { amount, .. }
+            | Instruction::SetPlayersLife { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::LookTopChoose { count: amount, .. }
             | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
@@ -462,6 +463,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileSubjectUntilSourceLeaves { subject }
             | Instruction::TurnFaceUpSubject { subject }
             | Instruction::TurnFaceDownSubject { subject }
+            | Instruction::TransformSubject { subject }
             | Instruction::AddOneOfEachCounterKindOnSubject { subject }
             | Instruction::RegenerateSubject { subject } => {
                 subject.rewrite_creature_type(change.from, change.to);
@@ -603,6 +605,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ChooseOneLastMoved { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::MoveLastMovedFiltered { .. }
+            | Instruction::CounterMatchingStackObjects { .. }
+            | Instruction::ReturnLinkedExile { .. }
+            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::MoveSubject { .. }
             | Instruction::ExileTopPlay { .. }
@@ -1058,6 +1063,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
             | Instruction::AdjustPlayersLife { .. }
+            | Instruction::SetPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }

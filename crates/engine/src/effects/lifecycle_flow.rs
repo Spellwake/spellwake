@@ -331,6 +331,46 @@ impl EffectWindow {
         let starts_turn = previous.is_none_or(|turn| turn.position().number != position.number);
         let mut next = self.clone();
         let mut append = RulesJournal::default();
+        if entered {
+            if let Some(ended) = previous
+                && ended.position().step == Step::End
+            {
+                let ended_active = self.window.active_player();
+                let mut updated_permissions = BTreeSet::new();
+                for mut grant in std::mem::take(&mut next.card_play_permissions) {
+                    match grant.duration {
+                        super::CardPlayDuration::UntilEndOfNextEndStep(owner)
+                            if owner == ended_active => {}
+                        super::CardPlayDuration::UntilEndOfNextEndStepSkipCurrent(owner)
+                            if owner == ended_active =>
+                        {
+                            grant.duration = super::CardPlayDuration::UntilEndOfNextEndStep(owner);
+                            updated_permissions.insert(grant);
+                        }
+                        _ => {
+                            updated_permissions.insert(grant);
+                        }
+                    }
+                }
+                next.card_play_permissions = updated_permissions;
+            }
+            if position.step == Step::End {
+                next.card_play_permissions.retain(|grant| {
+                    !matches!(
+                        grant.duration,
+                        super::CardPlayDuration::UntilNextEndStep(owner) if owner == active
+                    )
+                });
+            }
+            if position.step == Step::Upkeep {
+                next.card_play_permissions.retain(|grant| {
+                    !matches!(
+                        grant.duration,
+                        super::CardPlayDuration::UntilNextUpkeep(owner) if owner == active
+                    )
+                });
+            }
+        }
         if let Some(ended) = previous.filter(|_| entered && !self.mana.is_empty()) {
             let before = self.rules_snapshot(Some(ended))?;
             let retained = self.retained_mana_types(&before.view().evaluated);

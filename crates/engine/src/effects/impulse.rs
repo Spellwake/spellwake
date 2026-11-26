@@ -649,22 +649,7 @@ impl EffectWindow {
                             }
                             continue;
                         }
-                        let mapped_duration = match duration {
-                            crate::program::ImpulsePlayDuration::ThisTurn => {
-                                CardPlayDuration::ThroughTurn
-                            }
-                            crate::program::ImpulsePlayDuration::UntilEndOfNextTurn => {
-                                if self.window.active_player() == player {
-                                    CardPlayDuration::ThroughNextOwnTurnSkipCurrent(player)
-                                } else {
-                                    CardPlayDuration::ThroughNextOwnTurn(player)
-                                }
-                            }
-                            crate::program::ImpulsePlayDuration::WhileExiled
-                            | crate::program::ImpulsePlayDuration::UntilNextFromSource => {
-                                CardPlayDuration::WhileInZone
-                            }
-                        };
+                        let mapped_duration = self.map_impulse_play_duration(duration, player);
                         self.card_play_permissions.insert(CardPlayPermission {
                             zone: CardPlayZone::Exile,
                             object: permission.0,

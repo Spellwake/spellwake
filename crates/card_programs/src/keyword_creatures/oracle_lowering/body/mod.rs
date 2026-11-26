@@ -1,4 +1,5 @@
 use super::*;
+pub(super) use control_flow::try_wrap_each_player_that_player;
 
 // =========================================================================
 // Effect Body & Instruction Lowering
@@ -29,7 +30,9 @@ pub(super) use self::restrictions::{
     parse_cast_timing_restriction, parse_modal_choice, parse_modal_choice_with_uniqueness,
     rewrite_body_anaphora_stats, rewrite_body_prior_result, rewrite_instruction_anaphora,
     rewrite_value_expr_anaphora, rewrite_value_expr_prior_result, strip_activated_restrictions,
-    strip_triggered_restrictions,
+    strip_triggered_restrictions, try_lower_exact_plus_upto_activated_modes,
+    try_lower_exact_plus_upto_triggered_modes, try_lower_independent_multi_clause_activated_modes,
+    try_lower_independent_multi_clause_triggered_modes,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -420,7 +423,9 @@ pub(super) fn lower_spell_effects(
             | "oracle:invalid-fixed-clause"),
         ) => {
             if let Some((mode0, modes)) =
-                try_lower_exact_plus_upto_spell_modes(ins, vocabulary, ids)
+                try_lower_exact_plus_upto_spell_modes(ins, vocabulary, ids).or_else(|| {
+                    try_lower_independent_multi_clause_spell_modes(ins, vocabulary, ids)
+                })
             {
                 return Ok((mode0, Some(modes)));
             }
@@ -495,7 +500,27 @@ pub(super) fn lower_effect_body_impl(
     self_pronoun_valid: bool,
     allow_fixed_clauses: bool,
 ) -> Result<ExecutableBody, &'static str> {
-    let mut builder = BodyBuilder::new();
+    lower_effect_body_with_hint(
+        ins,
+        vocabulary,
+        ids,
+        in_trigger,
+        self_pronoun_valid,
+        allow_fixed_clauses,
+        TriggerHint::None,
+    )
+}
+
+pub(super) fn lower_effect_body_with_hint(
+    ins: &[InstructionAst],
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    allow_fixed_clauses: bool,
+    trigger_hint: TriggerHint,
+) -> Result<ExecutableBody, &'static str> {
+    let mut builder = BodyBuilder::with_trigger_hint(trigger_hint);
     builder.has_source = in_trigger || self_pronoun_valid;
     match lower_instruction_seq(
         ins,
@@ -514,7 +539,7 @@ pub(super) fn lower_effect_body_impl(
                 ids,
                 in_trigger,
                 self_pronoun_valid,
-                TriggerHint::None,
+                trigger_hint,
             )
         }
         Err(err) => Err(err),

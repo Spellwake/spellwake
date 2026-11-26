@@ -1257,6 +1257,55 @@ impl EffectWindow {
                     ActivatedCostScope::Encore => {
                         selected.body.instructions.contains(&Instruction::Encore)
                     }
+                    ActivatedCostScope::Loyalty => loyalty_cost.is_some(),
+                    ActivatedCostScope::Targeting(filter) => {
+                        let mut targeted_objects: Vec<ObjectId> = Vec::new();
+                        match &origin {
+                            ActivationOrigin::Targeted(crate::targets::TargetRef::Object(id)) => {
+                                targeted_objects.push(*id);
+                            }
+                            ActivationOrigin::PermanentTargets(targets) => {
+                                for target in targets {
+                                    if let crate::targets::TargetRef::Object(id) = target {
+                                        targeted_objects.push(*id);
+                                    }
+                                }
+                            }
+                            ActivationOrigin::SelectedCost {
+                                target: Some(crate::targets::TargetRef::Object(id)),
+                                ..
+                            } => {
+                                targeted_objects.push(*id);
+                            }
+                            ActivationOrigin::Modal(modes) => {
+                                for mode in modes {
+                                    if let Some(crate::targets::TargetRef::Object(id)) = mode.target
+                                    {
+                                        targeted_objects.push(id);
+                                    }
+                                    for target in &mode.targets {
+                                        if let crate::targets::TargetRef::Object(id) = target {
+                                            targeted_objects.push(*id);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        targeted_objects.into_iter().any(|tid| {
+                            evaluated.get(tid).is_some_and(|target_view| {
+                                target_view.zone == ObjectZone::Battlefield
+                                    && self.matches_object_filter(
+                                        **filter,
+                                        target_view,
+                                        rule_ctrl,
+                                        rule_source,
+                                        &BTreeSet::new(),
+                                        &evaluated,
+                                    )
+                            })
+                        })
+                    }
                 }
             };
             let controller_matches =

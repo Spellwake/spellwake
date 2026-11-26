@@ -4699,6 +4699,582 @@ pub(super) fn emit_condition_branches(
     Ok(false_branches)
 }
 
+fn filter_references_that_player(f: &ObjectFilterAst) -> bool {
+    matches!(
+        f.controller,
+        Some(ControllerRelation::ThatPlayer | ControllerRelation::OwnerThatPlayer)
+    ) || matches!(
+        f.owner,
+        Some(ControllerRelation::ThatPlayer | ControllerRelation::OwnerThatPlayer)
+    ) || matches!(
+        f.zone,
+        Some(
+            ZoneFilter::ThatPlayerGraveyard
+                | ZoneFilter::ThatPlayerHand
+                | ZoneFilter::ThatPlayerLibrary
+        )
+    ) || f.extra_zones.iter().any(|z| {
+        matches!(
+            z,
+            ZoneFilter::ThatPlayerGraveyard
+                | ZoneFilter::ThatPlayerHand
+                | ZoneFilter::ThatPlayerLibrary
+        )
+    })
+}
+
+fn subject_references_that_player(s: &SubjectRefAst) -> bool {
+    match s {
+        SubjectRefAst::Player(PlayerRefAst::ThatPlayer) => true,
+        SubjectRefAst::Group(f)
+        | SubjectRefAst::All(f)
+        | SubjectRefAst::Each(f)
+        | SubjectRefAst::TargetObject { filter: f, .. } => filter_references_that_player(f),
+        SubjectRefAst::InZone { subject, zone } => {
+            matches!(
+                zone,
+                ZoneFilter::ThatPlayerGraveyard
+                    | ZoneFilter::ThatPlayerHand
+                    | ZoneFilter::ThatPlayerLibrary
+            ) || subject_references_that_player(subject)
+        }
+        SubjectRefAst::Compound(items) => items.iter().any(subject_references_that_player),
+        SubjectRefAst::ControllerOf(inner) | SubjectRefAst::OwnerOf(inner) => {
+            subject_references_that_player(inner)
+        }
+        _ => false,
+    }
+}
+
+fn value_expr_references_that_player(e: &ValueExprAst) -> bool {
+    match e {
+        ValueExprAst::PlayerStat {
+            player: PlayerRefAst::ThatPlayer,
+            ..
+        }
+        | ValueExprAst::PlayerCounterCount {
+            player: PlayerRefAst::ThatPlayer,
+            ..
+        }
+        | ValueExprAst::StartingLifeTotal(PlayerRefAst::ThatPlayer)
+        | ValueExprAst::LifeChangedThisTurn {
+            player: PlayerRefAst::ThatPlayer,
+            ..
+        } => true,
+        ValueExprAst::Count(f)
+        | ValueExprAst::AggregateStat { filter: f, .. }
+        | ValueExprAst::ColorsAmong(f)
+        | ValueExprAst::CardTypesAmong(f)
+        | ValueExprAst::SubtypesAmong(f) => filter_references_that_player(f),
+        ValueExprAst::ObjectStat { subject, .. } | ValueExprAst::CounterCount { subject, .. } => {
+            subject_references_that_player(subject)
+        }
+        ValueExprAst::Add(a, b) | ValueExprAst::Sub(a, b) | ValueExprAst::Mul(a, b) => {
+            value_expr_references_that_player(a) || value_expr_references_that_player(b)
+        }
+        ValueExprAst::DivConst { expr, .. } => value_expr_references_that_player(expr),
+        _ => false,
+    }
+}
+
+fn token_references_that_player(t: &TokenSpecAst) -> bool {
+    match t {
+        TokenSpecAst::Predefined { count, .. } | TokenSpecAst::Creature { count, .. } => {
+            value_expr_references_that_player(count)
+        }
+        TokenSpecAst::Copy { count, source, .. } => {
+            value_expr_references_that_player(count) || subject_references_that_player(source)
+        }
+        TokenSpecAst::Role { attached_to, .. } => subject_references_that_player(attached_to),
+    }
+}
+
+pub(in super::super) fn try_wrap_each_player_that_player(
+    ins: &InstructionAst,
+) -> Option<InstructionAst> {
+    let is_each = |p: PlayerRefAst| {
+        matches!(
+            p,
+            PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent | PlayerRefAst::EachOtherPlayer
+        )
+    };
+    match ins {
+        InstructionAst::DealDamage {
+            source,
+            target,
+            amount,
+        } => {
+            if let SubjectRefAst::Player(p) = target.as_ref()
+                && is_each(*p)
+                && value_expr_references_that_player(amount)
+            {
+                Some(InstructionAst::ForEachPlayer {
+                    player: *p,
+                    body: vec![InstructionAst::DealDamage {
+                        source: source.clone(),
+                        target: Box::new(SubjectRefAst::Player(PlayerRefAst::ThatPlayer)),
+                        amount: amount.clone(),
+                    }],
+                })
+            } else {
+                None
+            }
+        }
+        InstructionAst::ChangeLife {
+            player,
+            delta,
+            gain,
+        } if is_each(*player) && value_expr_references_that_player(delta) => {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::ChangeLife {
+                    player: PlayerRefAst::ThatPlayer,
+                    delta: delta.clone(),
+                    gain: *gain,
+                }],
+            })
+        }
+        InstructionAst::SetLifeTotal { player, value }
+            if is_each(*player) && value_expr_references_that_player(value) =>
+        {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::SetLifeTotal {
+                    player: PlayerRefAst::ThatPlayer,
+                    value: value.clone(),
+                }],
+            })
+        }
+        InstructionAst::Draw {
+            player,
+            count,
+            up_to,
+        } if is_each(*player) && value_expr_references_that_player(count) => {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::Draw {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                    up_to: *up_to,
+                }],
+            })
+        }
+        InstructionAst::Mill { player, count }
+            if is_each(*player) && value_expr_references_that_player(count) =>
+        {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::Mill {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                }],
+            })
+        }
+        InstructionAst::Discard {
+            player,
+            count,
+            filter,
+            anaphora,
+            random,
+        } if is_each(*player)
+            && (count
+                .as_deref()
+                .is_some_and(value_expr_references_that_player)
+                || filter.as_deref().is_some_and(filter_references_that_player)) =>
+        {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::Discard {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                    filter: filter.clone(),
+                    anaphora: anaphora.clone(),
+                    random: *random,
+                }],
+            })
+        }
+        InstructionAst::DiscardUpTo {
+            player,
+            max_count,
+            filter,
+            any_number,
+            all,
+            random,
+        } if is_each(*player)
+            && (value_expr_references_that_player(max_count)
+                || filter.as_deref().is_some_and(filter_references_that_player)) =>
+        {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::DiscardUpTo {
+                    player: PlayerRefAst::ThatPlayer,
+                    max_count: max_count.clone(),
+                    filter: filter.clone(),
+                    any_number: *any_number,
+                    all: *all,
+                    random: *random,
+                }],
+            })
+        }
+        InstructionAst::CreateToken { controller, token }
+            if is_each(*controller) && token_references_that_player(token) =>
+        {
+            Some(InstructionAst::ForEachPlayer {
+                player: *controller,
+                body: vec![InstructionAst::CreateToken {
+                    controller: PlayerRefAst::ThatPlayer,
+                    token: token.clone(),
+                }],
+            })
+        }
+        InstructionAst::Sacrifice {
+            player,
+            count,
+            subject,
+            except,
+            half,
+            rounding,
+            chooser,
+        } if is_each(*player)
+            && (count
+                .as_deref()
+                .is_some_and(value_expr_references_that_player)
+                || subject_references_that_player(subject)) =>
+        {
+            Some(InstructionAst::ForEachPlayer {
+                player: *player,
+                body: vec![InstructionAst::Sacrifice {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                    subject: subject.clone(),
+                    except: except.clone(),
+                    half: *half,
+                    rounding: *rounding,
+                    chooser: *chooser,
+                }],
+            })
+        }
+        _ => None,
+    }
+}
+
+fn rewrite_single_target_player_to_that_player(
+    ins: &InstructionAst,
+) -> Option<(BodyTarget, InstructionAst)> {
+    let bt_for = |p: PlayerRefAst| match p {
+        PlayerRefAst::TargetPlayer => Some(BodyTarget::SinglePlayer),
+        PlayerRefAst::TargetOpponent => Some(BodyTarget::SingleOpponent),
+        _ => None,
+    };
+    match ins {
+        InstructionAst::DealDamage {
+            source,
+            target,
+            amount,
+        } => {
+            if let SubjectRefAst::Player(p) = target.as_ref()
+                && let Some(bt) = bt_for(*p)
+                && !subject_has_explicit_target(source)
+            {
+                Some((
+                    bt,
+                    InstructionAst::DealDamage {
+                        source: source.clone(),
+                        target: Box::new(SubjectRefAst::Player(PlayerRefAst::ThatPlayer)),
+                        amount: amount.clone(),
+                    },
+                ))
+            } else {
+                None
+            }
+        }
+        InstructionAst::ChangeLife {
+            player,
+            delta,
+            gain,
+        } => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::ChangeLife {
+                    player: PlayerRefAst::ThatPlayer,
+                    delta: delta.clone(),
+                    gain: *gain,
+                },
+            )
+        }),
+        InstructionAst::SetLifeTotal { player, value } => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::SetLifeTotal {
+                    player: PlayerRefAst::ThatPlayer,
+                    value: value.clone(),
+                },
+            )
+        }),
+        InstructionAst::Draw {
+            player,
+            count,
+            up_to,
+        } => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::Draw {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                    up_to: *up_to,
+                },
+            )
+        }),
+        InstructionAst::Mill { player, count } => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::Mill {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                },
+            )
+        }),
+        InstructionAst::Discard {
+            player,
+            count,
+            filter,
+            anaphora,
+            random,
+        } => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::Discard {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                    filter: filter.clone(),
+                    anaphora: anaphora.clone(),
+                    random: *random,
+                },
+            )
+        }),
+        InstructionAst::DiscardUpTo {
+            player,
+            max_count,
+            filter,
+            any_number,
+            all,
+            random,
+        } => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::DiscardUpTo {
+                    player: PlayerRefAst::ThatPlayer,
+                    max_count: max_count.clone(),
+                    filter: filter.clone(),
+                    any_number: *any_number,
+                    all: *all,
+                    random: *random,
+                },
+            )
+        }),
+        InstructionAst::CreateToken { controller, token } => bt_for(*controller).map(|bt| {
+            (
+                bt,
+                InstructionAst::CreateToken {
+                    controller: PlayerRefAst::ThatPlayer,
+                    token: token.clone(),
+                },
+            )
+        }),
+        InstructionAst::Sacrifice {
+            player,
+            count,
+            subject,
+            except,
+            half,
+            rounding,
+            chooser,
+        } if !subject_has_explicit_target(subject) => bt_for(*player).map(|bt| {
+            (
+                bt,
+                InstructionAst::Sacrifice {
+                    player: PlayerRefAst::ThatPlayer,
+                    count: count.clone(),
+                    subject: subject.clone(),
+                    except: except.clone(),
+                    half: *half,
+                    rounding: *rounding,
+                    chooser: *chooser,
+                },
+            )
+        }),
+        _ => None,
+    }
+}
+
+fn instruction_uses_that_player_as_primary(ins: &InstructionAst) -> bool {
+    match ins {
+        InstructionAst::DealDamage { target, .. } => {
+            matches!(
+                target.as_ref(),
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+            )
+        }
+        InstructionAst::ChangeLife { player, .. }
+        | InstructionAst::SetLifeTotal { player, .. }
+        | InstructionAst::Draw { player, .. }
+        | InstructionAst::Mill { player, .. }
+        | InstructionAst::Discard { player, .. }
+        | InstructionAst::DiscardHand { player }
+        | InstructionAst::DiscardUpTo { player, .. }
+        | InstructionAst::Sacrifice { player, .. } => *player == PlayerRefAst::ThatPlayer,
+        InstructionAst::CreateToken { controller, .. } => *controller == PlayerRefAst::ThatPlayer,
+        _ => false,
+    }
+}
+
+fn try_rewrite_target_player_with_that_player(
+    ins: &InstructionAst,
+) -> Option<(BodyTarget, InstructionAst)> {
+    match ins {
+        InstructionAst::BindX { x_expr, body }
+            if value_expr_references_that_player(x_expr) && !body.is_empty() =>
+        {
+            let (bt, rewritten_first) = rewrite_single_target_player_to_that_player(&body[0])?;
+            // Require every trailing instruction in BindX to avoid introducing a new target
+            // and to act on ThatPlayer rather than silently targeting You.
+            if body[1..].iter().any(instruction_has_explicit_target)
+                || !body[1..]
+                    .iter()
+                    .all(instruction_uses_that_player_as_primary)
+            {
+                return None;
+            }
+            let mut new_body = Vec::with_capacity(body.len());
+            new_body.push(rewritten_first);
+            new_body.extend_from_slice(&body[1..]);
+            Some((
+                bt,
+                InstructionAst::BindX {
+                    x_expr: x_expr.clone(),
+                    body: new_body,
+                },
+            ))
+        }
+        other => {
+            let refs_tp = match other {
+                InstructionAst::DealDamage { amount, .. } => {
+                    value_expr_references_that_player(amount)
+                }
+                InstructionAst::ChangeLife { delta, .. } => {
+                    value_expr_references_that_player(delta)
+                }
+                InstructionAst::SetLifeTotal { value, .. } => {
+                    value_expr_references_that_player(value)
+                }
+                InstructionAst::Draw { count, .. } | InstructionAst::Mill { count, .. } => {
+                    value_expr_references_that_player(count)
+                }
+                InstructionAst::Discard { count, filter, .. } => {
+                    count
+                        .as_deref()
+                        .is_some_and(value_expr_references_that_player)
+                        || filter.as_deref().is_some_and(filter_references_that_player)
+                }
+                InstructionAst::DiscardUpTo {
+                    max_count, filter, ..
+                } => {
+                    value_expr_references_that_player(max_count)
+                        || filter.as_deref().is_some_and(filter_references_that_player)
+                }
+                InstructionAst::CreateToken { token, .. } => token_references_that_player(token),
+                InstructionAst::Sacrifice { count, subject, .. } => {
+                    count
+                        .as_deref()
+                        .is_some_and(value_expr_references_that_player)
+                        || subject_references_that_player(subject)
+                }
+                _ => false,
+            };
+            if refs_tp {
+                rewrite_single_target_player_to_that_player(other)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn try_extract_group_player_scope(ins: &InstructionAst) -> Option<PlayerRefAst> {
+    let p = match ins {
+        InstructionAst::DealDamage { target, .. } => match target.as_ref() {
+            SubjectRefAst::Player(p) => *p,
+            _ => return None,
+        },
+        InstructionAst::ChangeLife { player, .. }
+        | InstructionAst::Draw { player, .. }
+        | InstructionAst::Mill { player, .. }
+        | InstructionAst::Discard { player, .. }
+        | InstructionAst::DiscardHand { player } => *player,
+        _ => return None,
+    };
+    matches!(p, PlayerRefAst::EachOpponent | PlayerRefAst::EachPlayer).then_some(p)
+}
+
+fn try_rewrite_followup_that_player(
+    ins: &InstructionAst,
+    scope: PlayerRefAst,
+) -> Option<InstructionAst> {
+    if instruction_has_explicit_target(ins) {
+        return None;
+    }
+    match ins {
+        InstructionAst::Discard {
+            player: PlayerRefAst::ThatPlayer,
+            count,
+            filter,
+            anaphora: None,
+            random,
+        } if !count
+            .as_deref()
+            .is_some_and(value_expr_references_that_player)
+            && !filter.as_deref().is_some_and(filter_references_that_player) =>
+        {
+            Some(InstructionAst::Discard {
+                player: scope,
+                count: count.clone(),
+                filter: filter.clone(),
+                anaphora: None,
+                random: *random,
+            })
+        }
+        InstructionAst::DiscardHand {
+            player: PlayerRefAst::ThatPlayer,
+        } => Some(InstructionAst::DiscardHand { player: scope }),
+        InstructionAst::Draw {
+            player: PlayerRefAst::ThatPlayer,
+            count,
+            up_to,
+        } if !value_expr_references_that_player(count) => Some(InstructionAst::Draw {
+            player: scope,
+            count: count.clone(),
+            up_to: *up_to,
+        }),
+        InstructionAst::Mill {
+            player: PlayerRefAst::ThatPlayer,
+            count,
+        } if !value_expr_references_that_player(count) => Some(InstructionAst::Mill {
+            player: scope,
+            count: count.clone(),
+        }),
+        InstructionAst::ChangeLife {
+            player: PlayerRefAst::ThatPlayer,
+            delta,
+            gain,
+        } if !value_expr_references_that_player(delta) => Some(InstructionAst::ChangeLife {
+            player: scope,
+            delta: delta.clone(),
+            gain: *gain,
+        }),
+        _ => None,
+    }
+}
+
 pub(in super::super) fn lower_instruction_seq(
     ins: &[InstructionAst],
     builder: &mut BodyBuilder,
@@ -11346,6 +11922,95 @@ pub(in super::super) fn lower_instruction_seq(
             )?;
             i += 1;
             continue;
+        }
+        // Auto-wrap EachPlayer / EachOpponent / EachOtherPlayer instructions whose nested
+        // expression references ThatPlayer (e.g. Acidic Soil, Price of Progress, Stern Judge,
+        // Biorhythm, Folio of Fancies, Nature's Resurgence) into ForEachPlayer.
+        if let Some(InstructionAst::ForEachPlayer {
+            player: loop_player,
+            body: loop_body,
+        }) = try_wrap_each_player_that_player(&ins[i])
+        {
+            let players = match loop_player {
+                PlayerRefAst::EachPlayer => AffectedPlayers::EachPlayer,
+                PlayerRefAst::EachOpponent => AffectedPlayers::EachOpponent,
+                _ => AffectedPlayers::EachOtherPlayer,
+            };
+            let mut probe = builder.clone();
+            if let Ok(sub) = super::super::instructions::lower_loop_player_sub_body(
+                &loop_body,
+                &mut probe,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            ) {
+                probe
+                    .instructions
+                    .push(Instruction::ForEachPlayer { players, body: sub });
+                *builder = probe;
+                i += 1;
+                continue;
+            }
+        }
+        // Pre-bind TargetPlayer / TargetOpponent when the same instruction or BindX expression
+        // references ThatPlayer (e.g. Storm Seeker, Burden of Greed, Keening Stone, Jovial Evil).
+        if builder.target == BodyTarget::None
+            && let Some((bt, rewritten)) = try_rewrite_target_player_with_that_player(&ins[i])
+        {
+            let mut probe = builder.clone();
+            if probe.bind_target(bt).is_ok()
+                && lower_instruction(
+                    &rewritten,
+                    &mut probe,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )
+                .is_ok()
+            {
+                *builder = probe;
+                i += 1;
+                continue;
+            }
+        }
+        // Resolve follow-up ThatPlayer after an EachOpponent / EachPlayer instruction
+        // when no single target or trigger player is bound (e.g. Skull Rend).
+        if !in_trigger
+            && builder.target == BodyTarget::None
+            && i + 1 < ins.len()
+            && let Some(scope) = try_extract_group_player_scope(&ins[i])
+            && let Some(rewritten_next) = try_rewrite_followup_that_player(&ins[i + 1], scope)
+        {
+            let mut probe = builder.clone();
+            if lower_instruction(
+                &ins[i],
+                &mut probe,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )
+            .is_ok()
+                && lower_instruction(
+                    &rewritten_next,
+                    &mut probe,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )
+                .is_ok()
+            {
+                *builder = probe;
+                i += 2;
+                continue;
+            }
         }
         lower_instruction(
             &ins[i],

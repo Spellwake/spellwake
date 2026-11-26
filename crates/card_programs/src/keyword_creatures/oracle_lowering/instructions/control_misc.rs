@@ -474,17 +474,45 @@ pub(super) fn lower_control_misc_instruction(
             }
         }
         InstructionAst::SetLifeTotal { player, value } => {
-            let ValueExpr::Literal(n) = lower_value_expr_in_context(
-                resolve_x(value, bound_x),
-                builder,
-                in_trigger,
-                vocabulary,
-            )?
-            else {
-                return Err("oracle:dynamic-set-life");
-            };
-            match player {
-                PlayerRefAst::You => {
+            let resolved_value = resolve_x(value, bound_x);
+            if matches!(
+                player,
+                PlayerRefAst::EachPlayer
+                    | PlayerRefAst::EachOpponent
+                    | PlayerRefAst::EachOtherPlayer
+            ) && value_expr_ast_references_that_player(resolved_value)
+            {
+                let players = match *player {
+                    PlayerRefAst::EachPlayer => AffectedPlayers::EachPlayer,
+                    PlayerRefAst::EachOpponent => AffectedPlayers::EachOpponent,
+                    _ => AffectedPlayers::EachOtherPlayer,
+                };
+                let rewritten = rewrite_loop_player_ast(
+                    &InstructionAst::SetLifeTotal {
+                        player: *player,
+                        value: Box::new(resolved_value.clone()),
+                    },
+                    *player,
+                );
+                let sub = lower_loop_player_sub_body(
+                    &[rewritten],
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )?;
+                builder
+                    .instructions
+                    .push(Instruction::ForEachPlayer { players, body: sub });
+                return Ok(());
+            }
+            let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
+            let amount =
+                lower_value_expr_in_context(resolved_value, builder, in_trigger, vocabulary)?;
+            match (player, amount) {
+                (PlayerRefAst::You, ValueExpr::Literal(n)) => {
                     builder
                         .instructions
                         .push(Instruction::AdjustControllerLife {
@@ -492,14 +520,34 @@ pub(super) fn lower_control_misc_instruction(
                         });
                     Ok(())
                 }
-                PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                (
+                    PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent,
+                    ValueExpr::Literal(n),
+                ) => {
                     builder.instructions.push(Instruction::AdjustTargetLife {
                         adjustment: LifeAdjustment::Set(n),
                     });
                     Ok(())
                 }
-                _ => Err("oracle:unsupported-set-life"),
+                (PlayerRefAst::ThatPlayer, ValueExpr::Literal(n))
+                    if players == AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                        && matches!(
+                            builder.target,
+                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                        ) =>
+                {
+                    builder.instructions.push(Instruction::AdjustTargetLife {
+                        adjustment: LifeAdjustment::Set(n),
+                    });
+                    Ok(())
+                }
+                (_, dynamic_or_group_amount) => {
+                    builder.instructions.push(Instruction::SetPlayersLife {
+                        players,
+                        amount: dynamic_or_group_amount,
+                    });
+                    Ok(())
+                }
             }
         }
         InstructionAst::BecomeMonarch {
@@ -922,6 +970,23 @@ pub(super) fn lower_control_misc_instruction(
                     builder.bind_target(bt)?;
                     return Ok(());
                 }
+            }
+            if matches!(
+                cleaned_choice,
+                "one of them"
+                    | "one of those"
+                    | "one of those cards"
+                    | "a card from among them"
+                    | "a card from among those"
+                    | "one of the exiled cards"
+            ) && last_instruction_moved_object(&builder.instructions)
+                && let Ok(chooser_rp) =
+                    lower_resolving_player_in_context(chooser_ref, builder, in_trigger)
+            {
+                builder.instructions.push(Instruction::ChooseOneLastMoved {
+                    chooser: chooser_rp,
+                });
+                return Ok(());
             }
             if let Ok(kind) = parse_choice_kind(cleaned_choice, true, vocabulary) {
                 return emit_choice_for_player_ref(chooser_ref, kind, builder, ids, in_trigger);
@@ -1399,7 +1464,14 @@ pub(super) fn lower_control_misc_instruction(
                 }
                 let rewritten_all: Option<Vec<InstructionAst>> = body
                     .iter()
-                    .map(|s| try_rewrite_for_each_player(s, *player))
+                    .map(|s| {
+                        let r = try_rewrite_for_each_player(s, *player)?;
+                        if super::super::body::try_wrap_each_player_that_player(&r).is_some() {
+                            None
+                        } else {
+                            Some(r)
+                        }
+                    })
                     .collect();
                 if let Some(seq) = rewritten_all {
                     return lower_instruction_seq(
@@ -2139,6 +2211,7 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             | Instruction::PayControllerLife(_)
             | Instruction::PayControllerEnergy(_)
             | Instruction::AdjustPlayersLife { .. }
+            | Instruction::SetPlayersLife { .. }
             | Instruction::AdjustControllerLife { .. }
             | Instruction::Discard {
                 players: AffectedPlayers::One(_),
@@ -2166,6 +2239,11 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             | Instruction::ExileGroupFromZone { .. }
             | Instruction::Mill { .. }
             | Instruction::MoveSubject { .. }
+            | Instruction::ReturnLinkedExile { .. }
+            | Instruction::CounterMatchingStackObjects { .. }
+            | Instruction::TransferAllCountersFromTriggeringLki { .. }
+            | Instruction::TransformSubject { .. }
+            | Instruction::MoveCounters { .. }
             | Instruction::SelectZoneCardsToZone { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::DestroyGroup(_)
@@ -2241,17 +2319,21 @@ pub(in super::super) fn parse_choice_kind(
         }));
     }
     match cleaned_choice {
-        "a color" => Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Color)),
-        "a card type" => Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardType(
-            Vec::new(),
-        ))),
-        "a basic land type" | "a land type" => Ok(ParsedChoiceKind::Domain(
-            ResolutionChoiceDomain::BasicLandType,
+        "a color" | "a color of your choice" | "any color" => {
+            Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Color))
+        }
+        "a card type" | "a card type of your choice" => Ok(ParsedChoiceKind::Domain(
+            ResolutionChoiceDomain::CardType(Vec::new()),
         )),
-        "an opponent" => Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Player {
-            opponents_only: true,
-        })),
-        "a player" | "another player" => {
+        "a basic land type" | "a land type" | "a basic land type of your choice" => Ok(
+            ParsedChoiceKind::Domain(ResolutionChoiceDomain::BasicLandType),
+        ),
+        "an opponent" | "an opponent of your choice" => {
+            Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Player {
+                opponents_only: true,
+            }))
+        }
+        "a player" | "another player" | "a player of your choice" => {
             Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Player {
                 opponents_only: false,
             }))
@@ -2260,15 +2342,21 @@ pub(in super::super) fn parse_choice_kind(
             min: 0,
             max: 20,
         })),
-        "a card name" => Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardName {
-            nonland_only: false,
-        })),
-        "a nonland card name" => Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardName {
-            nonland_only: true,
-        })),
-        "a creature type" => Ok(ParsedChoiceKind::CreatureType {
-            excluding: BTreeSet::new(),
-        }),
+        "a card name" | "a card name of your choice" => {
+            Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardName {
+                nonland_only: false,
+            }))
+        }
+        "a nonland card name" | "a nonland card name of your choice" => {
+            Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardName {
+                nonland_only: true,
+            }))
+        }
+        "a creature type" | "a creature type of your choice" => {
+            Ok(ParsedChoiceKind::CreatureType {
+                excluding: BTreeSet::new(),
+            })
+        }
         "odd or even" => Ok(ParsedChoiceKind::Domain(
             ResolutionChoiceDomain::LabeledOption(vec!["odd".to_owned(), "even".to_owned()]),
         )),
@@ -2510,6 +2598,46 @@ pub(super) fn is_self_anaphora_label(raw: &str) -> bool {
 
 pub(super) fn is_self_anaphora_ref(subject: &SubjectRefAst) -> bool {
     matches!(subject, SubjectRefAst::Anaphora(p) if is_self_anaphora_label(p))
+}
+
+fn filter_ast_references_that_player(f: &ObjectFilterAst) -> bool {
+    f.controller == Some(ControllerRelation::ThatPlayer)
+        || f.owner == Some(ControllerRelation::ThatPlayer)
+        || matches!(
+            f.zone,
+            Some(
+                ZoneFilter::ThatPlayerHand
+                    | ZoneFilter::ThatPlayerGraveyard
+                    | ZoneFilter::ThatPlayerLibrary
+            )
+        )
+}
+
+fn value_expr_ast_references_that_player(expr: &ValueExprAst) -> bool {
+    match expr {
+        ValueExprAst::Count(f)
+        | ValueExprAst::AggregateStat { filter: f, .. }
+        | ValueExprAst::ColorsAmong(f)
+        | ValueExprAst::CardTypesAmong(f)
+        | ValueExprAst::SubtypesAmong(f)
+        | ValueExprAst::ExtremeStatAmong { filter: f, .. }
+        | ValueExprAst::DistinctCountAmong { filter: f, .. }
+        | ValueExprAst::MaxSharedSubtypeCount { filter: f } => filter_ast_references_that_player(f),
+        ValueExprAst::PlayerStat { player, .. }
+        | ValueExprAst::PlayerCounterCount { player, .. }
+        | ValueExprAst::StartingLifeTotal(player)
+        | ValueExprAst::LifeChangedThisTurn { player, .. } => *player == PlayerRefAst::ThatPlayer,
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::Pow { base: a, exp: b }
+        | ValueExprAst::Shortfall {
+            threshold: a,
+            actual: b,
+        } => value_expr_ast_references_that_player(a) || value_expr_ast_references_that_player(b),
+        ValueExprAst::DivConst { expr: inner, .. } => value_expr_ast_references_that_player(inner),
+        _ => false,
+    }
 }
 
 pub(super) fn value_expr_ast_has_self_anaphora(expr: &ValueExprAst) -> bool {
@@ -3794,6 +3922,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::AdjustPlayersLife {
                 players, amount, ..
             }
+            | Instruction::SetPlayersLife { players, amount }
             | Instruction::Discard { players, amount }
             | Instruction::DiscardFiltered {
                 players, amount, ..
@@ -4139,7 +4268,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn lower_loop_player_sub_body(
+pub(in super::super) fn lower_loop_player_sub_body(
     body: &[InstructionAst],
     outer_builder: &mut BodyBuilder,
     vocabulary: &CreatureTypeVocabulary,

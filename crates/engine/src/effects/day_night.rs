@@ -95,6 +95,67 @@ impl EffectWindow {
         Ok(())
     }
 
+    /// Transform every qualifying double-faced or flip permanent in `ids` (CR 701.28).
+    pub(super) fn transform_objects(
+        &mut self,
+        entry: &crate::stack_window::StackEntry,
+        instruction: usize,
+        ids: Vec<ObjectId>,
+        append: &mut crate::occurrence::RulesJournal,
+    ) -> Result<(), EffectError> {
+        let evaluated = self.evaluated_characteristics()?;
+        let mut transformable = Vec::new();
+        for id in ids {
+            let Some(current) = self.window.cards().get(id) else {
+                continue;
+            };
+            let Some(front) = current.card_id().and_then(|card| self.programs.get(&card)) else {
+                continue;
+            };
+            let can_flip = front.flip_back.is_some() && !current.transformed();
+            if current.zone() != ObjectZone::Battlefield
+                || current.face_down().is_some()
+                || (front.reverse_face().is_none() && front.disturb.is_none() && !can_flip)
+            {
+                continue;
+            }
+            let Some(view) = evaluated.get(id) else {
+                continue;
+            };
+            if !can_flip
+                && (view.has_keyword(KeywordAbility::Daybound)
+                    || view.has_keyword(KeywordAbility::Nightbound)
+                    || Self::transform_prohibited(&evaluated, view))
+            {
+                continue;
+            }
+            if !transformable.contains(&id) {
+                transformable.push(id);
+            }
+        }
+        if transformable.is_empty() {
+            return Ok(());
+        }
+        let before = self.rules_snapshot(None)?;
+        self.characteristics
+            .restamp_transformations(&transformable)?;
+        for &id in &transformable {
+            self.window.transform(id)?;
+        }
+        let clock = self.day_night();
+        self.emit_from(
+            crate::occurrence::EventCause::Instruction {
+                entry: entry.id(),
+                instruction,
+            },
+            &before,
+            None,
+            append,
+            |old, new, _| Self::day_change_occurrences(clock, clock, &transformable, old, new),
+        )?;
+        Ok(())
+    }
+
     fn subtype_transform_groups(
         &self,
         kind: spellwake_contracts::creature_types::CreatureTypeId,

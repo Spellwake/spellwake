@@ -1849,6 +1849,51 @@ pub(super) fn lower_marker_or_action_condition(
                         right: ValueExpr::literal(1),
                     });
                 }
+                "no permanents left the battlefield this turn"
+                | "no permanent left the battlefield this turn" => {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::Add(
+                            Box::new(ValueExpr::PlayerStat(
+                                PlayerStatExpr::PermanentLeftBattlefieldThisTurn,
+                            )),
+                            Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                                spellwake_engine::program::OpponentTurnStat::PermanentLeft,
+                            ))),
+                        ),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    });
+                }
+                "a creature died under an opponent's control this turn" => {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(
+                            PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                                filter: Box::new(ObjectFilter::creature().opposing()),
+                                from_battlefield_only: true,
+                                controller: None,
+                            },
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    });
+                }
+                "an enchantment was put into your graveyard from the battlefield this turn" => {
+                    return Ok(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(
+                            PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                                filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                                    any_types: CardTypeMask::ENCHANTMENT,
+                                    owner: ControllerFilter::OwnerYou,
+                                    ..ObjectClause::any()
+                                })),
+                                from_battlefield_only: true,
+                                controller: None,
+                            },
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    });
+                }
                 "you didn't lose life this turn" => {
                     return Ok(ResolutionCondition {
                         left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLifeLostThisTurn),
@@ -2694,6 +2739,31 @@ pub(super) fn lower_marker_or_action_condition(
                 left: ValueExpr::PlayerStat(stat),
                 comparison: Comparison::GreaterOrEqual,
                 right: ValueExpr::literal(min),
+            })
+        }
+        ConditionAst::PlayerActionThisTurn {
+            player: PlayerRefAst::AnyPlayer,
+            action,
+        } if matches!(
+            action
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "discard" | "discarded" | "discarded_card"
+        ) =>
+        {
+            Ok(ResolutionCondition {
+                left: ValueExpr::Add(
+                    Box::new(ValueExpr::PlayerStat(
+                        PlayerStatExpr::ControllerDiscardedThisTurn,
+                    )),
+                    Box::new(ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                        spellwake_engine::program::OpponentTurnStat::Discarded,
+                    ))),
+                ),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
             })
         }
         ConditionAst::PlayerActionThisTurn { player, action } => {
@@ -4750,6 +4820,8 @@ pub(super) fn lower_marker_or_action_condition(
                 "you cast a spell this way"
                 | "that spell is countered this way"
                 | "that permanent is destroyed this way"
+                | "~ is destroyed this way"
+                | "it is destroyed this way"
                 | "you gain control of a creature this way"
                 | "you draw one or more cards this way"
                 | "those permanents are exchanged this way"
@@ -4757,6 +4829,30 @@ pub(super) fn lower_marker_or_action_condition(
                     left: ValueExpr::event(EventValueKind::LastActionSucceeded),
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(1),
+                }),
+                "~ deals damage to you this way" | "it deals damage to you this way"
+                    if !builder.instructions.is_empty() =>
+                {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::DealtDamageThisWay {
+                            combat_only: false,
+                        }),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })
+                }
+                "no counters were removed this way" if !builder.instructions.is_empty() => {
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionCount),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    })
+                }
+                "it wasn't the first land you played this turn"
+                | "this wasn't the first land you played this turn" => Ok(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayedLandThisTurn),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(2),
                 }),
                 "you don't cast it this way" | "you don't put it into your hand" => {
                     Ok(ResolutionCondition {
@@ -4993,6 +5089,43 @@ pub(super) fn lower_marker_or_action_condition(
                     right: ValueExpr::literal(1),
                 }),
                 other => {
+                    if let Some((cnt_raw, rest)) = other.split_once(" or more ")
+                        && let Some(min_n) = parse_small_positive_count(cnt_raw)
+                        && let Some((flt_raw, counter_tail)) = rest
+                            .split_once(" have an ")
+                            .or_else(|| rest.split_once(" have a "))
+                        && let Some(ck_raw) = counter_tail
+                            .strip_suffix(" counter on them")
+                            .or_else(|| counter_tail.strip_suffix(" counters on them"))
+                        && let Some(ck) = parse_counter_kind(ck_raw.trim())
+                        && ck.is_permanent()
+                    {
+                        let flt_clean = flt_raw.trim();
+                        let compiler_vocab = cached_compiler_vocab(vocabulary);
+                        if !flt_clean.is_empty()
+                            && !flt_clean.contains(" named ")
+                            && !flt_clean.contains(" chosen ")
+                            && let Ok(mut parsed) =
+                                spellwake_oracle_compiler::filter::parse_object_filter(
+                                    flt_clean,
+                                    &compiler_vocab,
+                                )
+                            && parsed.zone.is_none()
+                            && parsed.extra_zones.is_empty()
+                            && parsed.counter_kind.is_none()
+                            && parsed.named.is_none()
+                            && parsed.predicates.is_empty()
+                        {
+                            parsed.counter_kind = Some(ck_raw.trim().to_string());
+                            if let Ok(obj) = lower_object_filter(&parsed, vocabulary) {
+                                return Ok(ResolutionCondition {
+                                    left: ValueExpr::count_battlefield(obj),
+                                    comparison: Comparison::GreaterOrEqual,
+                                    right: ValueExpr::literal(min_n),
+                                });
+                            }
+                        }
+                    }
                     if let Some(after_ctrl) = other.strip_prefix("you control ")
                         && let Some((cnt_raw, flt_raw)) = after_ctrl.split_once(" or more ")
                         && let Some(min_n) = parse_small_positive_count(cnt_raw)

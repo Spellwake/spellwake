@@ -2366,6 +2366,12 @@ impl EffectManaYield {
 pub enum ImpulsePlayDuration {
     ThisTurn,
     UntilEndOfNextTurn,
+    /// Until the beginning of the grantee's next end step (CR 611.2a).
+    UntilNextEndStep,
+    /// Until the end of the grantee's next end step.
+    UntilEndOfNextEndStep,
+    /// Until the beginning of the grantee's next upkeep step (CR 611.2a).
+    UntilNextUpkeep,
     WhileExiled,
     /// Until another card is exiled with the same source permanent.
     UntilNextFromSource,
@@ -2668,6 +2674,10 @@ pub enum Instruction {
     TapTargetWhileControllingSource,
     /// Transform the ability's original permanent if it has not transformed since announcement.
     TransformSource,
+    /// Transform every qualifying double-faced or flip permanent in `subject` (CR 701.28).
+    TransformSubject {
+        subject: Box<EffectSubject>,
+    },
     /// Transform the source and attach its new face to the captured target.
     TransformSourceAndAttachToTarget,
     /// Advance this Class enchantment to the given level (CR 716.2a).
@@ -3250,6 +3260,11 @@ pub enum Instruction {
     AdjustPlayersLife {
         players: AffectedPlayers,
         gain: bool,
+        amount: ValueExpr,
+    },
+    /// Set the life total of every player in `players` to `amount` (CR 119.5).
+    SetPlayersLife {
+        players: AffectedPlayers,
         amount: ValueExpr,
     },
     /// Deal noncombat damage to all members of the resolving group simultaneously.
@@ -4096,6 +4111,22 @@ pub enum Instruction {
         filter: Option<Box<ObjectFilter>>,
         destination: SubjectDestination,
     },
+    /// Counter every other stack entry matching `include_spells`/`include_abilities`, `opponents_only`, and optional `filter`.
+    CounterMatchingStackObjects {
+        filter: Option<Box<SpellFilter>>,
+        include_spells: bool,
+        include_abilities: bool,
+        opponents_only: bool,
+    },
+    /// Move surviving cards exiled with this ability's source permanent (`linked_exiles`) to `destination`.
+    ReturnLinkedExile {
+        destination: SubjectDestination,
+        only_first: bool,
+    },
+    /// Copy every permanent counter kind and count from the triggering object's battlefield LKI onto `to`.
+    TransferAllCountersFromTriggeringLki {
+        to: Box<EffectSubject>,
+    },
     /// Extended up-to discard with dynamic maximum, optional card filter, and any-number mode.
     DiscardUpToExt {
         players: AffectedPlayers,
@@ -4246,10 +4277,14 @@ impl Instruction {
             | Self::DrawGame
             | Self::TurnFaceUpSubject { .. }
             | Self::TurnFaceDownSubject { .. }
+            | Self::TransformSubject { .. }
             | Self::EmpowerJace { .. }
             | Self::AddOneOfEachCounterKindOnSubject { .. }
             | Self::GrantLastMovedPlayPermission { .. }
             | Self::MoveLastMovedFiltered { .. }
+            | Self::CounterMatchingStackObjects { .. }
+            | Self::ReturnLinkedExile { .. }
+            | Self::TransferAllCountersFromTriggeringLki { .. }
             | Self::MoveGroupToLibrary { .. }
             | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
@@ -4527,6 +4562,7 @@ impl Instruction {
             | Self::OpponentsLoseAndControllerGains(..)
             | Self::AdjustEachOpponentLife { .. }
             | Self::AdjustPlayersLife { .. }
+            | Self::SetPlayersLife { .. }
             | Self::DamageGroup { .. }
             | Self::DamageTargetControllersCreatures { .. }
             | Self::DrawAndDamageOpponents { .. }
@@ -4898,6 +4934,7 @@ impl Instruction {
             | Self::ExilePlayerGraveyards(players)
             | Self::AddPlayerCounter { players, .. }
             | Self::AdjustPlayersLife { players, .. }
+            | Self::SetPlayersLife { players, .. }
             | Self::ReturnControlledPermanents { players, .. }
             | Self::ExileChosenPermanents { players, .. }
             | Self::Discard { players, .. }
@@ -5066,9 +5103,13 @@ impl Instruction {
             | Self::ExileSubjectUntilSourceLeaves { subject }
             | Self::TurnFaceUpSubject { subject }
             | Self::TurnFaceDownSubject { subject }
+            | Self::TransformSubject { subject }
             | Self::AddOneOfEachCounterKindOnSubject { subject } => subject_uses_target(subject),
             Self::GrantLastMovedPlayPermission { player, .. } => is_target_player(*player),
-            Self::MoveLastMovedFiltered { .. } => false,
+            Self::MoveLastMovedFiltered { .. }
+            | Self::CounterMatchingStackObjects { .. }
+            | Self::ReturnLinkedExile { .. } => false,
+            Self::TransferAllCountersFromTriggeringLki { to } => subject_uses_target(to),
             Self::EmpowerJace { count } => count.uses_target(),
             Self::MoveCounters {
                 from, to, amount, ..
@@ -6089,10 +6130,14 @@ impl Instruction {
             | Self::DrawGame
             | Self::TurnFaceUpSubject { .. }
             | Self::TurnFaceDownSubject { .. }
+            | Self::TransformSubject { .. }
             | Self::EmpowerJace { .. }
             | Self::AddOneOfEachCounterKindOnSubject { .. }
             | Self::GrantLastMovedPlayPermission { .. }
             | Self::MoveLastMovedFiltered { .. }
+            | Self::CounterMatchingStackObjects { .. }
+            | Self::ReturnLinkedExile { .. }
+            | Self::TransferAllCountersFromTriggeringLki { .. }
             | Self::MoveGroupToLibrary { .. }
             | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
@@ -6135,6 +6180,7 @@ impl Instruction {
             | Self::OpponentsLoseAndControllerGains(_)
             | Self::AdjustEachOpponentLife { .. }
             | Self::AdjustPlayersLife { .. }
+            | Self::SetPlayersLife { .. }
             | Self::DrainOpponents(_)
             | Self::DamageOpponentsAmount(_)
             | Self::DamageRelatedPlayerAmount(_)
@@ -6554,6 +6600,7 @@ impl Instruction {
                 | Self::AdjustControllerLife { .. }
                 | Self::AdjustEachOpponentLife { .. }
                 | Self::AdjustPlayersLife { .. }
+                | Self::SetPlayersLife { .. }
                 | Self::CreateTokens { .. }
                 | Self::CreateAttackingTokens { .. }
                 | Self::Mill { .. }
@@ -6665,10 +6712,14 @@ impl Instruction {
                 | Self::ExileSubjectUntilSourceLeaves { .. }
                 | Self::TurnFaceUpSubject { .. }
                 | Self::TurnFaceDownSubject { .. }
+                | Self::TransformSubject { .. }
                 | Self::EmpowerJace { .. }
                 | Self::AddOneOfEachCounterKindOnSubject { .. }
                 | Self::GrantLastMovedPlayPermission { .. }
                 | Self::MoveLastMovedFiltered { .. }
+                | Self::CounterMatchingStackObjects { .. }
+                | Self::ReturnLinkedExile { .. }
+                | Self::TransferAllCountersFromTriggeringLki { .. }
                 | Self::PreventDamageThisTurn(
                     crate::damage::TurnPreventionFilter::Combat
                         | crate::damage::TurnPreventionFilter::All
@@ -7243,6 +7294,7 @@ impl ExecutableBody {
                         | Instruction::DealDamageFrom { .. }
                         | Instruction::AttachPermanent { .. }
                         | Instruction::UnattachSubject { .. }
+                        | Instruction::TransferAllCountersFromTriggeringLki { .. }
                 )
             });
             if !valid_target
@@ -7899,7 +7951,8 @@ impl ExecutableBody {
                 }
                 Instruction::AdjustPlayersLife {
                     players, amount, ..
-                } => {
+                }
+                | Instruction::SetPlayersLife { players, amount } => {
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
@@ -12591,7 +12644,16 @@ impl ExecutableBody {
                 }
                 Instruction::TurnFaceUpSubject { subject }
                 | Instruction::TurnFaceDownSubject { subject }
-                | Instruction::AddOneOfEachCounterKindOnSubject { subject } => {
+                | Instruction::TransformSubject { subject }
+                | Instruction::AddOneOfEachCounterKindOnSubject { subject }
+                | Instruction::TransferAllCountersFromTriggeringLki { to: subject } => {
+                    if matches!(
+                        instruction,
+                        Instruction::TransferAllCountersFromTriggeringLki { .. }
+                    ) && !matches!(context, BodyContext::TriggerBound { .. })
+                    {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
                     subject
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -12743,6 +12805,27 @@ impl ExecutableBody {
                     }
                     None
                 }
+                Instruction::CounterMatchingStackObjects {
+                    filter,
+                    include_spells,
+                    include_abilities,
+                    ..
+                } => {
+                    if !*include_spells && !*include_abilities {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    if let Some(sf) = filter {
+                        sf.validate_vocabulary(vocabulary)?;
+                    }
+                    None
+                }
+                Instruction::ReturnLinkedExile { .. } => {
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    None
+                }
+
                 Instruction::AttachPermanentToPlayer { attachment, player } => {
                     let att_fam = match attachment {
                         MoveSubjectRef::TargetObject => Some(match self.target {
@@ -16476,6 +16559,7 @@ impl ExecutableBody {
                     | Instruction::OpponentsLoseAndControllerGains(_)
                     | Instruction::AdjustEachOpponentLife { .. }
                     | Instruction::AdjustPlayersLife { .. }
+                    | Instruction::SetPlayersLife { .. }
                     | Instruction::RememberPermanentTarget
                     | Instruction::ControllerLosesRememberedManaValue
                     | Instruction::ExiledTargetControllerGainsPower
@@ -16985,10 +17069,14 @@ impl ExecutableBody {
                     | Instruction::DrawGame
                     | Instruction::TurnFaceUpSubject { .. }
                     | Instruction::TurnFaceDownSubject { .. }
+                    | Instruction::TransformSubject { .. }
                     | Instruction::EmpowerJace { .. }
                     | Instruction::AddOneOfEachCounterKindOnSubject { .. }
                     | Instruction::GrantLastMovedPlayPermission { .. }
                     | Instruction::MoveLastMovedFiltered { .. }
+                    | Instruction::CounterMatchingStackObjects { .. }
+                    | Instruction::ReturnLinkedExile { .. }
+                    | Instruction::TransferAllCountersFromTriggeringLki { .. }
                     | Instruction::DiscardUpToExt { .. }
                     | Instruction::Earthbend { .. }
                     | Instruction::ReturnEarthbentCard
@@ -20012,6 +20100,7 @@ impl Program {
                             | Instruction::PutNamedCounterOnTarget { amount, .. }
                             | Instruction::PutCountersOnSubject { amount, .. }
                             | Instruction::AdjustPlayersLife { amount, .. }
+                            | Instruction::SetPlayersLife { amount, .. }
                             | Instruction::ExileTopPlay { count: amount, .. }
                             | Instruction::LookTopChoose { count: amount, .. }
                             | Instruction::RepeatLoop { count: amount, .. }
@@ -20435,6 +20524,7 @@ impl Program {
                             | Instruction::OpponentsLoseAndControllerGains(_)
                             | Instruction::AdjustEachOpponentLife { .. }
                             | Instruction::AdjustPlayersLife { .. }
+                            | Instruction::SetPlayersLife { .. }
                             | Instruction::FlipCoin { .. }
                             | Instruction::GoadOtherPlayersCreatures
                             | Instruction::AdditionalCombat { .. }
@@ -20703,10 +20793,14 @@ impl Program {
                             | Instruction::ExileSubjectUntilSourceLeaves { .. }
                             | Instruction::TurnFaceUpSubject { .. }
                             | Instruction::TurnFaceDownSubject { .. }
+                            | Instruction::TransformSubject { .. }
                             | Instruction::EmpowerJace { .. }
                             | Instruction::AddOneOfEachCounterKindOnSubject { .. }
                             | Instruction::GrantLastMovedPlayPermission { .. }
-                            | Instruction::MoveLastMovedFiltered { .. } => {
+                            | Instruction::MoveLastMovedFiltered { .. }
+                            | Instruction::CounterMatchingStackObjects { .. }
+                            | Instruction::ReturnLinkedExile { .. }
+                            | Instruction::TransferAllCountersFromTriggeringLki { .. } => {
                                 !operation.uses_mode_target()
                             }
                             Instruction::Scry { player, .. }

@@ -114,12 +114,14 @@ pub enum SpellCostModifier {
         pay_life_mv: bool,
         discount: u8,
     },
-    /// Alternative mana cost for spells matching `filter` (e.g. Omniscience, Jodah, Fist of Suns).
+    /// Alternative mana cost (or pay life equal to mana value) for spells matching `filter` (e.g. Omniscience, Jodah, Fist of Suns, Bolas's Citadel, Aluren).
     AlternativeForMatching {
         filter: SpellFilter,
         mana: crate::mana::ManaCost,
         once_each_turn: bool,
         own_turn_only: bool,
+        pay_life_mv: bool,
+        each_player: bool,
     },
     /// Modify the generic mana cost of spells cast using `keyword`.
     KeywordCastCost {
@@ -718,6 +720,10 @@ pub enum ActivatedCostScope {
     Unearth,
     /// Encore abilities (CR 702.141).
     Encore,
+    /// Planeswalker loyalty abilities (CR 606).
+    Loyalty,
+    /// Activated abilities that target a permanent matching `ObjectFilter`.
+    Targeting(Box<crate::program::ObjectFilter>),
 }
 
 /// Event predicate matched by a generalized trigger multiplier (CR 603.2d).
@@ -1216,7 +1222,9 @@ impl StaticContinuousAbility {
                     condition.rewrite_creature_type(change.from, change.to);
                 }
                 StaticModifierRule::ActivatedAbilityCost { scope, scale, .. } => {
-                    if let ActivatedCostScope::PermanentFilter(filter) = scope {
+                    if let ActivatedCostScope::PermanentFilter(filter)
+                    | ActivatedCostScope::Targeting(filter) = scope
+                    {
                         filter.rewrite_creature_type(change.from, change.to);
                     }
                     if let Some(expr) = scale {
@@ -1630,7 +1638,9 @@ impl StaticContinuousAbility {
                         if *delta == 0 {
                             return Err(CharacteristicDefinitionError::EmptyParts);
                         }
-                        if let ActivatedCostScope::PermanentFilter(filter) = scope {
+                        if let ActivatedCostScope::PermanentFilter(filter)
+                        | ActivatedCostScope::Targeting(filter) = scope
+                        {
                             filter
                                 .validate_vocabulary(vocabulary)
                                 .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;

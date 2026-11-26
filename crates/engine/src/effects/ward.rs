@@ -161,7 +161,7 @@ impl EffectWindow {
         Ok(())
     }
 
-    fn counter_captured_stack_entry(
+    pub(super) fn counter_captured_stack_entry(
         &mut self,
         source_entry: StackEntryId,
         index: usize,
