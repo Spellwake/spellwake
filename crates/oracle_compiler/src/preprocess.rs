@@ -777,7 +777,11 @@ pub fn parse_pt_mod(tok: &str) -> Option<(String, String)> {
         let Some(rest) = p.strip_prefix('+').or_else(|| p.strip_prefix('-')) else {
             return false;
         };
-        rest == "X" || rest == "x" || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        rest == "X"
+            || rest == "x"
+            || rest == "Y"
+            || rest == "y"
+            || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
     };
     if valid_part(dx) && valid_part(dy) {
         Some((dx.to_ascii_uppercase(), dy.to_ascii_uppercase()))
