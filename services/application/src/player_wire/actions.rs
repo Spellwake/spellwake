@@ -133,6 +133,156 @@ pub enum PlayerManaRestriction {
     SpellWithMinManaValueOrX,
     CreatureSpellWithMinManaValueOrX,
     CreatureOrEnchantmentSpell,
+    Predicate,
+}
+/// Public wire color rule inside a generalized [`PlayerSpellManaClause`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PlayerSpellColorRule {
+    Colorless,
+    Colored,
+    ExactColor { color: ManaColor },
+    MonocoloredOf { color: ManaColor },
+    Multicolored,
+    ExactColorCount { count: u8 },
+}
+/// Public wire cast mode inside a generalized [`PlayerSpellManaClause`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerSpellCastMode {
+    FaceDown,
+    Kicked,
+    Disturb,
+    FromGraveyard,
+    FromExile,
+    NotFromHand,
+    NotOwned,
+    SecondSpellThisTurn,
+}
+/// Public wire keyword predicate inside a generalized [`PlayerSpellManaClause`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerManaSpellKeyword {
+    Devoid,
+    Freerunning,
+    Foretell,
+    Flashback,
+    Disturb,
+}
+/// Public wire conjunctive spell clause inside [`PlayerManaPredicate`].
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerSpellManaClause {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_type: Option<PlayerCardType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_card_type: Option<PlayerCardType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supertype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creature_type: Option<super::views::PlayerCreatureTypeLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enchantment_subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_aura: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spell_subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planeswalker_subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rule: Option<PlayerSpellColorRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<PlayerManaSpellKeyword>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cast_mode: Option<PlayerSpellCastMode>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_abilities: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_mana_value: Option<u8>,
+}
+/// Public wire ability kind inside [`PlayerAbilityManaClause`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerAbilitySpendKind {
+    Equip,
+    PowerUp,
+    GainClassLevel,
+}
+/// Public wire conjunctive ability clause inside [`PlayerManaPredicate`].
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerAbilityManaClause {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_card_type: Option<PlayerCardType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_creature_type: Option<super::views::PlayerCreatureTypeLabel>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_colorless: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PlayerAbilitySpendKind>,
+}
+/// Public wire special action permitted by [`PlayerManaPredicate`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerManaSpecialAction {
+    Foretell,
+    TurnFaceUp,
+    TurnCreatureFaceUp,
+    UnlockDoor,
+    CumulativeUpkeep,
+}
+/// Public wire generalized spending predicate for floating restricted mana.
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerManaPredicate {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_any_spell: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spell_clauses: Vec<PlayerSpellManaClause>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_any_ability: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ability_clauses: Vec<PlayerAbilityManaClause>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub special_actions: Vec<PlayerManaSpecialAction>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub makes_spell_uncounterable: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disallow_generic: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_cost_containing_colorless: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_cost_containing_x: bool,
+}
+impl PlayerManaPredicate {
+    pub(super) fn valid(&self) -> bool {
+        (self.allow_any_spell
+            || !self.spell_clauses.is_empty()
+            || self.allow_any_ability
+            || !self.ability_clauses.is_empty()
+            || !self.special_actions.is_empty()
+            || self.allow_cost_containing_colorless
+            || self.allow_cost_containing_x
+            || self.disallow_generic)
+            && self.spell_clauses.len() <= 32
+            && self.ability_clauses.len() <= 32
+            && self.special_actions.len() <= 8
+            && unique(self.special_actions.iter().copied())
+            && self.spell_clauses.iter().all(|c| {
+                !matches!(
+                    c.color_rule,
+                    Some(
+                        PlayerSpellColorRule::ExactColor {
+                            color: ManaColor::Colourless
+                        } | PlayerSpellColorRule::MonocoloredOf {
+                            color: ManaColor::Colourless
+                        }
+                    )
+                )
+            })
+    }
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -143,6 +293,8 @@ pub struct PlayerRestrictedManaSpend {
     pub creature_type: Option<super::views::PlayerCreatureTypeLabel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_mana_value: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<PlayerManaPredicate>,
     pub amount: RulesCount,
 }
 /// Empty allocation represents an explicit zero payment; source checks actual cost.
@@ -181,11 +333,15 @@ impl PlayerPayment {
             && self.spend.len() <= 6
             && unique(self.spend.iter().map(|x| x.color))
             && list(&self.restricted_mana)
-            && unique(
-                self.restricted_mana
-                    .iter()
-                    .map(|x| (x.color, x.restriction, &x.creature_type, x.min_mana_value)),
-            )
+            && unique(self.restricted_mana.iter().map(|x| {
+                (
+                    x.color,
+                    x.restriction,
+                    &x.creature_type,
+                    x.min_mana_value,
+                    &x.predicate,
+                )
+            }))
             && self.restricted_mana.iter().all(|item| {
                 item.amount.as_rules_integer().is_positive()
                     && (item.creature_type.is_none()
@@ -203,6 +359,12 @@ impl PlayerPayment {
                                 | PlayerManaRestriction::SpellWithMinManaValueOrX
                                 | PlayerManaRestriction::CreatureSpellWithMinManaValueOrX
                         ))
+                    && (item.predicate.is_some()
+                        == (item.restriction == PlayerManaRestriction::Predicate))
+                    && item
+                        .predicate
+                        .as_ref()
+                        .is_none_or(PlayerManaPredicate::valid)
                     && self
                         .spend
                         .iter()

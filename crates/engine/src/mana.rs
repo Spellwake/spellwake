@@ -400,8 +400,140 @@ impl CastManaSummary {
     }
 }
 
-/// A rule restricting which spells may be paid for with a floating mana unit.
+/// Color predicate inside a generalized [`SpellManaClause`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpellColorRule {
+    Colorless,
+    Colored,
+    ExactColor(crate::characteristics::Color),
+    MonocoloredOf(crate::characteristics::Color),
+    Multicolored,
+    ExactColorCount(u8),
+}
+
+/// Casting-mode or origin predicate inside a generalized [`SpellManaClause`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpellCastMode {
+    FaceDown,
+    Kicked,
+    Disturb,
+    FromGraveyard,
+    FromExile,
+    NotFromHand,
+    NotOwned,
+    SecondSpellThisTurn,
+}
+
+/// Keyword predicate supported by generalized mana spending restrictions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ManaSpellKeyword {
+    Devoid,
+    Freerunning,
+    Foretell,
+    Flashback,
+    Disturb,
+}
+
+/// One conjunctive spell-matching clause inside a [`ManaSpendPredicate`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SpellManaClause {
+    pub card_type: Option<crate::program::CardType>,
+    pub exclude_card_type: Option<crate::program::CardType>,
+    pub supertype: Option<crate::program::Supertype>,
+    pub creature_type: Option<spellwake_contracts::creature_types::CreatureTypeId>,
+    pub artifact_subtype: Option<crate::program::ArtifactSubtype>,
+    pub enchantment_subtype: Option<crate::program::EnchantmentSubtype>,
+    pub is_aura: bool,
+    pub spell_subtype: Option<crate::program::SpellSubtype>,
+    pub planeswalker_subtype: Option<crate::program::PlaneswalkerSubtype>,
+    pub color_rule: Option<SpellColorRule>,
+    pub keyword: Option<ManaSpellKeyword>,
+    pub cast_mode: Option<SpellCastMode>,
+    pub no_abilities: bool,
+    pub min_mana_value: Option<u8>,
+}
+
+/// Ability-kind predicate inside an [`AbilityManaClause`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AbilitySpendKind {
+    Equip,
+    PowerUp,
+    GainClassLevel,
+}
+
+/// One conjunctive activated/mana-ability matching clause inside a [`ManaSpendPredicate`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AbilityManaClause {
+    pub source_card_type: Option<crate::program::CardType>,
+    pub source_creature_type: Option<spellwake_contracts::creature_types::CreatureTypeId>,
+    pub source_colorless: bool,
+    pub kind: Option<AbilitySpendKind>,
+}
+
+/// Special actions and upkeep payments permitted by a [`ManaSpendPredicate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ManaSpecialAction {
+    Foretell,
+    TurnFaceUp,
+    TurnCreatureFaceUp,
+    UnlockDoor,
+    CumulativeUpkeep,
+}
+
+/// Generalized DNF mana spending rule.
+///
+/// Clauses are kept in canonical sorted, deduplicated order so values are safe as
+/// `BTreeMap` keys and deterministic across wire projection and replay.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ManaSpendPredicate {
+    pub allow_any_spell: bool,
+    pub spell_clauses: Vec<SpellManaClause>,
+    pub allow_any_ability: bool,
+    pub ability_clauses: Vec<AbilityManaClause>,
+    pub special_actions: BTreeSet<ManaSpecialAction>,
+    pub makes_spell_uncounterable: bool,
+    pub disallow_generic: bool,
+    pub allow_cost_containing_colorless: bool,
+    pub allow_cost_containing_x: bool,
+}
+
+impl ManaSpendPredicate {
+    /// Sort and deduplicate clauses so identical predicates compare equal as map keys.
+    pub fn canonicalize(&mut self) {
+        self.spell_clauses.sort();
+        self.spell_clauses.dedup();
+        self.ability_clauses.sort();
+        self.ability_clauses.dedup();
+    }
+
+    /// Return whether this predicate permits at least one spending category or imposes a cost shape rule.
+    #[must_use]
+    pub fn is_non_empty(&self) -> bool {
+        self.allow_any_spell
+            || !self.spell_clauses.is_empty()
+            || self.allow_any_ability
+            || !self.ability_clauses.is_empty()
+            || !self.special_actions.is_empty()
+            || self.allow_cost_containing_colorless
+            || self.allow_cost_containing_x
+            || self.disallow_generic
+    }
+
+    pub(crate) fn valid_authored(&self, vocabulary: &CreatureTypeVocabulary) -> bool {
+        self.is_non_empty()
+            && self.spell_clauses.iter().all(|c| {
+                c.creature_type
+                    .is_none_or(|k| vocabulary.label(k).is_some())
+            })
+            && self.ability_clauses.iter().all(|c| {
+                c.source_creature_type
+                    .is_none_or(|k| vocabulary.label(k).is_some())
+            })
+    }
+}
+
+/// A rule restricting which spells may be paid for with a floating mana unit.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ManaRestriction {
     PlaneswalkerSpell,
     ColorlessSpell,
@@ -442,17 +574,53 @@ pub enum ManaRestriction {
     SpellWithMinManaValueOrX(u8),
     CreatureSpellWithMinManaValueOrX(u8),
     CreatureOrEnchantmentSpell,
+    /// Generalized predicate-based spending restriction.
+    Predicate(ManaSpendPredicate),
 }
 impl ManaRestriction {
-    fn valid_authored(self, vocabulary: &CreatureTypeVocabulary) -> bool {
+    pub(crate) fn valid_authored(&self, vocabulary: &CreatureTypeVocabulary) -> bool {
         match self {
             Self::CreatureSpellOfType(Some(kind))
-            | Self::CreatureSpellOrAbilityOfType(Some(kind)) => vocabulary.label(kind).is_some(),
+            | Self::CreatureSpellOrAbilityOfType(Some(kind)) => vocabulary.label(*kind).is_some(),
             Self::CreatureSpellOfType(None)
             | Self::CreatureSpellOrAbilityOfType(None)
             | Self::CreatureSpellOfTypeUncounterable(_) => false,
             Self::ColorlessEldraziSpellOrAbility => vocabulary.resolve_label("Eldrazi").is_some(),
+            Self::Predicate(pred) => pred.valid_authored(vocabulary),
             _ => true,
+        }
+    }
+
+    /// Whether spending this mana makes the cast spell uncounterable.
+    #[must_use]
+    pub fn makes_spell_uncounterable(&self) -> bool {
+        match self {
+            Self::CreatureSpellOfTypeUncounterable(_) => true,
+            Self::Predicate(pred) => pred.makes_spell_uncounterable,
+            _ => false,
+        }
+    }
+
+    /// Whether this mana cannot be used to pay generic mana costs (for example, Jegantha).
+    #[must_use]
+    pub fn disallows_generic(&self) -> bool {
+        matches!(self, Self::Predicate(pred) if pred.disallow_generic)
+    }
+
+    /// Whether this restriction permits spending the mana on a special action or upkeep payment.
+    #[must_use]
+    pub fn permits_special_action(&self, action: ManaSpecialAction) -> bool {
+        match self {
+            Self::NotNonartifactSpell | Self::NotSpellFromHand => true,
+            Self::InstantOrSorceryOrForetell => action == ManaSpecialAction::Foretell,
+            Self::Predicate(pred) => {
+                pred.special_actions.contains(&action)
+                    || (action == ManaSpecialAction::TurnCreatureFaceUp
+                        && pred
+                            .special_actions
+                            .contains(&ManaSpecialAction::TurnFaceUp))
+            }
+            _ => false,
         }
     }
 }
@@ -626,12 +794,16 @@ pub enum ChosenTypeManaScope {
 }
 
 /// Spending restriction attached to produced mana.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManaOutputRestriction {
     /// Static restriction rule independent of the source's chosen creature type.
     Fixed(ManaRestriction),
     /// Dynamic restriction reading the source's entry-chosen creature type at activation.
     ChosenCreatureType(ChosenTypeManaScope),
+    /// Dynamic restriction permitting either a creature spell of the entry-chosen type or `fallback`.
+    ChosenCreatureTypeOr(ManaSpendPredicate),
+    /// Dynamic restriction permitting only monocolored spells of the entry-chosen color.
+    MonocoloredOfChosenColor,
 }
 
 /// Immediate side effect applied alongside producing mana.
@@ -983,7 +1155,11 @@ impl ManaOutput {
                     }
                     ManaOutputModifier::Restrict(restriction) => match restriction {
                         ManaOutputRestriction::Fixed(rule) => rule.valid_authored(vocabulary),
-                        ManaOutputRestriction::ChosenCreatureType(_) => true,
+                        ManaOutputRestriction::ChosenCreatureType(_)
+                        | ManaOutputRestriction::MonocoloredOfChosenColor => true,
+                        ManaOutputRestriction::ChosenCreatureTypeOr(pred) => {
+                            pred.valid_authored(vocabulary)
+                        }
                     },
                     ManaOutputModifier::SpendEffect(_) => true,
                     ManaOutputModifier::SideEffect(
@@ -1099,4 +1275,61 @@ pub(crate) fn prepare_payment(
         .into_iter()
         .map(|(mana_type, amount)| ManaSpend { mana_type, amount })
         .collect())
+}
+
+#[cfg(test)]
+mod predicate_tests {
+    use super::*;
+    use crate::program::{CardType, Supertype};
+
+    #[test]
+    fn mana_spend_predicate_canonicalization_is_deterministic_and_deduplicates() {
+        let clause_a = SpellManaClause {
+            card_type: Some(CardType::Creature),
+            ..Default::default()
+        };
+        let clause_b = SpellManaClause {
+            supertype: Some(Supertype::Legendary),
+            ..Default::default()
+        };
+        let mut p1 = ManaSpendPredicate {
+            spell_clauses: vec![clause_b.clone(), clause_a.clone(), clause_b.clone()],
+            ..Default::default()
+        };
+        let mut p2 = ManaSpendPredicate {
+            spell_clauses: vec![clause_a, clause_b],
+            ..Default::default()
+        };
+        p1.canonicalize();
+        p2.canonicalize();
+        assert_eq!(p1, p2);
+        assert_eq!(p1.spell_clauses.len(), 2);
+    }
+
+    #[test]
+    fn mana_spend_predicate_flags_and_special_actions_match_contract() {
+        let empty = ManaSpendPredicate::default();
+        assert!(!empty.is_non_empty());
+
+        let jegantha = ManaSpendPredicate {
+            allow_any_spell: true,
+            allow_any_ability: true,
+            disallow_generic: true,
+            ..Default::default()
+        };
+        let r = ManaRestriction::Predicate(jegantha);
+        assert!(r.disallows_generic());
+        assert!(!r.makes_spell_uncounterable());
+
+        let face_up = ManaSpendPredicate {
+            special_actions: BTreeSet::from([ManaSpecialAction::TurnFaceUp]),
+            makes_spell_uncounterable: true,
+            ..Default::default()
+        };
+        let r2 = ManaRestriction::Predicate(face_up);
+        assert!(r2.makes_spell_uncounterable());
+        assert!(r2.permits_special_action(ManaSpecialAction::TurnFaceUp));
+        assert!(r2.permits_special_action(ManaSpecialAction::TurnCreatureFaceUp));
+        assert!(!r2.permits_special_action(ManaSpecialAction::Foretell));
+    }
 }

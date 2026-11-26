@@ -1363,13 +1363,44 @@ impl EffectWindow {
         if let Some(ref res) = restriction {
             collect_only_spend_mana_types(res, &mut only_spend_mana_types);
         }
+        let ability_spend_kind = if restriction
+            .as_ref()
+            .is_some_and(crate::activated::ActivationRestriction::has_power_up)
+        {
+            Some(crate::mana::AbilitySpendKind::PowerUp)
+        } else if selected
+            .body
+            .instructions
+            .iter()
+            .any(|ins| matches!(ins, Instruction::AdvanceClassLevel(_)))
+        {
+            Some(crate::mana::AbilitySpendKind::GainClassLevel)
+        } else if selected.body.instructions.iter().any(|ins| {
+            matches!(
+                ins,
+                Instruction::Attach(crate::attachment::AttachAbility::Equip)
+            )
+        }) {
+            Some(crate::mana::AbilitySpendKind::Equip)
+        } else {
+            None
+        };
+        let has_x_cost = chosen_x.is_some();
         let pay = |cost: &ManaCost| {
             let spend = self.prepare_restricted_mana_payment(
                 cost,
                 payment.as_ref(),
                 actor,
                 restricted,
-                |rule| self.restriction_allows_ability(rule, current),
+                |rule| {
+                    self.restriction_allows_ability(
+                        rule,
+                        current,
+                        cost,
+                        has_x_cost,
+                        ability_spend_kind,
+                    )
+                },
             )?;
             for required_type in &only_spend_mana_types {
                 if spend

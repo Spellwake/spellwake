@@ -302,8 +302,10 @@ native!(ExecutableBody, self, {
         | Instruction::ExertAbilitySource
         | Instruction::CollectEvidence { .. }
         | Instruction::Blight { .. }
+        | Instruction::Populate
         | Instruction::MoveSubject { .. }
         | Instruction::SelectZoneCardsToZone { .. }
+        | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
         | Instruction::DealDamageFrom { .. }
         | Instruction::DivideDamageAmongTargets { .. }
@@ -852,6 +854,7 @@ native!(ExecutableBody, self, {
         | Instruction::UntapOrTapSelect { .. }
         | Instruction::MoveGraveyardGroupOwned { .. }
         | Instruction::LookTopChooseExt { .. }
+        | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::CreateTokenCopyExt { .. }
         | Instruction::MoveCounters { .. }

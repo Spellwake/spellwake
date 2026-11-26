@@ -616,7 +616,7 @@ fn cmm_commodore_guff_counters_another_walker_creates_a_restricted_mana_wizard_a
     assert_eq!(
         red.execution()
             .restricted_mana()
-            .get(&(A, Red, restriction)),
+            .get(&(A, Red, restriction.clone())),
         Some(&1.into())
     );
     let cast = |s: &GameState, n, generic| GameCommand::CastWithResources {
@@ -630,7 +630,7 @@ fn cmm_commodore_guff_counters_another_walker_creates_a_restricted_mana_wizard_a
             })),
             restricted_mana: vec![RestrictedManaSpend {
                 mana_type: Red,
-                restriction,
+                restriction: restriction.clone(),
                 amount: 1.into(),
             }],
             ..Default::default()

@@ -502,7 +502,9 @@ fn cmm_narset_ancient_way_uses_restricted_mana_creates_reflexive_nonland_damage_
         let mana = reply(&colors, DecisionReply::ManaColor(c)).into_state();
         let restriction = ManaRestriction::NoncreatureSpell;
         assert_eq!(
-            mana.execution().restricted_mana().get(&(A, c, restriction)),
+            mana.execution()
+                .restricted_mana()
+                .get(&(A, c, restriction.clone())),
             Some(&1.into())
         );
         let cast = |id| GameCommand::CastWithResources {
@@ -512,7 +514,7 @@ fn cmm_narset_ancient_way_uses_restricted_mana_creates_reflexive_nonland_damage_
                 mana: Some(spend(&[(c, 1)])),
                 restricted_mana: vec![RestrictedManaSpend {
                     mana_type: c,
-                    restriction,
+                    restriction: restriction.clone(),
                     amount: 1.into(),
                 }],
                 ..Default::default()
