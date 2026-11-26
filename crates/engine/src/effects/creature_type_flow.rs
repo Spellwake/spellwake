@@ -344,8 +344,7 @@ impl EffectWindow {
     ) -> Result<RulesInteger, EffectError> {
         use crate::program::{
             AttachedCountKind, CounterSubjectRef, EventValueKind, MatchObjectRef, ObjectStatKind,
-            PlayerStatExpr, SourceStateExpr, StatAggregate, SubtypeFilter, ValueExpr,
-            ValueObjectRef, ValueZone,
+            PlayerStatExpr, SourceStateExpr, SubtypeFilter, ValueExpr, ValueObjectRef, ValueZone,
         };
         let resolve_ability_source = || -> Option<ObjectId> {
             if let Some(id) = explicit_source {
@@ -1271,13 +1270,7 @@ impl EffectWindow {
                         }
                     }
                 });
-                match op {
-                    StatAggregate::Max => Ok(values.max().unwrap_or_else(|| 0.into())),
-                    StatAggregate::Min => Ok(values.min().unwrap_or_else(|| 0.into())),
-                    StatAggregate::Sum => {
-                        Ok(values.fold(0.into(), |total: RulesInteger, v| total.plus(&v)))
-                    }
-                }
+                Ok(op.evaluate(values))
             }
             ValueExpr::ObjectStat { subject, stat } => match (subject, stat) {
                 (ValueObjectRef::AbilitySource, stat) => {

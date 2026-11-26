@@ -6528,6 +6528,20 @@ fn lower_value_expr_inner(
         }
         ValueExprAst::DistinctCountAmong { category, filter } => {
             match category.trim().to_ascii_lowercase().as_str() {
+                "different_powers" | "different powers" => {
+                    if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                        || filter.any_types != AstCardTypeMask::CREATURE
+                        || filter.any_spell
+                    {
+                        return Err("oracle:unsupported-value-expr");
+                    }
+                    let obj = lower_object_filter(filter, vocabulary)?;
+                    Ok(ValueExpr::aggregate(
+                        obj,
+                        ObjectStatKind::Power,
+                        StatAggregate::CountDistinct,
+                    ))
+                }
                 "colors" => {
                     if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                         || filter.any_spell

@@ -471,6 +471,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::program::TemporaryRuleKind::SpellCostReduction { filter: f, .. }
                 | crate::program::TemporaryRuleKind::SpellCostIncrease { filter: f, .. }
                 | crate::program::TemporaryRuleKind::FilteredFlash { filter: f, .. }
+                | crate::program::TemporaryRuleKind::NextSpellKeyword { filter: f, .. }
                 | crate::program::TemporaryRuleKind::ZoneCastPermission {
                     filter: Some(f), ..
                 } => {

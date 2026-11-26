@@ -94,14 +94,26 @@ pub(super) fn lower_restrictions_statics_instruction(
                             condition: None,
                             paired_rule: None,
                         } if matches!(subject.as_ref(), SubjectRefAst::Group(inner) if inner == filter)
-                            && matches!(keywords.as_slice(), [keyword] if keyword.eq_ignore_ascii_case("flash")) =>
+                            && keywords.len() == 1 =>
                         {
-                            builder.instructions.push(Instruction::CreateTemporaryRule {
-                                rule: Box::new(TemporaryRuleKind::FilteredFlash {
+                            let rule = match keywords[0].trim().to_ascii_lowercase().as_str() {
+                                "flash" => TemporaryRuleKind::FilteredFlash {
                                     player: ResolvingPlayer::Controller,
                                     filter: flt_obj,
                                     next_only: true,
-                                }),
+                                },
+                                "convoke" => TemporaryRuleKind::NextSpellKeyword {
+                                    filter: flt_obj,
+                                    keyword: KeywordAbility::Convoke,
+                                },
+                                "improvise" => TemporaryRuleKind::NextSpellKeyword {
+                                    filter: flt_obj,
+                                    keyword: KeywordAbility::Improvise,
+                                },
+                                _ => return Err("oracle:unsupported-temp-static"),
+                            };
+                            builder.instructions.push(Instruction::CreateTemporaryRule {
+                                rule: Box::new(rule),
                                 duration: dur,
                             });
                             return Ok(());
@@ -5509,5 +5521,70 @@ mod wave10_static_tests {
                 ..
             }]
         ));
+    }
+    #[test]
+    fn wave10_named_next_spell_payment_keywords_lower_complete_cards() {
+        let vocabulary = CreatureTypeVocabulary::new(
+            "wave10-payment-keywords".into(),
+            [0; 32],
+            vec!["Spirit".into()],
+        )
+        .expect("test vocabulary");
+        for (name, kind, cost, pt, text, keyword) in [
+            (
+                "Wand of the Worldsoul",
+                "Artifact",
+                Some("{2}{W}"),
+                None,
+                "This artifact enters tapped.\n{T}: Add {W}.\n{T}: The next spell you cast this turn has convoke.",
+                KeywordAbility::Convoke,
+            ),
+            (
+                "Flockchaser Phantom",
+                "Creature \u{2014} Spirit",
+                Some("{4}{W}{U}"),
+                Some(("5", "5")),
+                "Convoke\nFlying, vigilance\nWhenever this creature attacks, the next spell you cast this turn has convoke.",
+                KeywordAbility::Convoke,
+            ),
+            (
+                "Archway of Innovation",
+                "Land",
+                None,
+                None,
+                "This land enters tapped unless you control an Island.\n{T}: Add {U}.\n{U}, {T}: The next spell you cast this turn has improvise.",
+                KeywordAbility::Improvise,
+            ),
+        ] {
+            let card = InventoryCard {
+                scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+                oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+                name: name.into(),
+                layout: "normal".into(),
+                faces: vec![spellwake_content::CatalogFace {
+                    name: name.into(),
+                    type_line: Some(kind.into()),
+                    oracle_text: Some(text.into()),
+                    mana_cost: cost.map(str::to_owned),
+                    power: pt.map(|(power, _)| power.into()),
+                    toughness: pt.map(|(_, toughness)| toughness.into()),
+                }],
+                legalities: BTreeMap::new(),
+                eligible_formats: Vec::new(),
+                required_by_base_formats: true,
+                program_evidence: "test",
+            };
+            let program = compile_with_reason(&card, &vocabulary)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let bodies = program
+                .activated
+                .iter()
+                .map(|ability| &ability.body)
+                .chain(program.triggered.iter().map(|ability| &ability.body));
+            assert!(bodies.flat_map(|body| &body.instructions).any(|instruction|
+                matches!(instruction, Instruction::CreateTemporaryRule { rule, duration: ResolvedDuration::UntilEndOfTurn }
+                    if matches!(rule.as_ref(), TemporaryRuleKind::NextSpellKeyword { filter, keyword: actual }
+                        if *actual == keyword && *filter == ObjectFilter::any()))), "{name}");
+        }
     }
 }

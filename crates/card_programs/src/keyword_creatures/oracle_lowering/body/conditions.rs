@@ -520,6 +520,43 @@ pub(in super::super) fn lower_resolution_condition(
             })
         }
         ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter,
+            op: op @ (CompareOp::Ge | CompareOp::Gt),
+            value,
+        } if filter.any_types == AstCardTypeMask::CREATURE
+            && matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            && matches!(filter.controller, None | Some(ControllerRelation::You))
+            && filter.owner.is_none()
+            && filter.predicates.iter().any(|predicate| {
+                matches!(
+                    predicate,
+                    spellwake_oracle_compiler::ast::FilterPredicateAst::StateQualification(name)
+                        if name == "different_powers"
+                )
+            }) =>
+        {
+            let mut selected = filter.as_ref().clone();
+            selected.predicates.retain(|predicate| {
+                !matches!(
+                    predicate,
+                    spellwake_oracle_compiler::ast::FilterPredicateAst::StateQualification(name)
+                        if name == "different_powers"
+                )
+            });
+            selected.controller = Some(ControllerRelation::You);
+            let obj = lower_object_filter(&selected, vocabulary)?;
+            Ok(ResolutionCondition {
+                left: ValueExpr::aggregate(
+                    obj,
+                    ObjectStatKind::Power,
+                    StatAggregate::CountDistinct,
+                ),
+                comparison: lower_comparison(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            })
+        }
+        ConditionAst::ControlsCount {
             player,
             filter,
             op,
@@ -3478,5 +3515,302 @@ pub(in super::super) fn lower_resolution_condition(
             })
         }
         _ => Err("oracle:unsupported-if-condition"),
+    }
+}
+
+#[cfg(test)]
+mod wave11_distinct_power_tests {
+    use super::*;
+
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new(
+            "test-vocab".into(),
+            [0; 32],
+            vec![
+                "Human".into(),
+                "Knight".into(),
+                "Soldier".into(),
+                "Warlock".into(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn coven_uses_distinct_powers_and_preserves_other_constraints() {
+        let vocab = vocabulary();
+        let condition = spellwake_oracle_compiler::filter::parse_condition(
+            "you control three or more creatures with different powers",
+            &cached_compiler_vocab(&vocab),
+        )
+        .unwrap();
+        let expected = ResolutionCondition {
+            left: ValueExpr::aggregate(
+                ObjectFilter::creature().controlled(),
+                ObjectStatKind::Power,
+                StatAggregate::CountDistinct,
+            ),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(3),
+        };
+        assert_eq!(
+            lower_resolution_condition(&condition, &mut BodyBuilder::new(), &vocab, false, None),
+            Ok(expected.clone())
+        );
+        assert_eq!(
+            super::super::super::abilities::lower_trigger_condition(&condition, &vocab),
+            Ok(TriggerCondition::Eval(Box::new(expected)))
+        );
+        let ConditionAst::ControlsCount { filter, .. } = &condition else {
+            panic!("controls-count AST")
+        };
+        for bad_filter in [
+            {
+                let mut f = filter.clone();
+                f.zone = Some(ZoneFilter::YourGraveyard);
+                f
+            },
+            {
+                let mut f = filter.clone();
+                f.controller = Some(ControllerRelation::Opponent);
+                f
+            },
+            {
+                let mut f = filter.clone();
+                f.predicates.push(
+                    spellwake_oracle_compiler::ast::FilterPredicateAst::StateQualification(
+                        "unimplemented_condition".into(),
+                    ),
+                );
+                f
+            },
+        ] {
+            let bad = ConditionAst::ControlsCount {
+                player: PlayerRefAst::You,
+                filter: bad_filter,
+                op: CompareOp::Ge,
+                value: 3,
+            };
+            assert!(
+                lower_resolution_condition(&bad, &mut BodyBuilder::new(), &vocab, false, None)
+                    .is_err()
+            );
+        }
+        let mut narrowed = filter.clone();
+        narrowed.tapped = Some(true);
+        let condition = ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter: narrowed,
+            op: CompareOp::Ge,
+            value: 3,
+        };
+        let lowered =
+            lower_resolution_condition(&condition, &mut BodyBuilder::new(), &vocab, false, None)
+                .unwrap();
+        assert_ne!(
+            lowered.left,
+            ValueExpr::aggregate(
+                ObjectFilter::creature().controlled(),
+                ObjectStatKind::Power,
+                StatAggregate::CountDistinct
+            )
+        );
+    }
+
+    #[test]
+    fn distinct_power_value_rejects_graveyard_counts() {
+        let vocab = vocabulary();
+        let filter = spellwake_oracle_compiler::filter::parse_object_filter(
+            "creatures you control",
+            &cached_compiler_vocab(&vocab),
+        )
+        .unwrap();
+        let expr = ValueExprAst::DistinctCountAmong {
+            category: "different_powers".into(),
+            filter: Box::new(filter.clone()),
+        };
+        assert_eq!(
+            lower_value_expr(&expr, &vocab),
+            Ok(ValueExpr::aggregate(
+                ObjectFilter::creature().controlled(),
+                ObjectStatKind::Power,
+                StatAggregate::CountDistinct
+            ))
+        );
+        let mut graveyard = filter;
+        graveyard.zone = Some(ZoneFilter::YourGraveyard);
+        assert!(
+            lower_value_expr(
+                &ValueExprAst::DistinctCountAmong {
+                    category: "different_powers".into(),
+                    filter: Box::new(graveyard)
+                },
+                &vocab
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn bound_search_bridge_rejects_unrelated_continuations_and_rolls_back() {
+        let vocab = vocabulary();
+        let ast = compile_card(
+            &CardInput {
+                oracle_id: "test",
+                name: "Celebrate the Harvest",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Celebrate the Harvest",
+                    type_line: "Sorcery",
+                    oracle_text: "Search your library for up to X basic land cards, where X is the number of different powers among creatures you control. Put those cards onto the battlefield tapped, then shuffle.",
+                }],
+            },
+            &cached_compiler_vocab(&vocab),
+        );
+        let original = ast.faces[0].spell_effects.clone();
+        assert_eq!(original.len(), 3);
+        for variant in 0..5 {
+            let mut instructions = original.clone();
+            match variant {
+                0 => {
+                    instructions[2] = InstructionAst::ShuffleLibrary {
+                        player: PlayerRefAst::EachOpponent,
+                    }
+                }
+                1 => {
+                    let InstructionAst::MoveZone { subject, .. } = &mut instructions[1] else {
+                        panic!("move")
+                    };
+                    **subject = SubjectRefAst::Anaphora("unrelated cards".into());
+                }
+                2 => {
+                    let InstructionAst::BindX { body, .. } = &mut instructions[0] else {
+                        panic!("bind")
+                    };
+                    body.push(InstructionAst::ShuffleLibrary {
+                        player: PlayerRefAst::You,
+                    });
+                }
+                3 => {
+                    let InstructionAst::BindX { x_expr, .. } = &mut instructions[0] else {
+                        panic!("bind")
+                    };
+                    let ValueExprAst::DistinctCountAmong { category, .. } = x_expr.as_mut() else {
+                        panic!("distinct")
+                    };
+                    *category = "unsupported-category".into();
+                }
+                _ => instructions.push(InstructionAst::Draw {
+                    player: PlayerRefAst::You,
+                    count: Box::new(ValueExprAst::ChosenX),
+                    up_to: false,
+                }),
+            }
+            let mut builder = BodyBuilder::new();
+            let mut ids = LoweringIds::default();
+            assert!(
+                super::lower_instruction_seq(
+                    &instructions,
+                    &mut builder,
+                    &vocab,
+                    &mut ids,
+                    false,
+                    false,
+                    None
+                )
+                .is_err(),
+                "variant {variant}"
+            );
+            if variant == 3 {
+                assert!(builder.instructions.is_empty());
+                assert_eq!(
+                    (
+                        ids.next_activated,
+                        ids.next_triggered,
+                        ids.next_mana,
+                        ids.next_static,
+                        ids.next_ct_slot
+                    ),
+                    (0, 0, 0, 0, 0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pinned_coven_cards_and_celebrate_the_harvest_lower_completely() {
+        let vocab = vocabulary();
+        for (name, type_line, cost, stats, text) in [
+            (
+                "Dawnhart Wardens",
+                "Creature \u{2014} Human Warlock",
+                "{1}{G}{W}",
+                Some(("3", "3")),
+                "Vigilance\nCoven \u{2014} At the beginning of combat on your turn, if you control three or more creatures with different powers, creatures you control get +1/+0 until end of turn.",
+            ),
+            (
+                "Candlegrove Witch",
+                "Creature \u{2014} Human Warlock",
+                "{1}{W}",
+                Some(("2", "2")),
+                "Coven \u{2014} At the beginning of combat on your turn, if you control three or more creatures with different powers, this creature gains flying until end of turn.",
+            ),
+            (
+                "Ritual Guardian",
+                "Creature \u{2014} Human Soldier",
+                "{2}{W}",
+                Some(("3", "2")),
+                "Coven \u{2014} At the beginning of combat on your turn, if you control three or more creatures with different powers, this creature gains lifelink until end of turn.",
+            ),
+            (
+                "Candlelit Cavalry",
+                "Creature \u{2014} Human Knight",
+                "{4}{G}",
+                Some(("5", "5")),
+                "Coven \u{2014} At the beginning of combat on your turn, if you control three or more creatures with different powers, this creature gains trample until end of turn.",
+            ),
+            (
+                "Celebrate the Harvest",
+                "Sorcery",
+                "{3}{G}",
+                None,
+                "Search your library for up to X basic land cards, where X is the number of different powers among creatures you control. Put those cards onto the battlefield tapped, then shuffle.",
+            ),
+        ] {
+            let card = InventoryCard {
+                scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+                oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+                name: name.into(),
+                layout: "normal".into(),
+                faces: vec![spellwake_content::CatalogFace {
+                    name: name.into(),
+                    type_line: Some(type_line.into()),
+                    oracle_text: Some(text.into()),
+                    mana_cost: Some(cost.into()),
+                    power: stats.map(|(power, _)| power.into()),
+                    toughness: stats.map(|(_, toughness)| toughness.into()),
+                }],
+                legalities: BTreeMap::new(),
+                eligible_formats: vec![],
+                required_by_base_formats: true,
+                program_evidence: "test",
+            };
+            compile_with_reason(&card, &vocab).unwrap_or_else(|reason| {
+                let input = CardInput {
+                    oracle_id: "test",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text: text,
+                    }],
+                };
+                panic!(
+                    "{name}: {reason}; AST: {:#?}",
+                    compile_card(&input, &cached_compiler_vocab(&vocab))
+                );
+            });
+        }
     }
 }

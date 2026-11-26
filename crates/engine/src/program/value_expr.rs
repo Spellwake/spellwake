@@ -41,6 +41,20 @@ pub enum StatAggregate {
     Max,
     Min,
     Sum,
+    /// Number of distinct values, with objects lacking the statistic omitted.
+    CountDistinct,
+}
+
+impl StatAggregate {
+    /// Reduce the actual values of matching objects without narrowing rules integers.
+    pub(crate) fn evaluate(self, values: impl Iterator<Item = RulesInteger>) -> RulesInteger {
+        match self {
+            Self::Max => values.max().unwrap_or_else(|| 0.into()),
+            Self::Min => values.min().unwrap_or_else(|| 0.into()),
+            Self::Sum => values.fold(0.into(), |total: RulesInteger, value| total.plus(&value)),
+            Self::CountDistinct => RulesInteger::from_usize(values.collect::<BTreeSet<_>>().len()),
+        }
+    }
 }
 
 /// Subject whose statistic is read by [`ValueExpr::ObjectStat`].
@@ -514,7 +528,7 @@ pub enum ValueExpr {
     CountOtherSharingSourceSubtype,
     /// Count creatures currently attacking the resolving controller directly (not a planeswalker).
     CountAttackingController,
-    /// Aggregate (max or sum) a stat across battlefield objects matching `filter`.
+    /// Aggregate a statistic across battlefield objects matching `filter`.
     Aggregate {
         filter: Box<ObjectFilter>,
         stat: ObjectStatKind,

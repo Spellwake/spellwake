@@ -1786,3 +1786,312 @@ pub(in super::super) fn lower_animate_or_set_pt(
         _ => Err("oracle:unsupported-animate-subject"),
     }
 }
+
+// The trailing qualifier applies to the type change, not the granted ability.
+// Lower the pair transactionally so an unsupported grant cannot leave an animation behind.
+pub(super) fn try_lower_preserving_type_animation(
+    instructions: &[InstructionAst],
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<Option<usize>, &'static str> {
+    let [
+        InstructionAst::TemporaryStatic {
+            static_ability,
+            duration,
+        },
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        },
+        ..,
+    ] = instructions
+    else {
+        return Ok(None);
+    };
+    if restriction.trim().trim_end_matches('.').trim() != "it's still a land" {
+        return Ok(None);
+    }
+    let StaticAbilityAst::Compound(members) = static_ability.as_ref() else {
+        return Ok(None);
+    };
+    let Some(StaticAbilityAst::ContinuousLayerEffect {
+        subject,
+        set_types: Some(description),
+        additive_types: false,
+        base_pt: None,
+        set_colors: None,
+        grant_keywords,
+        lose_keywords,
+        lose_all_abilities: false,
+        condition: None,
+    }) = members.first()
+    else {
+        return Ok(None);
+    };
+    if !grant_keywords.is_empty() || !lose_keywords.is_empty() || members.len() < 2 {
+        return Ok(None);
+    }
+    if !members[1..].iter().all(|member| matches!(member,
+        StaticAbilityAst::GrantAbilityText { subject: grant_subject, compiled: Some(_), condition: None, .. }
+            if grant_subject == subject)) {
+        return Ok(None);
+    }
+    let Some((pt, description)) = description.split_once(' ') else {
+        return Ok(None);
+    };
+    let Some((power, toughness)) = pt.split_once('/') else {
+        return Ok(None);
+    };
+    if power.parse::<i64>().is_err() || toughness.parse::<i64>().is_err() {
+        return Ok(None);
+    }
+    let mut trial = builder.clone();
+    let mut trial_ids = LoweringIds {
+        next_activated: ids.next_activated,
+        next_triggered: ids.next_triggered,
+        next_mana: ids.next_mana,
+        next_static: ids.next_static,
+        next_ct_slot: ids.next_ct_slot,
+    };
+    lower_animate_or_set_pt(
+        subject,
+        power,
+        toughness,
+        Some(description),
+        &[],
+        duration,
+        true,
+        &mut trial,
+        vocabulary,
+        in_trigger,
+        self_pronoun_valid,
+        bound_x,
+    )?;
+    for member in &members[1..] {
+        let StaticAbilityAst::GrantAbilityText {
+            subject,
+            ability_text,
+            compiled,
+            ..
+        } = member
+        else {
+            return Err("oracle:unsupported-animation-grant");
+        };
+        lower_instruction(
+            &InstructionAst::GrantAbilityText {
+                subject: subject.clone(),
+                ability_text: ability_text.clone(),
+                compiled: compiled.clone(),
+                duration: duration.clone(),
+            },
+            &mut trial,
+            vocabulary,
+            &mut trial_ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        )?;
+    }
+    *builder = trial;
+    *ids = trial_ids;
+    Ok(Some(2))
+}
+
+#[cfg(test)]
+mod wave11_animation_tests {
+    use super::*;
+
+    fn vocabulary() -> CreatureTypeVocabulary {
+        CreatureTypeVocabulary::new(
+            "wave11-animation".into(),
+            [0; 32],
+            vec!["Elemental".into(), "Spirit".into()],
+        )
+        .expect("test vocabulary")
+    }
+
+    fn lavaclaw_body() -> Vec<InstructionAst> {
+        let vocabulary = vocabulary();
+        let ast = compile_card(
+            &CardInput {
+                oracle_id: "",
+                name: "Lavaclaw Reaches",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Lavaclaw Reaches",
+                    type_line: "Land",
+                    oracle_text: "{1}{B}{R}: Lavaclaw Reaches becomes a 2/2 black and red Elemental creature with \"{X}: This creature gets +X/+0 until end of turn.\" until end of turn. It's still a land.",
+                }],
+            },
+            &cached_compiler_vocab(&vocabulary),
+        );
+        match &ast.faces[0].abilities[0] {
+            AbilityAst::Activated { body, .. } => body.clone(),
+            _ => panic!("activated land animation"),
+        }
+    }
+
+    #[test]
+    fn wave11_compound_land_animation_preserves_types_stats_and_grant() {
+        let mut builder = BodyBuilder::new();
+        lower_instruction_seq(
+            &lavaclaw_body(),
+            &mut builder,
+            &vocabulary(),
+            &mut LoweringIds::default(),
+            false,
+            true,
+            None,
+        )
+        .expect("compound animation lowers");
+        assert_eq!(builder.instructions.len(), 2);
+        let Instruction::ChangeAbilitySource { parts, .. } = &builder.instructions[0] else {
+            panic!("animation must affect the source");
+        };
+        assert!(parts.0.iter().any(|part| matches!(part,
+            ResolvedPartSpec::Type(change) if matches!(&change.types,
+                TypeOperation::Add(types) if types.contains(&CardType::Creature)))));
+        assert!(parts.0.iter().any(|part| matches!(part,
+            ResolvedPartSpec::Type(change)
+                if matches!(&change.land_subtypes, SubtypeOperation::Keep)
+                    && matches!(&change.subtypes, SubtypeOperation::Add(_)))));
+        assert!(parts.0.iter().any(|part| matches!(part,
+            ResolvedPartSpec::Color(ColorOperation::Set(colors)) if colors.len() == 2)));
+        assert!(parts.0.iter().any(|part| matches!(part,
+            ResolvedPartSpec::SetPT(pt) if pt.power == 2.into() && pt.toughness == 2.into())));
+        let Instruction::ChangeAbilitySource { parts, .. } = &builder.instructions[1] else {
+            panic!("grant must affect the same source");
+        };
+        let [ResolvedPartSpec::GrantActivated(ability)] = parts.0.as_slice() else {
+            panic!("expected the granted activated ability");
+        };
+        assert!(matches!(
+            ability.source_cost,
+            SourceCost::GenericX {
+                symbols: 1,
+                tap_source: false
+            }
+        ));
+        assert!(
+            ability
+                .body
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction,
+            Instruction::ChangeAbilitySource { parts, duration: ResolvedDuration::UntilEndOfTurn }
+                if parts.0.iter().any(|part| matches!(part,
+                    ResolvedPartSpec::ModifyPTExpr { power, toughness }
+                        if power.as_ref() == &ValueExpr::chosen_x()
+                            && toughness.as_ref() == &ValueExpr::literal(0)))))
+        );
+    }
+
+    #[test]
+    fn wave11_compound_animation_requires_exact_qualifier_and_matching_subject() {
+        let mut body = lavaclaw_body();
+        let mut builder = BodyBuilder::new();
+        let mut ids = LoweringIds::default();
+        assert_eq!(
+            try_lower_preserving_type_animation(
+                &body[..1],
+                &mut builder,
+                &vocabulary(),
+                &mut ids,
+                false,
+                true,
+                None
+            ),
+            Ok(None)
+        );
+        if let InstructionAst::AbilityRestriction { restriction, .. } = &mut body[1] {
+            *restriction = "it's still a land and can't attack".into();
+        }
+        assert_eq!(
+            try_lower_preserving_type_animation(
+                &body,
+                &mut builder,
+                &vocabulary(),
+                &mut ids,
+                false,
+                true,
+                None
+            ),
+            Ok(None)
+        );
+        body = lavaclaw_body();
+        let InstructionAst::TemporaryStatic { static_ability, .. } = &mut body[0] else {
+            panic!()
+        };
+        let StaticAbilityAst::Compound(members) = static_ability.as_mut() else {
+            panic!()
+        };
+        let StaticAbilityAst::GrantAbilityText { subject, .. } = &mut members[1] else {
+            panic!()
+        };
+        **subject = SubjectRefAst::TriggerSubject;
+        assert_eq!(
+            try_lower_preserving_type_animation(
+                &body,
+                &mut builder,
+                &vocabulary(),
+                &mut ids,
+                false,
+                true,
+                None
+            ),
+            Ok(None)
+        );
+        assert!(builder.instructions.is_empty());
+        assert_eq!(ids.next_activated, 0);
+    }
+
+    #[test]
+    fn wave11_compound_animation_failed_grant_rolls_back_animation_and_ids() {
+        let mut body = lavaclaw_body();
+        let InstructionAst::TemporaryStatic { static_ability, .. } = &mut body[0] else {
+            panic!()
+        };
+        let StaticAbilityAst::Compound(members) = static_ability.as_mut() else {
+            panic!()
+        };
+        let StaticAbilityAst::GrantAbilityText {
+            compiled: Some(compiled),
+            ..
+        } = &mut members[1]
+        else {
+            panic!()
+        };
+        let AbilityAst::Activated {
+            body: grant_body, ..
+        } = &mut compiled.abilities[0]
+        else {
+            panic!()
+        };
+        grant_body.push(InstructionAst::AbilityRestriction {
+            restriction: "unrepresented restriction".into(),
+            condition: None,
+        });
+        let mut builder = BodyBuilder::new();
+        let mut ids = LoweringIds::default();
+        assert!(
+            try_lower_preserving_type_animation(
+                &body,
+                &mut builder,
+                &vocabulary(),
+                &mut ids,
+                false,
+                true,
+                None
+            )
+            .is_err()
+        );
+        assert!(builder.instructions.is_empty());
+        assert_eq!(ids.next_activated, 0);
+        assert_eq!(ids.next_triggered, 0);
+        assert_eq!(ids.next_static, 0);
+    }
+}

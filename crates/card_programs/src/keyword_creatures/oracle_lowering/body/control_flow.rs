@@ -4313,6 +4313,18 @@ pub(in super::super) fn lower_instruction_seq(
             i += 1;
             continue;
         }
+        if let Some(consumed) = try_lower_preserving_type_animation(
+            &ins[i..],
+            builder,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        )? {
+            i += consumed;
+            continue;
+        }
         // Fuse `Target player sacrifices a creature, then gains life equal to that creature's ...`
         // (e.g. Devour Flesh) so both clauses share the single player target rather than splitting.
         if i + 1 < ins.len()
@@ -5891,6 +5903,69 @@ pub(in super::super) fn lower_instruction_seq(
                     body: Box::new(reflexive_body),
                 });
             i += 1;
+            continue;
+        }
+        // A sentence-local X definition can wrap the search while its found-card
+        // movement and shuffle remain sibling sentences (Celebrate the Harvest).
+        // Keep the bridge exact and let the existing search continuation own movement.
+        if let Some(
+            [
+                InstructionAst::BindX { x_expr, body },
+                movement @ InstructionAst::MoveZone { subject, to },
+                shuffle @ InstructionAst::ShuffleLibrary {
+                    player: PlayerRefAst::You,
+                },
+            ],
+        ) = ins.get(i..i + 3)
+            && i + 3 == ins.len()
+            && let [
+                search @ InstructionAst::SearchLibrary {
+                    library,
+                    count,
+                    to_zone,
+                    shuffle: false,
+                    up_to: true,
+                    any_number: false,
+                    extra_zones,
+                    secondary_filter: None,
+                    secondary_is_or: false,
+                    where_x: None,
+                    rest_to_zone: None,
+                    modifier: None,
+                    follow_up,
+                    exact: false,
+                    ..
+                },
+            ] = body.as_slice()
+            && library.eq_ignore_ascii_case("your")
+            && matches!(count.as_ref(), ValueExprAst::ChosenX)
+            && to_zone == "found_set"
+            && extra_zones.is_empty()
+            && follow_up.is_empty()
+            && matches!(subject.as_ref(), SubjectRefAst::Anaphora(name) if name == "those cards")
+            && to == "the battlefield tapped"
+        {
+            let merged = [search.clone(), movement.clone(), shuffle.clone()];
+            let mut probe = builder.clone();
+            let mut probe_ids = LoweringIds {
+                next_activated: ids.next_activated,
+                next_triggered: ids.next_triggered,
+                next_mana: ids.next_mana,
+                next_static: ids.next_static,
+                next_ct_slot: ids.next_ct_slot,
+            };
+            lower_instruction_seq(
+                &merged,
+                &mut probe,
+                vocabulary,
+                &mut probe_ids,
+                in_trigger,
+                self_pronoun_valid,
+                Some(x_expr.as_ref()),
+            )?;
+            *builder = probe;
+            *ids = probe_ids;
+            i += 3;
             continue;
         }
         // Sentence-scoped BindX whose bound X is referenced by downstream instructions in this sequence

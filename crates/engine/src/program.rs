@@ -1675,6 +1675,12 @@ pub enum TemporaryRuleKind {
     NextSpellFree {
         filter: Option<ObjectFilter>,
     },
+    /// Grant convoke or improvise to the controller's next matching spell.
+    /// A successful matching cast consumes every such grant even if the keyword is not used.
+    NextSpellKeyword {
+        filter: ObjectFilter,
+        keyword: KeywordAbility,
+    },
     /// Duration-scoped zone replacement effect (e.g. Yawgmoth's Will, Hallowed Moonlight, Cosmic Intervention).
     TemporaryZoneReplacement(Box<ZoneReplacementAbility>),
     DamageCantBePrevented,
@@ -5240,7 +5246,8 @@ impl Instruction {
                 TemporaryRuleKind::SpellCostIncrease {
                     players, filter, ..
                 } => is_target_affected(*players) || filter_uses_target(filter),
-                TemporaryRuleKind::SpellCostReduction { filter, .. } => filter_uses_target(filter),
+                TemporaryRuleKind::SpellCostReduction { filter, .. }
+                | TemporaryRuleKind::NextSpellKeyword { filter, .. } => filter_uses_target(filter),
                 TemporaryRuleKind::SpellCostReductionExpr { filter, amount, .. } => {
                     filter_uses_target(filter) || amount.uses_target()
                 }
@@ -12704,6 +12711,15 @@ impl ExecutableBody {
                             }
                             _ => None,
                         }
+                    }
+                    TemporaryRuleKind::NextSpellKeyword { filter, keyword } => {
+                        if !matches!(keyword, KeywordAbility::Convoke | KeywordAbility::Improvise) {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                        filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        None
                     }
                     TemporaryRuleKind::FilteredFlash { player, filter, .. } => {
                         filter
