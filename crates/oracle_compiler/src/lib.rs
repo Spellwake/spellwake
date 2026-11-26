@@ -7,16 +7,12 @@
 pub mod ast;
 pub mod audit;
 pub mod clauses;
+pub(crate) mod combinators;
 pub mod filter;
 pub mod keywords;
 pub mod preprocess;
 pub mod standardize;
 pub mod vocab;
-pub mod wave_e10;
-pub mod wave_e6;
-pub mod wave_e7;
-pub mod wave_e8;
-pub mod wave_e9;
 
 use std::error::Error;
 use std::fmt;
