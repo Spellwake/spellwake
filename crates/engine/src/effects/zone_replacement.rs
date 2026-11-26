@@ -1688,7 +1688,6 @@ impl EffectWindow {
             | ResolutionSelectionOperation::ExileChosenGraveyardCards { .. }
             | ResolutionSelectionOperation::ExileLinkedTargets { .. }
             | ResolutionSelectionOperation::ExileChosen { .. }
-            | ResolutionSelectionOperation::ExileFromZone { .. }
             | ResolutionSelectionOperation::ExileFromHand { .. }
             | ResolutionSelectionOperation::ExileSingle { .. } => ZoneActionKind::EffectExile,
             ResolutionSelectionOperation::WholeGroup { destination, .. } => match destination {
@@ -1725,9 +1724,7 @@ impl EffectWindow {
                 action: crate::program::ChosenHandAction::Discard,
                 ..
             }
-            | ResolutionSelectionOperation::DiscardUpTo
             | ResolutionSelectionOperation::Discard
-            | ResolutionSelectionOperation::DiscardFiltered { .. }
             | ResolutionSelectionOperation::RandomDiscard { .. } => ZoneActionKind::EffectDiscard,
             ResolutionSelectionOperation::OtherControlledCreature {
                 sacrifice: false, ..
@@ -2200,17 +2197,9 @@ impl EffectWindow {
                     .get(entry)
                     .and_then(StackPayload::instructions)
                     .and_then(|ops| ops.get(*instruction)),
-                Some(
-                    Instruction::DestroyGroupWithoutRegeneration(_)
-                        | Instruction::DestroyTargetWithoutRegeneration
-                        | Instruction::DestroySubject {
-                            no_regeneration: true,
-                            ..
-                        }
-                        | Instruction::DestroyCapturedCombatCreature {
-                            no_regeneration: true
-                        }
-                )
+                Some(Instruction::DestroyCapturedCombatCreature {
+                    no_regeneration: true
+                })
             ),
             _ => false,
         };

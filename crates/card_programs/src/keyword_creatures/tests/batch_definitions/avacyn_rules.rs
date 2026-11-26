@@ -295,7 +295,10 @@ fn avacyn_rules_peel_from_reality_returns_the_remaining_legal_target() {
                 4,
                 B,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::ExileTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                ),
             ),
         ],
         &price,

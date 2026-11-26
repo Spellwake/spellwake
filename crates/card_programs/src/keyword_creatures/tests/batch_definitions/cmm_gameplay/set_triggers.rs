@@ -14,7 +14,10 @@ fn cmm_myr_sire_dies_into_the_printed_phyrexian_myr_artifact_creature() {
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::ExileTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                ),
             ),
         ],
         &price,
@@ -305,7 +308,10 @@ fn cmm_nadiers_nightblade_drains_for_a_controlled_token_even_when_it_is_exiled()
                 3,
                 A,
                 ObjectDestination::Hand,
-                free_instant(BodyTarget::SingleCreature, Instruction::ExileTarget),
+                free_instant(
+                    BodyTarget::SingleCreature,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                ),
             ),
             creature(4, A, 1, 1, &[]),
             remove_spell(5, A),

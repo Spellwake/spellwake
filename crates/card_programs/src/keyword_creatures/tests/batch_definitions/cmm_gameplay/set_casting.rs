@@ -2035,7 +2035,9 @@ fn innistrad_flayer_damage_is_dealt_by_the_creature_that_entered() {
             BodyTarget::FilteredOwnGraveyardCard(
                 spellwake_engine::program::ObjectFilter::creature(),
             ),
-            Instruction::ReturnOwnGraveyardCreatureToBattlefield,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
+                false,
+            ),
         ),
     );
     let starting = game(
@@ -3180,7 +3182,7 @@ fn innistrad_targeted_shuffle_moves_only_the_legal_cards_and_can_shuffle_none() 
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::AnyGraveyardCard,
-                    Instruction::ExileGraveyardTarget,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                 ),
             ),
         ],
@@ -3516,7 +3518,9 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
     let reanimate = || {
         free_instant(
             BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
-            Instruction::ReturnOwnGraveyardCreatureToBattlefield,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
+                false,
+            ),
         )
     };
     let mut flashback = free_instant(
@@ -4996,7 +5000,10 @@ fn innistrad_source_shuffle_uses_the_owner_and_only_reveals_through_the_match() 
             ObjectDestination::Battlefield { controller: A },
         )
         .unwrap();
-    let remove = free_instant(BodyTarget::SingleCreature, Instruction::ExileTarget);
+    let remove = free_instant(
+        BodyTarget::SingleCreature,
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+    );
     let mana = [(ManaType::Blue, 1), (ManaType::Colourless, 1)];
     let start = game(
         vec![A, B],
@@ -5550,7 +5557,10 @@ fn innistrad_nonland_name_choice_blocks_that_spell_until_the_source_leaves() {
         program.names = ObjectNames::single(EnglishCardName::new(name.to_owned()).unwrap());
         program
     };
-    let remove = free_instant(BodyTarget::SinglePermanent, Instruction::ExileTarget);
+    let remove = free_instant(
+        BodyTarget::SinglePermanent,
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+    );
     let mana = [(ManaType::White, 2), (ManaType::Colourless, 1)];
     let start = game(
         vec![A, B],

@@ -1639,7 +1639,20 @@ fn parse_interactive_choose_objects(
     if chooser == PlayerRefAst::You
         && matches!(
             builder.instructions.last(),
-            Some(Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer))
+            Some(Instruction::ZoneOp(spec))
+                                if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)
+                                    && matches!(
+                                        &spec.source,
+                                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                            zone: spellwake_engine::toolbox::QueryZone::Hand(ps),
+                                            ..
+                                        } if matches!(
+                                            ps.as_ref(),
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TargetPlayer
+                                            )
+                                        )
+                                    )
         )
         && let Some(core) = strip_revealed_hand_ref(&raw)
     {
@@ -1993,39 +2006,39 @@ fn has_live_interactive_last_moved(
                 );
             }
             Instruction::ExileLibraryTop { .. }
-            | Instruction::ExileLibraryTopLinked { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::ExileTopForPlay { .. }
-            | Instruction::ExileFromZone { .. }
-            | Instruction::ExileGroupFromZone { .. }
-            | Instruction::ExileChosenPermanents { .. }
-            | Instruction::ExileTarget
-            | Instruction::ExileGraveyardTarget
-            | Instruction::ExileSubjectUntilSourceLeaves { .. } => {
+            | Instruction::ExileTopForPlay { .. } => {
                 return matches!(
                     expected,
                     InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
                 );
             }
-            Instruction::Discard { .. }
-            | Instruction::DiscardFiltered { .. }
-            | Instruction::DiscardOneAtRandom(_)
-            | Instruction::DiscardUpTo { .. }
-            | Instruction::DiscardUpToExt { .. } => {
+            Instruction::Discard { .. } => {
                 return matches!(
                     expected,
                     InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Discard
                 );
             }
-            Instruction::MoveSubject { destination, .. }
-            | Instruction::MoveLastMovedFiltered { destination, .. }
-            | Instruction::SelectZoneCardsToZone { destination, .. }
-            | Instruction::MoveGraveyardGroupOwned { destination, .. } => {
-                return match destination {
-                    SubjectDestination::Exile { .. } => matches!(
+            Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+                if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some() =>
+            {
+                let spec =
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                        .unwrap();
+                return match &spec.destination {
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. } => matches!(
                         expected,
                         InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
                     ),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                    } => matches!(
+                        expected,
+                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Discard
+                    ),
+                    spellwake_engine::toolbox::ZoneDest::RevealOnly
+                    | spellwake_engine::toolbox::ZoneDest::None => continue,
                     _ => matches!(expected, InteractiveLastMovedKind::Any),
                 };
             }
@@ -2043,15 +2056,7 @@ fn has_live_interactive_last_moved(
                     _ => matches!(expected, InteractiveLastMovedKind::Any),
                 };
             }
-            Instruction::MoveGroup { destination, .. } => {
-                return match destination {
-                    PublicZoneDestination::Exile => matches!(
-                        expected,
-                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
-                    ),
-                    _ => matches!(expected, InteractiveLastMovedKind::Any),
-                };
-            }
+
             Instruction::ChooseObjects { .. }
             | Instruction::SearchLibrary { .. }
             | Instruction::ManifestTop { .. }
@@ -2068,8 +2073,7 @@ fn has_live_interactive_last_moved(
             | Instruction::AdjustPlayersLife { .. }
             | Instruction::GainControllerLife { .. }
             | Instruction::AddMana(_)
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::RevealPlayerHand(_) => continue,
+            | Instruction::AddManaForPlayer { .. } => continue,
             _ => return false,
         }
     }
@@ -2210,18 +2214,13 @@ pub(super) fn try_lower_choose_option_ext(
     ) && matches!(
         builder.instructions.last(),
         Some(
-            Instruction::ExileTopPlay { .. }
+            Instruction::ZoneOp(_)
+                | Instruction::ForEachPlayerQuery { .. }
+                | Instruction::ExileTopPlay { .. }
                 | Instruction::ExileLibraryTop { .. }
-                | Instruction::ExileLibraryTopLinked { .. }
                 | Instruction::LookTopChooseExt { .. }
                 | Instruction::RevealUntilMatchExt { .. }
-                | Instruction::MoveLastMovedFiltered { .. }
-                | Instruction::MoveSubject { .. }
-                | Instruction::MoveGroup { .. }
-                | Instruction::SelectZoneCardsToZone { .. }
                 | Instruction::ChooseObjects { .. }
-                | Instruction::ExileGroupFromZone { .. }
-                | Instruction::ExileFromZone { .. }
                 | Instruction::Mill { .. }
         )
     ) && let Ok(chooser_rp) = lower_resolving_player_in_context(chooser, builder, in_trigger)

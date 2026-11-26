@@ -40,11 +40,10 @@ use spellwake_engine::{
     program::{
         AffectedPlayers, BodyTarget, CardType, DamageAmountSpec, DamageRecipientsRef,
         DamageSourceRef, EffectSubject, ExecutableBody, Instruction, LookTopKeepDest,
-        LookTopRestDest, MoveSubjectRef, ObjectFilter, PermanentDefinition, PermanentTargetAction,
+        LookTopRestDest, ObjectFilter, PermanentDefinition, PermanentTargetAction,
         PlaneswalkerSubtype, PlayerRelation, PlayerTriggerAction, Program, ProgramKind,
-        ResolvingPlayer, SourceZoneFilter, SpellFilter, SubjectDestination, TemporaryRuleKind,
-        TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
-        ValueExpr, ValueZone,
+        ResolvingPlayer, SourceZoneFilter, SpellFilter, TemporaryRuleKind, TriggerEvent,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueZone,
     },
     targets::TargetRef,
 };
@@ -1279,10 +1278,13 @@ fn move_last_moved_filtered_moves_only_matching_objects() {
                         player: ResolvingPlayer::Controller,
                         amount: 2,
                     },
-                    Instruction::MoveLastMovedFiltered {
-                        filter: Some(Box::new(ObjectFilter::creature())),
-                        destination: SubjectDestination::Hand,
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::filtered(
+                            spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            ObjectFilter::creature(),
+                        ),
+                        spellwake_engine::toolbox::ZoneDest::Hand,
+                    ))),
                 ],
             ),
         ),
@@ -1442,12 +1444,7 @@ fn static_sba_lose_game_replacement_exiles_source_and_restores_life() {
             body: Box::new(ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::MoveSubject {
-                        subject: MoveSubjectRef::AbilitySource,
-                        destination: SubjectDestination::Exile {
-                            delayed_return: None,
-                        },
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: matches!(None, Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)), delayed_return: None, link_group: None }))),
                     Instruction::AdjustControllerLife {
                         adjustment: LifeAdjustment::Set(20.into()),
                     },

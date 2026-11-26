@@ -339,7 +339,7 @@ pub(super) fn compile(
                     Instruction::DrawController {
                         amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                     },
-                    Instruction::DiscardOneAtRandom(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
                 ],
@@ -446,7 +446,7 @@ pub(super) fn compile(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::ExileTopFaceDown,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_top_face_down(),
                         super::ordinary_text::create_tokens(
                             "a 2/2 colorless Spirit creature token",
                             vocabulary,
@@ -488,7 +488,7 @@ pub(super) fn compile(
                 (
                     BodyTarget::None,
                     vec![
-                        Instruction::DiscardUpTo { maximum: 2 },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_up_to(2),
                         Instruction::DrawController {
                             amount: spellwake_engine::program::ValueExpr::event(
                                 spellwake_engine::program::EventValueKind::LargestDiscard,
@@ -508,7 +508,7 @@ pub(super) fn compile(
                                 object_filter: None,
                             },
                         },
-                        Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped: false },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                     ],
                 )
             };
@@ -613,11 +613,11 @@ pub(super) fn compile(
                             BodyTarget::FilteredPermanent(
                                 ObjectFilter::creature_or_enchantment().opposing(),
                             ),
-                            vec![Instruction::ExileTarget],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
                         ))),
                         Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                             BodyTarget::FilteredPermanent(ObjectFilter::enchantment().controlled()),
-                            vec![Instruction::ExileTarget],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
                         ))),
                         Instruction::ExileUntilOtherTargetLeaves,
                     ],
@@ -705,7 +705,7 @@ pub(super) fn compile(
             }
             "Scry 2." => (BodyTarget::None,Instruction::Scry {player:ResolvingPlayer::Controller,amount:spellwake_engine::program::ValueExpr::Literal(2.into())}),
             text if text == format!("Draw a card and reveal it. Remove a number of loyalty counters equal to that card's mana value from {short}.") => (BodyTarget::None,Instruction::DrawRevealRemoveLoyalty),
-            "Exile target enchantment, tapped artifact, or tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::either(ObjectClause::enchantment(), ObjectClause::any().any_types(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)).tapped())),Instruction::ExileTarget),
+            "Exile target enchantment, tapped artifact, or tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::either(ObjectClause::enchantment(), ObjectClause::any().any_types(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)).tapped())),crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Search your library for an artifact or creature card, put it onto the battlefield, then shuffle. It gains haste. Return it to your hand at the beginning of the next end step." =>
                 (BodyTarget::None, Instruction::SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
                         spellwake_engine::program::SearchCardMatcher::CardTypes([CardType::Artifact, CardType::Creature].into()),
@@ -806,13 +806,13 @@ pub(super) fn compile(
                 power_toughness: PowerToughness { power: 1.into(), toughness: 0.into() }, keywords: BTreeSet::new(),
             })),
             "Create three 1/1 white Soldier creature tokens." => (BodyTarget::None, super::ordinary_text::create_tokens("three 1/1 white Soldier creature tokens", vocabulary)?),
-            "Destroy all creatures with power 4 or greater." => (BodyTarget::None, Instruction::DestroyGroup(Box::new(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))))),
+            "Destroy all creatures with power 4 or greater." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4)), true)),
             "You get an emblem with \"Whenever you cast a spell, this emblem deals 5 damage to any target.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::SpellcastDamage { amount: 5.into(), noncreature_only: false })),
             "You get an emblem with \"Whenever you cast a noncreature spell, this emblem deals 2 damage to any target.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::SpellcastDamage { amount: 2.into(), noncreature_only: true })),
             "You get an emblem with \"Creatures you control get +2/+2 and have flying.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::ControlledCreatureBonus {
                 power_toughness: PowerToughness { power: 2.into(), toughness: 2.into() }, keywords: BTreeSet::from([KeywordAbility::Flying]),
             })),
-            "Exile target creature with power 4 or greater." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), Instruction::ExileTarget),
+            "Exile target creature with power 4 or greater." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Each player draws a card." => (BodyTarget::None, Instruction::DrawEachPlayer { amount: one() }),
             "Target player draws a card." => (BodyTarget::SinglePlayer, Instruction::DrawTargetPlayer { amount: one() }),
             "Target player mills twenty cards." => (BodyTarget::SinglePlayer, Instruction::Mill {
@@ -908,7 +908,7 @@ pub(super) fn loyalty_support(
                         .controlled()
                         .other_than_trigger_source(),
                 ),
-                vec![Instruction::ExileUntilNextEndStep],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_until_next_end_step()],
             ),
         )
     } else if first

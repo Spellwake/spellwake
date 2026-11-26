@@ -63,13 +63,12 @@ pub(super) fn lower_combat_damage_instruction(
             ) && builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                        | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                        | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
-                        | Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: SubjectDestination::Battlefield { .. },
-                        }
+                    Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
+                ) || matches!(
+                    op,
+                    Instruction::ZoneOp(spec)
+                        if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                            && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
                 )
             });
             let target_can_be_damage_source =
@@ -7220,19 +7219,14 @@ fn has_prior_exile_instruction(ops: &[Instruction]) -> bool {
     ops.iter().any(|op| {
         matches!(
             op,
-            Instruction::ExileTarget
-                | Instruction::ExileGraveyardTarget
-                | Instruction::ExileFromZone { .. }
-                | Instruction::ExileLibraryTop { .. }
-                | Instruction::ExileTopPlay { .. }
-                | Instruction::ExileChosenPermanents { .. }
-                | Instruction::ExileGroupFromZone { .. }
-                | Instruction::ExileSubjectUntilSourceLeaves { .. }
-                | Instruction::MoveSubject {
-                    destination: SubjectDestination::Exile { .. },
-                    ..
-                }
-        )
+            Instruction::ExileLibraryTop { .. } | Instruction::ExileTopPlay { .. }
+        ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+            .is_some_and(|spec| {
+                matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                )
+            })
     })
 }
 

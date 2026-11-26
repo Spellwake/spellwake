@@ -1282,263 +1282,11 @@ impl EffectWindow {
                 | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
                 | Instruction::PutEquipmentFromHandOrGraveyard
                 | Instruction::PutHandPermanentsOntoBattlefield { .. }
-                | Instruction::PutHandPermanentFiltered { .. }
         ) {
             if let Some(frame) = self.hand_entry_selection()? {
                 return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
                     frame,
                 )));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::MoveGraveyardGroup {
-            filter,
-            all_graveyards,
-            to_battlefield: true,
-            tapped,
-        } = &instruction
-        {
-            let objects: Vec<_> = self
-                .graveyard_cards_matching(entry.controller(), filter, *all_graveyards)?
-                .into_iter()
-                .collect();
-            if objects.is_empty() {
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            self.linked_return_work = Some(LinkedReturnWork {
-                origin: LinkedReturnOrigin::Graveyard {
-                    player: (!*all_graveyards).then_some(entry.controller()),
-                    controller: Some(entry.controller()),
-                    subtype_counters: None,
-                    entry_additions: crate::program::EntryAdditions::default(),
-                    entry: entry.id(),
-                    instruction: index,
-                    tapped: *tapped,
-                    forest: false,
-                    corpse: false,
-                },
-                library_bottom: None,
-                wake_entry: None,
-                objects,
-                orders: BTreeMap::new(),
-                graveyard_orders: BTreeMap::new(),
-                choices: BTreeMap::new(),
-                auras: BTreeMap::new(),
-                replacements: None,
-            });
-            self.finish_linked_return_if_ready(ctx.append)?;
-            if let Some(frame) = self.pending_resolution_decision() {
-                return Ok(StepOutcome::Pending(frame));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ManifestTop { player, amount } = &instruction {
-            let player = self.resolving_player(*player)?;
-            let remaining = match self
-                .resolution_cursor()
-                .and_then(|cursor| cursor.manifest_remaining.clone())
-            {
-                Some(count) => count,
-                None => {
-                    if let Some(cur) = self.resolution_cursor_mut() {
-                        cur.results.last_moved_objects.clear();
-                    }
-                    self.resolve_value_expr(entry.controller(), amount)?
-                }
-            };
-            let next_card = self.window.cards().library(player).first().copied();
-            if let Some(card) = next_card
-                && remaining.is_positive()
-            {
-                self.resolution_cursor_mut()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .manifest_remaining = Some(remaining.minus(&1.into()));
-                self.linked_return_work = Some(LinkedReturnWork {
-                    origin: LinkedReturnOrigin::Manifest {
-                        player,
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    objects: vec![card],
-                    library_bottom: None,
-                    wake_entry: None,
-                    orders: BTreeMap::new(),
-                    graveyard_orders: BTreeMap::new(),
-                    choices: BTreeMap::new(),
-                    auras: BTreeMap::new(),
-                    replacements: None,
-                });
-                self.finish_linked_return_if_ready(ctx.append)?;
-            } else {
-                self.resolution_cursor_mut()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .manifest_remaining = None;
-                self.advance_instruction()?;
-            }
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::CreateReflexiveGraveyardReturn {
-            let amount = self
-                .resolution_cursor()
-                .and_then(|cur| cur.impulse.contributions.clone())
-                .ok_or(EffectError::InconsistentProgram)?;
-            let source = self
-                .execution_bindings(entry.id())
-                .and_then(|b| b.trigger.as_ref())
-                .ok_or(EffectError::InconsistentProgram)?
-                .source
-                .clone();
-            let before = self.rules_snapshot(None)?;
-            self.emit_from(
-                crate::occurrence::EventCause::Instruction {
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                &before,
-                None,
-                ctx.append,
-                |_, _, _| {
-                    Ok(vec![
-                        crate::occurrence::RulesOccurrence::GraveyardReturnPaid {
-                            source: Box::new(source),
-                            controller: entry.controller(),
-                            mana_value: amount,
-                        },
-                    ])
-                },
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if matches!(
-            instruction,
-            Instruction::ReturnGraveyardCreatureWithCorpse(_)
-        ) {
-            let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target else {
-                return Err(EffectError::IllegalTarget);
-            };
-            self.begin_graveyard_returns(
-                entry,
-                index,
-                entry.controller(),
-                vec![object],
-                false,
-                ctx.append,
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ReturnRandomLinkedExile {
-            let objects = self.exiled_search_results()?;
-            if objects.len() > 1 {
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                self.pending_work =
-                    Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-                        cursor,
-                        chooser: entry.controller(),
-                        options: BTreeSet::new(),
-                        rebound_or_buyback: false,
-                        cast: None,
-                    })));
-            } else if !self.begin_exile_cohort_to_hand(objects)? {
-                self.advance_instruction()?;
-            }
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ReturnCardsExiledWithLink(link) = instruction {
-            let StackKind::TriggeredAbility { source } = entry.kind() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let candidates = self
-                .independent_exile_links
-                .get(&(source.id(), link))
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect();
-            self.begin_linked_cohort_return(
-                LinkedReturnOrigin::ChosenExile {
-                    controller: None,
-                    tapped: false,
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                candidates,
-                ctx.append,
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ReturnCardsExiledWithLinkExt {
-            group,
-            under_controller_control,
-            tapped,
-        } = instruction
-        {
-            let source_id = match entry.kind() {
-                StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source } => {
-                    source.id()
-                }
-                StackKind::CardSpell(id) => *id,
-                _ => return Err(EffectError::InconsistentProgram),
-            };
-            let candidates = self
-                .independent_exile_links
-                .get(&(source_id, group))
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect();
-            self.begin_linked_cohort_return(
-                LinkedReturnOrigin::ChosenExile {
-                    controller: under_controller_control.then(|| entry.controller()),
-                    tapped,
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                candidates,
-                ctx.append,
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ExileSubjectUntilSourceLeaves { subject } = instruction {
-            let objects: Vec<ObjectId> = self.effect_group(entry, *subject)?.into_iter().collect();
-            let before_controllers: Vec<SeatId> = objects
-                .iter()
-                .filter_map(|&oid| {
-                    self.window
-                        .cards()
-                        .get(oid)
-                        .and_then(|o| o.controller().or(Some(o.owner())))
-                })
-                .collect();
-            let new_ids = self.move_objects_to_subject_destination_ids(
-                entry,
-                index,
-                entry.controller(),
-                &objects,
-                crate::program::SubjectDestination::Exile {
-                    delayed_return: Some(crate::program::DelayedReturnTiming::UntilSourceLeaves),
-                },
-                ctx.append,
-            )?;
-            let moved_count = new_ids.len();
-            if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = moved_count > 0;
-                cursor.results.last_action_count = Some(RulesInteger::from_usize(moved_count));
-                cursor.results.last_moved_objects = new_ids;
-                cursor.results.last_moved_controllers = if moved_count > 0 {
-                    before_controllers
-                } else {
-                    Vec::new()
-                };
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -1967,64 +1715,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ReturnLinkedExile {
-            destination,
-            only_first,
-        } = instruction
-        {
-            let source_id = match entry.kind() {
-                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                    Some(source.id())
-                }
-                StackKind::CardSpell(id) => Some(*id),
-                _ => None,
-            };
-            let mut exiled_objs: Vec<ObjectId> = source_id
-                .and_then(|sid| self.linked_exiles.get(&sid))
-                .map(|list| {
-                    list.iter()
-                        .copied()
-                        .filter(|&id| {
-                            self.window
-                                .cards()
-                                .get(id)
-                                .is_some_and(|o| o.zone() == ObjectZone::Exile)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            if only_first && exiled_objs.len() > 1 {
-                exiled_objs.truncate(1);
-            }
-            if !exiled_objs.is_empty() {
-                let returning_set: BTreeSet<ObjectId> = exiled_objs.iter().copied().collect();
-                if let Some(sid) = source_id
-                    && let Some(list) = self.linked_exiles.get_mut(&sid)
-                {
-                    list.retain(|id| !returning_set.contains(id));
-                }
-                let moved_ids = self.move_objects_to_subject_destination_ids(
-                    entry,
-                    index,
-                    entry.controller(),
-                    &exiled_objs,
-                    destination,
-                    ctx.append,
-                )?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(moved_ids.len()));
-                    cursor.results.last_moved_objects = moved_ids;
-                }
-            } else if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = false;
-                cursor.results.last_action_count = Some(0.into());
-                cursor.results.last_moved_objects.clear();
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::TransferAllCountersFromTriggeringLki { to } = instruction {
             let lki_counters: BTreeMap<CounterKind, RulesInteger> = self
                 .execution_bindings(entry.id())
@@ -2233,78 +1923,6 @@ impl EffectWindow {
             if let Some(cursor) = self.resolution_cursor_mut() {
                 cursor.results.last_action_succeeded = granted > 0;
                 cursor.results.last_action_count = Some(RulesInteger::from_usize(granted));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::MoveLastMovedFiltered {
-            ref filter,
-            destination,
-        } = instruction
-        {
-            let evaluated = self.evaluated_characteristics()?;
-            let moved: Vec<ObjectId> = self
-                .resolution_cursor()
-                .map(|c| c.results.last_moved_objects.clone())
-                .unwrap_or_default();
-            let ability_source = match entry.kind() {
-                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                    Some(source.id())
-                }
-                StackKind::CardSpell(id) => Some(*id),
-                _ => None,
-            };
-            let matched: Vec<ObjectId> = moved
-                .into_iter()
-                .filter(|&id| {
-                    if self.window.cards().get(id).is_none() {
-                        return false;
-                    }
-                    let Some(f) = filter.as_deref() else {
-                        return true;
-                    };
-                    evaluated.get(id).is_some_and(|view| {
-                        self.matches_object_filter(
-                            *f,
-                            view,
-                            entry.controller(),
-                            ability_source,
-                            &BTreeSet::new(),
-                            &evaluated,
-                        )
-                    })
-                })
-                .collect();
-            if !matched.is_empty() {
-                let before_controllers: Vec<SeatId> = matched
-                    .iter()
-                    .filter_map(|&oid| {
-                        self.window
-                            .cards()
-                            .get(oid)
-                            .and_then(|o| o.controller().or(Some(o.owner())))
-                    })
-                    .collect();
-                let moved_ids = self.move_objects_to_subject_destination_ids(
-                    entry,
-                    index,
-                    entry.controller(),
-                    &matched,
-                    destination,
-                    ctx.append,
-                )?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(moved_ids.len()));
-                    cursor.results.last_moved_objects = moved_ids;
-                    cursor.results.last_moved_controllers = before_controllers;
-                }
-            } else if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = false;
-                cursor.results.last_action_count = Some(0.into());
-                cursor.results.last_moved_objects.clear();
-                cursor.results.last_moved_controllers.clear();
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -2836,7 +2454,7 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if matches!(instruction, Instruction::ReturnGraveyardTargetsTapped(_)) {
+        if false {
             let objects = self
                 .legal_permanent_targets()?
                 .into_iter()
@@ -2997,12 +2615,10 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if matches!(
-            instruction,
-            Instruction::DiscardOneAtRandom(_) | Instruction::SacrificeRandomUntilLand
-        ) && self
-            .resolution_cursor()
-            .is_some_and(|cursor| cursor.random_selection.is_none())
+        if matches!(instruction, Instruction::SacrificeRandomUntilLand)
+            && self
+                .resolution_cursor()
+                .is_some_and(|cursor| cursor.random_selection.is_none())
         {
             let objects = self.random_move_candidates(&instruction)?;
             match objects.as_slice() {
@@ -3029,81 +2645,8 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ReturnRandomGraveyardCards {
-            ref filter, count, ..
-        } = instruction
-            && self
-                .resolution_cursor()
-                .is_some_and(|cursor| cursor.results.sampled_graveyard_cards.is_none())
-        {
-            let candidates =
-                self.random_graveyard_candidates(entry.controller(), filter.as_deref().copied())?;
-            if candidates.len() <= usize::from(count.get()) {
-                self.resolution_cursor_mut()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .results
-                    .sampled_graveyard_cards = Some(candidates.into_iter().collect());
-            } else {
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                self.pending_work =
-                    Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-                        cursor,
-                        chooser: entry.controller(),
-                        options: BTreeSet::new(),
-                        rebound_or_buyback: false,
-                        cast: None,
-                    })));
-                return Ok(StepOutcome::Continue);
-            }
-        }
-        if matches!(
-            instruction,
-            Instruction::ReturnRandomGraveyardCards {
-                to_battlefield: true,
-                ..
-            }
-        ) {
-            let objects = self
-                .resolution_cursor_mut()
-                .and_then(|cursor| cursor.results.sampled_graveyard_cards.take())
-                .ok_or(EffectError::InconsistentProgram)?;
-            if self.linked_return_work.is_some() {
-                return Err(EffectError::InconsistentProgram);
-            }
-            if !objects.is_empty() {
-                self.linked_return_work = Some(LinkedReturnWork {
-                    library_bottom: None,
-                    origin: LinkedReturnOrigin::Graveyard {
-                        player: Some(entry.controller()),
-                        controller: None,
-                        subtype_counters: None,
-                        entry_additions: crate::program::EntryAdditions::default(),
-                        entry: entry.id(),
-                        instruction: index,
-                        tapped: false,
-                        forest: false,
-                        corpse: false,
-                    },
-                    wake_entry: None,
-                    objects: objects.into_iter().collect(),
-                    orders: BTreeMap::new(),
-                    graveyard_orders: BTreeMap::new(),
-                    choices: BTreeMap::new(),
-                    auras: BTreeMap::new(),
-                    replacements: None,
-                });
-                self.finish_linked_return_if_ready(ctx.append)?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if matches!(
-            instruction,
-            Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration
-        ) {
+
+        if matches!(instruction, Instruction::DestroyTarget) {
             let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
                 return Err(EffectError::InconsistentProgram);
             };
@@ -3182,44 +2725,6 @@ impl EffectWindow {
             for mode in &mut payload.modes {
                 mode.shift_for_splice(index, inserted);
             }
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::PutTargetInLibrary(
-            crate::program::LibraryPlacement::ChoiceTopOrBottom { chooser },
-        ) = instruction
-        {
-            let chosen = self
-                .resolution_cursor_mut()
-                .and_then(|cursor| cursor.chosen_option_index.take());
-            let Some(chosen_idx) = chosen else {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                    revision: self.revision,
-                    entry: entry.id(),
-                    instruction: index,
-                    chooser: actor,
-                    count: 2,
-                    labels: vec![
-                        "Put on top of library".to_owned(),
-                        "Put on bottom of library".to_owned(),
-                    ],
-                });
-                return Ok(StepOutcome::Pending(frame));
-            };
-            let concrete = if chosen_idx == 0 {
-                crate::program::LibraryPlacement::Top
-            } else {
-                crate::program::LibraryPlacement::Bottom
-            };
-            let resolved_op = Instruction::PutTargetInLibrary(concrete);
-            if self.begin_resolution_selection(&resolved_op, ctx.append)? {
-                return Ok(StepOutcome::Continue);
-            }
-            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::ForEachPlayer { players, body } = instruction {
@@ -3466,304 +2971,6 @@ impl EffectWindow {
             if let Some(cursor) = self.resolution_cursor_mut() {
                 cursor.results.last_action_succeeded = total.is_positive();
                 cursor.results.last_action_count = Some(total);
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::MoveGroupToLibrary {
-            group,
-            mut placement,
-        } = instruction
-        {
-            if let crate::program::LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
-                let chosen = self
-                    .resolution_cursor_mut()
-                    .and_then(|cursor| cursor.chosen_option_index.take());
-                let Some(chosen_idx) = chosen else {
-                    let cursor_snap = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .clone();
-                    let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                    let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                        revision: self.revision,
-                        entry: entry.id(),
-                        instruction: index,
-                        chooser: actor,
-                        count: 2,
-                        labels: vec![
-                            "Put on top of library".to_owned(),
-                            "Put on bottom of library".to_owned(),
-                        ],
-                    });
-                    return Ok(StepOutcome::Pending(frame));
-                };
-                placement = if chosen_idx == 0 {
-                    crate::program::LibraryPlacement::Top
-                } else {
-                    crate::program::LibraryPlacement::Bottom
-                };
-            }
-            let mut objects: Vec<ObjectId> = self
-                .effect_group(entry, crate::program::EffectSubject::Matching(group))?
-                .into_iter()
-                .collect();
-            if placement == crate::program::LibraryPlacement::BottomRandom {
-                match self.suspend_bottom_random_if_needed(entry, objects)? {
-                    Some(ordered) => objects = ordered,
-                    None => return Ok(StepOutcome::Continue),
-                }
-            }
-            if !objects.is_empty() {
-                let before_controllers: Vec<SeatId> = objects
-                    .iter()
-                    .filter_map(|&oid| {
-                        self.window
-                            .cards()
-                            .get(oid)
-                            .and_then(|o| o.controller().or(Some(o.owner())))
-                    })
-                    .collect();
-                let moved_ids = self.move_objects_to_subject_destination_ids(
-                    entry,
-                    index,
-                    entry.controller(),
-                    &objects,
-                    crate::program::SubjectDestination::Library(placement),
-                    ctx.append,
-                )?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(moved_ids.len()));
-                    cursor.results.last_moved_objects = moved_ids;
-                    cursor.results.last_moved_controllers = before_controllers;
-                }
-            } else if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = false;
-                cursor.results.last_action_count = Some(0.into());
-                cursor.results.last_moved_objects.clear();
-                cursor.results.last_moved_controllers.clear();
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ExileLibraryTopLinked {
-            player,
-            amount,
-            group,
-            face_down,
-        } = instruction
-        {
-            let cursor_snap = self
-                .resolution_cursor()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .clone();
-            let seat = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
-            let requested = self
-                .resolve_value_expr(entry.controller(), &amount)?
-                .max(0.into())
-                .to_usize()
-                .unwrap_or(0);
-            let cards: Vec<ObjectId> = if self.window.participants().contains(&seat) {
-                let library = self.window.cards().library(seat);
-                library[..requested.min(library.len())].to_vec()
-            } else {
-                Vec::new()
-            };
-            if cards.is_empty() {
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = false;
-                    cursor.results.last_action_count = Some(0.into());
-                    cursor.results.last_moved_objects.clear();
-                    cursor.results.moved_library_types.clear();
-                    cursor.results.revealed_top_types.clear();
-                    cursor.results.revealed_top_card = None;
-                }
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            let moves: Vec<(ObjectId, ObjectDestination)> = cards
-                .iter()
-                .map(|&id| (id, ObjectDestination::Exile))
-                .collect();
-            let before = self.rules_snapshot(None)?;
-            let (window, movements) = self.window.record_linked_return_moves(&moves)?;
-            self.window = window;
-            let source_id = match entry.kind() {
-                StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source } => {
-                    Some(source.id())
-                }
-                StackKind::CardSpell(id) => Some(*id),
-                _ => None,
-            };
-            let exiled_ids: Vec<ObjectId> = movements
-                .iter()
-                .filter(|m| m.after.zone() == ObjectZone::Exile)
-                .flat_map(|m| m.arrivals())
-                .collect();
-            for &new_id in &exiled_ids {
-                if face_down {
-                    self.face_down_exile.insert(new_id, entry.controller());
-                }
-                if let Some(src) = source_id {
-                    self.independent_exile_links
-                        .entry((src, group))
-                        .or_default()
-                        .insert(new_id);
-                }
-            }
-            let visible = self.evaluated_characteristics()?;
-            let moved_types: BTreeSet<CardType> = movements
-                .iter()
-                .filter(|m| m.after.zone() == ObjectZone::Exile)
-                .filter_map(|m| visible.get(m.after.id()))
-                .flat_map(|view| view.current_types.iter().copied())
-                .collect();
-            if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_moved_objects = exiled_ids.clone();
-                cursor.results.last_action_succeeded = !exiled_ids.is_empty();
-                cursor.results.last_action_count = Some(RulesInteger::from_usize(exiled_ids.len()));
-                cursor.results.moved_library_types = moved_types.clone();
-                cursor.results.revealed_top_types = moved_types;
-                cursor.results.revealed_top_card = exiled_ids.first().copied();
-            }
-            self.emit_from(
-                crate::occurrence::EventCause::Instruction {
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                &before,
-                None,
-                ctx.append,
-                |previous, current, controllers| {
-                    movements
-                        .iter()
-                        .map(|m| {
-                            occurrence_flow::zone_occurrence_at(
-                                previous,
-                                current,
-                                m,
-                                crate::occurrence::ZoneReason::ExiledByEffect,
-                                controllers,
-                            )
-                        })
-                        .collect()
-                },
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::MoveGraveyardGroupOwned {
-            players,
-            filter,
-            mut destination,
-        } = instruction
-        {
-            if let crate::program::SubjectDestination::Library(
-                crate::program::LibraryPlacement::ChoiceTopOrBottom { chooser },
-            ) = destination
-            {
-                let chosen = self
-                    .resolution_cursor_mut()
-                    .and_then(|cursor| cursor.chosen_option_index.take());
-                let Some(chosen_idx) = chosen else {
-                    let cursor_snap = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .clone();
-                    let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                    let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                        revision: self.revision,
-                        entry: entry.id(),
-                        instruction: index,
-                        chooser: actor,
-                        count: 2,
-                        labels: vec![
-                            "Put on top of library".to_owned(),
-                            "Put on bottom of library".to_owned(),
-                        ],
-                    });
-                    return Ok(StepOutcome::Pending(frame));
-                };
-                destination = crate::program::SubjectDestination::Library(if chosen_idx == 0 {
-                    crate::program::LibraryPlacement::Top
-                } else {
-                    crate::program::LibraryPlacement::Bottom
-                });
-            }
-            let cursor_snap = self
-                .resolution_cursor()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .clone();
-            let seats = self.selection_players(players, entry.controller(), Some(&cursor_snap))?;
-            let evaluated = self.evaluated_characteristics()?;
-            let excluded = BTreeSet::new();
-            let ability_source = match entry.kind() {
-                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                    Some(source.id())
-                }
-                StackKind::CardSpell(id) => Some(*id),
-                _ => None,
-            };
-            let mut objects = Vec::new();
-            for seat in seats {
-                for &id in self.window.cards().graveyard(seat) {
-                    if evaluated.get(id).is_some_and(|card| {
-                        self.matches_object_filter(
-                            *filter,
-                            card,
-                            entry.controller(),
-                            ability_source,
-                            &excluded,
-                            &evaluated,
-                        )
-                    }) {
-                        objects.push(id);
-                    }
-                }
-            }
-            if matches!(
-                destination,
-                crate::program::SubjectDestination::Library(
-                    crate::program::LibraryPlacement::BottomRandom
-                )
-            ) {
-                match self.suspend_bottom_random_if_needed(entry, objects)? {
-                    Some(ordered) => objects = ordered,
-                    None => return Ok(StepOutcome::Continue),
-                }
-            }
-            if !objects.is_empty() {
-                let before_controllers: Vec<SeatId> = objects
-                    .iter()
-                    .filter_map(|&oid| {
-                        self.window
-                            .cards()
-                            .get(oid)
-                            .and_then(|o| o.controller().or(Some(o.owner())))
-                    })
-                    .collect();
-                let moved_ids = self.move_objects_to_subject_destination_ids(
-                    entry,
-                    index,
-                    entry.controller(),
-                    &objects,
-                    destination,
-                    ctx.append,
-                )?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(moved_ids.len()));
-                    cursor.results.last_moved_objects = moved_ids;
-                    cursor.results.last_moved_controllers = before_controllers;
-                }
-            } else if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = false;
-                cursor.results.last_action_count = Some(0.into());
-                cursor.results.last_moved_objects.clear();
-                cursor.results.last_moved_controllers.clear();
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -4950,86 +4157,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::PutResolvingSpellInLibrary(mut placement) = instruction {
-            if let crate::program::LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
-                let chosen = self
-                    .resolution_cursor_mut()
-                    .and_then(|cursor| cursor.chosen_option_index.take());
-                let Some(chosen_idx) = chosen else {
-                    let cursor_snap = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .clone();
-                    let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                    let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                        revision: self.revision,
-                        entry: entry.id(),
-                        instruction: index,
-                        chooser: actor,
-                        count: 2,
-                        labels: vec![
-                            "Put on top of library".to_owned(),
-                            "Put on bottom of library".to_owned(),
-                        ],
-                    });
-                    return Ok(StepOutcome::Pending(frame));
-                };
-                placement = if chosen_idx == 0 {
-                    crate::program::LibraryPlacement::Top
-                } else {
-                    crate::program::LibraryPlacement::Bottom
-                };
-            }
-            if let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id()) {
-                payload.library_on_resolve = Some(placement);
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::PutSubjectIntoLibraryFromTop { subject, offset } = instruction {
-            let resolved_offset = self
-                .resolve_value_expr(entry.controller(), &offset)?
-                .max(0.into())
-                .to_usize()
-                .unwrap_or(0);
-            let offset_u8 = u8::try_from(resolved_offset).unwrap_or(u8::MAX);
-            let target_objs = self.resolve_move_subject_objects(entry, subject)?;
-            if !target_objs.is_empty() {
-                let before_controllers: Vec<SeatId> = target_objs
-                    .iter()
-                    .filter_map(|&oid| {
-                        self.window
-                            .cards()
-                            .get(oid)
-                            .and_then(|o| o.controller().or(Some(o.owner())))
-                    })
-                    .collect();
-                let moved_ids = self.move_objects_to_subject_destination_ids(
-                    entry,
-                    index,
-                    entry.controller(),
-                    &target_objs,
-                    crate::program::SubjectDestination::Library(
-                        crate::program::LibraryPlacement::FromTop(offset_u8),
-                    ),
-                    ctx.append,
-                )?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(moved_ids.len()));
-                    cursor.results.last_moved_objects = moved_ids;
-                    cursor.results.last_moved_controllers = before_controllers;
-                }
-            } else if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = false;
-                cursor.results.last_action_count = Some(0.into());
-                cursor.results.last_moved_objects.clear();
-                cursor.results.last_moved_controllers.clear();
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::SetDayNight(clock) = instruction {
             let previous = self.day_night();
             if previous != clock {
@@ -5103,133 +4230,6 @@ impl EffectWindow {
                     resolved_expires,
                     once,
                 );
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::MoveSubject {
-            subject,
-            mut destination,
-        } = instruction
-        {
-            if let crate::program::SubjectDestination::Library(
-                crate::program::LibraryPlacement::ChoiceTopOrBottom { chooser },
-            ) = destination
-            {
-                let chosen = self
-                    .resolution_cursor_mut()
-                    .and_then(|cursor| cursor.chosen_option_index.take());
-                let Some(chosen_idx) = chosen else {
-                    let cursor_snap = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .clone();
-                    let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                    let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                        revision: self.revision,
-                        entry: entry.id(),
-                        instruction: index,
-                        chooser: actor,
-                        count: 2,
-                        labels: vec![
-                            "Put on top of library".to_owned(),
-                            "Put on bottom of library".to_owned(),
-                        ],
-                    });
-                    return Ok(StepOutcome::Pending(frame));
-                };
-                destination = crate::program::SubjectDestination::Library(if chosen_idx == 0 {
-                    crate::program::LibraryPlacement::Top
-                } else {
-                    crate::program::LibraryPlacement::Bottom
-                });
-            }
-            let target_objs = self.resolve_move_subject_objects(entry, subject)?;
-            if !target_objs.is_empty() {
-                let before_controllers: Vec<SeatId> = target_objs
-                    .iter()
-                    .filter_map(|&oid| {
-                        self.window
-                            .cards()
-                            .get(oid)
-                            .and_then(|o| o.controller().or(Some(o.owner())))
-                    })
-                    .collect();
-                let moved_ids = self.move_objects_to_subject_destination_ids(
-                    entry,
-                    index,
-                    entry.controller(),
-                    &target_objs,
-                    destination,
-                    ctx.append,
-                )?;
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(moved_ids.len()));
-                    cursor.results.last_moved_objects = moved_ids;
-                    cursor.results.last_moved_controllers = before_controllers;
-                }
-            } else if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = false;
-                cursor.results.last_action_count = Some(0.into());
-                cursor.results.last_moved_objects.clear();
-                cursor.results.last_moved_controllers.clear();
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::SelectZoneCardsToZone {
-            player,
-            source_zone,
-            ref filter,
-            ref min,
-            ref max,
-            mut destination,
-            reveal,
-        } = instruction
-            && let crate::program::SubjectDestination::Library(
-                crate::program::LibraryPlacement::ChoiceTopOrBottom { chooser },
-            ) = destination
-        {
-            let chosen = self
-                .resolution_cursor_mut()
-                .and_then(|cursor| cursor.chosen_option_index.take());
-            let Some(chosen_idx) = chosen else {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                    revision: self.revision,
-                    entry: entry.id(),
-                    instruction: index,
-                    chooser: actor,
-                    count: 2,
-                    labels: vec![
-                        "Put on top of library".to_owned(),
-                        "Put on bottom of library".to_owned(),
-                    ],
-                });
-                return Ok(StepOutcome::Pending(frame));
-            };
-            destination = crate::program::SubjectDestination::Library(if chosen_idx == 0 {
-                crate::program::LibraryPlacement::Top
-            } else {
-                crate::program::LibraryPlacement::Bottom
-            });
-            let resolved_op = Instruction::SelectZoneCardsToZone {
-                player,
-                source_zone,
-                filter: filter.clone(),
-                min: min.clone(),
-                max: max.clone(),
-                destination,
-                reveal,
-            };
-            if self.begin_resolution_selection(&resolved_op, ctx.append)? {
-                return Ok(StepOutcome::Continue);
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -5348,19 +4348,6 @@ impl EffectWindow {
             if let Some(frame) = self.pending_resolution_decision() {
                 return Ok(StepOutcome::Pending(frame));
             }
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ExileTopFaceDown {
-            if !self
-                .resolution_cursor()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .impulse
-                .started
-                && self.begin_impulse(entry, index, true)?
-            {
-                return Ok(StepOutcome::Continue);
-            }
-            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if self.begin_resolution_choice(&instruction, ctx.append)? {
@@ -7292,21 +6279,8 @@ impl EffectWindow {
             self.additional_combats = 0;
             return Ok(StepOutcome::Complete(RuleCompletion::Resolution));
         }
-        if matches!(
-            instruction,
-            Instruction::ShuffleEachHandAndGraveyard
-                | Instruction::ShuffleOwnLibrary
-                | Instruction::ShuffleOwnGraveyardIntoLibrary
-        ) {
+        if matches!(instruction, Instruction::ShuffleOwnGraveyardIntoLibrary) {
             self.begin_graveyard_shuffle()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ShufflePlayerLibrary(player) = instruction {
-            self.begin_player_library_shuffle(player)?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ShuffleSubjectIntoLibrary { subject, zone } = instruction {
-            self.begin_subject_into_library_shuffle(entry, *subject, zone)?;
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::GainControlOfPermanent {
@@ -7719,45 +6693,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ShuffleTargetIntoLibrary {
-            self.begin_target_into_library_shuffle(entry)?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::RevealPlayerHand(player) = instruction {
-            let seat = self.resolving_player(player)?;
-            let cards: Vec<GameObject> = self
-                .window
-                .cards()
-                .iter()
-                .filter(|obj| obj.zone() == ObjectZone::Hand(seat))
-                .cloned()
-                .collect();
-            if !cards.is_empty() {
-                let before = self.rules_snapshot(None)?;
-                self.emit_from(
-                    crate::occurrence::EventCause::Instruction {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    &before,
-                    None,
-                    ctx.append,
-                    |_, _, _| {
-                        Ok(cards
-                            .iter()
-                            .cloned()
-                            .map(
-                                |object| crate::occurrence::RulesOccurrence::HandCardRevealed {
-                                    object,
-                                },
-                            )
-                            .collect())
-                    },
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::GrantGraveyardCastAndWatchAbilities {
             let StackKind::ActivatedAbility { source } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
@@ -7852,10 +6787,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ShuffleAbilitySourceIntoLibrary {
-            self.begin_ability_source_shuffle(entry)?;
-            return Ok(StepOutcome::Continue);
-        }
         Ok(StepOutcome::Next(instruction))
     }
 
@@ -7869,16 +6800,6 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         if matches!(instruction, Instruction::ShuffleTargetGraveyardCards { .. }) {
             self.begin_targeted_graveyard_shuffle()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ExileAllGraveyards {
-            self.begin_graveyard_exile()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ExilePlayerGraveyards(players) = instruction {
-            let seats =
-                self.selection_players(players, entry.controller(), self.resolution_cursor())?;
-            self.begin_players_graveyard_exile(&seats)?;
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::RemoveCountersFromPermanent {
@@ -8401,24 +7322,6 @@ impl EffectWindow {
                 inputs,
                 ctx.journal,
             )?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ExileResolvingSpell {
-            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            payload.exile_on_resolve = true;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ReturnResolvingSpellToHand {
-            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            payload.return_to_hand_on_resolve = true;
-            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if instruction == Instruction::Ascend {
@@ -11513,10 +10416,7 @@ impl EffectWindow {
         }
         if matches!(
             instruction,
-            Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
+            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
         ) && let TargetRef::Object(object) = target
             && !self.settled_entry_destinations.contains_key(&object)
         {
@@ -11529,10 +10429,7 @@ impl EffectWindow {
         }
         if matches!(
             instruction,
-            Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
+            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
         ) && let TargetRef::Object(object) = target
             && let Some(destination) = self.settled_entry_destinations.get(&object).copied()
             && destination != crate::program::PublicZoneDestination::Battlefield
@@ -12488,45 +11385,6 @@ impl EffectWindow {
             mode.shift_for_splice(index, inserted);
         }
         Ok(())
-    }
-
-    fn suspend_bottom_random_if_needed(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        objects: Vec<ObjectId>,
-    ) -> Result<Option<Vec<ObjectId>>, EffectError> {
-        if let Some(mut piles) = self
-            .resolution_cursor_mut()
-            .and_then(|c| c.revealed_piles.take())
-            && let Some(ordered) = piles.bottom_order.take()
-        {
-            return Ok(Some(ordered));
-        }
-        let mut owner_counts: BTreeMap<SeatId, usize> = BTreeMap::new();
-        for &id in &objects {
-            if let Some(card) = self.window.cards().get(id) {
-                *owner_counts.entry(card.owner()).or_insert(0) += 1;
-            }
-        }
-        if owner_counts.values().all(|&count| count <= 1) {
-            return Ok(Some(objects));
-        }
-        let mut work = revealed_piles::RevealedPiles::new(objects.clone());
-        work.pending_random_bottom = Some(objects);
-        self.resolution_cursor_mut()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .revealed_piles = Some(Box::new(work));
-        let Some(PendingWork::Resolution(cursor)) = self.pending_work.take() else {
-            return Err(EffectError::WrongResolutionFrame);
-        };
-        self.pending_work = Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-            cursor,
-            chooser: entry.controller(),
-            options: BTreeSet::new(),
-            rebound_or_buyback: false,
-            cast: None,
-        })));
-        Ok(None)
     }
 
     fn remove_counters_from_objects(

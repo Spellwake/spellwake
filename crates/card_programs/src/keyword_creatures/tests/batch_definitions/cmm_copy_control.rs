@@ -512,10 +512,11 @@ fn cmm_myriad_construct_ignores_ability_targets_and_uses_equipped_power_when_sac
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::DestroyGroup(Box::new(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
                         spellwake_engine::program::ObjectFilter::creature()
                             .with_power(spellwake_engine::program::PowerFilter::AtLeast(4)),
-                    )),
+                        true,
+                    ),
                 ),
             ),
         ],

@@ -247,11 +247,41 @@ impl EffectWindow {
                 .filter(|obj| obj.zone() == ObjectZone::Battlefield)
                 .map(GameObject::id)
                 .collect()),
+            QueryZone::BattlefieldControlledBy(players) => {
+                let seats: BTreeSet<SeatId> = self
+                    .eval_player_selector_at(controller, entry, players, cursor)?
+                    .into_iter()
+                    .collect();
+                let eval = self.evaluated_characteristics()?;
+                Ok(cards
+                    .iter()
+                    .filter(|obj| {
+                        obj.zone() == ObjectZone::Battlefield
+                            && eval
+                                .get(obj.id())
+                                .and_then(|c| c.controller)
+                                .or_else(|| obj.controller())
+                                .is_some_and(|c| seats.contains(&c))
+                    })
+                    .map(GameObject::id)
+                    .collect())
+            }
             QueryZone::Exile => Ok(cards
                 .iter()
                 .filter(|obj| obj.zone() == ObjectZone::Exile)
                 .map(GameObject::id)
                 .collect()),
+            QueryZone::ExileOwnedBy(players) => {
+                let seats: BTreeSet<SeatId> = self
+                    .eval_player_selector_at(controller, entry, players, cursor)?
+                    .into_iter()
+                    .collect();
+                Ok(cards
+                    .iter()
+                    .filter(|obj| obj.zone() == ObjectZone::Exile && seats.contains(&obj.owner()))
+                    .map(GameObject::id)
+                    .collect())
+            }
             QueryZone::Stack => Ok(cards
                 .iter()
                 .filter(|obj| obj.zone() == ObjectZone::Stack)
@@ -404,6 +434,88 @@ impl EffectWindow {
                         }
                         collected
                     }
+                }
+            }
+            ObjectQuery::Empty => Vec::new(),
+            ObjectQuery::Fixed(ids) => ids
+                .iter()
+                .copied()
+                .filter(|id| self.window.cards().get(*id).is_some())
+                .collect(),
+            ObjectQuery::Take { source, count } => {
+                let n = self
+                    .resolve_value_expr_with_source(controller, count, cursor, source_id)?
+                    .to_usize()
+                    .unwrap_or(0);
+                self.eval_object_query_at(controller, entry, source, cursor)?
+                    .into_iter()
+                    .take(n)
+                    .collect()
+            }
+            ObjectQuery::Filtered { source, filter } => self
+                .eval_object_query_at(controller, entry, source, cursor)?
+                .into_iter()
+                .filter(|&id| {
+                    self.object_passes_filter(id, **filter, controller, source_id, &evaluated)
+                })
+                .collect(),
+            ObjectQuery::LastMoved => cursor
+                .map(|c| {
+                    if !c.results.last_moved_objects.is_empty() {
+                        c.results.last_moved_objects.clone()
+                    } else {
+                        c.results.returned_target_permanent.into_iter().collect()
+                    }
+                })
+                .unwrap_or_default(),
+            ObjectQuery::CreatedTokens => cursor
+                .map(|c| c.last_created_tokens.clone())
+                .unwrap_or_default(),
+            ObjectQuery::Revealed => cursor
+                .and_then(|c| c.results.revealed_top_card)
+                .or_else(|| self.window.cards().library(controller).first().copied())
+                .into_iter()
+                .collect(),
+            ObjectQuery::LinkedTarget { index } => self
+                .legal_linked_targets()
+                .ok()
+                .flatten()
+                .map(|(a, b)| if *index == 0 { a } else { b })
+                .into_iter()
+                .collect(),
+            ObjectQuery::LinkedExile { group } => {
+                let mut out = Vec::new();
+                if let Some(src) = source_id {
+                    match group {
+                        None => {
+                            if let Some(list) = self.linked_exiles.get(&src) {
+                                out.extend(list.iter().copied().filter(|id| {
+                                    self.window
+                                        .cards()
+                                        .get(*id)
+                                        .is_some_and(|c| c.zone() == ObjectZone::Exile)
+                                }));
+                            }
+                        }
+                        Some(g) => {
+                            if let Some(list) = self.independent_exile_links.get(&(src, *g)) {
+                                out.extend(list.iter().copied().filter(|id| {
+                                    self.window
+                                        .cards()
+                                        .get(*id)
+                                        .is_some_and(|c| c.zone() == ObjectZone::Exile)
+                                }));
+                            }
+                        }
+                    }
+                }
+                out
+            }
+            ObjectQuery::EffectSubject(subject) => {
+                if let Some(e) = entry.or_else(|| self.window.resolving()) {
+                    self.effect_group(e, **subject)?.into_iter().collect()
+                } else {
+                    Vec::new()
                 }
             }
             ObjectQuery::Bound(binding) => cursor

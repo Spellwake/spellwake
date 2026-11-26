@@ -2458,22 +2458,6 @@ pub enum Instruction {
         random_rest_order: bool,
         secondary: Option<Box<LookTopSecondary>>,
     },
-    /// Move a single resolved subject (target, source, trigger subject, attached host, or
-    /// revealed card) to an arbitrary destination with full entry/exile modifiers.
-    MoveSubject {
-        subject: MoveSubjectRef,
-        destination: SubjectDestination,
-    },
-    /// Choose `min..=max` cards matching `filter` in `source_zone` and move them to `destination`.
-    SelectZoneCardsToZone {
-        player: ResolvingPlayer,
-        source_zone: SourceZoneFilter,
-        filter: Box<ObjectFilter>,
-        min: ValueExpr,
-        max: ValueExpr,
-        destination: SubjectDestination,
-        reveal: bool,
-    },
     /// Resolution-time non-target object selection with optional constraints (`distinct_powers`,
     /// `max_total_power`) and optional keep-vs-rest `unchosen_action`. Chosen object IDs are
     /// recorded in `last_moved_objects` and `vowed_creatures` for downstream instructions.
@@ -2535,11 +2519,6 @@ pub enum Instruction {
         rule: Box<TemporaryRuleKind>,
         duration: ResolvedDuration,
     },
-    /// Destroy every permanent resolved by `subject`, optionally prohibiting regeneration.
-    DestroySubject {
-        subject: Box<EffectSubject>,
-        no_regeneration: bool,
-    },
     /// Grant `player` permission to play or cast a resolved card from its current zone.
     GrantCardPlayPermission {
         player: ResolvingPlayer,
@@ -2568,13 +2547,6 @@ pub enum Instruction {
     },
     /// Evaluate `ValueExpr` and bind the resolving stack entry's `chosen_x` for downstream instructions and reflexive triggers.
     BindResolutionX(ValueExpr),
-    /// Put the resolving spell card into its owner's library at `placement` instead of the graveyard (CR 608.2n).
-    PutResolvingSpellInLibrary(LibraryPlacement),
-    /// Put `subject` into its owner's library at a dynamically computed zero-based offset from the top (CR 401.2).
-    PutSubjectIntoLibraryFromTop {
-        subject: MoveSubjectRef,
-        offset: ValueExpr,
-    },
     /// Explicitly change the game's day/night designation (CR 730.2, e.g. Into the Night, The Celestus, Unnatural Moonrise).
     SetDayNight(crate::day_night::DayNight),
     /// Create an Aura token (such as a Role token) attached to `host`.
@@ -2591,20 +2563,6 @@ pub enum Instruction {
         body: Box<ExecutableBody>,
         expires: ResolvedDuration,
         once: bool,
-    },
-    /// Move all cards matching `filter` from your graveyard (or all graveyards) to hand or battlefield.
-    MoveGraveyardGroup {
-        filter: Box<ObjectFilter>,
-        all_graveyards: bool,
-        to_battlefield: bool,
-        tapped: bool,
-    },
-    /// Choose up to `maximum` permanent cards matching `filter` from `player`'s hand and put them onto the battlefield.
-    PutHandPermanentFiltered {
-        player: ResolvingPlayer,
-        filter: Box<ObjectFilter>,
-        maximum: u8,
-        tapped: bool,
     },
     /// Execute `body` sequentially `count` times (evaluated once on loop entry).
     RepeatLoop {
@@ -2629,13 +2587,6 @@ pub enum Instruction {
     PayEnergy {
         player: ResolvingPlayer,
         amount: ValueExpr,
-    },
-    /// Each affected player exiles `amount` objects matching `filter` from `zone` (`Hand`, `Graveyard`, or `Battlefield`).
-    ExileFromZone {
-        players: AffectedPlayers,
-        zone: crate::activated::CostExileZone,
-        amount: ValueExpr,
-        filter: Box<ObjectFilter>,
     },
     /// Each affected player taps (`tap = true`) or untaps (`tap = false`) `amount` controlled permanents matching `filter`.
     TapOrUntapControlled {
@@ -2764,8 +2715,6 @@ pub enum Instruction {
     ExileRelatedPermanents(RelatedExileGroup),
     /// Exile a creature under a source link, even if that source has already left play.
     ExileTargetWithLink(LinkedExileGroup),
-    /// Return cards attributed to this exact source and its printed link.
-    ReturnCardsExiledWithLink(LinkedExileGroup),
     /// Destroy every permanent of this enchantment subtype attached to the resolving controller.
     DestroyAttachedEnchantmentSubtype(EnchantmentSubtype),
     /// Optionally attach a controlled Equipment to one token created by the preceding instruction.
@@ -2812,8 +2761,6 @@ pub enum Instruction {
     GoadOtherPlayersCreatures,
     /// Exile the controller's top card; they may cast it normally, otherwise deal this much damage to each opponent.
     ImpulseCastOrDamage(RulesInteger),
-    /// Engine-owned private exile of the controller's top card.
-    ExileTopFaceDown,
     /// Exile the top card and allow its controller to play it this turn or until the next successful exile by this source.
     ExileTopForPlay {
         until_next_from_source: bool,
@@ -2924,22 +2871,8 @@ pub enum Instruction {
     CreateEmblem(crate::emblem::EmblemDefinition),
     /// Each opponent receives an independent emblem.
     CreateOpponentEmblems(crate::emblem::EmblemDefinition),
-    /// Destroy all matching destructible permanents in one zone-change event.
-    DestroyGroup(Box<ObjectFilter>),
-    DestroyGroupWithoutRegeneration(Box<ObjectFilter>),
-    /// Return the matching cohort to owners’ hands or exile it simultaneously.
-    MoveGroup {
-        group: Box<ObjectFilter>,
-        destination: PublicZoneDestination,
-    },
-    /// Move the announced permanent or graveyard card to its owner's library.
-    PutTargetInLibrary(LibraryPlacement),
     /// Choose one card from the resolving controller's hand and put it on their library bottom.
     PutOwnHandCardOnLibraryBottom,
-    /// Move the whole battlefield cohort to its owners' library bottoms.
-    PutGroupOnLibraryBottom(Box<ObjectFilter>),
-    /// Exile the announced card from any graveyard.
-    ExileGraveyardTarget,
     ExileCapturedGraveyardCard,
     /// Allow the controller to cast this exact graveyard card this turn and watch its cast.
     GrantGraveyardCastAndWatchAbilities,
@@ -2947,10 +2880,6 @@ pub enum Instruction {
     GainCastCardAbilities {
         recipient: crate::object_identity::ObjectId,
         donor: Box<crate::characteristics::ObjectCharacteristics>,
-    },
-    ExileCardsFromGraveyard {
-        player: ResolvingPlayer,
-        count: std::num::NonZeroU8,
     },
     /// Create a continuous damage-prevention effect lasting through this turn.
     PreventDamageThisTurn(crate::damage::TurnPreventionFilter),
@@ -3032,9 +2961,6 @@ pub enum Instruction {
     ExileOrderedPermanent(u16),
     /// One mandatory target clause in a fixed sequence; the enclosed body uses that clause's target.
     FixedTargetClause(Box<ExecutableBody>),
-    /// Exile the resolving spell itself after the preceding instructions complete.
-    ExileResolvingSpell,
-    ReturnResolvingSpellToHand,
     Ascend,
     /// Destroy all surviving independently bound permanent targets as one event.
     DestroyFixedTargets,
@@ -3063,7 +2989,6 @@ pub enum Instruction {
     },
     /// Return X announced own-graveyard creatures, then sacrifice the returned objects next end step.
     ReturnChosenXGraveyardCreatures,
-    ReturnGraveyardTargetsTapped(u8),
     /// Simultaneous noncombat damage to one required and up to two other targets.
     /// Split three damage among one to three announced targets, giving the first any remainder.
     DivideThreeDamageAmongTargets,
@@ -3127,8 +3052,6 @@ pub enum Instruction {
     CastFoundSpell(crate::object_identity::ObjectId),
     /// An opponent chooses a revealed creature to enter while the rest go to the graveyard.
     RevealOpponentChoosesCreature,
-    /// Shuffle the exact battlefield ability source into the owner's library.
-    ShuffleAbilitySourceIntoLibrary,
     /// After paying the source shuffle, reveal through this name and put the rest in the graveyard.
     RevealToNameAfterSourceShuffle(spellwake_contracts::names::EnglishCardName),
     /// Choose land or nonland, reveal to the first match, take it, and randomly bottom the rest.
@@ -3341,8 +3264,6 @@ pub enum Instruction {
     OtherCreaturesReturnPowerDamage,
     /// Choose a permanent card type and return that whole group from the controller's graveyard.
     ChooseAndReturnOwnGraveyardCardsByType,
-    /// Return the complete group of cards with this permanent type to their owner's hand.
-    ReturnOwnGraveyardCardsOfTypeToHand(CardType),
     ChangeAbilitySource {
         parts: ResolvedPartsSpec,
         duration: ResolvedDuration,
@@ -3442,8 +3363,6 @@ pub enum Instruction {
     /// Choose a new defending player or planeswalker for a targeted attacker (CR 508.7).
     ReselectAttackDefender,
     RequireAttackSourceNextTurn,
-    /// Exile the target until an opponent of this effect's controller becomes monarch.
-    ExileUntilNextEndStep,
     ExileTargetUntilOpponentMonarch,
     Unearth,
     /// The controller sacrifices the retained permanents they still control, together.
@@ -3499,8 +3418,6 @@ pub enum Instruction {
     },
     /// Destroy the targeted permanent if it can be destroyed.
     DestroyTarget,
-    /// Destroy the targeted permanent without allowing regeneration (CR 701.7b).
-    DestroyTargetWithoutRegeneration,
     /// Destroy the permanent captured as the damaging source, with no targeting.
     DestroyCapturedDamageSource,
     ExileCombatDamagedCreature,
@@ -3527,27 +3444,12 @@ pub enum Instruction {
         keyword: KeywordAbility,
     },
     ReturnToOwnersHand,
-    /// Return the targeted creature card in the controller's graveyard under that player's control.
-    ReturnOwnGraveyardCreatureToBattlefield,
-    /// Return a targeted permanent card from the resolving controller's graveyard.
-    ReturnOwnGraveyardPermanentToBattlefield {
-        tapped: bool,
-    },
-    /// Return a targeted creature or planeswalker card from any graveyard.
-    ReturnAnyGraveyardCreatureOrPlaneswalker,
     /// Return a creature card from any graveyard and give it the specified subtype and black color.
     ReturnAnyGraveyardCreatureBlackSubtype(CreatureTypeId),
-    /// Exile the exact targeted battlefield incarnation.
-    ExileTarget,
-    /// Exile the exact permanent that generated this resolving ability.
-    ExileAbilitySource,
     /// Exile every physical card currently in any graveyard.
     /// Place a +1/+1 counter on this ability’s source. On the specified resolution
     /// this turn, remove all of those counters and deal their number to each creature and player.
     AddCounterAndDischargeOnResolution(u8),
-    ExileAllGraveyards,
-    /// Exile every physical card in each affected player's graveyard.
-    ExilePlayerGraveyards(AffectedPlayers),
     /// Remove up to `amount` counters of `kind` (`None` = any permanent counter) from source or target.
     RemoveCountersFromPermanent {
         target_self: bool,
@@ -3566,15 +3468,7 @@ pub enum Instruction {
     ShuffleTargetGraveyardCards {
         maximum: u8,
     },
-    ShuffleEachHandAndGraveyard,
     EndControllerTurn,
-    ShuffleOwnLibrary,
-    /// Shuffle the specified resolving player's library.
-    ShufflePlayerLibrary(ResolvingPlayer),
-    /// Shuffle the targeted permanent or graveyard card into its owner's library.
-    ShuffleTargetIntoLibrary,
-    /// Reveal every card currently in the specified player's hand.
-    RevealPlayerHand(ResolvingPlayer),
     ExileTopForFreePlay,
     /// Exile the top card, offer to put the exiled permanent onto the battlefield, and repeat only on entry.
     ExileTopRepeatOnPermanentEntry,
@@ -3589,14 +3483,6 @@ pub enum Instruction {
     ReturnSourceGraveyardToHand,
     /// Optionally return a creature card from your graveyard to your hand.
     ReturnUpToOneOwnGraveyardCreatureToHand,
-    /// Move the announced creature card from your graveyard into your hand.
-    ReturnTargetGraveyardCreatureToHand,
-    /// Sample distinct qualifying cards from the controller's graveyard, then return them together.
-    ReturnRandomGraveyardCards {
-        filter: Option<Box<ObjectFilter>>,
-        count: std::num::NonZeroU8,
-        to_battlefield: bool,
-    },
     /// Reveal the target opponent's hand, then choose a qualifying card to move.
     ChooseRevealedHandCard {
         minimum_mana_value: u16,
@@ -3693,12 +3579,6 @@ pub enum Instruction {
     DrawController {
         amount: ValueExpr,
     },
-    /// Each affected player chooses matching permanents they control to return to their owners' hands.
-    ReturnControlledPermanents {
-        players: AffectedPlayers,
-        amount: ValueExpr,
-        filter: PermanentTypeFilter,
-    },
     /// Choose a creature you control other than the ability source, then return or sacrifice it.
     ChooseOtherControlledCreature {
         sacrifice: bool,
@@ -3710,11 +3590,6 @@ pub enum Instruction {
     ExileRelatedHandCardForPlay,
     /// Each player may pay the spell's X life per chosen creature to save it from sacrifice.
     PayLifeOrSacrificeCreatures,
-    ExileChosenPermanents {
-        players: AffectedPlayers,
-        amount: ValueExpr,
-        filter: PermanentTypeFilter,
-    },
     SacrificeColoredPermanents,
     /// Each player chooses one of their creatures to receive a vow counter.
     ChooseVowedCreatures,
@@ -3782,27 +3657,6 @@ pub enum Instruction {
         /// Evaluated types are distinct from physical Battlefield/control checks.
         filter: PermanentTypeFilter,
     },
-    /// Each affected player chooses up to `amount` eligible controlled permanents matching `filter` and sacrifices them.
-    SacrificeUpTo {
-        players: AffectedPlayers,
-        amount: ValueExpr,
-        filter: PermanentTypeFilter,
-    },
-    /// Each affected player chooses as many eligible cards from their own hand
-    /// as possible matching `filter`, then discards the complete selection simultaneously.
-    DiscardFiltered {
-        players: AffectedPlayers,
-        amount: ValueExpr,
-        filter: Box<ObjectFilter>,
-    },
-    /// Each affected player chooses as many physical cards from their own hand
-    /// as possible, then discards the complete selection simultaneously.
-    /// Random discard and choosing for another player are separate instructions.
-    DiscardUpTo {
-        maximum: u16,
-    },
-    /// The ability controller discards one uniformly selected hand card.
-    DiscardOneAtRandom(ResolvingPlayer),
     /// The targeted player sacrifices a random permanent and repeats for each nonland sacrificed.
     SacrificeRandomUntilLand,
     /// Sacrifice one controlled permanent matching the filter. Skip the remainder if none was sacrificed.
@@ -3849,11 +3703,6 @@ pub enum Instruction {
     DoubleCountersOnSubject {
         subject: Box<EffectSubject>,
         kind: Option<crate::effects::CounterKind>,
-    },
-    /// Shuffle every resolved permanent/card in `subject` into its owner's library (CR 701.20).
-    ShuffleSubjectIntoLibrary {
-        subject: Box<EffectSubject>,
-        zone: Option<SourceZoneFilter>,
     },
     /// The resolved player wins the game immediately during resolution (CR 104.2b).
     WinGame(ResolvingPlayer),
@@ -3959,23 +3808,6 @@ pub enum Instruction {
         count: ValueExpr,
         may_choose_new_targets: bool,
     },
-    /// Exile all cards matching `filter` from `zone` of each player in `players`.
-    ExileGroupFromZone {
-        players: AffectedPlayers,
-        zone: SourceZoneFilter,
-        filter: Box<ObjectFilter>,
-    },
-    /// Cause the controllers of each permanent in `subject` to sacrifice it.
-    SacrificeSubject {
-        subject: Box<EffectSubject>,
-    },
-    /// Non-targeted choose-and-destroy `count` battlefield permanents matching `filter`.
-    DestroyChosen {
-        chooser: ResolvingPlayer,
-        filter: Box<ObjectFilter>,
-        count: ValueExpr,
-        allow_regeneration: bool,
-    },
     /// CR 702.75 Hideaway: cast a card exiled face down linked to the ability source without paying its mana cost.
     CastLinkedFaceDownFree,
     /// CR 702.60 Ripple N: reveal top N cards, cast matching-name cards free, bottom the rest.
@@ -4013,18 +3845,6 @@ pub enum Instruction {
         kind: Option<crate::effects::CounterKind>,
         amount: Option<ValueExpr>,
     },
-    /// Put every battlefield permanent matching `group` into its owner's library at `placement`.
-    MoveGroupToLibrary {
-        group: ObjectFilter,
-        placement: LibraryPlacement,
-    },
-    /// Exile the top `amount` cards of `player`'s library linked to the ability source under `group`.
-    ExileLibraryTopLinked {
-        player: ResolvingPlayer,
-        amount: ValueExpr,
-        group: LinkedExileGroup,
-        face_down: bool,
-    },
     /// Non-targeted selection of `count` (or up to `count`) matching battlefield permanents to tap or untap.
     UntapOrTapSelect {
         chooser: ResolvingPlayer,
@@ -4032,12 +3852,6 @@ pub enum Instruction {
         count: ValueExpr,
         up_to: bool,
         tap: bool,
-    },
-    /// Move every card matching `filter` from the graveyards of `players` to `destination`.
-    MoveGraveyardGroupOwned {
-        players: AffectedPlayers,
-        filter: Box<ObjectFilter>,
-        destination: SubjectDestination,
     },
     /// Generalized look-at-top-N choosing cards into `keep_dest` and putting the rest into `rest_dest`.
     LookTopChooseExt {
@@ -4099,16 +3913,6 @@ pub enum Instruction {
         any_number: bool,
         amount: Option<ValueExpr>,
     },
-    /// Exile every permanent resolved by `subject` until the ability source leaves the battlefield (CR 610.3).
-    ExileSubjectUntilSourceLeaves {
-        subject: Box<EffectSubject>,
-    },
-    /// Return cards attributed to this exact source and link, optionally under controller's control and/or tapped.
-    ReturnCardsExiledWithLinkExt {
-        group: LinkedExileGroup,
-        under_controller_control: bool,
-        tapped: bool,
-    },
     /// End the game in a draw immediately (CR 104.4).
     DrawGame,
     /// Turn every face-down permanent resolved by `subject` face up (CR 708.6).
@@ -4136,11 +3940,6 @@ pub enum Instruction {
         cast_only: bool,
         any_color: bool,
     },
-    /// Move every surviving object in `last_moved_objects` matching optional `filter` to `destination`.
-    MoveLastMovedFiltered {
-        filter: Option<Box<ObjectFilter>>,
-        destination: SubjectDestination,
-    },
     /// Counter every other stack entry matching `include_spells`/`include_abilities`, `opponents_only`, and optional `filter`.
     CounterMatchingStackObjects {
         filter: Option<Box<SpellFilter>>,
@@ -4148,21 +3947,9 @@ pub enum Instruction {
         include_abilities: bool,
         opponents_only: bool,
     },
-    /// Move surviving cards exiled with this ability's source permanent (`linked_exiles`) to `destination`.
-    ReturnLinkedExile {
-        destination: SubjectDestination,
-        only_first: bool,
-    },
     /// Copy every permanent counter kind and count from the triggering object's battlefield LKI onto `to`.
     TransferAllCountersFromTriggeringLki {
         to: Box<EffectSubject>,
-    },
-    /// Extended up-to discard with dynamic maximum, optional card filter, and any-number mode.
-    DiscardUpToExt {
-        players: AffectedPlayers,
-        max_count: ValueExpr,
-        filter: Option<Box<ObjectFilter>>,
-        any_number: bool,
     },
     /// Earthbend `amount`: animate targeted controlled land as 0/0 with haste, put `amount` +1/+1 counters on it, and register its delayed return trigger.
     Earthbend {
@@ -4304,8 +4091,6 @@ impl Instruction {
             | Self::GrantControllerFlashUntilCleanup
             | Self::ExileTopPlay { .. }
             | Self::LookTopChoose { .. }
-            | Self::MoveSubject { .. }
-            | Self::SelectZoneCardsToZone { .. }
             | Self::ChooseObjects { .. }
             | Self::ChooseOption { .. }
             | Self::DealDamageFrom { .. }
@@ -4317,7 +4102,6 @@ impl Instruction {
             | Self::BecomeCopyFixedTargets { .. }
             | Self::DoublePowerToughnessSubject { .. }
             | Self::DoubleCountersOnSubject { .. }
-            | Self::ShuffleSubjectIntoLibrary { .. }
             | Self::WinGame(_)
             | Self::LoseGame(_)
             | Self::DistributeCountersAmongTargets { .. }
@@ -4341,9 +4125,6 @@ impl Instruction {
             | Self::Fight { .. }
             | Self::Exchange(_)
             | Self::CopyStackObject { .. }
-            | Self::ExileGroupFromZone { .. }
-            | Self::SacrificeSubject { .. }
-            | Self::DestroyChosen { .. }
             | Self::CastLinkedFaceDownFree
             | Self::Ripple(_)
             | Self::Demonstrate
@@ -4354,8 +4135,6 @@ impl Instruction {
             | Self::GrantChosenProtection { .. }
             | Self::RemoveCountersFromSubject { .. }
             | Self::MoveCounters { .. }
-            | Self::ExileSubjectUntilSourceLeaves { .. }
-            | Self::ReturnCardsExiledWithLinkExt { .. }
             | Self::DrawGame
             | Self::TurnFaceUpSubject { .. }
             | Self::TurnFaceDownSubject { .. }
@@ -4363,14 +4142,9 @@ impl Instruction {
             | Self::EmpowerJace { .. }
             | Self::AddOneOfEachCounterKindOnSubject { .. }
             | Self::GrantLastMovedPlayPermission { .. }
-            | Self::MoveLastMovedFiltered { .. }
             | Self::CounterMatchingStackObjects { .. }
-            | Self::ReturnLinkedExile { .. }
             | Self::TransferAllCountersFromTriggeringLki { .. }
-            | Self::MoveGroupToLibrary { .. }
-            | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
-            | Self::MoveGraveyardGroupOwned { .. }
             | Self::LookTopChooseExt { .. }
             | Self::RevealTopTwoPiles { .. }
             | Self::RevealUntilMatchExt { .. }
@@ -4381,22 +4155,16 @@ impl Instruction {
             | Self::SkipNextUntap { .. }
             | Self::RequireCombatAction { .. }
             | Self::CreateTemporaryRule { .. }
-            | Self::DestroySubject { .. }
             | Self::GrantCardPlayPermission { .. }
             | Self::CreateTokenCopy { .. }
             | Self::BindResolutionX(_)
-            | Self::PutResolvingSpellInLibrary(_)
-            | Self::PutSubjectIntoLibraryFromTop { .. }
             | Self::SetDayNight(_)
             | Self::CreateAuraTokenAttached { .. }
             | Self::ExploreSubject(_)
             | Self::ScheduleDelayedEventTrigger { .. }
-            | Self::MoveGraveyardGroup { .. }
-            | Self::PutHandPermanentFiltered { .. }
             | Self::RepeatLoop { .. }
             | Self::PayLife { .. }
             | Self::PayEnergy { .. }
-            | Self::ExileFromZone { .. }
             | Self::TapOrUntapControlled { .. }
             | Self::ExertAbilitySource
             | Self::CollectEvidence { .. }
@@ -4448,7 +4216,6 @@ impl Instruction {
             | Self::ExileDelayedObjects(..)
             | Self::ExileRelatedPermanents(..)
             | Self::ExileTargetWithLink(..)
-            | Self::ReturnCardsExiledWithLink(..)
             | Self::DestroyAttachedEnchantmentSubtype(..)
             | Self::EquipNewToken
             | Self::PutEquipmentFromHandOrGraveyard
@@ -4473,7 +4240,6 @@ impl Instruction {
             | Self::ReturnSourceToHand
             | Self::GoadOtherPlayersCreatures
             | Self::ImpulseCastOrDamage(..)
-            | Self::ExileTopFaceDown
             | Self::ExileTopForPlay { .. }
             | Self::ExileTopFreeNoncreatureSpells(..)
             | Self::ExileTopForEachSpellType(..)
@@ -4521,17 +4287,10 @@ impl Instruction {
             | Self::DamageDamagedPlayersCreatures
             | Self::CreateEmblem(..)
             | Self::CreateOpponentEmblems(..)
-            | Self::DestroyGroup(..)
-            | Self::DestroyGroupWithoutRegeneration(..)
-            | Self::MoveGroup { .. }
-            | Self::PutTargetInLibrary(..)
             | Self::PutOwnHandCardOnLibraryBottom
-            | Self::PutGroupOnLibraryBottom(..)
-            | Self::ExileGraveyardTarget
             | Self::ExileCapturedGraveyardCard
             | Self::GrantGraveyardCastAndWatchAbilities
             | Self::GainCastCardAbilities { .. }
-            | Self::ExileCardsFromGraveyard { .. }
             | Self::PreventDamageThisTurn(..)
             | Self::PreventDamageSpec(..)
             | Self::TakeExtraTurn
@@ -4563,8 +4322,6 @@ impl Instruction {
             | Self::BindOrderedPermanents { .. }
             | Self::ExileOrderedPermanent(..)
             | Self::FixedTargetClause(..)
-            | Self::ExileResolvingSpell
-            | Self::ReturnResolvingSpellToHand
             | Self::Ascend
             | Self::DestroyFixedTargets
             | Self::DestroyTargetAndAttachedEquipment
@@ -4577,7 +4334,6 @@ impl Instruction {
             | Self::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
             | Self::ReturnGraveyardCreatureWithSubtypeCounters { .. }
             | Self::ReturnChosenXGraveyardCreatures
-            | Self::ReturnGraveyardTargetsTapped(..)
             | Self::DivideThreeDamageAmongTargets
             | Self::DistributePlusOneCounters { .. }
             | Self::DamageOrderedTargets { .. }
@@ -4604,7 +4360,6 @@ impl Instruction {
             | Self::CastLinkedSpellMatchingX
             | Self::CastFoundSpell(..)
             | Self::RevealOpponentChoosesCreature
-            | Self::ShuffleAbilitySourceIntoLibrary
             | Self::RevealToNameAfterSourceShuffle(..)
             | Self::RevealUntilLandKind
             | Self::RevealOddCastOrDraw
@@ -4661,7 +4416,6 @@ impl Instruction {
             | Self::TargetDamagesItsControllersOtherCreatures
             | Self::OtherCreaturesReturnPowerDamage
             | Self::ChooseAndReturnOwnGraveyardCardsByType
-            | Self::ReturnOwnGraveyardCardsOfTypeToHand(..)
             | Self::ChangeAbilitySource { .. }
             | Self::GiveControlOfAbilitySource
             | Self::Proliferate
@@ -4706,7 +4460,6 @@ impl Instruction {
             | Self::SetBlockDeclarations(..)
             | Self::ReselectAttackDefender
             | Self::RequireAttackSourceNextTurn
-            | Self::ExileUntilNextEndStep
             | Self::ExileTargetUntilOpponentMonarch
             | Self::Unearth
             | Self::SacrificeDelayedObjects(..)
@@ -4733,7 +4486,6 @@ impl Instruction {
             | Self::SetGroupTapped { .. }
             | Self::SetSubjectTapped { .. }
             | Self::DestroyTarget
-            | Self::DestroyTargetWithoutRegeneration
             | Self::DestroyCapturedDamageSource
             | Self::ExileCombatDamagedCreature
             | Self::DestroyCapturedCombatCreature { .. }
@@ -4745,35 +4497,21 @@ impl Instruction {
             | Self::ResolvePowerAbility(..)
             | Self::BoostSaddledAttacker { .. }
             | Self::ReturnToOwnersHand
-            | Self::ReturnOwnGraveyardCreatureToBattlefield
-            | Self::ReturnOwnGraveyardPermanentToBattlefield { .. }
-            | Self::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Self::ReturnAnyGraveyardCreatureBlackSubtype(..)
-            | Self::ExileTarget
-            | Self::ExileAbilitySource
             | Self::AddCounterAndDischargeOnResolution(..)
-            | Self::ExileAllGraveyards
-            | Self::ExilePlayerGraveyards(..)
             | Self::RemoveCountersFromPermanent { .. }
             | Self::ExileCreatureAtMostRevealedPower
             | Self::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Self::ReturnOwnedCommandersToHand
             | Self::ShuffleOwnGraveyardIntoLibrary
             | Self::ShuffleTargetGraveyardCards { .. }
-            | Self::ShuffleEachHandAndGraveyard
             | Self::EndControllerTurn
-            | Self::ShuffleOwnLibrary
-            | Self::ShufflePlayerLibrary(..)
-            | Self::ShuffleTargetIntoLibrary
-            | Self::RevealPlayerHand(..)
             | Self::ExileTopForFreePlay
             | Self::ExileTopRepeatOnPermanentEntry
             | Self::ExileTargetUntilNonlandForFreeCast
             | Self::ReturnSourceGraveyardToBattlefield { .. }
             | Self::ReturnSourceGraveyardToHand
             | Self::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Self::ReturnTargetGraveyardCreatureToHand
-            | Self::ReturnRandomGraveyardCards { .. }
             | Self::ChooseRevealedHandCard { .. }
             | Self::ReturnUpToOneRecentGraveyardCard
             | Self::ExileUpToTwoGraveyardTargetsGainLife
@@ -4806,12 +4544,10 @@ impl Instruction {
             | Self::DrawEachPlayer { .. }
             | Self::DrawPlayersControllingName(..)
             | Self::DrawController { .. }
-            | Self::ReturnControlledPermanents { .. }
             | Self::ChooseOtherControlledCreature { .. }
             | Self::ExileFromHandOrBattlefield(..)
             | Self::ExileRelatedHandCardForPlay
             | Self::PayLifeOrSacrificeCreatures
-            | Self::ExileChosenPermanents { .. }
             | Self::SacrificeColoredPermanents
             | Self::ChooseVowedCreatures
             | Self::ChooseCreaturesToKeep
@@ -4833,10 +4569,6 @@ impl Instruction {
             | Self::AffectPermanentTargets { .. }
             | Self::ModifyAnyNumberOfPermanents { .. }
             | Self::Sacrifice { .. }
-            | Self::SacrificeUpTo { .. }
-            | Self::DiscardFiltered { .. }
-            | Self::DiscardUpTo { .. }
-            | Self::DiscardUpToExt { .. }
             | Self::Earthbend { .. }
             | Self::ReturnEarthbentCard
             | Self::RegenerateSubject { .. }
@@ -4847,7 +4579,6 @@ impl Instruction {
             | Self::AttachFixedTargets
             | Self::AttachPermanentToPlayer { .. }
             | Self::AttachChoosingPermanent { .. }
-            | Self::DiscardOneAtRandom(..)
             | Self::SacrificeRandomUntilLand
             | Self::SacrificeToContinue { .. }
             | Self::SacrificeMatching(..)
@@ -4998,31 +4729,19 @@ impl Instruction {
             | Self::CollectEvidence { player, .. }
             | Self::Blight { player, .. }
             | Self::ManifestTop { player, .. }
-            | Self::PutHandPermanentFiltered { player, .. }
-            | Self::PutHandPermanentsOntoBattlefield { player, .. }
-            | Self::ShufflePlayerLibrary(player)
-            | Self::RevealPlayerHand(player) => is_target_player(*player),
+            | Self::PutHandPermanentsOntoBattlefield { player, .. } => is_target_player(*player),
             Self::OptionalSequence { chooser, .. } | Self::OptionalEffect { chooser } => {
                 is_target_player(*chooser)
             }
             Self::Scry { player, amount }
             | Self::Surveil { player, amount }
             | Self::Mill { player, amount } => is_target_player(*player) || amount.uses_target(),
-            Self::ExileCardsFromGraveyard { player, .. } | Self::DiscardOneAtRandom(player) => {
-                is_target_player(*player)
-            }
-            Self::ExileFromZone { players, .. }
-            | Self::TapOrUntapControlled { players, .. }
-            | Self::ExilePlayerGraveyards(players)
+            Self::TapOrUntapControlled { players, .. }
             | Self::AddPlayerCounter { players, .. }
             | Self::AdjustPlayersLife { players, .. }
             | Self::SetPlayersLife { players, .. }
-            | Self::ReturnControlledPermanents { players, .. }
-            | Self::ExileChosenPermanents { players, .. }
             | Self::Discard { players, .. }
-            | Self::DiscardFiltered { players, .. }
-            | Self::Sacrifice { players, .. }
-            | Self::SacrificeUpTo { players, .. } => is_target_affected(*players),
+            | Self::Sacrifice { players, .. } => is_target_affected(*players),
             Self::DrawPlayer { players, amount } => {
                 is_target_affected(*players) || amount.uses_target()
             }
@@ -5067,16 +4786,6 @@ impl Instruction {
             Self::AddManaForPlayer { player, yield_kind } => {
                 is_target_player(*player) || yield_kind.uses_target()
             }
-            Self::DiscardUpToExt {
-                players,
-                max_count,
-                filter,
-                any_number,
-            } => {
-                is_target_affected(*players)
-                    || (!*any_number && max_count.uses_target())
-                    || filter.as_deref().is_some_and(filter_uses_target)
-            }
             Self::Earthbend { .. } => true,
             Self::RegenerateSubject { subject } => subject_uses_target(subject),
             Self::SkipNextTurns { player, .. } | Self::SkipNextStep { player, .. } => {
@@ -5107,39 +4816,6 @@ impl Instruction {
                     || options
                         .iter()
                         .any(|b| b.body.instructions.iter().any(Self::uses_mode_target))
-            }
-            Self::MoveSubject {
-                subject,
-                destination,
-            } => {
-                matches!(subject, MoveSubjectRef::TargetObject)
-                    || matches!(
-                        destination,
-                        SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
-                            chooser
-                        }) if is_target_player(*chooser)
-                    )
-            }
-            Self::SelectZoneCardsToZone {
-                player,
-                source_zone,
-                filter,
-                destination,
-                ..
-            } => {
-                is_target_player(*player)
-                    || matches!(
-                        source_zone,
-                        SourceZoneFilter::TargetPlayerHand
-                            | SourceZoneFilter::TargetPlayerGraveyard
-                    )
-                    || filter_uses_target(filter)
-                    || matches!(
-                        destination,
-                        SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
-                            chooser
-                        }) if is_target_player(*chooser)
-                    )
             }
             Self::ChooseObjects {
                 players,
@@ -5188,21 +4864,15 @@ impl Instruction {
             } => subject_uses_target(receiver) || matches!(donor, MoveSubjectRef::TargetObject),
             Self::DoublePowerToughnessSubject { subject, .. }
             | Self::DoubleCountersOnSubject { subject, .. }
-            | Self::ShuffleSubjectIntoLibrary { subject, .. }
-            | Self::DestroySubject { subject, .. }
-            | Self::SacrificeSubject { subject }
             | Self::SkipNextUntap { subject }
             | Self::RequireCombatAction { subject, .. }
             | Self::SetSubjectTapped { subject, .. }
-            | Self::ExileSubjectUntilSourceLeaves { subject }
             | Self::TurnFaceUpSubject { subject }
             | Self::TurnFaceDownSubject { subject }
             | Self::TransformSubject { subject }
             | Self::AddOneOfEachCounterKindOnSubject { subject } => subject_uses_target(subject),
             Self::GrantLastMovedPlayPermission { player, .. } => is_target_player(*player),
-            Self::MoveLastMovedFiltered { .. }
-            | Self::CounterMatchingStackObjects { .. }
-            | Self::ReturnLinkedExile { .. } => false,
+            Self::CounterMatchingStackObjects { .. } => false,
             Self::TransferAllCountersFromTriggeringLki { to } => subject_uses_target(to),
             Self::EmpowerJace { count } => count.uses_target(),
             Self::MoveCounters {
@@ -5212,10 +4882,6 @@ impl Instruction {
                     || matches!(to, MoveSubjectRef::TargetObject)
                     || amount.as_ref().is_some_and(ValueExpr::uses_target)
             }
-            Self::MoveGroup { group, .. }
-            | Self::DestroyGroup(group)
-            | Self::DestroyGroupWithoutRegeneration(group)
-            | Self::PutGroupOnLibraryBottom(group) => filter_uses_target(group),
             Self::SetGroupTapped { filter, .. } => filter_uses_target(filter),
             Self::SuppressGroupKeywords { group, .. }
             | Self::ModifyGroupUntilEndOfTurn { group, .. } => subject_uses_target(group),
@@ -5233,7 +4899,7 @@ impl Instruction {
                 body.target == BodyTarget::None
                     && body.instructions.iter().any(Self::uses_mode_target)
             }
-            Self::DrawGame | Self::ReturnCardsExiledWithLinkExt { .. } => false,
+            Self::DrawGame => false,
             Self::WinGame(player) => matches!(
                 player,
                 ResolvingPlayer::TargetPlayer
@@ -5316,26 +4982,6 @@ impl Instruction {
                         | StackCopyTarget::TargetSpellOrAbility
                 ) || count.uses_target()
             }
-            Self::ExileGroupFromZone {
-                players,
-                zone,
-                filter,
-                ..
-            } => {
-                is_target_affected(*players)
-                    || matches!(
-                        zone,
-                        SourceZoneFilter::TargetPlayerHand
-                            | SourceZoneFilter::TargetPlayerGraveyard
-                    )
-                    || filter_uses_target(filter)
-            }
-            Self::DestroyChosen {
-                chooser,
-                filter,
-                count,
-                ..
-            } => is_target_player(*chooser) || filter_uses_target(filter) || count.uses_target(),
             Self::CastLinkedFaceDownFree | Self::Ripple(_) | Self::Demonstrate | Self::Enlist => {
                 false
             }
@@ -5367,17 +5013,6 @@ impl Instruction {
             } => {
                 subject_uses_target(subject) || amount.as_ref().is_some_and(ValueExpr::uses_target)
             }
-            Self::MoveGroupToLibrary { group, placement } => {
-                group.has_target_player()
-                    || group.uses_target_permanent()
-                    || matches!(
-                        placement,
-                        LibraryPlacement::ChoiceTopOrBottom { chooser } if is_target_player(*chooser)
-                    )
-            }
-            Self::ExileLibraryTopLinked { player, amount, .. } => {
-                is_target_player(*player) || amount.uses_target()
-            }
             Self::UntapOrTapSelect {
                 chooser,
                 filter,
@@ -5388,20 +5023,6 @@ impl Instruction {
                     || filter.has_target_player()
                     || filter.uses_target_permanent()
                     || count.uses_target()
-            }
-            Self::MoveGraveyardGroupOwned {
-                players,
-                filter,
-                destination,
-            } => {
-                is_target_affected(*players)
-                    || filter.has_target_player()
-                    || matches!(
-                        destination,
-                        SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
-                            chooser
-                        }) if is_target_player(*chooser)
-                    )
             }
             Self::LookTopChooseExt {
                 library_owner,
@@ -5481,13 +5102,7 @@ impl Instruction {
                     )
             }
             Self::BindResolutionX(expr) => expr.uses_target(),
-            Self::PutResolvingSpellInLibrary(LibraryPlacement::ChoiceTopOrBottom { chooser }) => {
-                is_target_player(*chooser)
-            }
-            Self::PutResolvingSpellInLibrary(_) | Self::SetDayNight(_) => false,
-            Self::PutSubjectIntoLibraryFromTop { subject, offset } => {
-                matches!(subject, MoveSubjectRef::TargetObject) || offset.uses_target()
-            }
+            Self::SetDayNight(_) => false,
             Self::CreateAuraTokenAttached { host: source, .. } | Self::ExploreSubject(source) => {
                 matches!(source, MoveSubjectRef::TargetObject)
             }
@@ -5702,8 +5317,6 @@ impl Instruction {
             | Self::ExileRelatedPermanents(..)
             | Self::ExileTargetWithLink(..)
             | Self::CastDefeatedSiege
-            | Self::PutTargetInLibrary(..)
-            | Self::ExileGraveyardTarget
             | Self::ChooseNewTargets
             | Self::GainControlOfSpell
             | Self::ChangeOnlyTarget
@@ -5715,7 +5328,6 @@ impl Instruction {
             | Self::ExileOrderedPermanent(..)
             | Self::DestroyTargetAndAttachedEquipment
             | Self::ReturnGraveyardCreatureWithSubtypeCounters { .. }
-            | Self::ReturnGraveyardTargetsTapped(..)
             | Self::DivideThreeDamageAmongTargets
             | Self::DistributePlusOneCounters { .. }
             | Self::DamageOrderedTargets { .. }
@@ -5739,23 +5351,15 @@ impl Instruction {
             | Self::CreateReflectingShield
             | Self::CreatePreventionShield { .. }
             | Self::RequireAttackSourceNextTurn
-            | Self::ExileUntilNextEndStep
             | Self::ExileTargetUntilOpponentMonarch
             | Self::CastTargetGraveyardInstant
             | Self::DestroyTarget
-            | Self::DestroyTargetWithoutRegeneration
             | Self::Attach(..)
             | Self::ReturnToOwnersHand
-            | Self::ReturnOwnGraveyardCreatureToBattlefield
-            | Self::ReturnOwnGraveyardPermanentToBattlefield { .. }
-            | Self::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Self::ReturnAnyGraveyardCreatureBlackSubtype(..)
-            | Self::ExileTarget
             | Self::ExileCreatureAtMostRevealedPower
             | Self::ShuffleTargetGraveyardCards { .. }
-            | Self::ShuffleTargetIntoLibrary
             | Self::ExileTargetUntilNonlandForFreeCast
-            | Self::ReturnTargetGraveyardCreatureToHand
             | Self::ChooseRevealedHandCard { .. }
             | Self::ExileUpToTwoGraveyardTargetsGainLife
             | Self::ExileTargetUntilSourceLeaves
@@ -5786,7 +5390,6 @@ impl Instruction {
             | Self::SacrificeRandomUntilLand => true,
             Self::ControlManaSourceThroughNextTurn
             | Self::GrantControllerFlashUntilCleanup
-            | Self::MoveGraveyardGroup { .. }
             | Self::ExertAbilitySource
             | Self::RevealUntilMatch { .. }
             | Self::AddExperienceCounter
@@ -5820,7 +5423,6 @@ impl Instruction {
             | Self::ScheduleCreatedTokenExile(..)
             | Self::ScheduleCreatedTokenSacrifice
             | Self::ExileDelayedObjects(..)
-            | Self::ReturnCardsExiledWithLink(..)
             | Self::DestroyAttachedEnchantmentSubtype(..)
             | Self::EquipNewToken
             | Self::PutEquipmentFromHandOrGraveyard
@@ -5844,7 +5446,6 @@ impl Instruction {
             | Self::ReturnSourceToHand
             | Self::GoadOtherPlayersCreatures
             | Self::ImpulseCastOrDamage(..)
-            | Self::ExileTopFaceDown
             | Self::ExileTopForPlay { .. }
             | Self::ExileTopFreeNoncreatureSpells(..)
             | Self::ExileTopForEachSpellType(..)
@@ -5908,8 +5509,6 @@ impl Instruction {
             | Self::CopyCapturedAbility
             | Self::OfferSourceCounters { .. }
             | Self::FixedTargetClause(..)
-            | Self::ExileResolvingSpell
-            | Self::ReturnResolvingSpellToHand
             | Self::Ascend
             | Self::DestroyFixedTargets
             | Self::ReturnFixedTargets
@@ -5941,7 +5540,6 @@ impl Instruction {
             | Self::CastLinkedSpellMatchingX
             | Self::CastFoundSpell(..)
             | Self::RevealOpponentChoosesCreature
-            | Self::ShuffleAbilitySourceIntoLibrary
             | Self::RevealToNameAfterSourceShuffle(..)
             | Self::RevealUntilLandKind
             | Self::RevealOddCastOrDraw
@@ -5978,7 +5576,6 @@ impl Instruction {
             | Self::DamageCapturedBlocker(..)
             | Self::ReflectAttachedCreatureDamage
             | Self::ChooseAndReturnOwnGraveyardCardsByType
-            | Self::ReturnOwnGraveyardCardsOfTypeToHand(..)
             | Self::ChangeAbilitySource { .. }
             | Self::Proliferate
             | Self::ExileOnePerPlayerUntilSourceLeaves
@@ -6038,21 +5635,16 @@ impl Instruction {
             | Self::PutCountersOnSource { .. }
             | Self::ResolvePowerAbility(..)
             | Self::BoostSaddledAttacker { .. }
-            | Self::ExileAbilitySource
             | Self::AddCounterAndDischargeOnResolution(..)
-            | Self::ExileAllGraveyards
             | Self::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Self::ReturnOwnedCommandersToHand
             | Self::ShuffleOwnGraveyardIntoLibrary
-            | Self::ShuffleEachHandAndGraveyard
             | Self::EndControllerTurn
-            | Self::ShuffleOwnLibrary
             | Self::ExileTopForFreePlay
             | Self::ExileTopRepeatOnPermanentEntry
             | Self::ReturnSourceGraveyardToBattlefield { .. }
             | Self::ReturnSourceGraveyardToHand
             | Self::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Self::ReturnRandomGraveyardCards { .. }
             | Self::ReturnUpToOneRecentGraveyardCard
             | Self::DrawPlayersControllingName(..)
             | Self::ChooseOtherControlledCreature { .. }
@@ -6077,7 +5669,6 @@ impl Instruction {
             | Self::MillEachPlayer(..)
             | Self::PutLibraryCohortIntoGraveyard(..)
             | Self::ModifyAnyNumberOfPermanents { .. }
-            | Self::DiscardUpTo { .. }
             | Self::SacrificeToContinue { .. }
             | Self::SacrificeMatching(..) => false,
         }
@@ -6113,7 +5704,6 @@ impl Instruction {
             | Self::ExileUntilOtherTargetLeaves
             | Self::CopyOtherTargetAsArtifact
             | Self::ReturnChosenXGraveyardCreatures
-            | Self::ReturnGraveyardTargetsTapped(_)
             | Self::ReturnCapturedDyingCreature
             | Self::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
             | Self::ReturnGraveyardCreatureWithSubtypeCounters { .. }
@@ -6182,12 +5772,7 @@ impl Instruction {
             | Self::ReturnLinkedSearchCards
             | Self::ReturnSourceGraveyardToBattlefield { .. }
             | Self::ReturnSourceGraveyardToHand
-            | Self::ShuffleOwnLibrary
-            | Self::ShufflePlayerLibrary(_)
-            | Self::RevealPlayerHand(_)
             | Self::ShuffleOwnGraveyardIntoLibrary
-            | Self::ExileAllGraveyards
-            | Self::ExilePlayerGraveyards(_)
             | Self::RemoveCountersFromPermanent { .. }
             | Self::Scry { .. }
             | Self::Surveil { .. }
@@ -6198,8 +5783,6 @@ impl Instruction {
             | Self::AddMana(_)
             | Self::ExileLibraryTop { .. }
             | Self::ExileTopForPlay { .. }
-            | Self::ExileTopFaceDown
-            | Self::MoveGroup { .. }
             | Self::PutChargeCounterOnSource
             | Self::PutBlessingCounterOnSource
             | Self::PutNamedCounterOnSource { .. }
@@ -6208,12 +5791,9 @@ impl Instruction {
             | Self::SetSubjectTapped { .. }
             | Self::ChangeGroup { .. }
             | Self::PutStorageCounterOnSource
-            | Self::ExileAbilitySource
             | Self::ReturnSourceToHand
             | Self::UntapAbilitySource
             | Self::TapAbilitySource
-            | Self::DestroyGroupWithoutRegeneration(_)
-            | Self::DestroyGroup(_)
             | Self::UntapControlledLands
             | Self::UntapControlledCreatures
             | Self::Proliferate
@@ -6221,8 +5801,6 @@ impl Instruction {
             | Self::PutNamedCounterOnTarget { .. }
             | Self::ExileTopPlay { .. }
             | Self::LookTopChoose { .. }
-            | Self::MoveSubject { .. }
-            | Self::SelectZoneCardsToZone { .. }
             | Self::ChooseObjects { .. }
             | Self::ChooseOption { .. }
             | Self::DealDamageFrom { .. }
@@ -6234,7 +5812,6 @@ impl Instruction {
             | Self::BecomeCopyFixedTargets { .. }
             | Self::DoublePowerToughnessSubject { .. }
             | Self::DoubleCountersOnSubject { .. }
-            | Self::ShuffleSubjectIntoLibrary { .. }
             | Self::WinGame(_)
             | Self::LoseGame(_)
             | Self::DistributeCountersAmongTargets { .. }
@@ -6258,26 +5835,18 @@ impl Instruction {
             | Self::Fight { .. }
             | Self::Exchange(_)
             | Self::CopyStackObject { .. }
-            | Self::ExileGroupFromZone { .. }
-            | Self::SacrificeSubject { .. }
-            | Self::DestroyChosen { .. }
             | Self::CastLinkedFaceDownFree
             | Self::Ripple(_)
             | Self::Demonstrate
             | Self::Enlist
-            | Self::ShuffleEachHandAndGraveyard
             | Self::FixedTargetClause(_)
             | Self::Ascend
-            | Self::ExileResolvingSpell
-            | Self::ReturnResolvingSpellToHand
             | Self::ForEachPlayer { .. }
             | Self::OfferAnyPlayer { .. }
             | Self::DealDamageToAnnouncedTargets { .. }
             | Self::GrantChosenProtection { .. }
             | Self::RemoveCountersFromSubject { .. }
             | Self::MoveCounters { .. }
-            | Self::ExileSubjectUntilSourceLeaves { .. }
-            | Self::ReturnCardsExiledWithLinkExt { .. }
             | Self::DrawGame
             | Self::TurnFaceUpSubject { .. }
             | Self::TurnFaceDownSubject { .. }
@@ -6285,14 +5854,9 @@ impl Instruction {
             | Self::EmpowerJace { .. }
             | Self::AddOneOfEachCounterKindOnSubject { .. }
             | Self::GrantLastMovedPlayPermission { .. }
-            | Self::MoveLastMovedFiltered { .. }
             | Self::CounterMatchingStackObjects { .. }
-            | Self::ReturnLinkedExile { .. }
             | Self::TransferAllCountersFromTriggeringLki { .. }
-            | Self::MoveGroupToLibrary { .. }
-            | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
-            | Self::MoveGraveyardGroupOwned { .. }
             | Self::LookTopChooseExt { .. }
             | Self::RevealTopTwoPiles { .. }
             | Self::RevealUntilMatchExt { .. }
@@ -6313,18 +5877,13 @@ impl Instruction {
             | Self::UpdateStateTrack { .. }
             | Self::SideDeckOp(_)
             | Self::CreateTemporaryRule { .. }
-            | Self::DestroySubject { .. }
             | Self::GrantCardPlayPermission { .. }
             | Self::CreateTokenCopy { .. }
             | Self::BindResolutionX(_)
-            | Self::PutResolvingSpellInLibrary(_)
-            | Self::PutSubjectIntoLibraryFromTop { .. }
             | Self::SetDayNight(_)
             | Self::CreateAuraTokenAttached { .. }
             | Self::ExploreSubject(_)
             | Self::ScheduleDelayedEventTrigger { .. }
-            | Self::MoveGraveyardGroup { .. }
-            | Self::PutHandPermanentFiltered { .. }
             | Self::RepeatLoop { .. }
             | Self::PayLife { .. }
             | Self::PayEnergy { .. }
@@ -6352,19 +5911,13 @@ impl Instruction {
             | Self::PreventDamageSpec(_)
             | Self::PhaseOut(_)
             | Self::PhaseOutObjects(_)
-            | Self::ExileGraveyardTarget
-            | Self::ExileCardsFromGraveyard { .. }
             | Self::EndControllerTurn
-            | Self::DiscardOneAtRandom(_)
             | Self::FightSourceWithTarget
             | Self::ChooseNewTargets
-            | Self::ReturnOwnGraveyardCardsOfTypeToHand(_)
-            | Self::ReturnTargetGraveyardCreatureToHand
             | Self::ExileCapturedGraveyardCard => true,
             Self::DrawAndLoseLifeForTargetGraveyardCreatures
             | Self::ReturnAnyGraveyardCreatureBlackSubtype(_)
             | Self::ReturnUpToOneRecentGraveyardCard
-            | Self::ReturnRandomGraveyardCards { .. }
             | Self::ChooseRevealedHandCard { .. }
             | Self::ReturnUpToOneOwnGraveyardCreatureToHand
             | Self::ExileUpToTwoGraveyardTargetsGainLife => false,
@@ -6372,20 +5925,9 @@ impl Instruction {
             Self::SearchLibrary { filter } if filter.supports_optional_wrapper() => true,
             Self::SacrificeMatching(_)
             | Self::SacrificeStateTriggerSource
-            | Self::ShuffleAbilitySourceIntoLibrary
-            | Self::ShuffleTargetIntoLibrary
-            | Self::PutTargetInLibrary(_)
             | Self::ScheduleDelayedStepTrigger { .. }
             | Self::EmitReflexiveTrigger { .. } => true,
             Self::Discard {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Self::DiscardFiltered {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Self::DiscardUpToExt {
                 players: AffectedPlayers::One(_),
                 ..
             }
@@ -6397,27 +5939,13 @@ impl Instruction {
             | Self::SelectExtremeLifePlayer { .. }
             | Self::AttachPermanentToPlayer { .. }
             | Self::AttachChoosingPermanent { .. }
-            | Self::ReturnControlledPermanents {
-                players: AffectedPlayers::One(_),
-                ..
-            }
             | Self::Sacrifice {
                 players: AffectedPlayers::One(_),
                 ..
             }
-            | Self::SacrificeUpTo {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Self::ExileChosenPermanents {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Self::ExileFromZone { .. }
             | Self::TapOrUntapControlled { .. }
             | Self::ModifyAnyNumberOfPermanents { .. }
             | Self::UntapUpTo { .. }
-            | Self::DiscardUpTo { .. }
             | Self::AdditionalCombat { .. }
             | Self::AdditionalCombatAfterUntappingAttackers
             | Self::TakeExtraTurn
@@ -6427,7 +5955,6 @@ impl Instruction {
             | Self::RegenerateSource
             | Self::DoubleCountersOnTargets => true,
             Self::PutTargetOwnedExiledLandsOntoBattlefield
-            | Self::DiscardUpToExt { .. }
             | Self::BindOrderedPermanents { .. }
             | Self::LookOpponentExileForCast { .. }
             | Self::ExileFromTargetLibrary
@@ -6452,18 +5979,14 @@ impl Instruction {
             | Self::DestroyOtherCreatures
             | Self::SacrificeOtherCreatures
             | Self::SacrificeColoredPermanents
-            | Self::ExileChosenPermanents { .. }
             | Self::ExileFromHandOrBattlefield(_)
             | Self::ExileRelatedHandCardForPlay
             | Self::PayLifeOrSacrificeCreatures
-            | Self::ReturnControlledPermanents { .. }
             | Self::ChooseOtherControlledCreature { .. }
             | Self::Sacrifice { .. }
-            | Self::SacrificeUpTo { .. }
             | Self::SacrificeRandomUntilLand
             | Self::SacrificeToContinue { .. }
             | Self::Discard { .. }
-            | Self::DiscardFiltered { .. }
             | Self::RepeatOpponentLifeLoss
             | Self::RememberPermanentTarget
             | Self::ControllerLosesRememberedManaValue
@@ -6506,12 +6029,10 @@ impl Instruction {
             | Self::ScheduleCreatedTokenSacrifice
             | Self::ExileDelayedObjects(_)
             | Self::ExileRelatedPermanents(_)
-            | Self::ReturnCardsExiledWithLink(_)
             | Self::TapTargetWhileControllingSource
             | Self::RegisterTokenLinkedExile
             | Self::ReturnTokenLinkedExile
             | Self::PutOwnHandCardOnLibraryBottom
-            | Self::PutGroupOnLibraryBottom(_)
             | Self::PutEquipmentFromHandOrGraveyard
             | Self::EquipNewToken
             | Self::Encore
@@ -6634,21 +6155,15 @@ impl Instruction {
             | Self::RemoveTargetFromCombat
             | Self::RemoveSubjectFromCombat(_)
             | Self::DestroyTarget
-            | Self::DestroyTargetWithoutRegeneration
             | Self::ExileCreatureAtMostRevealedPower
-            | Self::ExileTarget
             | Self::ExileTargetWithLink(_)
             | Self::ImprintTargetLand
             | Self::ImprintTargetCreature
             | Self::ExileTargetAsAbilityDonor
             | Self::ExileTargetUntilSourceLeaves
-            | Self::ExileUntilNextEndStep
             | Self::ExileTargetUntilOpponentMonarch
             | Self::ReturnToOwnersHand
             | Self::ExileForSubtypeToken(_)
-            | Self::ReturnOwnGraveyardCreatureToBattlefield
-            | Self::ReturnOwnGraveyardPermanentToBattlefield { .. }
-            | Self::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Self::CounterSpell
             | Self::CounterSpellToExile
             | Self::CounterSpellToLibrary { .. }
@@ -6744,9 +6259,9 @@ impl Instruction {
                 | Self::OfferManaPayment { .. }
                 | Self::OfferDynamicManaPayment { .. }
                 | Self::ExploreSource
+                | Self::ZoneOp(_)
+                | Self::ForEachPlayerQuery { .. }
                 | Self::Discard { .. }
-                | Self::DiscardFiltered { .. }
-                | Self::DiscardUpToExt { .. }
                 | Self::Earthbend { .. }
                 | Self::RegenerateSubject { .. }
                 | Self::AddManaForPlayer { .. }
@@ -6768,12 +6283,8 @@ impl Instruction {
                 | Self::AddPlayerCounter { .. }
                 | Self::ExileTopPlay { .. }
                 | Self::LookTopChoose { .. }
-                | Self::MoveSubject { .. }
-                | Self::SelectZoneCardsToZone { .. }
                 | Self::ChooseObjects { .. }
                 | Self::ChooseOption { .. }
-                | Self::MoveGraveyardGroup { .. }
-                | Self::PutHandPermanentFiltered { .. }
                 | Self::RepeatLoop { .. }
                 | Self::RevealUntilMatch { .. }
                 | Self::CreateContinuousEffect { .. }
@@ -6790,9 +6301,6 @@ impl Instruction {
                 | Self::DamageOpponentsAmount(_)
                 | Self::DamageGroup { .. }
                 | Self::DamageGroupAmount { .. }
-                | Self::DestroyGroup(_)
-                | Self::MoveGroup { .. }
-                | Self::ExileFromZone { .. }
                 | Self::Blight { .. }
                 | Self::CollectEvidence { .. }
                 | Self::PayLife { .. }
@@ -6813,7 +6321,6 @@ impl Instruction {
                 | Self::ScheduleDelayedEventTrigger { .. }
                 | Self::EmitReflexiveTrigger { .. }
                 | Self::Proliferate
-                | Self::ShuffleOwnLibrary
                 | Self::BecomeMonarch(_)
                 | Self::IncreaseSpeed
                 | Self::Discover { .. }
@@ -6824,10 +6331,7 @@ impl Instruction {
                 | Self::ChooseValue { .. }
                 | Self::ChooseOptionForPlayers { .. }
                 | Self::CreateEmblem(_)
-                | Self::ExileResolvingSpell
                 | Self::DestroyTarget
-                | Self::DestroyTargetWithoutRegeneration
-                | Self::DestroySubject { .. }
                 | Self::GainControlOfPermanent { .. }
                 | Self::DoublePowerToughnessSubject { .. }
                 | Self::DoubleCountersOnSubject { .. }
@@ -6844,13 +6348,9 @@ impl Instruction {
                 | Self::GrantCardPlayPermission { .. }
                 | Self::GrantProtectionChosenColor(_)
                 | Self::ChooseNewTargets
-                | Self::DiscardOneAtRandom(_)
                 | Self::Fight { .. }
                 | Self::Exchange(_)
                 | Self::CopyStackObject { .. }
-                | Self::ExileGroupFromZone { .. }
-                | Self::SacrificeSubject { .. }
-                | Self::DestroyChosen { .. }
                 | Self::CastLinkedFaceDownFree
                 | Self::Ripple(_)
                 | Self::Demonstrate
@@ -6858,28 +6358,22 @@ impl Instruction {
                 | Self::CreateArmyIfAbsent { .. }
                 | Self::Amass { .. }
                 | Self::ReturnToOwnersHand
-                | Self::ExileTarget
                 | Self::SearchLibrary { .. }
                 | Self::AddMana(_)
                 | Self::RemoveCountersFromPermanent { .. }
                 | Self::PutCountersOnControlledCreatures
-                | Self::ExileGraveyardTarget
                 | Self::CounterSpell
                 | Self::CounterSpellToLibrary { .. }
                 | Self::PhaseOut(PhasingSubject::Source)
-                | Self::ShuffleAbilitySourceIntoLibrary
                 | Self::ModifyGroupUntilEndOfTurn { .. }
                 | Self::MoveCounters { .. }
-                | Self::ExileSubjectUntilSourceLeaves { .. }
                 | Self::TurnFaceUpSubject { .. }
                 | Self::TurnFaceDownSubject { .. }
                 | Self::TransformSubject { .. }
                 | Self::EmpowerJace { .. }
                 | Self::AddOneOfEachCounterKindOnSubject { .. }
                 | Self::GrantLastMovedPlayPermission { .. }
-                | Self::MoveLastMovedFiltered { .. }
                 | Self::CounterMatchingStackObjects { .. }
-                | Self::ReturnLinkedExile { .. }
                 | Self::TransferAllCountersFromTriggeringLki { .. }
                 | Self::PreventDamageThisTurn(
                     crate::damage::TurnPreventionFilter::Combat
@@ -7095,6 +6589,325 @@ pub struct TriggeredModes {
     pub suffix: Option<Box<ExecutableBody>>,
     pub options: Vec<ExecutableBody>,
 }
+fn toolbox_merge_family(
+    current: Option<OperandFamily>,
+    next: Option<OperandFamily>,
+) -> Result<Option<OperandFamily>, DefinitionError> {
+    match (current, next) {
+        (None, other) | (other, None) => Ok(other),
+        (Some(left), Some(right)) if left == right => Ok(Some(left)),
+        (Some(_), Some(_)) => Err(DefinitionError::OperandFamily),
+    }
+}
+
+fn toolbox_object_target_family(target: BodyTarget) -> Result<OperandFamily, DefinitionError> {
+    match target {
+        BodyTarget::SinglePermanent
+        | BodyTarget::SingleCreature
+        | BodyTarget::SinglePlaneswalker
+        | BodyTarget::FilteredPermanent(_) => Ok(OperandFamily::Permanent),
+        BodyTarget::SingleOwnGraveyardCard
+        | BodyTarget::FilteredOwnGraveyardCard(_)
+        | BodyTarget::FilteredAnyGraveyardCard { .. }
+        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+        | BodyTarget::RecentlyDiscardedOrFromLibrary
+        | BodyTarget::AnyGraveyardCard
+        | BodyTarget::AnyGraveyardCreature => Ok(OperandFamily::GraveyardCard),
+        BodyTarget::OwnedExiledFlashbackCard => Ok(OperandFamily::ExiledCard),
+        BodyTarget::SingleSpell(_) => Ok(OperandFamily::Spell),
+        BodyTarget::SingleStackEntry
+        | BodyTarget::SingleStackObject(_)
+        | BodyTarget::ControlledAbility { .. }
+        | BodyTarget::StackEntryTargetingControlledPermanent => Ok(OperandFamily::StackEntry),
+        BodyTarget::SingleCreatureOrPlayer
+        | BodyTarget::SinglePlayerOrPlaneswalker
+        | BodyTarget::SingleOpponentOrPlaneswalker
+        | BodyTarget::OpponentOrPlaneswalkerThenCreature
+        | BodyTarget::SingleAnyTarget => Ok(OperandFamily::DamageRecipient),
+        BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+            Err(DefinitionError::OperandFamily)
+        }
+    }
+}
+
+fn validate_toolbox_player_selector(
+    selector: &crate::toolbox::PlayerSelector,
+    context: BodyContext,
+    target: BodyTarget,
+    definitely_exiled_target: bool,
+) -> Result<Option<OperandFamily>, DefinitionError> {
+    use crate::toolbox::PlayerSelector;
+    match selector {
+        PlayerSelector::Resolving(role) => role.validate(context, target, definitely_exiled_target),
+        PlayerSelector::Group(players) => {
+            players.validate(context, target, definitely_exiled_target)
+        }
+        PlayerSelector::OwnersOf(query) | PlayerSelector::ControllersOf(query) => {
+            validate_toolbox_object_query(query, context, target, definitely_exiled_target)
+        }
+        PlayerSelector::Bound(_) => Ok(None),
+    }
+}
+
+fn validate_toolbox_filter(
+    filter: &ObjectFilter,
+    target: BodyTarget,
+) -> Result<Option<OperandFamily>, DefinitionError> {
+    let mut family = None;
+    if filter.uses_target_permanent() {
+        family = toolbox_merge_family(family, Some(OperandFamily::Permanent))?;
+    }
+    if filter.has_target_player() {
+        let f = match target {
+            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => OperandFamily::Player,
+            _ => toolbox_object_target_family(target)?,
+        };
+        family = toolbox_merge_family(family, Some(f))?;
+    }
+    Ok(family)
+}
+
+fn validate_toolbox_zone(
+    zone: &crate::toolbox::QueryZone,
+    context: BodyContext,
+    target: BodyTarget,
+    definitely_exiled_target: bool,
+) -> Result<Option<OperandFamily>, DefinitionError> {
+    use crate::toolbox::QueryZone;
+    match zone {
+        QueryZone::Hand(p)
+        | QueryZone::Library(p)
+        | QueryZone::Graveyard(p)
+        | QueryZone::ExileOwnedBy(p)
+        | QueryZone::BattlefieldControlledBy(p) => {
+            validate_toolbox_player_selector(p, context, target, definitely_exiled_target)
+        }
+        QueryZone::Battlefield
+        | QueryZone::Exile
+        | QueryZone::Stack
+        | QueryZone::Command
+        | QueryZone::AllZones => Ok(None),
+    }
+}
+
+fn validate_toolbox_object_query(
+    query: &crate::toolbox::ObjectQuery,
+    context: BodyContext,
+    target: BodyTarget,
+    definitely_exiled_target: bool,
+) -> Result<Option<OperandFamily>, DefinitionError> {
+    use crate::toolbox::{ObjectQuery, QuerySlice};
+    match query {
+        ObjectQuery::Targets | ObjectQuery::LinkedTarget { .. } => {
+            Ok(Some(toolbox_object_target_family(target)?))
+        }
+        ObjectQuery::EffectSubject(subject) => match subject.as_ref() {
+            EffectSubject::TargetObject
+            | EffectSubject::TargetAndSameNameMatching(_)
+            | EffectSubject::MatchingOtherThanTarget(_)
+            | EffectSubject::TargetAndSharingColorMatching(_) => {
+                Ok(Some(toolbox_object_target_family(target)?))
+            }
+            EffectSubject::Matching(filter) => validate_toolbox_filter(filter, target),
+            _ => Ok(None),
+        },
+        ObjectQuery::ZoneScan {
+            zone,
+            filter,
+            slice,
+        } => {
+            let mut family =
+                validate_toolbox_zone(zone, context, target, definitely_exiled_target)?;
+            family = toolbox_merge_family(family, validate_toolbox_filter(filter, target)?)?;
+            let slice_fam = match slice {
+                QuerySlice::All => None,
+                QuerySlice::Top(expr) | QuerySlice::Bottom(expr) => {
+                    expr.required_operand_family(target)?
+                }
+                QuerySlice::UntilMatch { filter, count, .. } => toolbox_merge_family(
+                    validate_toolbox_filter(filter, target)?,
+                    count.required_operand_family(target)?,
+                )?,
+            };
+            toolbox_merge_family(family, slice_fam)
+        }
+        ObjectQuery::Filtered { source, filter } => toolbox_merge_family(
+            validate_toolbox_object_query(source, context, target, definitely_exiled_target)?,
+            validate_toolbox_filter(filter, target)?,
+        ),
+        ObjectQuery::Take { source, count } => toolbox_merge_family(
+            validate_toolbox_object_query(source, context, target, definitely_exiled_target)?,
+            count.required_operand_family(target)?,
+        ),
+        ObjectQuery::BoundFiltered { filter, .. } => validate_toolbox_filter(filter, target),
+        ObjectQuery::Tagged { zone, filter, .. } => {
+            let zf = match zone {
+                Some(z) => validate_toolbox_zone(z, context, target, definitely_exiled_target)?,
+                None => None,
+            };
+            let ff = match filter {
+                Some(f) => validate_toolbox_filter(f, target)?,
+                None => None,
+            };
+            toolbox_merge_family(zf, ff)
+        }
+        ObjectQuery::Union(parts) => {
+            let mut family = None;
+            for part in parts {
+                family = toolbox_merge_family(
+                    family,
+                    validate_toolbox_object_query(part, context, target, definitely_exiled_target)?,
+                )?;
+            }
+            Ok(family)
+        }
+        ObjectQuery::Difference(left, right) | ObjectQuery::Intersect(left, right) => {
+            toolbox_merge_family(
+                validate_toolbox_object_query(left, context, target, definitely_exiled_target)?,
+                validate_toolbox_object_query(right, context, target, definitely_exiled_target)?,
+            )
+        }
+        ObjectQuery::Empty
+        | ObjectQuery::Fixed(_)
+        | ObjectQuery::Bound(_)
+        | ObjectQuery::Source
+        | ObjectQuery::TriggerSubject
+        | ObjectQuery::AttachedHost
+        | ObjectQuery::LastMoved
+        | ObjectQuery::CreatedTokens
+        | ObjectQuery::Revealed
+        | ObjectQuery::LinkedExile { .. } => Ok(None),
+    }
+}
+
+fn validate_toolbox_zone_op(
+    spec: &crate::toolbox::ZoneOpSpec,
+    context: BodyContext,
+    target: BodyTarget,
+    definitely_exiled_target: bool,
+) -> Result<Option<OperandFamily>, DefinitionError> {
+    use crate::toolbox::{LibraryOrderPos, ZoneController, ZoneDest, ZoneSelection};
+    let mut family =
+        validate_toolbox_object_query(&spec.source, context, target, definitely_exiled_target)?;
+    let sel_fam = match &spec.selection {
+        ZoneSelection::All => None,
+        ZoneSelection::Random { count, chooser } => toolbox_merge_family(
+            count.required_operand_family(target)?,
+            validate_toolbox_player_selector(chooser, context, target, definitely_exiled_target)?,
+        )?,
+        ZoneSelection::Prompt {
+            chooser, min, max, ..
+        } => {
+            let f1 = validate_toolbox_player_selector(
+                chooser,
+                context,
+                target,
+                definitely_exiled_target,
+            )?;
+            let f2 = toolbox_merge_family(f1, min.required_operand_family(target)?)?;
+            toolbox_merge_family(f2, max.required_operand_family(target)?)?
+        }
+    };
+    family = toolbox_merge_family(family, sel_fam)?;
+    let dest_fam = match &spec.destination {
+        ZoneDest::Battlefield {
+            controller,
+            entering_counters,
+            attach_to,
+            ..
+        } => {
+            let mut f = match controller {
+                ZoneController::Owner => None,
+                ZoneController::Player(p) => {
+                    validate_toolbox_player_selector(p, context, target, definitely_exiled_target)?
+                }
+            };
+            for (_, amount) in entering_counters {
+                f = toolbox_merge_family(f, amount.required_operand_family(target)?)?;
+            }
+            if let Some(attach) = attach_to {
+                f = toolbox_merge_family(
+                    f,
+                    validate_toolbox_object_query(
+                        attach,
+                        context,
+                        target,
+                        definitely_exiled_target,
+                    )?,
+                )?;
+            }
+            f
+        }
+        ZoneDest::Exile { viewer, .. } => match viewer {
+            Some(p) => {
+                validate_toolbox_player_selector(p, context, target, definitely_exiled_target)?
+            }
+            None => None,
+        },
+        ZoneDest::LookOnly { viewer } => {
+            validate_toolbox_player_selector(viewer, context, target, definitely_exiled_target)?
+        }
+        ZoneDest::Library { position } => match position {
+            LibraryOrderPos::Top
+            | LibraryOrderPos::Bottom
+            | LibraryOrderPos::BottomRandom
+            | LibraryOrderPos::ShuffleInto => None,
+            LibraryOrderPos::NthFromTop(expr) => expr.required_operand_family(target)?,
+            LibraryOrderPos::ChoiceTopOrBottom { chooser } => validate_toolbox_player_selector(
+                chooser,
+                context,
+                target,
+                definitely_exiled_target,
+            )?,
+        },
+        ZoneDest::None | ZoneDest::Graveyard { .. } | ZoneDest::Hand | ZoneDest::RevealOnly => None,
+    };
+    family = toolbox_merge_family(family, dest_fam)?;
+    if let Some(shuffler) = &spec.shuffle_library {
+        family = toolbox_merge_family(
+            family,
+            validate_toolbox_player_selector(shuffler, context, target, definitely_exiled_target)?,
+        )?;
+    }
+    Ok(family)
+}
+
+fn toolbox_query_scans_graveyard(query: &crate::toolbox::ObjectQuery) -> bool {
+    use crate::toolbox::{ObjectQuery, QueryZone};
+    match query {
+        ObjectQuery::ZoneScan {
+            zone: QueryZone::Graveyard(_),
+            ..
+        } => true,
+        ObjectQuery::Filtered { source, .. } | ObjectQuery::Take { source, .. } => {
+            toolbox_query_scans_graveyard(source)
+        }
+        ObjectQuery::Union(parts) => parts.iter().any(toolbox_query_scans_graveyard),
+        ObjectQuery::Difference(left, _) | ObjectQuery::Intersect(left, _) => {
+            toolbox_query_scans_graveyard(left)
+        }
+        _ => false,
+    }
+}
+
+fn toolbox_query_scans_library(query: &crate::toolbox::ObjectQuery) -> bool {
+    use crate::toolbox::{ObjectQuery, QueryZone};
+    match query {
+        ObjectQuery::ZoneScan {
+            zone: QueryZone::Library(_),
+            ..
+        } => true,
+        ObjectQuery::Filtered { source, .. } | ObjectQuery::Take { source, .. } => {
+            toolbox_query_scans_library(source)
+        }
+        ObjectQuery::Union(parts) => parts.iter().any(toolbox_query_scans_library),
+        ObjectQuery::Difference(left, _) | ObjectQuery::Intersect(left, _) => {
+            toolbox_query_scans_library(left)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum OperandFamily {
     GraveyardCard,
@@ -7202,12 +7015,7 @@ impl ExecutableBody {
             {
                 Some((0, usize::MAX))
             }
-            [
-                Instruction::SacrificeToContinue { .. },
-                Instruction::ReturnGraveyardTargetsTapped(count),
-            ] if self.target == BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()) => {
-                Some((usize::from(*count), usize::from(*count)))
-            }
+
             [Instruction::ReturnUpToOneRecentGraveyardCard]
                 if self.target == BodyTarget::RecentlyDiscardedOrFromLibrary =>
             {
@@ -7481,29 +7289,19 @@ impl ExecutableBody {
             let has_multi_gy_move = self.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::MoveSubject {
-                        subject: MoveSubjectRef::TargetObject,
-                        destination: SubjectDestination::Battlefield { .. }
-                            | SubjectDestination::Hand
-                            | SubjectDestination::Exile { .. }
-                            | SubjectDestination::Library(_),
-                    } | Instruction::ReturnTargetGraveyardCreatureToHand
-                        | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-                        | Instruction::ExileGraveyardTarget
-                        | Instruction::ShuffleTargetIntoLibrary
+                    Instruction::ZoneOp(spec)
+                        if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
+                            && matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Battlefield { .. }
+                                    | crate::toolbox::ZoneDest::Hand
+                                    | crate::toolbox::ZoneDest::Exile { .. }
+                                    | crate::toolbox::ZoneDest::Library { .. }
+                            )
                 )
             });
             let valid_gy_target_and_ops = match self.target {
-                BodyTarget::FilteredOwnGraveyardCard(_) => {
-                    has_multi_gy_move
-                        || matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::PutTargetInLibrary(_),
-                                Instruction::DrawController { .. }
-                            ]
-                        )
-                }
+                BodyTarget::FilteredOwnGraveyardCard(_) => has_multi_gy_move,
                 BodyTarget::SingleOwnGraveyardCard
                 | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature
@@ -7708,11 +7506,6 @@ impl ExecutableBody {
                     filter: LookTopFilter::AllOfChosenType(slot),
                     ..
                 } => Some(*slot),
-                Instruction::MoveGroup { group, .. }
-                | Instruction::DestroyGroup(group)
-                | Instruction::DestroyGroupWithoutRegeneration(group)
-                | Instruction::PutGroupOnLibraryBottom(group) => group.chosen_type_slot(),
-                Instruction::MoveGroupToLibrary { group, .. } => group.chosen_type_slot(),
                 Instruction::ModifyGroupByAmount { group, .. }
                 | Instruction::ModifyGroupUntilEndOfTurn { group, .. }
                 | Instruction::SuppressGroupKeywords { group, .. } => group.chosen_type_slot(),
@@ -7724,15 +7517,115 @@ impl ExecutableBody {
             let family = match instruction {
                 Instruction::ZoneOp(spec) => {
                     spec.validate_vocabulary(vocabulary)?;
-                    None
+                    let family = validate_toolbox_zone_op(
+                        spec,
+                        context,
+                        self.target,
+                        facts.definitely_exiled_target,
+                    )?;
+                    let targets_source = matches!(
+                        &spec.source,
+                        crate::toolbox::ObjectQuery::Targets
+                    ) || matches!(
+                        &spec.source,
+                        crate::toolbox::ObjectQuery::EffectSubject(s)
+                            if matches!(s.as_ref(), EffectSubject::TargetObject)
+                    );
+                    if targets_source {
+                        if matches!(
+                            spec.destination,
+                            crate::toolbox::ZoneDest::Graveyard {
+                                semantics: crate::toolbox::GraveyardSemantics::Destroy { .. }
+                            }
+                        ) {
+                            facts.checked_destruction_target = true;
+                            facts.maybe_checked_destruction_target = true;
+                        }
+                        if matches!(spec.destination, crate::toolbox::ZoneDest::Exile { .. })
+                            && !donor_moved
+                        {
+                            facts.definitely_exiled_target = true;
+                            facts.maybe_exiled_target = true;
+                        }
+                        if matches!(
+                            spec.destination,
+                            crate::toolbox::ZoneDest::Battlefield { .. }
+                                | crate::toolbox::ZoneDest::Hand
+                        ) && matches!(
+                            toolbox_object_target_family(self.target),
+                            Ok(OperandFamily::GraveyardCard)
+                        ) {
+                            facts.returned_graveyard_target = true;
+                        }
+                        donor_moved = true;
+                    }
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Graveyard {
+                            semantics: crate::toolbox::GraveyardSemantics::Destroy { .. }
+                        }
+                    ) {
+                        facts.definitely_destroyed = true;
+                        facts.maybe_destroyed = true;
+                    }
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Graveyard {
+                            semantics: crate::toolbox::GraveyardSemantics::Sacrifice
+                        }
+                    ) {
+                        facts.definitely_sacrificed = true;
+                        facts.maybe_sacrificed = true;
+                    }
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Graveyard {
+                            semantics: crate::toolbox::GraveyardSemantics::Discard
+                        }
+                    ) {
+                        facts.definitely_discarded = true;
+                        facts.maybe_discarded = true;
+                    }
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Graveyard {
+                            semantics: crate::toolbox::GraveyardSemantics::Mill
+                        }
+                    ) {
+                        facts.definitely_milled = true;
+                        facts.definitely_milled_top = true;
+                        facts.maybe_milled_top = true;
+                    }
+                    if matches!(spec.destination, crate::toolbox::ZoneDest::Exile { .. })
+                        && toolbox_query_scans_graveyard(&spec.source)
+                    {
+                        facts.definitely_selected_graveyard_exile = true;
+                        facts.maybe_selected_graveyard_exile = true;
+                    }
+                    if toolbox_query_scans_library(&spec.source) {
+                        facts.definitely_checked_top = true;
+                        facts.maybe_checked_top = true;
+                        facts.moved_library_cards = true;
+                        facts.maybe_moved_library_cards = true;
+                    }
+                    family
                 }
                 Instruction::ApplyContinuous(spec) => {
                     spec.validate_vocabulary(vocabulary)?;
-                    None
+                    if spec.uses_target() {
+                        Some(toolbox_object_target_family(self.target)?)
+                    } else {
+                        None
+                    }
                 }
                 Instruction::PromptChoice(spec) => {
                     spec.validate_vocabulary(vocabulary)?;
-                    None
+                    validate_toolbox_player_selector(
+                        &spec.chooser,
+                        context,
+                        self.target,
+                        facts.definitely_exiled_target,
+                    )?
                 }
                 Instruction::BranchCondition {
                     condition,
@@ -7748,8 +7641,14 @@ impl ExecutableBody {
                     query, body: inner, ..
                 } => {
                     query.validate_vocabulary(vocabulary)?;
+                    let family = validate_toolbox_object_query(
+                        query,
+                        context,
+                        self.target,
+                        facts.definitely_exiled_target,
+                    )?;
                     inner.validate(vocabulary)?;
-                    None
+                    family
                 }
                 Instruction::ForEachPlayerQuery {
                     selector,
@@ -7757,8 +7656,57 @@ impl ExecutableBody {
                     ..
                 } => {
                     selector.validate_vocabulary(vocabulary)?;
+                    let family = validate_toolbox_player_selector(
+                        selector,
+                        context,
+                        self.target,
+                        facts.definitely_exiled_target,
+                    )?;
+                    for sub in &inner.instructions {
+                        if let Instruction::ZoneOp(spec) = sub {
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Graveyard {
+                                    semantics: crate::toolbox::GraveyardSemantics::Destroy { .. }
+                                }
+                            ) {
+                                facts.definitely_destroyed = true;
+                                facts.maybe_destroyed = true;
+                            }
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Graveyard {
+                                    semantics: crate::toolbox::GraveyardSemantics::Sacrifice
+                                }
+                            ) {
+                                facts.definitely_sacrificed = true;
+                                facts.maybe_sacrificed = true;
+                            }
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Graveyard {
+                                    semantics: crate::toolbox::GraveyardSemantics::Discard
+                                }
+                            ) {
+                                facts.definitely_discarded = true;
+                                facts.maybe_discarded = true;
+                            }
+                            if matches!(spec.destination, crate::toolbox::ZoneDest::Exile { .. })
+                                && toolbox_query_scans_graveyard(&spec.source)
+                            {
+                                facts.definitely_selected_graveyard_exile = true;
+                                facts.maybe_selected_graveyard_exile = true;
+                            }
+                            if toolbox_query_scans_library(&spec.source) {
+                                facts.definitely_checked_top = true;
+                                facts.maybe_checked_top = true;
+                                facts.moved_library_cards = true;
+                                facts.maybe_moved_library_cards = true;
+                            }
+                        }
+                    }
                     inner.validate(vocabulary)?;
-                    None
+                    family
                 }
                 Instruction::BindEnv { .. } => None,
                 Instruction::SetObjectTag { query, .. } => {
@@ -8363,41 +8311,6 @@ impl ExecutableBody {
                     }
                     None
                 }
-                Instruction::PutTargetInLibrary(placement) => {
-                    if let LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?;
-                    }
-                    match self.target {
-                        BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::SingleAnyTarget
-                        | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
-                        BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                        BodyTarget::SingleOwnGraveyardCard
-                        | BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::FilteredAnyGraveyardCard { .. } => {
-                            Some(OperandFamily::GraveyardCard)
-                        }
-                        _ => return Err(DefinitionError::OperandFamily),
-                    }
-                }
-                Instruction::ExileGraveyardTarget
-                    if matches!(
-                        self.target,
-                        BodyTarget::AnyGraveyardCard
-                            | BodyTarget::AnyGraveyardCreature
-                            | BodyTarget::FilteredOwnGraveyardCard(_)
-                            | BodyTarget::FilteredAnyGraveyardCard { .. }
-                    ) =>
-                {
-                    facts.definitely_exiled_target = true;
-                    Some(OperandFamily::GraveyardCard)
-                }
-                Instruction::ExileGraveyardTarget => return Err(DefinitionError::OperandFamily),
                 Instruction::GrantGraveyardCastAndWatchAbilities
                     if self.target == BodyTarget::AnyGraveyardCreature
                         && matches!(context, BodyContext::Activated { .. }) =>
@@ -8419,53 +8332,6 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     None
-                }
-                Instruction::ExileCardsFromGraveyard { player, .. } => {
-                    if !matches!(
-                        player,
-                        ResolvingPlayer::Controller
-                            | ResolvingPlayer::TargetPlayer
-                            | ResolvingPlayer::TargetController
-                            | ResolvingPlayer::TargetOwner
-                            | ResolvingPlayer::UniqueRelatedPlayer
-                    ) {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    facts.definitely_selected_graveyard_exile = true;
-                    player.validate(context, self.target, facts.definitely_exiled_target)?
-                }
-                Instruction::PutGroupOnLibraryBottom(group) => {
-                    if self.target != BodyTarget::None || group.uses_outside_named_slots() {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    group.validate_vocabulary(vocabulary)?;
-                    donor_moved = true;
-                    None
-                }
-                Instruction::MoveGroup {
-                    destination: PublicZoneDestination::Command,
-                    ..
-                } => return Err(DefinitionError::InvalidInstruction),
-                Instruction::MoveGroup { group, .. }
-                | Instruction::DestroyGroupWithoutRegeneration(group)
-                | Instruction::DestroyGroup(group) => {
-                    if group.uses_outside_named_slots() {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    group
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    facts.definitely_destroyed |=
-                        !matches!(instruction, Instruction::MoveGroup { .. });
-                    donor_moved = true;
-                    let mut fam = None;
-                    if group.has_target_player() {
-                        fam = merge_family(fam, Some(OperandFamily::Player))?;
-                    }
-                    if group.uses_target_permanent() {
-                        fam = merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    fam
                 }
                 Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
                     if self.target == BodyTarget::SinglePlayer =>
@@ -9040,20 +8906,18 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::MayTurnControlledCreatureFaceUp
-                | Instruction::ExileNonlandsToHandAndDamage { .. }
-                | Instruction::RevealTopHandLoseManaValue { .. }
-                | Instruction::RevealSharedTypeCreatureCastOrBottom
-                | Instruction::RevealOddCastOrDraw
-                | Instruction::RevealUntilLandKind
-                | Instruction::RevealOpponentChoosesCreature
-                | Instruction::ShuffleAbilitySourceIntoLibrary
-                | Instruction::RevealToNameAfterSourceShuffle(_)
-                | Instruction::RevealHandAndBottomPiles
-                | Instruction::RevealDividePiles
-                | Instruction::DrawToChosenOpponentHandSize
-                | Instruction::LookTopPlaneswalkers
-                | Instruction::RevealTopPermanentOrHand
-                    if self.target == BodyTarget::None =>
+| Instruction::ExileNonlandsToHandAndDamage { .. }
+| Instruction::RevealTopHandLoseManaValue { .. }
+| Instruction::RevealSharedTypeCreatureCastOrBottom
+| Instruction::RevealOddCastOrDraw
+| Instruction::RevealUntilLandKind
+| Instruction::RevealOpponentChoosesCreature
+| Instruction::RevealToNameAfterSourceShuffle(_)
+| Instruction::RevealHandAndBottomPiles
+| Instruction::RevealDividePiles
+| Instruction::DrawToChosenOpponentHandSize
+| Instruction::LookTopPlaneswalkers
+| Instruction::RevealTopPermanentOrHand if self.target == BodyTarget::None =>
                 {
                     None
                 }
@@ -9197,22 +9061,6 @@ impl ExecutableBody {
                 Instruction::ReturnChosenXGraveyardCreatures => {
                     return Err(DefinitionError::InvalidInstruction);
                 }
-                Instruction::ReturnGraveyardTargetsTapped(count) => {
-                    if *count == 0
-                        || self.target
-                            != BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature())
-                        || !matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::SacrificeToContinue { .. },
-                                Instruction::ReturnGraveyardTargetsTapped(_)
-                            ]
-                        )
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    Some(OperandFamily::GraveyardCard)
-                }
                 Instruction::ReturnGraveyardCohort(returning) => {
                     if self.target != BodyTarget::None
                         || matches!(returning.filter, GraveyardReturnFilter::CardType(kind) if !kind.is_permanent())
@@ -9353,7 +9201,7 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::ExileUntilOtherTargetLeaves => {
-                    if self.target != BodyTarget::None || self.instructions.len() != 3 || !matches!(self.instructions.last(), Some(Instruction::ExileUntilOtherTargetLeaves)) || !self.instructions[..2].iter().all(|op| matches!(op, Instruction::FixedTargetClause(body) if body.instructions == [Instruction::ExileTarget])) { return Err(DefinitionError::InvalidInstruction); }
+                    if self.target != BodyTarget::None || self.instructions.len() != 3 || !matches!(self.instructions.last(), Some(Instruction::ExileUntilOtherTargetLeaves)) || !self.instructions[..2].iter().all(|op| matches!(op, Instruction::FixedTargetClause(body) if matches!(body.instructions.as_slice(), [Instruction::ZoneOp(spec)] if matches!(spec.source, crate::toolbox::ObjectQuery::Targets) && matches!(spec.destination, crate::toolbox::ZoneDest::Exile { .. })))) { return Err(DefinitionError::InvalidInstruction); }
                     None
                 }
                 Instruction::ReturnFixedTargets | Instruction::FightFixedTargets => {
@@ -9486,9 +9334,7 @@ impl ExecutableBody {
                     if self.target != BodyTarget::None || !matches!(self.instructions.last(), Some(Instruction::DestroyFixedTargets)) || self.instructions.len() < 2 || !self.instructions[..self.instructions.len()-1].iter().all(|op| matches!(op, Instruction::FixedTargetClause(body) if body.instructions == [Instruction::DestroyTarget])) { return Err(DefinitionError::InvalidInstruction); }
                     None
                 }
-                Instruction::ExileResolvingSpell
-                | Instruction::ReturnResolvingSpellToHand
-                | Instruction::Ascend => None,
+                Instruction::Ascend=> None,
                 Instruction::LookOpponentExileForCast { count }
                     if *count > 0 && self.target == BodyTarget::SingleOpponent =>
                 {
@@ -10210,13 +10056,7 @@ impl ExecutableBody {
                 {
                     None
                 }
-                Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
-                    if self.target == BodyTarget::None =>
-                {
-                    None
-                }
-                Instruction::ChooseAndReturnOwnGraveyardCardsByType
-                | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_) => {
+                Instruction::ChooseAndReturnOwnGraveyardCardsByType=> {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 Instruction::ReflectAttachedCreatureDamage
@@ -10279,25 +10119,6 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     Some(OperandFamily::Permanent)
-                }
-                Instruction::ReturnCardsExiledWithLink(group) => {
-                    let expected = match group {
-                        LinkedExileGroup::FiendHunter | LinkedExileGroup::SourceLinked => {
-                            TriggerSpec::leaves_battlefield(ObjectFilter::self_object())
-                        }
-                        LinkedExileGroup::Helvault => TriggerSpec::new(TriggerEvent::Dies {
-                            subject: ObjectFilter::self_object(),
-                            mode: DiesTriggerMode::Permanent,
-                        }),
-                    };
-                    if self.target != BodyTarget::None
-                        || !matches!(context, BodyContext::TriggerBound {
-                        condition, grouping: TriggerGrouping::EachOccurrence,
-                    } if *condition == expected)
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    None
                 }
                 Instruction::ExileRelatedPermanents(group) => match (group, self.target) {
                     (RelatedExileGroup::CreaturesSharingTargetName, BodyTarget::SingleCreature) => {
@@ -10391,7 +10212,7 @@ impl ExecutableBody {
                     }
                     None
                 }
-                Instruction::ExileTopFaceDown | Instruction::RegisterTokenLinkedExile => {
+                Instruction::RegisterTokenLinkedExile=> {
                     if self.target != BodyTarget::None {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -10704,7 +10525,7 @@ impl ExecutableBody {
                         && matches!(
                             self.instructions.as_slice(),
                             [
-                                Instruction::ExileAbilitySource,
+                                Instruction::ZoneOp(_),
                                 Instruction::ReturnExiledTargetCohort {
                                     next_end_step: false,
                                     ..
@@ -10818,7 +10639,7 @@ impl ExecutableBody {
                                     action: PermanentTargetAction::Tap
                                 },
                                 Instruction::BranchIfFalse { .. },
-                                Instruction::ExileTarget,
+                                Instruction::ZoneOp(_),
                             ]
                         );
                     let optional_toggle = index == 1
@@ -11107,118 +10928,6 @@ impl ExecutableBody {
                         facts.definitely_checked_top = true;
                     }
                     library_owner.validate(context, self.target, facts.definitely_exiled_target)?
-                }
-                Instruction::MoveSubject {
-                    subject,
-                    destination,
-                } => {
-                    if let SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
-                        chooser,
-                    }) = destination
-                    {
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?;
-                    }
-                    if let SubjectDestination::Battlefield {
-                        attach_to_self: true,
-                        ..
-                    } = destination
-                        && !context.has_source()
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    if let SubjectDestination::Exile {
-                        delayed_return:
-                            Some(
-                                DelayedReturnTiming::UntilSourceLeaves
-                                | DelayedReturnTiming::LinkedGroup(_),
-                            ),
-                    } = destination
-                        && !context.has_source()
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    match subject {
-                        MoveSubjectRef::TargetObject => match self.target {
-                            BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
-                            BodyTarget::SingleAnyTarget
-                            | BodyTarget::SingleCreatureOrPlayer
-                            | BodyTarget::SinglePlayerOrPlaneswalker
-                            | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                Some(OperandFamily::DamageRecipient)
-                            }
-                            BodyTarget::SingleOwnGraveyardCard
-                            | BodyTarget::AnyGraveyardCard
-                            | BodyTarget::AnyGraveyardCreature
-                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                            | BodyTarget::FilteredOwnGraveyardCard(_)
-                            | BodyTarget::FilteredAnyGraveyardCard { .. } => {
-                                if matches!(destination, SubjectDestination::Battlefield { .. }) {
-                                    facts.returned_graveyard_target = true;
-                                }
-                                Some(OperandFamily::GraveyardCard)
-                            }
-                            BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                            _ => return Err(DefinitionError::OperandFamily),
-                        },
-                        MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
-                            if !context.has_source() {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        MoveSubjectRef::TriggeringObject => {
-                            if !matches!(context, BodyContext::TriggerBound { .. }) {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        MoveSubjectRef::RevealedCard => {
-                            if !facts.definitely_checked_top {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        MoveSubjectRef::CreatedTokens
-                        | MoveSubjectRef::LastMoved
-                        | MoveSubjectRef::RememberedFirst
-                        | MoveSubjectRef::RememberedSecond => None,
-                    }
-                }
-                Instruction::SelectZoneCardsToZone {
-                    player,
-                    source_zone,
-                    filter,
-                    min,
-                    max,
-                    destination,
-                    ..
-                } => {
-                    if let SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
-                        chooser,
-                    }) = destination
-                    {
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?;
-                    }
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    min.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    max.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    let mut fam =
-                        player.validate(context, self.target, facts.definitely_exiled_target)?;
-                    if filter.has_target_player()
-                        || matches!(
-                            source_zone,
-                            SourceZoneFilter::TargetPlayerHand
-                                | SourceZoneFilter::TargetPlayerGraveyard
-                        )
-                    {
-                        fam = merge_family(fam, Some(OperandFamily::Player))?;
-                    }
-                    fam
                 }
                 Instruction::ChooseObjects {
                     players,
@@ -11777,63 +11486,6 @@ impl ExecutableBody {
                         _ => None,
                     }
                 }
-                Instruction::ShuffleSubjectIntoLibrary { subject, .. } => {
-                    subject
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    match subject.as_ref() {
-                        EffectSubject::AbilitySource => {
-                            if !context.has_source() {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        EffectSubject::TriggerSubject
-                        | EffectSubject::TriggeringAttacker
-                        | EffectSubject::TriggeringAttackGroup
-                        | EffectSubject::TriggeringTarget => {
-                            if !matches!(context, BodyContext::TriggerBound { .. }) {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        EffectSubject::TargetObject
-                        | EffectSubject::TargetAndSameNameMatching(_) => match self.target {
-                            BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
-                            BodyTarget::SingleOwnGraveyardCard
-                            | BodyTarget::AnyGraveyardCard
-                            | BodyTarget::AnyGraveyardCreature
-                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                            | BodyTarget::FilteredOwnGraveyardCard(_)
-                            | BodyTarget::FilteredAnyGraveyardCard { .. } => {
-                                Some(OperandFamily::GraveyardCard)
-                            }
-                            _ => return Err(DefinitionError::OperandFamily),
-                        },
-                        EffectSubject::MatchingOtherThanTarget(_)
-                        | EffectSubject::TargetAndSharingColorMatching(_) => match self.target {
-                            BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
-                            _ => return Err(DefinitionError::OperandFamily),
-                        },
-                        EffectSubject::Matching(filter) => {
-                            let mut fam = None;
-                            if filter.has_target_player() {
-                                fam = merge_family(fam, Some(OperandFamily::Player))?;
-                            }
-                            if filter.uses_target_permanent() {
-                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
-                            }
-                            fam
-                        }
-                        _ => None,
-                    }
-                }
                 Instruction::WinGame(player) => {
                     player.validate(context, self.target, facts.definitely_exiled_target)?
                 }
@@ -12205,89 +11857,6 @@ impl ExecutableBody {
                     };
                     merge_family(tf, cf)?
                 }
-                Instruction::ExileGroupFromZone {
-                    players,
-                    zone,
-                    filter,
-                    ..
-                } => {
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    let pf =
-                        players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    let ff = (filter.has_target_player()
-                        || matches!(
-                            zone,
-                            SourceZoneFilter::TargetPlayerHand
-                                | SourceZoneFilter::TargetPlayerGraveyard
-                        ))
-                    .then_some(OperandFamily::Player);
-                    merge_family(pf, ff)?
-                }
-                Instruction::SacrificeSubject { subject } => {
-                    subject.validate_vocabulary(vocabulary)?;
-                    facts.definitely_sacrificed = true;
-                    match subject.as_ref() {
-                        EffectSubject::TargetObject
-                        | EffectSubject::TargetAndSameNameMatching(_)
-                        | EffectSubject::MatchingOtherThanTarget(_)
-                        | EffectSubject::TargetAndSharingColorMatching(_) => {
-                            if !matches!(
-                                self.target,
-                                BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_)
-                            ) {
-                                return Err(DefinitionError::OperandFamily);
-                            }
-                            Some(OperandFamily::Permanent)
-                        }
-                        EffectSubject::AbilitySource => {
-                            if !context.has_source() {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        EffectSubject::TriggerSubject
-                        | EffectSubject::TriggeringAttacker
-                        | EffectSubject::TriggeringAttackGroup
-                        | EffectSubject::TriggeringTarget => {
-                            if !matches!(context, BodyContext::TriggerBound { .. }) {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
-                        EffectSubject::Matching(filter) => {
-                            let mut fam = None;
-                            if filter.has_target_player() {
-                                fam = merge_family(fam, Some(OperandFamily::Player))?;
-                            }
-                            if filter.uses_target_permanent() {
-                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
-                            }
-                            fam
-                        }
-                    }
-                }
-                Instruction::DestroyChosen {
-                    chooser,
-                    filter,
-                    count,
-                    ..
-                } => {
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    let cf =
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?;
-                    let ff = filter.has_target_player().then_some(OperandFamily::Player);
-                    let af = count.required_operand_family(self.target)?;
-                    merge_family(merge_family(cf, ff)?, af)?
-                }
                 Instruction::CastLinkedFaceDownFree | Instruction::Enlist => {
                     if !context.has_source() {
                         return Err(DefinitionError::InvalidInstruction);
@@ -12549,44 +12118,6 @@ impl ExecutableBody {
                     }
                     family
                 }
-                Instruction::MoveGroupToLibrary { group, placement } => {
-                    if group.uses_outside_named_slots() {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    group
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    donor_moved = true;
-                    let mut fam = None;
-                    if let LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
-                        fam = merge_family(
-                            fam,
-                            chooser.validate(
-                                context,
-                                self.target,
-                                facts.definitely_exiled_target,
-                            )?,
-                        )?;
-                    }
-                    if group.has_target_player() {
-                        fam = merge_family(fam, Some(OperandFamily::Player))?;
-                    }
-                    if group.uses_target_permanent() {
-                        fam = merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    fam
-                }
-                Instruction::ExileLibraryTopLinked { player, amount, .. } => {
-                    if !context.has_source() {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    facts.moved_library_cards = true;
-                    facts.definitely_checked_top = true;
-                    let pf =
-                        player.validate(context, self.target, facts.definitely_exiled_target)?;
-                    merge_family(pf, amount.required_operand_family(self.target)?)?
-                }
                 Instruction::UntapOrTapSelect {
                     chooser,
                     filter,
@@ -12606,34 +12137,6 @@ impl ExecutableBody {
                         fam = merge_family(fam, Some(OperandFamily::Permanent))?;
                     }
                     merge_family(fam, count.required_operand_family(self.target)?)?
-                }
-                Instruction::MoveGraveyardGroupOwned {
-                    players,
-                    filter,
-                    destination,
-                } => {
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    let mut fam =
-                        players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    if let SubjectDestination::Library(LibraryPlacement::ChoiceTopOrBottom {
-                        chooser,
-                    }) = destination
-                    {
-                        fam = merge_family(
-                            fam,
-                            chooser.validate(
-                                context,
-                                self.target,
-                                facts.definitely_exiled_target,
-                            )?,
-                        )?;
-                    }
-                    if filter.has_target_player() {
-                        fam = merge_family(fam, Some(OperandFamily::Player))?;
-                    }
-                    fam
                 }
                 Instruction::LookTopChooseExt {
                     library_owner,
@@ -12823,71 +12326,6 @@ impl ExecutableBody {
                     }
                     fam
                 }
-                Instruction::ExileSubjectUntilSourceLeaves { subject } => {
-                    if !context.has_source() {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    subject
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    donor_moved = true;
-                    match subject.as_ref() {
-                        EffectSubject::AbilitySource => None,
-                        EffectSubject::TriggerSubject
-                        | EffectSubject::TriggeringAttacker
-                        | EffectSubject::TriggeringAttackGroup
-                        | EffectSubject::TriggeringTarget => {
-                            if !matches!(context, BodyContext::TriggerBound { .. }) {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        EffectSubject::TargetObject
-                        | EffectSubject::TargetAndSameNameMatching(_)
-                        | EffectSubject::TargetAndSharingColorMatching(_) => {
-                            if !matches!(
-                                self.target,
-                                BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_)
-                            ) {
-                                return Err(DefinitionError::OperandFamily);
-                            }
-                            facts.definitely_exiled_target = true;
-                            Some(OperandFamily::Permanent)
-                        }
-                        EffectSubject::MatchingOtherThanTarget(_) => {
-                            if !matches!(
-                                self.target,
-                                BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_)
-                            ) {
-                                return Err(DefinitionError::OperandFamily);
-                            }
-                            Some(OperandFamily::Permanent)
-                        }
-                        EffectSubject::Matching(filter) => {
-                            let mut fam = None;
-                            if filter.has_target_player() {
-                                fam = merge_family(fam, Some(OperandFamily::Player))?;
-                            }
-                            if filter.uses_target_permanent() {
-                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
-                            }
-                            fam
-                        }
-                        EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
-                    }
-                }
-                Instruction::ReturnCardsExiledWithLinkExt { .. } => {
-                    if self.target != BodyTarget::None || !context.has_source() {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    None
-                }
                 Instruction::DrawGame => None,
                 Instruction::EmpowerJace { count } => {
                     count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
@@ -13050,12 +12488,6 @@ impl ExecutableBody {
                     }
                     player.validate(context, self.target, facts.definitely_exiled_target)?
                 }
-                Instruction::MoveLastMovedFiltered { filter, .. } => {
-                    if let Some(f) = filter {
-                        f.validate_vocabulary(vocabulary)?;
-                    }
-                    None
-                }
                 Instruction::CounterMatchingStackObjects {
                     filter,
                     include_spells,
@@ -13067,12 +12499,6 @@ impl ExecutableBody {
                     }
                     if let Some(sf) = filter {
                         sf.validate_vocabulary(vocabulary)?;
-                    }
-                    None
-                }
-                Instruction::ReturnLinkedExile { .. } => {
-                    if !context.has_source() {
-                        return Err(DefinitionError::InvalidInstruction);
                     }
                     None
                 }
@@ -13826,45 +13252,6 @@ impl ExecutableBody {
                         }
                     }
                 },
-                Instruction::DestroySubject { subject, .. } => {
-                    subject
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    if matches!(subject.as_ref(), EffectSubject::AbilitySource)
-                        && !context.has_source()
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    if matches!(
-                        subject.as_ref(),
-                        EffectSubject::TargetObject
-                            | EffectSubject::TargetAndSameNameMatching(_)
-                            | EffectSubject::MatchingOtherThanTarget(_)
-                            | EffectSubject::TargetAndSharingColorMatching(_)
-                    ) {
-                        if !matches!(
-                            self.target,
-                            BodyTarget::SingleCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_)
-                        ) {
-                            return Err(DefinitionError::OperandFamily);
-                        }
-                        Some(OperandFamily::Permanent)
-                    } else if let EffectSubject::Matching(filter) = subject.as_ref() {
-                        let mut fam = None;
-                        if filter.has_target_player() {
-                            fam = merge_family(fam, Some(OperandFamily::Player))?;
-                        }
-                        if filter.uses_target_permanent() {
-                            fam = merge_family(fam, Some(OperandFamily::Permanent))?;
-                        }
-                        fam
-                    } else {
-                        None
-                    }
-                }
                 Instruction::GrantCardPlayPermission {
                     player, subject, ..
                 } => {
@@ -13971,58 +13358,6 @@ impl ExecutableBody {
                     facts.defined_resolution_x = true;
                     expr.required_operand_family(self.target)?
                 }
-                Instruction::PutResolvingSpellInLibrary(placement) => {
-                    if matches!(
-                        context,
-                        BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
-                    ) {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    if let LibraryPlacement::ChoiceTopOrBottom { chooser } = placement {
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?
-                    } else {
-                        None
-                    }
-                }
-                Instruction::PutSubjectIntoLibraryFromTop { subject, offset } => {
-                    offset.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    let subj_fam = match subject {
-                        MoveSubjectRef::TargetObject => match self.target {
-                            BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
-                            BodyTarget::SingleOwnGraveyardCard
-                            | BodyTarget::AnyGraveyardCard
-                            | BodyTarget::AnyGraveyardCreature
-                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                            | BodyTarget::FilteredOwnGraveyardCard(_)
-                            | BodyTarget::FilteredAnyGraveyardCard { .. } => {
-                                Some(OperandFamily::GraveyardCard)
-                            }
-                            BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                            _ => return Err(DefinitionError::OperandFamily),
-                        },
-                        MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
-                            if !context.has_source() {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        MoveSubjectRef::TriggeringObject => {
-                            if !matches!(context, BodyContext::TriggerBound { .. }) {
-                                return Err(DefinitionError::InvalidInstruction);
-                            }
-                            None
-                        }
-                        MoveSubjectRef::RevealedCard
-                        | MoveSubjectRef::CreatedTokens
-                        | MoveSubjectRef::LastMoved
-                        | MoveSubjectRef::RememberedFirst
-                        | MoveSubjectRef::RememberedSecond => None,
-                    };
-                    merge_family(subj_fam, offset.required_operand_family(self.target)?)?
-                }
                 Instruction::SetDayNight(_) => None,
                 Instruction::CreateAuraTokenAttached {
                     definition, host, ..
@@ -14099,26 +13434,6 @@ impl ExecutableBody {
                     };
                     temp.validate_body(vocabulary)?;
                     None
-                }
-                Instruction::MoveGraveyardGroup { filter, .. } => {
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    None
-                }
-                Instruction::PutHandPermanentFiltered {
-                    player,
-                    filter,
-                    maximum,
-                    ..
-                } => {
-                    if *maximum == 0 {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    player.validate(context, self.target, facts.definitely_exiled_target)?
                 }
                 Instruction::RepeatLoop { count, body } => {
                     if body.target != BodyTarget::None {
@@ -14237,18 +13552,12 @@ impl ExecutableBody {
                     facts.definitely_selected_graveyard_exile = true;
                     family
                 }
-                Instruction::ExileFromZone {
+                Instruction::TapOrUntapControlled {
                     players,
                     amount,
                     filter,
                     ..
-                }
-                | Instruction::TapOrUntapControlled {
-                    players,
-                    amount,
-                    filter,
-                    ..
-                } => {
+                }=> {
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
@@ -14468,7 +13777,9 @@ impl ExecutableBody {
                         && (!*sacrifice
                             || !matches!(
                                 self.instructions.get(index + 1),
-                                Some(Instruction::ExileAbilitySource)
+                                Some(Instruction::ZoneOp(spec))
+                                    if matches!(spec.source, crate::toolbox::ObjectQuery::Source)
+                                        && matches!(spec.destination, crate::toolbox::ZoneDest::Exile { .. })
                             ))
                     {
                         return Err(DefinitionError::InvalidInstruction);
@@ -14480,33 +13791,18 @@ impl ExecutableBody {
                     }
                     None
                 }
-                Instruction::ExileChosenPermanents {
+                Instruction::Sacrifice {
                     players,
                     amount,
                     filter,
-                }
-                | Instruction::ReturnControlledPermanents {
-                    players,
-                    amount,
-                    filter,
-                }
-                | Instruction::Sacrifice {
-                    players,
-                    amount,
-                    filter,
-                }
-                | Instruction::SacrificeUpTo {
-                    players,
-                    amount,
-                    filter,
-                } => {
+                }=> {
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     filter.validate(vocabulary)?;
                     if matches!(
                         instruction,
-                        Instruction::Sacrifice { .. } | Instruction::SacrificeUpTo { .. }
+                        Instruction::Sacrifice { .. }
                     ) {
                         let single_sac = matches!(players, AffectedPlayers::One(_))
                             && matches!(amount, ValueExpr::Literal(value) if *value == 1.into());
@@ -14523,60 +13819,11 @@ impl ExecutableBody {
                         !matches!(amount, ValueExpr::Literal(value) if *value == 0.into());
                     family
                 }
-                Instruction::DiscardOneAtRandom(player) => {
-                    if !matches!(
-                        player,
-                        ResolvingPlayer::Controller
-                            | ResolvingPlayer::TargetPlayer
-                            | ResolvingPlayer::UniqueRelatedPlayer
-                            | ResolvingPlayer::ActivePlayer
-                            | ResolvingPlayer::TargetController
-                            | ResolvingPlayer::TargetOwner
-                            | ResolvingPlayer::DefendingPlayer
-                    ) {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    facts.definitely_discarded = true;
-                    player.validate(context, self.target, facts.definitely_exiled_target)?
-                }
                 Instruction::SacrificeRandomUntilLand => {
                     if self.target != BodyTarget::SingleOpponent {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     Some(OperandFamily::Player)
-                }
-                Instruction::DiscardUpTo { maximum } => {
-                    if *maximum == 0 || self.target != BodyTarget::None {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    facts.definitely_discarded = true;
-                    None
-                }
-                Instruction::DiscardUpToExt {
-                    players,
-                    max_count,
-                    filter,
-                    any_number,
-                } => {
-                    let mut family =
-                        players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    if !*any_number {
-                        max_count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                        family =
-                            merge_family(family, max_count.required_operand_family(self.target)?)?;
-                    }
-                    if let Some(f) = filter {
-                        f.validate_vocabulary(vocabulary)
-                            .map_err(|_| DefinitionError::InvalidInstruction)?;
-                        if f.has_target_player() {
-                            family = merge_family(family, Some(OperandFamily::Player))?;
-                        }
-                        if f.uses_target_permanent() {
-                            family = merge_family(family, Some(OperandFamily::Permanent))?;
-                        }
-                    }
-                    facts.definitely_discarded = true;
-                    family
                 }
                 Instruction::SacrificeMatching(filter) => {
                     if matches!(filter, SacrificeSelection::Subtype(kind) if vocabulary.label(*kind).is_none())
@@ -14595,20 +13842,6 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::Discard { players, amount } => {
-                    let family =
-                        players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    facts.definitely_discarded = true;
-                    family
-                }
-                Instruction::DiscardFiltered {
-                    players,
-                    amount,
-                    filter,
-                } => {
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
@@ -14751,10 +13984,6 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    None
-                }
-                Instruction::ExileAbilitySource => {
-                    donor_moved = true;
                     None
                 }
                 Instruction::ExileSourceAndGainLife(n) => {
@@ -15017,11 +14246,10 @@ impl ExecutableBody {
                     )?
                 }
                 Instruction::GoadOtherPlayersCreatures => None,
-                Instruction::ShuffleAbilitySourceIntoLibrary => None,
                 Instruction::RevealToNameAfterSourceShuffle(_)
                     if self.target == BodyTarget::None
                         && self.instructions[..index]
-                            .contains(&Instruction::ShuffleAbilitySourceIntoLibrary) =>
+                            .iter().any(|op| matches!(op, Instruction::ZoneOp(spec) if matches!(spec.source, crate::toolbox::ObjectQuery::Source) && matches!(spec.destination, crate::toolbox::ZoneDest::Library { position: crate::toolbox::LibraryOrderPos::ShuffleInto }))) =>
                 {
                     None
                 }
@@ -15471,15 +14699,9 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::ReturnOwnedCommandersToHand
-                | Instruction::ExileTopForFreePlay
-                | Instruction::ShuffleEachHandAndGraveyard
-                | Instruction::EndControllerTurn
-                | Instruction::ShuffleOwnLibrary
-                | Instruction::ShuffleOwnGraveyardIntoLibrary
-                | Instruction::ExileAllGraveyards => None,
-                Instruction::ExilePlayerGraveyards(players) => {
-                    players.validate(context, self.target, facts.definitely_exiled_target)?
-                }
+| Instruction::ExileTopForFreePlay
+| Instruction::EndControllerTurn
+| Instruction::ShuffleOwnGraveyardIntoLibrary=> None,
                 Instruction::RemoveCountersFromPermanent {
                     target_self,
                     kind: _,
@@ -15501,19 +14723,6 @@ impl ExecutableBody {
                         }
                     }
                 }
-                Instruction::ShufflePlayerLibrary(player)
-                | Instruction::RevealPlayerHand(player) => {
-                    player.validate(context, self.target, facts.definitely_exiled_target)?
-                }
-                Instruction::ShuffleTargetIntoLibrary => Some(match self.target {
-                    BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature => OperandFamily::GraveyardCard,
-                    _ => OperandFamily::Permanent,
-                }),
                 Instruction::ShuffleTargetGraveyardCards { maximum }
                     if *maximum > 0
                         && self.target == BodyTarget::SinglePlayer
@@ -15565,29 +14774,6 @@ impl ExecutableBody {
                     if self.target != BodyTarget::RecentlyDiscardedOrFromLibrary
                         || self.instructions.len() != 1
                     {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    Some(OperandFamily::GraveyardCard)
-                }
-                Instruction::ReturnRandomGraveyardCards {
-                    filter,
-                    to_battlefield,
-                    ..
-                } => {
-                    if self.target != BodyTarget::None
-                        || (*to_battlefield && filter.as_deref() != Some(&ObjectFilter::creature()))
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    if let Some(filter) = filter {
-                        filter
-                            .validate_vocabulary(vocabulary)
-                            .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    }
-                    None
-                }
-                Instruction::ReturnTargetGraveyardCreatureToHand => {
-                    if !matches!(self.target, BodyTarget::FilteredOwnGraveyardCard(_)) {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     Some(OperandFamily::GraveyardCard)
@@ -16524,14 +15710,6 @@ impl ExecutableBody {
                     facts.returned_graveyard_target = true;
                     Some(OperandFamily::GraveyardCard)
                 }
-                Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker => {
-                    if self.target != BodyTarget::AnyGraveyardCreatureOrPlaneswalker {
-                        return Err(DefinitionError::OperandFamily);
-                    }
-                    donor_moved = true;
-                    facts.returned_graveyard_target = true;
-                    Some(OperandFamily::GraveyardCard)
-                }
                 Instruction::GrantFlashback(FlashbackSubject::Target)
                     if self.target
                         == BodyTarget::FilteredOwnGraveyardCard(
@@ -16553,32 +15731,6 @@ impl ExecutableBody {
                     }
                     Some(OperandFamily::GraveyardCard)
                 }
-                Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. } => {
-                    let valid = match self.target {
-                        BodyTarget::FilteredOwnGraveyardCard(filter)
-                        | BodyTarget::FilteredAnyGraveyardCard { filter, .. } => {
-                            !filter.allows_instant_or_sorcery()
-                        }
-                        BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => true,
-                        _ => false,
-                    };
-                    if !valid {
-                        return Err(DefinitionError::OperandFamily);
-                    }
-                    donor_moved = true;
-                    facts.returned_graveyard_target = true;
-                    Some(OperandFamily::GraveyardCard)
-                }
-                Instruction::ReturnOwnGraveyardCreatureToBattlefield => {
-                    if self.target != BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature())
-                    {
-                        return Err(DefinitionError::OperandFamily);
-                    }
-                    donor_moved = true;
-                    facts.returned_graveyard_target = true;
-                    Some(OperandFamily::GraveyardCard)
-                }
                 Instruction::ExileTargetAsAbilityDonor => {
                     if self.target != BodyTarget::SingleCreature
                         || !matches!(context, BodyContext::Activated { .. })
@@ -16594,14 +15746,11 @@ impl ExecutableBody {
                     Some(OperandFamily::ExiledCard)
                 }
                 Instruction::DestroyTarget
-                | Instruction::DestroyTargetWithoutRegeneration
-                | Instruction::ExileTarget
-                | Instruction::ImprintTargetLand
-                | Instruction::ImprintTargetCreature
-                | Instruction::ExileTargetUntilSourceLeaves
-                | Instruction::ExileUntilNextEndStep
-                | Instruction::ExileTargetUntilOpponentMonarch
-                | Instruction::ReturnToOwnersHand => {
+| Instruction::ImprintTargetLand
+| Instruction::ImprintTargetCreature
+| Instruction::ExileTargetUntilSourceLeaves
+| Instruction::ExileTargetUntilOpponentMonarch
+| Instruction::ReturnToOwnersHand=> {
                     if let Some(filter) = match instruction {
                         Instruction::ImprintTargetLand => Some(ObjectFilter::land().controlled()),
                         Instruction::ImprintTargetCreature => {
@@ -16617,11 +15766,11 @@ impl ExecutableBody {
                     }
                     if matches!(
                         instruction,
-                        Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration
+                        Instruction::DestroyTarget
                     ) {
                         facts.checked_destruction_target = true;
                     }
-                    if matches!(instruction, Instruction::ExileTarget) && !donor_moved {
+                    if false && !donor_moved {
                         facts.definitely_exiled_target = true;
                     }
                     donor_moved = true;
@@ -16853,19 +16002,12 @@ impl ExecutableBody {
                     | Instruction::GrantNoMaxHandSizeRestOfGame
                     | Instruction::PreventDamageThisTurn(_)
                     | Instruction::PreventDamageSpec(_)
-                    | Instruction::MoveGroup { .. }
-                    | Instruction::PutTargetInLibrary(_)
                     | Instruction::PutOwnHandCardOnLibraryBottom
-                    | Instruction::PutGroupOnLibraryBottom(_)
-                    | Instruction::ExileGraveyardTarget
                     | Instruction::ExileCapturedGraveyardCard
                     | Instruction::GrantGraveyardCastAndWatchAbilities
                     | Instruction::GainCastCardAbilities { .. }
-                    | Instruction::ExileCardsFromGraveyard { .. }
                     | Instruction::ReturnUpToOneRecentGraveyardCard
                     | Instruction::ExileUpToTwoGraveyardTargetsGainLife
-                    | Instruction::ReturnTargetGraveyardCreatureToHand
-                    | Instruction::ReturnRandomGraveyardCards { .. }
                     | Instruction::ChooseRevealedHandCard { .. }
                     | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
                     | Instruction::ReturnSourceGraveyardToBattlefield { .. }
@@ -16874,12 +16016,7 @@ impl ExecutableBody {
                     | Instruction::ExileTopForFreePlay
                     | Instruction::ExileTargetUntilNonlandForFreeCast
                     | Instruction::ExileTopRepeatOnPermanentEntry
-                    | Instruction::ShuffleEachHandAndGraveyard
                     | Instruction::EndControllerTurn
-                    | Instruction::ShuffleOwnLibrary
-                    | Instruction::ShufflePlayerLibrary(_)
-                    | Instruction::ShuffleTargetIntoLibrary
-                    | Instruction::RevealPlayerHand(_)
                     | Instruction::ShuffleOwnGraveyardIntoLibrary
                     | Instruction::ShuffleTargetGraveyardCards { .. }
                     | Instruction::ExileCreatureAtMostRevealedPower
@@ -16889,11 +16026,7 @@ impl ExecutableBody {
                     | Instruction::DestroyNonlandsAtSourceChargeCount
                     | Instruction::AddCounterAndDischargeOnResolution(_)
                     | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-                    | Instruction::ExileAllGraveyards
-                    | Instruction::ExilePlayerGraveyards(_)
                     | Instruction::RemoveCountersFromPermanent { .. }
-                    | Instruction::DestroyGroupWithoutRegeneration(_)
-                    | Instruction::DestroyGroup(_)
                     | Instruction::ExileOnePerPlayerUntilSourceLeaves
                     | Instruction::DoubleCountersOnTargets
                     | Instruction::ExileCombatDamagedCreature
@@ -16986,15 +16119,12 @@ impl ExecutableBody {
                     | Instruction::ExileRelatedTopForCastThisTurn
                     | Instruction::ExileRelatedTopForPlay
                     | Instruction::ExileTopForPlay { .. }
-                    | Instruction::ExileTopFaceDown
                     | Instruction::ScheduleCreatedTokenExile(_)
                     | Instruction::ScheduleCreatedTokenSacrifice
                     | Instruction::ExileDelayedObjects(_)
                     | Instruction::ExileRelatedPermanents(_)
                     | Instruction::ExileTargetWithLink(_)
-                    | Instruction::ReturnCardsExiledWithLink(_)
                     | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-                    | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
                     | Instruction::TargetDamagesItsControllersOtherCreatures
                     | Instruction::OtherCreaturesReturnPowerDamage
                     | Instruction::DestroyCapturedCombatCreature { .. }
@@ -17078,8 +16208,6 @@ impl ExecutableBody {
                     | Instruction::AddPlayerCounter { .. }
                     | Instruction::ExileTopPlay { .. }
                     | Instruction::LookTopChoose { .. }
-                    | Instruction::MoveSubject { .. }
-                    | Instruction::SelectZoneCardsToZone { .. }
                     | Instruction::ChooseObjects { .. }
                     | Instruction::ChooseOption { .. }
                     | Instruction::DealDamageFrom { .. }
@@ -17091,7 +16219,6 @@ impl ExecutableBody {
                     | Instruction::BecomeCopyFixedTargets { .. }
                     | Instruction::DoublePowerToughnessSubject { .. }
                     | Instruction::DoubleCountersOnSubject { .. }
-                    | Instruction::ShuffleSubjectIntoLibrary { .. }
                     | Instruction::WinGame(_)
                     | Instruction::LoseGame(_)
                     | Instruction::DistributeCountersAmongTargets { .. }
@@ -17115,9 +16242,6 @@ impl ExecutableBody {
                     | Instruction::Fight { .. }
                     | Instruction::Exchange(_)
                     | Instruction::CopyStackObject { .. }
-                    | Instruction::ExileGroupFromZone { .. }
-                    | Instruction::SacrificeSubject { .. }
-                    | Instruction::DestroyChosen { .. }
                     | Instruction::CastLinkedFaceDownFree
                     | Instruction::Ripple(_)
                     | Instruction::Demonstrate
@@ -17127,10 +16251,7 @@ impl ExecutableBody {
                     | Instruction::DealDamageToAnnouncedTargets { .. }
                     | Instruction::GrantChosenProtection { .. }
                     | Instruction::RemoveCountersFromSubject { .. }
-                    | Instruction::MoveGroupToLibrary { .. }
-                    | Instruction::ExileLibraryTopLinked { .. }
                     | Instruction::UntapOrTapSelect { .. }
-                    | Instruction::MoveGraveyardGroupOwned { .. }
                     | Instruction::LookTopChooseExt { .. }
                     | Instruction::RevealTopTwoPiles { .. }
                     | Instruction::RevealUntilMatchExt { .. }
@@ -17141,22 +16262,16 @@ impl ExecutableBody {
                     | Instruction::SkipNextUntap { .. }
                     | Instruction::RequireCombatAction { .. }
                     | Instruction::CreateTemporaryRule { .. }
-                    | Instruction::DestroySubject { .. }
                     | Instruction::GrantCardPlayPermission { .. }
                     | Instruction::CreateTokenCopy { .. }
                     | Instruction::BindResolutionX(_)
-                    | Instruction::PutResolvingSpellInLibrary(_)
-                    | Instruction::PutSubjectIntoLibraryFromTop { .. }
                     | Instruction::SetDayNight(_)
                     | Instruction::CreateAuraTokenAttached { .. }
                     | Instruction::ExploreSubject(_)
                     | Instruction::ScheduleDelayedEventTrigger { .. }
-                    | Instruction::MoveGraveyardGroup { .. }
-                    | Instruction::PutHandPermanentFiltered { .. }
                     | Instruction::RepeatLoop { .. }
                     | Instruction::PayLife { .. }
                     | Instruction::PayEnergy { .. }
-                    | Instruction::ExileFromZone { .. }
                     | Instruction::TapOrUntapControlled { .. }
                     | Instruction::ExertAbilitySource
                     | Instruction::CollectEvidence { .. }
@@ -17202,7 +16317,6 @@ impl ExecutableBody {
                     | Instruction::RegenerateTarget
                     | Instruction::ExileDefeatedSiege
                     | Instruction::ExileSourceAndGainLife(_)
-                    | Instruction::ExileAbilitySource
                     | Instruction::ReturnSourceToHand
                     | Instruction::UntapAbilitySource
                     | Instruction::TapAbilitySource
@@ -17210,19 +16324,13 @@ impl ExecutableBody {
                     | Instruction::RegenerateControlledSubtype(_)
                     | Instruction::GoadTarget
                     | Instruction::DestroyTarget
-                    | Instruction::DestroyTargetWithoutRegeneration
-                    | Instruction::ExileTarget
                     | Instruction::ImprintTargetLand
                     | Instruction::ImprintTargetCreature
                     | Instruction::ExileTargetAsAbilityDonor
                     | Instruction::ExileTargetUntilSourceLeaves
-                    | Instruction::ExileUntilNextEndStep
                     | Instruction::ExileTargetUntilOpponentMonarch
                     | Instruction::ReturnToOwnersHand
-                    | Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                    | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
                     | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                    | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
                     | Instruction::CounterSpell
                     | Instruction::CounterSpellToExile
                     | Instruction::CounterSpellToLibrary { .. }
@@ -17245,8 +16353,6 @@ impl ExecutableBody {
                     | Instruction::PutNamedCounterOnTarget { .. }
                     | Instruction::PutPowerToughnessCounters { .. }
                     | Instruction::FixedTargetClause(_)
-                    | Instruction::ExileResolvingSpell
-                    | Instruction::ReturnResolvingSpellToHand
                     | Instruction::Ascend
                     | Instruction::DestroyFixedTargets
                     | Instruction::DestroyTargetAndAttachedEquipment
@@ -17256,7 +16362,6 @@ impl ExecutableBody {
                     | Instruction::ExileUntilOtherTargetLeaves
                     | Instruction::CopyOtherTargetAsArtifact
                     | Instruction::ReturnChosenXGraveyardCreatures
-                    | Instruction::ReturnGraveyardTargetsTapped(_)
                     | Instruction::ReturnCapturedDyingCreature
                     | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
                     | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
@@ -17287,7 +16392,6 @@ impl ExecutableBody {
                     | Instruction::RevealOddCastOrDraw
                     | Instruction::RevealUntilLandKind
                     | Instruction::RevealOpponentChoosesCreature
-                    | Instruction::ShuffleAbilitySourceIntoLibrary
                     | Instruction::RevealToNameAfterSourceShuffle(_)
                     | Instruction::ChooseOwnCommanderToCast
                     | Instruction::ChooseMatchingHandSpellToCast
@@ -17330,24 +16434,16 @@ impl ExecutableBody {
                     | Instruction::DestroyOtherCreatures
                     | Instruction::SacrificeOtherCreatures
                     | Instruction::SacrificeColoredPermanents
-                    | Instruction::ExileChosenPermanents { .. }
                     | Instruction::ExileFromHandOrBattlefield(_)
                     | Instruction::ExileRelatedHandCardForPlay
                     | Instruction::PayLifeOrSacrificeCreatures
-                    | Instruction::ReturnControlledPermanents { .. }
                     | Instruction::ChooseOtherControlledCreature { .. }
                     | Instruction::Sacrifice { .. }
-                    | Instruction::SacrificeUpTo { .. }
-                    | Instruction::DiscardOneAtRandom(_)
                     | Instruction::SacrificeRandomUntilLand
-                    | Instruction::DiscardUpTo { .. }
                     | Instruction::SacrificeToContinue { .. }
                     | Instruction::SacrificeMatching(_)
                     | Instruction::Discard { .. }
-                    | Instruction::DiscardFiltered { .. }
                     | Instruction::MoveCounters { .. }
-                    | Instruction::ExileSubjectUntilSourceLeaves { .. }
-                    | Instruction::ReturnCardsExiledWithLinkExt { .. }
                     | Instruction::DrawGame
                     | Instruction::TurnFaceUpSubject { .. }
                     | Instruction::TurnFaceDownSubject { .. }
@@ -17355,11 +16451,8 @@ impl ExecutableBody {
                     | Instruction::EmpowerJace { .. }
                     | Instruction::AddOneOfEachCounterKindOnSubject { .. }
                     | Instruction::GrantLastMovedPlayPermission { .. }
-                    | Instruction::MoveLastMovedFiltered { .. }
                     | Instruction::CounterMatchingStackObjects { .. }
-                    | Instruction::ReturnLinkedExile { .. }
                     | Instruction::TransferAllCountersFromTriggeringLki { .. }
-                    | Instruction::DiscardUpToExt { .. }
                     | Instruction::Earthbend { .. }
                     | Instruction::ReturnEarthbentCard
                     | Instruction::RegenerateSubject { .. }
@@ -18397,7 +17490,6 @@ impl Program {
                     | Instruction::AdjustControllerLife { .. }
                     | Instruction::ReturnToOwnersHand
                     | Instruction::DestroyTarget
-                    | Instruction::DestroyTargetWithoutRegeneration
                     | Instruction::AddMana(EffectManaYield::Fixed(_))
                     | Instruction::CreateTokens { .. }
                     | Instruction::CreateAttackingTokens { .. }
@@ -19753,37 +18845,34 @@ impl Program {
                                 | LookTopFilter::SourceChosenCreatureTypeKeepRest,
                             ..
                         }
-                        | Instruction::MayTurnControlledCreatureFaceUp
-                        | Instruction::ExploreSource
-                        | Instruction::MayRevealLibraryTop
-                        | Instruction::ChangeAbilitySource { .. }
-                        | Instruction::GiveControlOfAbilitySource
-                        | Instruction::PreventDamageThisTurn(
+| Instruction::MayTurnControlledCreatureFaceUp
+| Instruction::ExploreSource
+| Instruction::MayRevealLibraryTop
+| Instruction::ChangeAbilitySource { .. }
+| Instruction::GiveControlOfAbilitySource
+| Instruction::PreventDamageThisTurn(
                             crate::damage::TurnPreventionFilter::ToAbilitySource,
                         )
-                        | Instruction::RequireAttackSourceNextTurn
-                        | Instruction::AttachControlledToSource { .. }
-                        | Instruction::UntapAbilitySource
-                        | Instruction::TapAbilitySource
-                        | Instruction::RegenerateSource
-                        | Instruction::ExileDefeatedSiege
-                        | Instruction::ExileSourceAndGainLife(_)
-                        | Instruction::ExileAbilitySource
-                        | Instruction::ReturnSourceToHand
-                        | Instruction::ImprintTargetLand
-                        | Instruction::ImprintTargetCreature
-                        | Instruction::ExileTargetAsAbilityDonor
-                        | Instruction::ExileTargetUntilSourceLeaves
-                        | Instruction::ExileSubjectUntilSourceLeaves { .. }
-                        | Instruction::ReturnCardsExiledWithLinkExt { .. }
-                        | Instruction::PutNamedCounterOnSource { .. }
-                        | Instruction::PutChargeCounterOnSource
-                        | Instruction::PutBlessingCounterOnSource
-                        | Instruction::PutQuestCounterOnSource
-                        | Instruction::PutStorageCounterOnSource
-                        | Instruction::PutCounterOnRelatedPermanent
-                        | Instruction::PutCountersOnOtherCreatures
-                        | Instruction::DamageFromPower(PowerDamageSource::AbilitySource) => true,
+| Instruction::RequireAttackSourceNextTurn
+| Instruction::AttachControlledToSource { .. }
+| Instruction::UntapAbilitySource
+| Instruction::TapAbilitySource
+| Instruction::RegenerateSource
+| Instruction::ExileDefeatedSiege
+| Instruction::ExileSourceAndGainLife(_)
+| Instruction::ReturnSourceToHand
+| Instruction::ImprintTargetLand
+| Instruction::ImprintTargetCreature
+| Instruction::ExileTargetAsAbilityDonor
+| Instruction::ExileTargetUntilSourceLeaves
+| Instruction::PutNamedCounterOnSource { .. }
+| Instruction::PutChargeCounterOnSource
+| Instruction::PutBlessingCounterOnSource
+| Instruction::PutQuestCounterOnSource
+| Instruction::PutStorageCounterOnSource
+| Instruction::PutCounterOnRelatedPermanent
+| Instruction::PutCountersOnOtherCreatures
+| Instruction::DamageFromPower(PowerDamageSource::AbilitySource)=> true,
                         Instruction::PreventDamageSpec(spec)
                             if matches!(
                                 spec.source,
@@ -20152,22 +19241,22 @@ impl Program {
                     return Err(DefinitionError::InvalidInstruction);
                 }
             }
-            if ability.body.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::ExileTopFaceDown | Instruction::RegisterTokenLinkedExile
-                )
-            }) && !(self.has_type(CardType::Planeswalker)
-                && ability.source_cost == SourceCost::None
-                && ability.body.target == BodyTarget::None
-                && matches!(
-                    ability.body.instructions.as_slice(),
-                    [
-                        Instruction::ExileTopFaceDown,
-                        Instruction::CreateTokens { .. },
-                        Instruction::RegisterTokenLinkedExile
-                    ]
-                ))
+            if ability
+                .body
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::RegisterTokenLinkedExile))
+                && !(self.has_type(CardType::Planeswalker)
+                    && ability.source_cost == SourceCost::None
+                    && ability.body.target == BodyTarget::None
+                    && matches!(
+                        ability.body.instructions.as_slice(),
+                        [
+                            Instruction::ZoneOp(_),
+                            Instruction::CreateTokens { .. },
+                            Instruction::RegisterTokenLinkedExile
+                        ]
+                    ))
             {
                 return Err(DefinitionError::InvalidInstruction);
             }
@@ -20195,9 +19284,7 @@ impl Program {
             if ability.body.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ExileResolvingSpell
-                        | Instruction::ReturnResolvingSpellToHand
-                        | Instruction::DivideThreeDamageAmongTargets
+                    Instruction::DivideThreeDamageAmongTargets
                         | Instruction::DamageOrderedTargets { .. }
                 )
             }) || (has_fixed_clauses
@@ -20371,13 +19458,8 @@ impl Program {
                             | Instruction::Scry { amount, .. }
                             | Instruction::Surveil { amount, .. }
                             | Instruction::Discard { amount, .. }
-                            | Instruction::DiscardFiltered { amount, .. }
-                            | Instruction::DiscardUpToExt {
-                                max_count: amount, ..
-                            }
                             | Instruction::Earthbend { amount }
                             | Instruction::Sacrifice { amount, .. }
-                            | Instruction::SacrificeUpTo { amount, .. }
                             | Instruction::AddPlayerCounter { amount, .. }
                             | Instruction::PutNamedCounterOnTarget { amount, .. }
                             | Instruction::PutCountersOnSubject { amount, .. }
@@ -20390,7 +19472,6 @@ impl Program {
                             | Instruction::BoostTargetPower { amount, .. }
                             | Instruction::Monstrosity { amount }
                             | Instruction::CopyStackObject { count: amount, .. }
-                            | Instruction::DestroyChosen { count: amount, .. }
                             if expr_uses_source(amount)
                     ) || matches!(
                         op,
@@ -20414,7 +19495,6 @@ impl Program {
                                 LinkedExileGroup::Helvault | LinkedExileGroup::SourceLinked,
                             )
                             | Instruction::ExchangeLifeWithSourceToughness
-                            | Instruction::ShuffleAbilitySourceIntoLibrary
                             | Instruction::GrantGraveyardCastAndWatchAbilities
                             | Instruction::DamageFromPower(PowerDamageSource::TargetCreatureToAbilitySource)
                             | Instruction::PhaseOut(PhasingSubject::Source)
@@ -20783,7 +19863,6 @@ impl Program {
                             | Instruction::SuppressGroupKeywords { .. }
                             | Instruction::ExileDefeatedSiege
                             | Instruction::ExileSourceAndGainLife(_)
-                            | Instruction::ExileAbilitySource
                             | Instruction::ReturnSourceToHand
                             | Instruction::ReturnSourceGraveyardToHand
                             | Instruction::ReturnSourceGraveyardToBattlefield { .. }
@@ -20816,25 +19895,15 @@ impl Program {
                             | Instruction::GrantNoMaxHandSizeRestOfGame
                             | Instruction::PreventDamageThisTurn(_)
                             | Instruction::PreventDamageSpec(_)
-                            | Instruction::MoveGroup { .. }
-                            | Instruction::PutTargetInLibrary(_)
                             | Instruction::PutOwnHandCardOnLibraryBottom
-                            | Instruction::PutGroupOnLibraryBottom(_)
-                            | Instruction::ExileGraveyardTarget
                             | Instruction::ExileCapturedGraveyardCard
                             | Instruction::GrantGraveyardCastAndWatchAbilities
                             | Instruction::GainCastCardAbilities { .. }
-                            | Instruction::ExileCardsFromGraveyard { .. }
                             | Instruction::ReturnOwnedCommandersToHand
                             | Instruction::ExileTopForFreePlay
                             | Instruction::ExileTargetUntilNonlandForFreeCast
                             | Instruction::ExileTopRepeatOnPermanentEntry
-                            | Instruction::ShuffleEachHandAndGraveyard
                             | Instruction::EndControllerTurn
-                            | Instruction::ShuffleOwnLibrary
-                            | Instruction::ShufflePlayerLibrary(_)
-                            | Instruction::ShuffleTargetIntoLibrary
-                            | Instruction::RevealPlayerHand(_)
                             | Instruction::ShuffleOwnGraveyardIntoLibrary
                             | Instruction::ShuffleTargetGraveyardCards { .. }
                             | Instruction::MayTurnControlledCreatureFaceUp
@@ -20845,7 +19914,6 @@ impl Program {
                             | Instruction::DestroyDamagedPlayersNonlandsAtX
                             | Instruction::PutChosenXChargeCounters
                             | Instruction::DestroyNonlandsAtSourceChargeCount
-                            | Instruction::DiscardOneAtRandom(_)
                             | Instruction::Monstrosity { .. }
                             | Instruction::GrantProtectionChosenColor(
                                 ProtectionRecipients::AbilitySource
@@ -20853,25 +19921,15 @@ impl Program {
                             )
                             | Instruction::Fight { .. }
                             | Instruction::CopyStackObject { .. }
-                            | Instruction::ExileGroupFromZone { .. }
-                            | Instruction::SacrificeSubject { .. }
-                            | Instruction::DestroyChosen { .. }
                             | Instruction::CastLinkedFaceDownFree
                             | Instruction::Ripple(_)
                             | Instruction::Demonstrate
                             | Instruction::Enlist
                             | Instruction::GrantChosenProtection { .. }
                             | Instruction::RemoveCountersFromSubject { .. }
-                            | Instruction::MoveGroupToLibrary { .. }
-                            | Instruction::ExileLibraryTopLinked { .. }
-                            | Instruction::MoveGraveyardGroupOwned { .. }
                             | Instruction::AddCounterAndDischargeOnResolution(_)
                             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-                            | Instruction::ExileAllGraveyards
-                            | Instruction::ExilePlayerGraveyards(_)
                             | Instruction::RemoveCountersFromPermanent { .. }
-                            | Instruction::DestroyGroupWithoutRegeneration(_)
-                            | Instruction::DestroyGroup(_)
                             | Instruction::ExileOnePerPlayerUntilSourceLeaves
                             | Instruction::DoubleCountersOnTargets
                             | Instruction::ExileCombatDamagedCreature
@@ -20940,8 +19998,6 @@ impl Program {
                             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
                             | Instruction::PutCountersOnOtherCreatures
                             | Instruction::PutCountersOnControlledSubtype(_)
-                            | Instruction::ReturnRandomGraveyardCards { .. }
-                            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
                             | Instruction::TapEnchantedCreature
                             | Instruction::ModifyGroupUntilEndOfTurn { .. }
                             | Instruction::ModifyGroupByAmount { .. }
@@ -20952,7 +20008,6 @@ impl Program {
                             | Instruction::LookTopPlaneswalkers
                             | Instruction::LookTopLandBattlefieldTapped
                             | Instruction::ExchangeLifeWithSourceToughness
-                            | Instruction::ShuffleAbilitySourceIntoLibrary
                             | Instruction::RevealToNameAfterSourceShuffle(_)
                             | Instruction::BranchIfFalse { .. }
                             | Instruction::Jump { .. }
@@ -20977,7 +20032,6 @@ impl Program {
                             | Instruction::LookTopOneRestBottom { .. }
                             | Instruction::LookTopOneRestGraveyard { .. }
                             | Instruction::LookTopChoose { .. }
-                            | Instruction::MoveSubject { .. }
                             | Instruction::ChooseOption { .. }
                             | Instruction::DealDamageFrom { .. }
                             | Instruction::DivideDamageAmongTargets { .. }
@@ -20985,7 +20039,6 @@ impl Program {
                             | Instruction::GainControlOfPermanent { .. }
                             | Instruction::GiveFixedTargetControl { .. }
                             | Instruction::BecomeCopyFixedTargets { .. }
-                            | Instruction::ShuffleSubjectIntoLibrary { .. }
                             | Instruction::WinGame(_)
                             | Instruction::LoseGame(_)
                             | Instruction::DistributeCountersAmongTargets { .. }
@@ -21005,18 +20058,13 @@ impl Program {
                             | Instruction::AttachPermanent { .. }
                             | Instruction::SkipNextUntap { .. }
                             | Instruction::RequireCombatAction { .. }
-                            | Instruction::DestroySubject { .. }
                             | Instruction::GrantCardPlayPermission { .. }
                             | Instruction::CreateTokenCopy { .. }
                             | Instruction::BindResolutionX(_)
-                            | Instruction::PutResolvingSpellInLibrary(_)
-                            | Instruction::PutSubjectIntoLibraryFromTop { .. }
                             | Instruction::SetDayNight(_)
                             | Instruction::CreateAuraTokenAttached { .. }
                             | Instruction::ExploreSubject(_)
                             | Instruction::ScheduleDelayedEventTrigger { .. }
-                            | Instruction::MoveGraveyardGroup { .. }
-                            | Instruction::PutHandPermanentFiltered { .. }
                             | Instruction::RepeatLoop { .. }
                             | Instruction::OfferManaPayment { .. }
                             | Instruction::OfferDynamicManaPayment { .. }
@@ -21032,10 +20080,7 @@ impl Program {
                             | Instruction::CreateEmblem(_)
                             | Instruction::CreateOpponentEmblems(_)
                             | Instruction::UntapUpTo { .. }
-                            | Instruction::DiscardUpTo { .. }
                             | Instruction::Ascend
-                            | Instruction::ReturnCardsExiledWithLink(_)
-                            | Instruction::ReturnCardsExiledWithLinkExt { .. }
                             | Instruction::DrawGame
                             | Instruction::AddExperienceCounter
                             | Instruction::RequireOpponentsCreaturesBlockThisTurn
@@ -21045,15 +20090,23 @@ impl Program {
                             | Instruction::TabletopHonorAction { .. }
                             | Instruction::SelectExtremeLifePlayer { .. }
                             | Instruction::ReturnOneNonlandPerOpponent => true,
-                            Instruction::ForEachPlayer { .. }
+                            Instruction::ZoneOp(_)
+                            | Instruction::ApplyContinuous(_)
+                            | Instruction::PromptChoice(_)
+                            | Instruction::BranchCondition { .. }
+                            | Instruction::ForEach { .. }
+                            | Instruction::ForEachPlayerQuery { .. }
+                            | Instruction::BindEnv { .. }
+                            | Instruction::SetObjectTag { .. }
+                            | Instruction::UpdateStateTrack { .. }
+                            | Instruction::SideDeckOp { .. }
+                            | Instruction::ForEachPlayer { .. }
                             | Instruction::RegenerateSubject { .. }
                             | Instruction::AttachChoosingPermanent { .. }
                             | Instruction::OfferAnyPlayer { .. }
                             | Instruction::UntapOrTapSelect { .. }
-                            | Instruction::SelectZoneCardsToZone { .. }
                             | Instruction::ChooseObjects { .. }
                             | Instruction::ExileTopPlay { .. }
-                            | Instruction::ExileFromZone { .. }
                             | Instruction::TapOrUntapControlled { .. }
                             | Instruction::PayLife { .. }
                             | Instruction::PayEnergy { .. }
@@ -21072,16 +20125,13 @@ impl Program {
                             | Instruction::DoubleCountersOnSubject { .. }
                             | Instruction::DoublePowerToughnessSubject { .. }
                             | Instruction::MoveCounters { .. }
-                            | Instruction::ExileSubjectUntilSourceLeaves { .. }
                             | Instruction::TurnFaceUpSubject { .. }
                             | Instruction::TurnFaceDownSubject { .. }
                             | Instruction::TransformSubject { .. }
                             | Instruction::EmpowerJace { .. }
                             | Instruction::AddOneOfEachCounterKindOnSubject { .. }
                             | Instruction::GrantLastMovedPlayPermission { .. }
-                            | Instruction::MoveLastMovedFiltered { .. }
                             | Instruction::CounterMatchingStackObjects { .. }
-                            | Instruction::ReturnLinkedExile { .. }
                             | Instruction::TransferAllCountersFromTriggeringLki { .. } => {
                                 !operation.uses_mode_target()
                             }
@@ -21112,17 +20162,10 @@ impl Program {
                                 targetless_player(*chooser)
                             }
                             Instruction::DrawPlayer { players, .. }
-                            | Instruction::ReturnControlledPermanents { players, .. }
-                            | Instruction::ExileChosenPermanents { players, .. }
                             | Instruction::Sacrifice { players, .. }
-                            | Instruction::SacrificeUpTo { players, .. }
                             | Instruction::Discard { players, .. }
-                            | Instruction::DiscardFiltered { players, .. }
                             | Instruction::AddPlayerCounter { players, .. } => {
                                 targetless_players(*players)
-                            }
-                            Instruction::DiscardUpToExt { players, .. } => {
-                                targetless_players(*players) && !operation.uses_mode_target()
                             }
                             _ => false,
                         }
@@ -21132,14 +20175,12 @@ impl Program {
             }
         }
         for ability in &self.triggered {
-            if ability.body.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::ExileResolvingSpell
-                        | Instruction::ReturnResolvingSpellToHand
-                        | Instruction::CreateReflexiveDiscardDamage
-                )
-            }) {
+            if ability
+                .body
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::CreateReflexiveDiscardDamage))
+            {
                 return Err(DefinitionError::InvalidInstruction);
             }
             ability.validate_body(vocabulary)?;

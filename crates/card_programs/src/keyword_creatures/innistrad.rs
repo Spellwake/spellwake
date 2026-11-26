@@ -149,7 +149,7 @@ pub(super) fn spell(
     if let Some((filter, count)) = graveyard_return {
         let body = ExecutableBody::new(
             own_graveyard(filter),
-            vec![ReturnTargetGraveyardCreatureToHand],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand()],
         );
         return Some(if count == 1 {
             body
@@ -163,7 +163,12 @@ pub(super) fn spell(
         return Some(
             ExecutableBody::new(
                 own_graveyard(ObjectFilter::creature()),
-                vec![PutTargetInLibrary(LibraryPlacement::Top), draw(1)],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(
+                        LibraryPlacement::Top,
+                    ),
+                    draw(1),
+                ],
             )
             .with_graveyard_target_bounds(0, usize::MAX),
         );
@@ -373,7 +378,7 @@ pub(super) fn spell(
         "Destroy all enchantments. You gain 1 life for each enchantment destroyed this way." => (
             NoTarget,
             vec![
-                DestroyGroup(Box::new(ObjectFilter::enchantment())),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::enchantment(), true),
                 GainControllerLife {
                     amount: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::DestroyedPermanents),
                 },
@@ -495,16 +500,12 @@ pub(super) fn spell(
                         spellwake_engine::program::GraveyardReturnFilter::CreatureSubtype(subtype("Zombie")?),
                     )
                 }),
-                DestroyGroup(Box::new(ObjectFilter::any().with_subtype(subtype("Human")?))),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::any().with_subtype(subtype("Human")?), true),
             ],
         ),
         "Return two cards at random from your graveyard to your hand." => (
             NoTarget,
-            vec![ReturnRandomGraveyardCards {
-                to_battlefield: false,
-                filter: None,
-                count: std::num::NonZeroU8::new(2)?,
-            }],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(None, std::num::NonZeroU8::new(2)?, false)],
         ),
         "Counter target spell. You may cast a spell that shares a card type with it from your hand without paying its mana cost." => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
@@ -644,7 +645,7 @@ pub(super) fn spell(
         ),
         "Put target creature on top of its owner's library." => (
             SingleCreature,
-            vec![PutTargetInLibrary(LibraryPlacement::Top)],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(LibraryPlacement::Top)],
         ),
         "Target opponent loses 3 life." => (SingleOpponent, vec![lose(3)]),
         "Create a token that's a copy of target creature you control." => (
@@ -652,7 +653,7 @@ pub(super) fn spell(
             vec![CopyCreatureAsToken],
         ),
         "Draw two cards, then discard a card at random." => {
-            (NoTarget, vec![draw(2), DiscardOneAtRandom(ResolvingPlayer::Controller)])
+            (NoTarget, vec![draw(2), crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(ResolvingPlayer::Controller)])
         }
         "Tap up to two target creatures." => (
             SingleCreature,
@@ -662,7 +663,7 @@ pub(super) fn spell(
             (NoTarget, vec![LookTopOneRestGraveyard { count: 4 }])
         }
         "Exile target card from a graveyard." => {
-            (BodyTarget::AnyGraveyardCard, vec![ExileGraveyardTarget])
+            (BodyTarget::AnyGraveyardCard, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()])
         }
         "Up to two target creatures can't block this turn." => {
             (SingleCreature, vec![cannot_block()])
@@ -1249,7 +1250,7 @@ pub(super) fn compile(
                         OptionalEffect { chooser: ResolvingPlayer::Controller },
                         ExileTargetWithLink(link),
                     ]),
-                    (spellwake_engine::program::TriggerSpec::leaves_battlefield(ObjectFilter::self_object()), NoTarget, vec![ReturnCardsExiledWithLink(link)]),
+                    (spellwake_engine::program::TriggerSpec::leaves_battlefield(ObjectFilter::self_object()), NoTarget, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_cards_exiled_with_link(link, false, false)]),
                 ],
             )
         }
@@ -1271,7 +1272,7 @@ pub(super) fn compile(
                 ability.id = spellwake_engine::activated::ActivatedAbilityId(program.activated.len() as u64);
                 program.activated.push(ability);
             }
-            add_trigger(&mut program, spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }), NoTarget, vec![ReturnCardsExiledWithLink(link)]);
+            add_trigger(&mut program, spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }), NoTarget, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_cards_exiled_with_link(link, false, false)]);
             return Some(program);
         }
         "Indestructible\nWhenever this creature deals combat damage to a creature, flip a coin. If you win the flip, destroy that creature." => (
@@ -1615,10 +1616,7 @@ pub(super) fn compile(
             let mut program = Program::aura(Some(price()?), EnchantRestriction::Player);
             program.enchantment_subtypes.insert(spellwake_engine::program::EnchantmentSubtype::Curse);
             add_trigger(&mut program, spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::StepBegan { step: spellwake_engine::turn::Step::Upkeep, player: spellwake_engine::program::TriggerPlayerScope::EnchantedPlayer }), NoTarget, vec![
-                ExileCardsFromGraveyard {
-                    player: ResolvingPlayer::UniqueRelatedPlayer,
-                    count: std::num::NonZeroU8::new(2)?,
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::UniqueRelatedPlayer, std::num::NonZeroU8::new(2)?),
             ]);
             return Some(program);
         }
@@ -1840,7 +1838,7 @@ pub(super) fn compile(
                 BodyTarget::FilteredOwnGraveyardCard(
                     ObjectFilter::any().with_subtype(vocabulary.resolve_label("Spirit")?),
                 ),
-                vec![ReturnTargetGraveyardCreatureToHand],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand()],
             )],
         ),
         "{1}, Sacrifice a creature: You gain life equal to the sacrificed creature's toughness." => {
@@ -1931,7 +1929,7 @@ pub(super) fn compile(
             program.activated.push(activation(
                 fixed_cost("{1}{U}")?, SourceCost::None, BodyTarget::None,
                 vec![
-                    ShuffleAbilitySourceIntoLibrary,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_ability_source_into_library(),
                     RevealToNameAfterSourceShuffle(EnglishCardName::new("Mirror-Mad Phantasm".to_owned()).ok()?),
                 ],
             ));
@@ -1985,7 +1983,7 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::dies(ObjectFilter::self_object()),
                 SingleOpponent,
-                vec![DiscardOneAtRandom(ResolvingPlayer::TargetPlayer)],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(ResolvingPlayer::TargetPlayer)],
             )],
         ),
         "Trample\nWhen this creature dies, exile it, then return two creature cards at random from your graveyard to the battlefield." => (
@@ -1995,11 +1993,7 @@ pub(super) fn compile(
                 NoTarget,
                 vec![
                     ExileCapturedGraveyardCard,
-                    ReturnRandomGraveyardCards {
-                        filter: Some(Box::new(ObjectFilter::creature())),
-                        count: std::num::NonZeroU8::new(2)?,
-                        to_battlefield: true,
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(Some(ObjectFilter::creature()), std::num::NonZeroU8::new(2)?, true),
                 ],
             )],
         ),
@@ -2008,11 +2002,7 @@ pub(super) fn compile(
             vec![(
                 etb,
                 NoTarget,
-                vec![ReturnRandomGraveyardCards {
-                    to_battlefield: false,
-                    filter: Some(Box::new(ObjectFilter::any().with_subtype(vocabulary.resolve_label("Zombie")?))),
-                    count: std::num::NonZeroU8::new(1)?,
-                }],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(Some(ObjectFilter::any().with_subtype(vocabulary.resolve_label("Zombie")?)), std::num::NonZeroU8::new(1)?, false)],
             )],
         ),
         "Morbid — When this creature enters, if a creature died this turn, return a creature card at random from your graveyard to your hand." => (
@@ -2020,11 +2010,7 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::self_enters().only_if(spellwake_engine::program::TriggerCondition::Morbid),
                 NoTarget,
-                vec![ReturnRandomGraveyardCards {
-                    to_battlefield: false,
-                    filter: Some(Box::new(ObjectFilter::creature())),
-                    count: std::num::NonZeroU8::new(1)?,
-                }],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(Some(ObjectFilter::creature()), std::num::NonZeroU8::new(1)?, false)],
             )],
         ),
         "At the beginning of your upkeep, return an instant or sorcery card at random from your graveyard to your hand.\nWhenever you cast an instant or sorcery spell, this creature gets +4/+0 until end of turn." => (
@@ -2033,11 +2019,7 @@ pub(super) fn compile(
                 (
                     spellwake_engine::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::Controller),
                     NoTarget,
-                    vec![ReturnRandomGraveyardCards {
-                        to_battlefield: false,
-                        filter: Some(Box::new(ObjectFilter::instant_or_sorcery())),
-                        count: std::num::NonZeroU8::new(1)?,
-                    }],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(Some(ObjectFilter::instant_or_sorcery()), std::num::NonZeroU8::new(1)?, false)],
                 ),
                 (
                     spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::instant_or_sorcery()),
@@ -2059,11 +2041,7 @@ pub(super) fn compile(
                 fixed_cost("{3}")?,
                 SourceCost::TapSacrifice,
                 NoTarget,
-                vec![ReturnRandomGraveyardCards {
-                    to_battlefield: false,
-                    filter: Some(Box::new(ObjectFilter::creature())),
-                    count: std::num::NonZeroU8::new(1)?,
-                }],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(Some(ObjectFilter::creature()), std::num::NonZeroU8::new(1)?, false)],
             ));
             return Some(program);
         }
@@ -2138,10 +2116,7 @@ pub(super) fn compile(
                 SourceCost::Tap,
                 SinglePlayer,
                 vec![
-                    ExileCardsFromGraveyard {
-                        player: ResolvingPlayer::TargetPlayer,
-                        count: std::num::NonZeroU8::new(1)?,
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::TargetPlayer, std::num::NonZeroU8::new(1)?),
                     BranchIfFalse {
                         condition: ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::SelectedGraveyardExileCreatures),
@@ -2452,7 +2427,7 @@ pub(super) fn compile(
                 ManaCost::free(),
                 SourceCost::Tap,
                 BodyTarget::AnyGraveyardCreature,
-                vec![ExileGraveyardTarget],
+                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
             ));
             return Some(program);
         }

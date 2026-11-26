@@ -395,15 +395,9 @@ pub(super) fn lower_tokens_copies_instruction(
                                 && builder.instructions.iter().any(|op| {
                                     matches!(
                                         op,
-                                        Instruction::DestroyGroup(_)
-                                            | Instruction::DestroyGroupWithoutRegeneration(_)
-                                            | Instruction::MoveGroup { .. }
-                                            | Instruction::ExileGroupFromZone { .. }
-                                            | Instruction::ExileFromZone { .. }
+                                        Instruction::ZoneOp(_)
+                                            | Instruction::ForEachPlayerQuery { .. }
                                             | Instruction::Sacrifice { .. }
-                                            | Instruction::SacrificeSubject { .. }
-                                            | Instruction::DestroyChosen { .. }
-                                            | Instruction::MoveSubject { .. }
                                     )
                                 });
                             if after_group_removal {
@@ -449,15 +443,9 @@ pub(super) fn lower_tokens_copies_instruction(
                         if builder.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::DestroyGroup(_)
-                                    | Instruction::DestroyGroupWithoutRegeneration(_)
-                                    | Instruction::MoveGroup { .. }
-                                    | Instruction::ExileGroupFromZone { .. }
-                                    | Instruction::ExileFromZone { .. }
+                                Instruction::ZoneOp(_)
+                                    | Instruction::ForEachPlayerQuery { .. }
                                     | Instruction::Sacrifice { .. }
-                                    | Instruction::SacrificeSubject { .. }
-                                    | Instruction::DestroyChosen { .. }
-                                    | Instruction::MoveSubject { .. }
                             )
                         }) =>
                     {

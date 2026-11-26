@@ -6772,14 +6772,7 @@ fn lower_inline_replacement_body(
         }
         for op in &mut body.instructions {
             match op {
-                Instruction::ExileAbilitySource => {
-                    *op = Instruction::MoveSubject {
-                        subject: MoveSubjectRef::AbilitySource,
-                        destination: SubjectDestination::Exile {
-                            delayed_return: None,
-                        },
-                    };
-                }
+                Instruction::ZoneOp(_) => {}
                 Instruction::ExileLibraryTop { player, amount } => {
                     *op = Instruction::ExileTopPlay {
                         count: ValueExpr::literal(i64::from(*amount)),

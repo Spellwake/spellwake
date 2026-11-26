@@ -9,7 +9,7 @@ use crate::{
     occurrence::{EventCause, RulesOccurrence, StatusReason, ZoneReason},
     program::{
         AffectedPlayers, EffectSubject, ExecutableBody, Instruction, LibraryPlacement,
-        MoveSubjectRef, PublicZoneDestination, ResolvingPlayer, SubjectDestination,
+        ResolvingPlayer,
     },
     token::TokenRecipients,
 };
@@ -47,10 +47,46 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         | Instruction::DisallowDamagePreventionThisTurn
         | Instruction::GrantNoMaxHandSizeRestOfGame
         | Instruction::SetGroupTapped { .. }
-        | Instruction::DestroyGroup(_)
-        | Instruction::DestroyGroupWithoutRegeneration(_)
-        | Instruction::ExileTopPlay { .. }
-        | Instruction::ExileTopFaceDown => true,
+        | Instruction::ExileTopPlay { .. } => true,
+        Instruction::ZoneOp(spec) => {
+            matches!(spec.selection, crate::toolbox::ZoneSelection::All)
+                && (matches!(
+                    (&spec.source, &spec.destination),
+                    (
+                        crate::toolbox::ObjectQuery::Source,
+                        crate::toolbox::ZoneDest::Exile {
+                            delayed_return: None,
+                            ..
+                        } | crate::toolbox::ZoneDest::Graveyard { .. }
+                            | crate::toolbox::ZoneDest::Hand
+                            | crate::toolbox::ZoneDest::Library {
+                                position: crate::toolbox::LibraryOrderPos::Top
+                                    | crate::toolbox::LibraryOrderPos::Bottom
+                                    | crate::toolbox::LibraryOrderPos::NthFromTop(_)
+                            }
+                    ) | (
+                        crate::toolbox::ObjectQuery::ZoneScan {
+                            zone: crate::toolbox::QueryZone::Battlefield,
+                            ..
+                        },
+                        crate::toolbox::ZoneDest::Graveyard { .. }
+                            | crate::toolbox::ZoneDest::Hand
+                            | crate::toolbox::ZoneDest::Exile {
+                                delayed_return: None,
+                                ..
+                            }
+                    ) | (
+                        crate::toolbox::ObjectQuery::ZoneScan {
+                            zone: crate::toolbox::QueryZone::Library(_),
+                            ..
+                        },
+                        crate::toolbox::ZoneDest::Exile {
+                            face_down: true,
+                            ..
+                        }
+                    )
+                ))
+        }
         Instruction::PutCountersOnSubject { subject, .. } => {
             matches!(
                 subject.as_ref(),
@@ -80,25 +116,7 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
                         | TokenRecipients::Player(_)
                 )
         }),
-        Instruction::MoveSubject {
-            subject: MoveSubjectRef::AbilitySource,
-            destination,
-        } => matches!(
-            destination,
-            SubjectDestination::Exile {
-                delayed_return: None
-            } | SubjectDestination::Graveyard
-                | SubjectDestination::Hand
-                | SubjectDestination::Library(
-                    LibraryPlacement::Top | LibraryPlacement::Bottom | LibraryPlacement::FromTop(_)
-                )
-        ),
-        Instruction::MoveGroup { destination, .. } => matches!(
-            destination,
-            PublicZoneDestination::Hand
-                | PublicZoneDestination::Exile
-                | PublicZoneDestination::Graveyard
-        ),
+
         _ => false,
     })
 }
@@ -1610,210 +1628,161 @@ impl EffectWindow {
                         })?;
                     }
                 }
-                Instruction::MoveSubject {
-                    subject: MoveSubjectRef::AbilitySource,
-                    destination,
-                } => {
-                    if let Some(source) = rep.source
-                        && self
+                Instruction::ZoneOp(spec) => {
+                    let evaluated = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    let targets: Vec<ObjectId> = match &spec.source {
+                        crate::toolbox::ObjectQuery::Source => rep
+                            .source
+                            .filter(|s| {
+                                self.window
+                                    .cards()
+                                    .get(*s)
+                                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                            })
+                            .into_iter()
+                            .collect(),
+                        crate::toolbox::ObjectQuery::ZoneScan {
+                            zone: crate::toolbox::QueryZone::Battlefield,
+                            filter,
+                            ..
+                        } => evaluated
+                            .objects
+                            .values()
+                            .filter(|p| {
+                                p.zone == ObjectZone::Battlefield
+                                    && self.matches_object_filter(
+                                        **filter,
+                                        p,
+                                        rep.controller,
+                                        rep.source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .map(|p| p.object)
+                            .collect(),
+                        crate::toolbox::ObjectQuery::ZoneScan {
+                            zone: crate::toolbox::QueryZone::Library(_),
+                            ..
+                        } => self
                             .window
                             .cards()
-                            .get(source)
-                            .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-                    {
-                        let (dest, reason) = match destination {
-                            SubjectDestination::Exile {
-                                delayed_return: None,
-                            } => (ObjectDestination::Exile, ZoneReason::ExiledByEffect),
-                            SubjectDestination::Graveyard => (
-                                ObjectDestination::Graveyard,
-                                ZoneReason::Sacrifice {
-                                    player: rep.controller,
-                                },
-                            ),
-                            SubjectDestination::Hand => {
-                                (ObjectDestination::Hand, ZoneReason::ReturnToOwnersHand)
-                            }
-                            SubjectDestination::Library(placement) => {
-                                let dest = match placement {
-                                    LibraryPlacement::Top => ObjectDestination::LibraryTop,
-                                    LibraryPlacement::Bottom | LibraryPlacement::BottomRandom => {
-                                        ObjectDestination::LibraryBottom
-                                    }
-                                    LibraryPlacement::FromTop(n) => {
-                                        ObjectDestination::LibraryFromTop(n)
-                                    }
-                                    LibraryPlacement::ChoiceTopOrBottom { .. } => {
-                                        return Err(EffectError::InconsistentProgram);
-                                    }
-                                };
-                                (dest, ZoneReason::PutIntoOwnersLibrary(placement))
-                            }
-                            _ => return Err(EffectError::InconsistentProgram),
-                        };
-                        let _ =
-                            self.inline_move_object(source, dest, reason, cause.clone(), append)?;
-                    }
-                }
-                Instruction::DestroyGroup(filter)
-                | Instruction::DestroyGroupWithoutRegeneration(filter) => {
-                    let evaluated = self.evaluated_characteristics()?;
-                    let excluded = BTreeSet::new();
-                    let targets: Vec<ObjectId> = evaluated
-                        .objects
-                        .values()
-                        .filter(|p| {
-                            p.zone == ObjectZone::Battlefield
-                                && !p.has_keyword(KeywordAbility::Indestructible)
-                                && self.matches_object_filter(
-                                    *filter,
-                                    p,
-                                    rep.controller,
-                                    rep.source,
-                                    &excluded,
-                                    &evaluated,
-                                )
-                        })
-                        .map(|p| p.object)
-                        .collect();
-                    for id in targets {
-                        let _ = self.inline_move_object(
-                            id,
-                            ObjectDestination::Graveyard,
-                            ZoneReason::Destroyed,
-                            cause.clone(),
-                            append,
-                        )?;
-                    }
-                }
-                Instruction::MoveGroup { group, destination } => {
-                    let evaluated = self.evaluated_characteristics()?;
-                    let excluded = BTreeSet::new();
-                    let targets: Vec<ObjectId> = evaluated
-                        .objects
-                        .values()
-                        .filter(|p| {
-                            p.zone == ObjectZone::Battlefield
-                                && self.matches_object_filter(
-                                    *group,
-                                    p,
-                                    rep.controller,
-                                    rep.source,
-                                    &excluded,
-                                    &evaluated,
-                                )
-                        })
-                        .map(|p| p.object)
-                        .collect();
-                    let (dest, reason) = match destination {
-                        PublicZoneDestination::Hand => {
-                            (ObjectDestination::Hand, ZoneReason::ReturnToOwnersHand)
-                        }
-                        PublicZoneDestination::Exile => {
-                            (ObjectDestination::Exile, ZoneReason::ExiledByEffect)
-                        }
-                        PublicZoneDestination::Graveyard => (
-                            ObjectDestination::Graveyard,
-                            ZoneReason::Sacrifice {
-                                player: rep.controller,
-                            },
-                        ),
-                        PublicZoneDestination::Battlefield
-                        | PublicZoneDestination::Library
-                        | PublicZoneDestination::Command => {
-                            return Err(EffectError::InconsistentProgram);
-                        }
+                            .library(rep.controller)
+                            .first()
+                            .copied()
+                            .into_iter()
+                            .collect(),
+                        _ => Vec::new(),
                     };
-                    for id in targets {
-                        let _ = self.inline_move_object(id, dest, reason, cause.clone(), append)?;
-                    }
-                }
-                Instruction::ExileTopPlay {
-                    count,
-                    library_owner,
-                    duration,
-                    cast_only,
-                    free,
-                    any_color,
-                    face_down,
-                    grant_play,
-                } => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &count, event_amount)?
-                        .max(0.into());
-                    let n = val.to_usize().unwrap_or(0);
-                    if n > 0 {
-                        for seat in self.resolve_replacement_players(library_owner, rep)? {
-                            let top: Vec<ObjectId> = self
-                                .window
-                                .cards()
-                                .library(seat)
-                                .iter()
-                                .take(n)
-                                .copied()
-                                .collect();
-                            for id in top {
-                                if let Some(exiled_id) = self.inline_move_object(
+                    match &spec.destination {
+                        crate::toolbox::ZoneDest::Exile {
+                            face_down,
+                            link_to_source,
+                            ..
+                        } => {
+                            for id in targets {
+                                if let Some(moved) = self.inline_move_object(
                                     id,
                                     ObjectDestination::Exile,
                                     ZoneReason::ExiledByEffect,
                                     cause.clone(),
                                     append,
                                 )? {
-                                    if face_down {
-                                        self.face_down_exile.insert(exiled_id, rep.controller);
+                                    if *face_down {
+                                        self.face_down_exile.insert(moved, rep.controller);
                                     }
-                                    if grant_play {
-                                        if cast_only
-                                            && self
-                                                .copiable_program(exiled_id)
-                                                .is_some_and(|p| p.has_type(CardType::Land))
-                                        {
-                                            continue;
-                                        }
-                                        let permission = (exiled_id, rep.controller);
-                                        if duration
-                                            == crate::program::ImpulsePlayDuration::UntilNextFromSource
-                                            && let Some(source) = rep.source
-                                        {
-                                            self.exile_play_until_next.insert(source, permission);
-                                            if free {
-                                                self.free_exiled_cards.insert(permission);
-                                            }
-                                            continue;
-                                        }
-                                        let mapped_duration = self
-                                            .map_impulse_play_duration(duration, rep.controller);
-                                        self.card_play_permissions.insert(CardPlayPermission {
-                                            zone: CardPlayZone::Exile,
-                                            object: exiled_id,
-                                            player: rep.controller,
-                                            duration: mapped_duration,
-                                            any_color,
-                                            free,
-                                            cast_only,
-                                        });
-                                        if free {
-                                            self.free_exiled_cards.insert(permission);
-                                        }
+                                    if *link_to_source && let Some(src) = rep.source {
+                                        self.linked_exiles.entry(src).or_default().push(moved);
                                     }
                                 }
                             }
                         }
-                    }
-                }
-                Instruction::ExileTopFaceDown => {
-                    let top = self.window.cards().library(rep.controller).first().copied();
-                    if let Some(id) = top
-                        && let Some(exiled_id) = self.inline_move_object(
-                            id,
-                            ObjectDestination::Exile,
-                            ZoneReason::ExiledByEffect,
-                            cause.clone(),
-                            append,
-                        )?
-                    {
-                        self.face_down_exile.insert(exiled_id, rep.controller);
+                        crate::toolbox::ZoneDest::Graveyard { semantics } => {
+                            let is_destroy = matches!(
+                                semantics,
+                                crate::toolbox::GraveyardSemantics::Destroy { .. }
+                            );
+                            let reason = match semantics {
+                                crate::toolbox::GraveyardSemantics::Destroy { .. } => {
+                                    ZoneReason::Destroyed
+                                }
+                                crate::toolbox::GraveyardSemantics::Sacrifice => {
+                                    ZoneReason::Sacrifice {
+                                        player: rep.controller,
+                                    }
+                                }
+                                _ => ZoneReason::PutLibraryCohortIntoGraveyard,
+                            };
+                            for id in targets {
+                                if is_destroy
+                                    && evaluated.get(id).is_some_and(|p| {
+                                        p.has_keyword(KeywordAbility::Indestructible)
+                                    })
+                                {
+                                    continue;
+                                }
+                                let _ = self.inline_move_object(
+                                    id,
+                                    ObjectDestination::Graveyard,
+                                    reason,
+                                    cause.clone(),
+                                    append,
+                                )?;
+                            }
+                        }
+                        crate::toolbox::ZoneDest::Hand => {
+                            for id in targets {
+                                let _ = self.inline_move_object(
+                                    id,
+                                    ObjectDestination::Hand,
+                                    ZoneReason::ReturnToOwnersHand,
+                                    cause.clone(),
+                                    append,
+                                )?;
+                            }
+                        }
+                        crate::toolbox::ZoneDest::Library { position } => {
+                            let (dest, pl) = match position {
+                                crate::toolbox::LibraryOrderPos::Top => {
+                                    (ObjectDestination::LibraryTop, LibraryPlacement::Top)
+                                }
+                                crate::toolbox::LibraryOrderPos::Bottom
+                                | crate::toolbox::LibraryOrderPos::BottomRandom
+                                | crate::toolbox::LibraryOrderPos::ShuffleInto => {
+                                    (ObjectDestination::LibraryBottom, LibraryPlacement::Bottom)
+                                }
+                                crate::toolbox::LibraryOrderPos::NthFromTop(expr) => {
+                                    let n = self
+                                        .resolve_value_expr_with_source(
+                                            rep.controller,
+                                            expr,
+                                            None,
+                                            rep.source,
+                                        )?
+                                        .to_usize()
+                                        .unwrap_or(0);
+                                    let off = u8::try_from(n).unwrap_or(u8::MAX);
+                                    (
+                                        ObjectDestination::LibraryFromTop(off),
+                                        LibraryPlacement::FromTop(off),
+                                    )
+                                }
+                                crate::toolbox::LibraryOrderPos::ChoiceTopOrBottom { .. } => {
+                                    return Err(EffectError::InconsistentProgram);
+                                }
+                            };
+                            for id in targets {
+                                let _ = self.inline_move_object(
+                                    id,
+                                    dest,
+                                    ZoneReason::PutIntoOwnersLibrary(pl),
+                                    cause.clone(),
+                                    append,
+                                )?;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 _ => return Err(EffectError::InconsistentProgram),

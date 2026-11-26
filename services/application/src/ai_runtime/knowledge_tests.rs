@@ -1000,7 +1000,11 @@ fn scry_and_surveil_are_private_to_actor_and_invalidated_by_shuffle() {
     let shuffle = free_instant(
         "Shuffle Self",
         BodyTarget::None,
-        vec![Instruction::ShuffleOwnLibrary],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::shuffle(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ),
+        ))],
     );
     // Index 0 rotates to bottom of library; indices 1..=7 are drawn into hand;
     // indices 8..=10 stay at top of library in order.
@@ -1607,7 +1611,17 @@ fn hand_reveal_tracks_remaining_cards_and_invalidates_discarded_and_played_cards
         "Peek and Discard Fixture",
         BodyTarget::SingleOpponent,
         vec![
-            Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer),
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                    )),
+                    spellwake_engine::program::ObjectFilter::any(),
+                ),
+                spellwake_engine::toolbox::ZoneDest::RevealOnly,
+            ))),
             Instruction::Discard {
                 players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 amount: ValueExpr::literal(1),
@@ -1725,7 +1739,11 @@ fn london_mulligan_bottom_is_private_to_owner_and_invalidated_on_shuffle() {
     let shuffle = free_instant(
         "Shuffle Self",
         BodyTarget::None,
-        vec![Instruction::ShuffleOwnLibrary],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::shuffle(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ),
+        ))],
     );
     for i in 1..=12_u64 {
         let prog = if i <= 6 {
@@ -1890,7 +1908,19 @@ fn morph_and_foretell_hidden_information_never_leaks_and_invalidates_prior_hand_
     let peek = free_instant(
         "Peek Hand",
         BodyTarget::SingleOpponent,
-        vec![Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer)],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                    )),
+                    spellwake_engine::program::ObjectFilter::any(),
+                ),
+                spellwake_engine::toolbox::ZoneDest::RevealOnly,
+            ),
+        ))],
     );
 
     let mut h = Harness::scheduled(
@@ -2021,7 +2051,11 @@ fn cascade_bottomed_cards_stay_bottom_unordered_and_clear_on_shuffle() {
     let shuffle = free_instant(
         "Shuffle Self",
         BodyTarget::None,
-        vec![Instruction::ShuffleOwnLibrary],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::shuffle(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ),
+        ))],
     );
     // Index 0 rotates to bottom of library (after Cascaded Mox), indices 1..=7 go to hand,
     // indices 8..=10 stay on top of library so Cascade hits Zeta, Alpha, then Cascaded Mox!

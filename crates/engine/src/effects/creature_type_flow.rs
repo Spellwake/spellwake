@@ -278,8 +278,18 @@ impl EffectWindow {
                 })
             })
             .collect::<Result<Vec<_>, EffectError>>()?;
-        operations.push(Instruction::DestroyGroupWithoutRegeneration(Box::new(
-            crate::program::ObjectFilter::creature().outside_named_slots(),
+        operations.push(Instruction::ZoneOp(Box::new(
+            crate::toolbox::ZoneOpSpec::move_all(
+                crate::toolbox::ObjectQuery::zone(
+                    crate::toolbox::QueryZone::Battlefield,
+                    crate::program::ObjectFilter::creature().outside_named_slots(),
+                ),
+                crate::toolbox::ZoneDest::Graveyard {
+                    semantics: crate::toolbox::GraveyardSemantics::Destroy {
+                        allow_regenerate: false,
+                    },
+                },
+            ),
         )));
         let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry) else {
             return Err(EffectError::InconsistentProgram);

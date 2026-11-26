@@ -138,7 +138,8 @@ pub(super) fn compile(
                         }],
                     ))),
                     Instruction::TakeExtraTurn,
-                    Instruction::ExileResolvingSpell,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell(
+                    ),
                 ],
             ),
         );
@@ -179,13 +180,16 @@ pub(super) fn compile(
         use spellwake_engine::program::{ConditionalCastCost, ObjectFilter, PublicZoneDestination};
         let each = match text {
             "Destroy target artifact you don't control." => {
-                Instruction::DestroyGroup(Box::new(ObjectFilter::artifact().not_controlled()))
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    ObjectFilter::artifact().not_controlled(),
+                    true,
+                )
             }
             "Return target nonland permanent you don't control to its owner's hand." => {
-                Instruction::MoveGroup {
-                    group: Box::new(ObjectFilter::nonland().not_controlled()),
-                    destination: PublicZoneDestination::Hand,
-                }
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                    ObjectFilter::nonland().not_controlled(),
+                    PublicZoneDestination::Hand,
+                )
             }
             _ => return None,
         };
@@ -798,7 +802,7 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
                         .with_mana_value(spellwake_engine::program::ManaValueFilter::AtMost(3)),
                 ),
                 vec![
-                    Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped: false },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                     Instruction::RequireCondition(
                         spellwake_engine::program::InterveningCondition::CastFromGraveyard,
                     ),

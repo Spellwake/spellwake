@@ -72,9 +72,9 @@ use spellwake_engine::{
         ObjectFilterFlags, ObjectStatKind, PermanentDefinition, PermanentTypeFilter, PhaseCheck,
         PlaneswalkerSubtype, PlayerRelation, PlayerStatExpr, PowerFilter, Program, ProgramKind,
         ResolutionCondition, ResolvingPlayer, SacrificeSelection, SearchCardMatcher,
-        SpellDefinition, SpellFilter, SubjectDestination, SubtypeFilter, Supertype,
-        TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec, TriggerZone,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueObjectRef, ValueZone,
+        SpellDefinition, SpellFilter, SubtypeFilter, Supertype, TemporaryRuleKind, TriggerEvent,
+        TriggerGrouping, TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        ValueObjectRef, ValueZone,
     },
     setup::GameSeed,
     shuffle::EntropyTape,
@@ -2353,11 +2353,22 @@ fn exile_zone_trigger_discovery_and_exile_subject_until_leaves_cr_610_3() {
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ExileSubjectUntilSourceLeaves {
-                subject: Box::new(EffectSubject::Matching(
-                    ObjectFilter::creature().not_controlled(),
-                )),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(ObjectFilter::creature().not_controlled()),
+                    )),
+                    spellwake_engine::toolbox::ZoneDest::Exile {
+                        face_down: false,
+                        viewer: None,
+                        link_to_source: true,
+                        delayed_return: Some(
+                            spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves,
+                        ),
+                        link_group: None,
+                    },
+                ),
+            ))],
         ),
     });
     let banisher = validated(banisher, &vocab);
@@ -2887,10 +2898,17 @@ fn offer_any_player_all_decline_and_unpayable_cost_guard() {
                 ),
                 paid_body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::MoveSubject {
-                        subject: MoveSubjectRef::AbilitySource,
-                        destination: SubjectDestination::Library(LibraryPlacement::Top),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            spellwake_engine::toolbox::ZoneDest::Library {
+                                position:
+                                    spellwake_engine::toolbox::LibraryOrderPos::from_placement(
+                                        LibraryPlacement::Top,
+                                    ),
+                            },
+                        ),
+                    ))],
                 ),
                 declined_body: None,
             }],

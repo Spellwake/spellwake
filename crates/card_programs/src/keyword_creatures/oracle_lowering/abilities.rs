@@ -1372,16 +1372,27 @@ fn rewrite_instructions_unique_related_player(
             Instruction::DrawPlayer { players, .. }
             | Instruction::AdjustPlayersLife { players, .. }
             | Instruction::Discard { players, .. }
-            | Instruction::DiscardFiltered { players, .. }
-            | Instruction::DiscardUpToExt { players, .. }
             | Instruction::Sacrifice { players, .. }
-            | Instruction::SacrificeUpTo { players, .. }
             | Instruction::AddPlayerCounter { players, .. }
-            | Instruction::ExileFromZone { players, .. }
-            | Instruction::ExileGroupFromZone { players, .. }
-            | Instruction::ReturnControlledPermanents { players, .. }
             | Instruction::TapOrUntapControlled { players, .. } => {
                 rewrite_affected_players_if_unique(players, replacement);
+            }
+            Instruction::ZoneOp(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
+                    spec,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+            }
+            Instruction::ForEachPlayerQuery { selector, body, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    selector,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+                rewrite_instructions_unique_related_player(&mut body.instructions, replacement);
             }
             Instruction::Mill { player, .. }
             | Instruction::Scry { player, .. }
@@ -1391,13 +1402,7 @@ fn rewrite_instructions_unique_related_player(
             | Instruction::PayEnergy { player, .. }
             | Instruction::Blight { player, .. }
             | Instruction::CollectEvidence { player, .. }
-            | Instruction::RevealPlayerHand(player)
-            | Instruction::ShufflePlayerLibrary(player)
-            | Instruction::DiscardOneAtRandom(player)
             | Instruction::ExileLibraryTop { player, .. }
-            | Instruction::ExileLibraryTopLinked { player, .. }
-            | Instruction::PutHandPermanentFiltered { player, .. }
-            | Instruction::SelectZoneCardsToZone { player, .. }
             | Instruction::LookTopChoose {
                 library_owner: player,
                 ..

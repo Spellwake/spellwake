@@ -36,19 +36,21 @@ pub(super) fn lower_zone_moves_instruction(
             except: None,
         } => match subject.as_ref() {
             s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                builder
-                    .instructions
-                    .push(Instruction::DestroyGroup(Box::new(
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
                         ObjectFilter::self_object(),
-                    )));
+                        true,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::AttachedHost(_) => {
-                builder
-                    .instructions
-                    .push(Instruction::DestroyGroup(Box::new(ObjectFilter::Clause(
-                        ObjectClause::any().attached_to_self(),
-                    ))));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                        ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                        true,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -163,9 +165,11 @@ pub(super) fn lower_zone_moves_instruction(
                 let obj = builder
                     .last_group_filter
                     .ok_or("oracle:unsupported-destroy")?;
-                builder
-                    .instructions
-                    .push(Instruction::DestroyGroup(Box::new(obj)));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                        obj, true,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::TriggerSubject | SubjectRefAst::Anaphora(_)
@@ -189,10 +193,12 @@ pub(super) fn lower_zone_moves_instruction(
                 Ok(())
             }
             SubjectRefAst::TriggerSubject if in_trigger => {
-                builder.instructions.push(Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                    no_regeneration: false,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_subject(
+                        EffectSubject::TriggerSubject,
+                        false,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -200,27 +206,32 @@ pub(super) fn lower_zone_moves_instruction(
                     && in_trigger
                     && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
             {
-                builder.instructions.push(Instruction::DestroySubject {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                    no_regeneration: false,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_subject(
+                        EffectSubject::TriggerSubject,
+                        false,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::SelfObject => {
-                builder
-                    .instructions
-                    .push(Instruction::DestroyGroup(Box::new(
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
                         ObjectFilter::self_object(),
-                    )));
+                        true,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                 let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
                 builder.last_group_filter = Some(obj);
-                builder
-                    .instructions
-                    .push(Instruction::DestroyGroup(Box::new(obj)));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                        obj, true,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f) if f.zone.is_none() => {
@@ -228,12 +239,14 @@ pub(super) fn lower_zone_moves_instruction(
                 bind_filter_player_target(builder, &obj)?;
                 ensure_target_power_consumed(builder, &obj);
                 builder.last_group_filter = Some(obj);
-                builder.instructions.push(Instruction::DestroyChosen {
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(obj),
-                    count: ValueExpr::literal(1),
-                    allow_regeneration: true,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_chosen(
+                        ResolvingPlayer::Controller,
+                        obj,
+                        ValueExpr::literal(1),
+                        true,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -305,1046 +318,1054 @@ pub(super) fn lower_zone_moves_instruction(
             random: false,
             face_down: false,
             into_pile: false,
-        } => match subject.as_ref() {
-            SubjectRefAst::InZone {
-                subject: inner,
-                zone,
-            } => match inner.as_ref() {
-                s if matches!(s, SubjectRefAst::SelfObject)
-                    || is_self_pronoun(s, builder, self_pronoun_valid) =>
-                {
-                    match zone {
-                        ZoneFilter::Battlefield => {
-                            if !in_trigger && !self_pronoun_valid {
-                                builder.instructions.push(Instruction::ExileResolvingSpell);
-                            } else {
-                                builder.instructions.push(Instruction::ExileAbilitySource);
-                            }
-                            Ok(())
-                        }
-                        ZoneFilter::YourGraveyard
-                        | ZoneFilter::YourHand
-                        | ZoneFilter::AnyGraveyard
-                            if in_trigger || self_pronoun_valid =>
+        } => {
+            match subject.as_ref() {
+                SubjectRefAst::InZone {
+                    subject: inner,
+                    zone,
+                } => {
+                    match inner.as_ref() {
+                        s if matches!(s, SubjectRefAst::SelfObject)
+                            || is_self_pronoun(s, builder, self_pronoun_valid) =>
                         {
-                            builder.instructions.push(Instruction::MoveSubject {
-                                subject: MoveSubjectRef::AbilitySource,
-                                destination: SubjectDestination::Exile {
+                            match zone {
+                                ZoneFilter::Battlefield => {
+                                    if !in_trigger && !self_pronoun_valid {
+                                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell());
+                                    } else {
+                                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source());
+                                    }
+                                    Ok(())
+                                }
+                                ZoneFilter::YourGraveyard
+                                | ZoneFilter::YourHand
+                                | ZoneFilter::AnyGraveyard
+                                    if in_trigger || self_pronoun_valid =>
+                                {
+                                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::AbilitySource, SubjectDestination::Exile {
                                     delayed_return: None,
-                                },
-                            });
+                                }));
+                                    Ok(())
+                                }
+                                _ => Err("oracle:unsupported-exile"),
+                            }
+                        }
+                        SubjectRefAst::TriggerSubject
+                            if in_trigger
+                                && matches!(
+                                    zone,
+                                    ZoneFilter::YourGraveyard
+                                        | ZoneFilter::ThatPlayerGraveyard
+                                        | ZoneFilter::AnyGraveyard
+                                        | ZoneFilter::OpponentGraveyard
+                                        | ZoneFilter::OpponentsGraveyards
+                                        | ZoneFilter::AllGraveyards
+                                ) =>
+                        {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TriggeringObject, SubjectDestination::Exile {
+                            delayed_return: None,
+                        }));
                             Ok(())
                         }
-                        _ => Err("oracle:unsupported-exile"),
+                        SubjectRefAst::Anaphora(raw)
+                            if matches!(
+                                zone,
+                                ZoneFilter::YourGraveyard
+                                    | ZoneFilter::ThatPlayerGraveyard
+                                    | ZoneFilter::AnyGraveyard
+                                    | ZoneFilter::OpponentGraveyard
+                                    | ZoneFilter::OpponentsGraveyards
+                                    | ZoneFilter::AllGraveyards
+                            ) =>
+                        {
+                            let low = raw.trim().to_ascii_lowercase();
+                            let is_singular = !matches!(
+                                low.as_str(),
+                                "them"
+                                    | "those"
+                                    | "those cards"
+                                    | "one of them"
+                                    | "each of them"
+                                    | "all of them"
+                                    | "the rest"
+                            );
+                            if !is_singular {
+                                return Err("oracle:unsupported-exile");
+                            }
+                            if has_prior_moved_object(&builder.instructions)
+                                && !is_permanent_body_target(builder.target)
+                            {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::LastMoved, SubjectDestination::Exile {
+                                delayed_return: None,
+                            }));
+                                Ok(())
+                            } else if in_trigger
+                                && builder.target == BodyTarget::None
+                                && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                            {
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TriggeringObject, SubjectDestination::Exile {
+                                delayed_return: None,
+                            }));
+                                Ok(())
+                            } else {
+                                Err("oracle:unsupported-exile")
+                            }
+                        }
+                        _ if *zone == ZoneFilter::Battlefield => lower_instruction(
+                            &InstructionAst::Exile {
+                                actor: None,
+                                subject: inner.clone(),
+                                random: false,
+                                face_down: false,
+                                into_pile: false,
+                            },
+                            builder,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        ),
+                        _ => {
+                            let unwrapped = unwrap_in_zone_subject(subject)
+                                .ok_or("oracle:unsupported-exile")?;
+                            lower_instruction(
+                                &InstructionAst::Exile {
+                                    actor: None,
+                                    subject: Box::new(unwrapped),
+                                    random: false,
+                                    face_down: false,
+                                    into_pile: false,
+                                },
+                                builder,
+                                vocabulary,
+                                ids,
+                                in_trigger,
+                                self_pronoun_valid,
+                                bound_x,
+                            )
+                        }
                     }
                 }
-                SubjectRefAst::TriggerSubject
-                    if in_trigger
-                        && matches!(
-                            zone,
-                            ZoneFilter::YourGraveyard
-                                | ZoneFilter::ThatPlayerGraveyard
-                                | ZoneFilter::AnyGraveyard
-                                | ZoneFilter::OpponentGraveyard
-                                | ZoneFilter::OpponentsGraveyards
-                                | ZoneFilter::AllGraveyards
-                        ) =>
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && has_checked_revealed_top_strict(&builder.instructions) =>
                 {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::TriggeringObject,
-                        destination: SubjectDestination::Exile {
-                            delayed_return: None,
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::RevealedCard,
+                            SubjectDestination::Exile {
+                                delayed_return: None,
+                            },
+                        ),
+                    );
+                    Ok(())
+                }
+                s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+                    if !in_trigger && !self_pronoun_valid {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell());
+                    } else {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source());
+                    }
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(1),
+                } => {
+                    let bt = lower_target_subject(subject, vocabulary)?;
+                    if filter.zone.is_some() && filter.zone != Some(ZoneFilter::Battlefield) {
+                        if matches!(
+                            bt,
+                            BodyTarget::SingleOwnGraveyardCard
+                                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                        ) {
+                            builder.bind_target(bt)?;
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Exile {
+                                delayed_return: None,
+                            }));
+                        } else if matches!(
+                            bt,
+                            BodyTarget::AnyGraveyardCard
+                                | BodyTarget::AnyGraveyardCreature
+                                | BodyTarget::FilteredOwnGraveyardCard(_)
+                                | BodyTarget::FilteredAnyGraveyardCard { .. }
+                        ) {
+                            builder.bind_target(bt)?;
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target());
+                        } else {
+                            return Err("oracle:unsupported-exile-gy-target");
+                        }
+                    } else if matches!(bt, BodyTarget::SingleSpell(_)) {
+                        builder.bind_target(bt)?;
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                SubjectDestination::Exile {
+                                    delayed_return: None,
+                                },
+                            ),
+                        );
+                    } else {
+                        builder.bind_target(bt)?;
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                        );
+                    }
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::Exact(1),
+                } => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::UpTo(1),
+                } => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: 1,
+                            action: PermanentTargetAction::Exile,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(n),
+                } if filter.zone.is_none() && *n >= 2 => {
+                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                    builder.bind_target(bt)?;
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: *n,
+                            maximum: *n,
+                            action: PermanentTargetAction::Exile,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::UpTo(max),
+                } if filter.zone.is_none() && *max > 0 => {
+                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                    builder.bind_target(bt)?;
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: *max,
+                            action: PermanentTargetAction::Exile,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::AnyNumber,
+                } if filter.zone.is_none() => {
+                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                    builder.bind_target(bt)?;
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: u16::MAX,
+                            action: PermanentTargetAction::Exile,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
+                } if filter.zone.is_none() && !in_trigger => {
+                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                    builder.bind_target(bt)?;
+                    if *tc == TargetCountAst::UpToX {
+                        builder.up_to_x_target_count = true;
+                    } else {
+                        builder.x_target_count = true;
+                    }
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: u16::MAX,
+                            action: PermanentTargetAction::Exile,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(n),
+                } if filter.zone.is_some() && *n >= 2 => {
+                    let bt = match lower_target_subject(
+                        &SubjectRefAst::TargetObject {
+                            filter: filter.clone(),
+                            count: TargetCountAst::Exact(1),
                         },
-                    });
+                        vocabulary,
+                    )? {
+                        BodyTarget::SingleOwnGraveyardCard => {
+                            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
+                        }
+                        other @ (BodyTarget::AnyGraveyardCard
+                        | BodyTarget::AnyGraveyardCreature
+                        | BodyTarget::FilteredOwnGraveyardCard(_)
+                        | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
+                        _ => return Err("oracle:unsupported-exile-gy-target"),
+                    };
+                    builder.bind_target(bt)?;
+                    builder.graveyard_target_bounds = Some((usize::from(*n), usize::from(*n)));
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::UpTo(max),
+                } if filter.zone.is_some() && *max > 0 => {
+                    let bt = match lower_target_subject(
+                        &SubjectRefAst::TargetObject {
+                            filter: filter.clone(),
+                            count: TargetCountAst::Exact(1),
+                        },
+                        vocabulary,
+                    )? {
+                        BodyTarget::SingleOwnGraveyardCard => {
+                            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
+                        }
+                        other @ (BodyTarget::AnyGraveyardCard
+                        | BodyTarget::AnyGraveyardCreature
+                        | BodyTarget::FilteredOwnGraveyardCard(_)
+                        | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
+                        _ => return Err("oracle:unsupported-exile-gy-target"),
+                    };
+                    builder.bind_target(bt)?;
+                    builder.graveyard_target_bounds = Some((0, usize::from(*max)));
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: count @ (TargetCountAst::ChosenX | TargetCountAst::AnyNumber),
+                } if filter.zone.is_some()
+                    && (*count != TargetCountAst::ChosenX || !in_trigger) =>
+                {
+                    let bt = match lower_target_subject(
+                        &SubjectRefAst::TargetObject {
+                            filter: filter.clone(),
+                            count: TargetCountAst::Exact(1),
+                        },
+                        vocabulary,
+                    )? {
+                        BodyTarget::SingleOwnGraveyardCard => {
+                            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
+                        }
+                        other @ (BodyTarget::AnyGraveyardCard
+                        | BodyTarget::AnyGraveyardCreature
+                        | BodyTarget::FilteredOwnGraveyardCard(_)
+                        | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
+                        _ => return Err("oracle:unsupported-exile-gy-target"),
+                    };
+                    builder.bind_target(bt)?;
+                    builder.graveyard_target_bounds = Some((0, usize::MAX));
+                    if *count == TargetCountAst::ChosenX {
+                        builder.x_target_count = true;
+                    }
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if raw.trim().eq_ignore_ascii_case(
+                        "all cards from target player's hand and graveyard",
+                    ) =>
+                {
+                    let player = lower_resolving_player_in_context(
+                        PlayerRefAst::TargetPlayer,
+                        builder,
+                        in_trigger,
+                    )?;
+                    // Both zones belong to one target and move in one simultaneous batch.
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(AffectedPlayers::One(player), SourceZoneFilter::HandOrGraveyard, ObjectFilter::any()));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
                     if matches!(
-                        zone,
-                        ZoneFilter::YourGraveyard
-                            | ZoneFilter::ThatPlayerGraveyard
-                            | ZoneFilter::AnyGraveyard
-                            | ZoneFilter::OpponentGraveyard
-                            | ZoneFilter::OpponentsGraveyards
-                            | ZoneFilter::AllGraveyards
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "your hand"
+                            | "target player's hand"
+                            | "target opponent's hand"
+                            | "that player's hand"
+                            | "their hand"
+                            | "each opponent's hand"
+                            | "your opponents' hands"
+                            | "opponents' hands"
+                            | "each player's hand"
+                            | "all hands"
                     ) =>
                 {
                     let low = raw.trim().to_ascii_lowercase();
-                    let is_singular = !matches!(
-                        low.as_str(),
-                        "them"
-                            | "those"
-                            | "those cards"
-                            | "one of them"
-                            | "each of them"
-                            | "all of them"
-                            | "the rest"
-                    );
-                    if !is_singular {
-                        return Err("oracle:unsupported-exile");
-                    }
-                    if has_prior_moved_object(&builder.instructions)
-                        && !is_permanent_body_target(builder.target)
-                    {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::LastMoved,
-                            destination: SubjectDestination::Exile {
-                                delayed_return: None,
-                            },
-                        });
-                        Ok(())
-                    } else if in_trigger
-                        && builder.target == BodyTarget::None
-                        && (!self_pronoun_valid || !is_self_anaphora_label(raw))
-                    {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: SubjectDestination::Exile {
-                                delayed_return: None,
-                            },
-                        });
-                        Ok(())
-                    } else {
-                        Err("oracle:unsupported-exile")
-                    }
+                    let players = match low.as_str() {
+                        "your hand" => AffectedPlayers::One(ResolvingPlayer::Controller),
+                        "target player's hand" => {
+                            AffectedPlayers::One(lower_resolving_player_in_context(
+                                PlayerRefAst::TargetPlayer,
+                                builder,
+                                in_trigger,
+                            )?)
+                        }
+                        "target opponent's hand" => {
+                            AffectedPlayers::One(lower_resolving_player_in_context(
+                                PlayerRefAst::TargetOpponent,
+                                builder,
+                                in_trigger,
+                            )?)
+                        }
+                        "that player's hand" | "their hand" => {
+                            AffectedPlayers::One(lower_resolving_player_in_context(
+                                PlayerRefAst::ThatPlayer,
+                                builder,
+                                in_trigger,
+                            )?)
+                        }
+                        "each opponent's hand" | "your opponents' hands" | "opponents' hands" => {
+                            AffectedPlayers::EachOpponent
+                        }
+                        "each player's hand" | "all hands" => AffectedPlayers::EachPlayer,
+                        _ => return Err("oracle:unsupported-exile"),
+                    };
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(players, SourceZoneFilter::Hand, ObjectFilter::any()));
+                    Ok(())
                 }
-                _ if *zone == ZoneFilter::Battlefield => lower_instruction(
-                    &InstructionAst::Exile {
-                        actor: None,
-                        subject: inner.clone(),
-                        random: false,
-                        face_down: false,
-                        into_pile: false,
-                    },
-                    builder,
-                    vocabulary,
-                    ids,
-                    in_trigger,
-                    self_pronoun_valid,
-                    bound_x,
-                ),
-                _ => {
-                    let unwrapped =
-                        unwrap_in_zone_subject(subject).ok_or("oracle:unsupported-exile")?;
-                    lower_instruction(
-                        &InstructionAst::Exile {
-                            actor: None,
-                            subject: Box::new(unwrapped),
-                            random: false,
-                            face_down: false,
-                            into_pile: false,
-                        },
-                        builder,
-                        vocabulary,
-                        ids,
-                        in_trigger,
-                        self_pronoun_valid,
-                        bound_x,
-                    )
-                }
-            },
-            SubjectRefAst::Anaphora(_)
-                if builder.target == BodyTarget::None
-                    && has_checked_revealed_top_strict(&builder.instructions) =>
-            {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::RevealedCard,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                if !in_trigger && !self_pronoun_valid {
-                    builder.instructions.push(Instruction::ExileResolvingSpell);
-                } else {
-                    builder.instructions.push(Instruction::ExileAbilitySource);
-                }
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::Exact(1),
-            } => {
-                let bt = lower_target_subject(subject, vocabulary)?;
-                if filter.zone.is_some() && filter.zone != Some(ZoneFilter::Battlefield) {
+                SubjectRefAst::Anaphora(raw)
                     if matches!(
-                        bt,
-                        BodyTarget::SingleOwnGraveyardCard
-                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    ) {
-                        builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: SubjectDestination::Exile {
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "your graveyard"
+                            | "target player's graveyard"
+                            | "target opponent's graveyard"
+                            | "that player's graveyard"
+                            | "their graveyard"
+                            | "each opponent's graveyard"
+                            | "your opponents' graveyards"
+                            | "opponents' graveyards"
+                            | "each player's graveyard"
+                            | "all graveyards"
+                    ) =>
+                {
+                    let low = raw.trim().to_ascii_lowercase();
+                    match low.as_str() {
+                        "each player's graveyard" | "all graveyards" => {
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_all_graveyards());
+                        }
+                        "your graveyard" => {
+                            builder
+                            .instructions
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
+                                ResolvingPlayer::Controller,
+                            )));
+                        }
+                        "target player's graveyard" => {
+                            let p = lower_resolving_player_in_context(
+                                PlayerRefAst::TargetPlayer,
+                                builder,
+                                in_trigger,
+                            )?;
+                            builder
+                            .instructions
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(p)));
+                        }
+                        "target opponent's graveyard" => {
+                            let p = lower_resolving_player_in_context(
+                                PlayerRefAst::TargetOpponent,
+                                builder,
+                                in_trigger,
+                            )?;
+                            builder
+                            .instructions
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(p)));
+                        }
+                        "that player's graveyard" | "their graveyard" => {
+                            let p = lower_resolving_player_in_context(
+                                PlayerRefAst::ThatPlayer,
+                                builder,
+                                in_trigger,
+                            )?;
+                            builder
+                            .instructions
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(p)));
+                        }
+                        "each opponent's graveyard"
+                        | "your opponents' graveyards"
+                        | "opponents' graveyards" => {
+                            builder
+                            .instructions
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::EachOpponent,));
+                        }
+                        _ => return Err("oracle:unsupported-exile"),
+                    }
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if matches!(
+                        builder.target,
+                        BodyTarget::SinglePermanent
+                            | BodyTarget::SingleCreature
+                            | BodyTarget::SinglePlaneswalker
+                            | BodyTarget::FilteredPermanent(_)
+                    ) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if last_instruction_created_tokens(&builder.instructions) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::CreatedTokens,
+                            SubjectDestination::Exile {
                                 delayed_return: None,
                             },
-                        });
-                    } else if matches!(
-                        bt,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if last_instruction_moved_object(&builder.instructions) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::LastMoved,
+                            SubjectDestination::Exile {
+                                delayed_return: None,
+                            },
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if matches!(
+                        builder.target,
                         BodyTarget::AnyGraveyardCard
                             | BodyTarget::AnyGraveyardCreature
                             | BodyTarget::FilteredOwnGraveyardCard(_)
                             | BodyTarget::FilteredAnyGraveyardCard { .. }
-                    ) {
-                        builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::ExileGraveyardTarget);
-                    } else {
-                        return Err("oracle:unsupported-exile-gy-target");
-                    }
-                } else if matches!(bt, BodyTarget::SingleSpell(_)) {
-                    builder.bind_target(bt)?;
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::TargetObject,
-                        destination: SubjectDestination::Exile {
-                            delayed_return: None,
-                        },
-                    });
-                } else {
-                    builder.bind_target(bt)?;
-                    builder.instructions.push(Instruction::ExileTarget);
-                }
-                Ok(())
-            }
-            SubjectRefAst::TargetOneOf {
-                options,
-                count: TargetCountAst::Exact(1),
-            } => {
-                let bt = lower_target_one_of_permanent_body_target(
-                    options, builder, in_trigger, vocabulary,
-                )?;
-                builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::ExileTarget);
-                Ok(())
-            }
-            SubjectRefAst::TargetOneOf {
-                options,
-                count: TargetCountAst::UpTo(1),
-            } => {
-                let bt = lower_target_one_of_permanent_body_target(
-                    options, builder, in_trigger, vocabulary,
-                )?;
-                builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: 1,
-                        action: PermanentTargetAction::Exile,
-                    });
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::Exact(n),
-            } if filter.zone.is_none() && *n >= 2 => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::Exile,
-                    });
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::UpTo(max),
-            } if filter.zone.is_none() && *max > 0 => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *max,
-                        action: PermanentTargetAction::Exile,
-                    });
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::AnyNumber,
-            } if filter.zone.is_none() => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Exile,
-                    });
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
-            } if filter.zone.is_none() && !in_trigger => {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                builder.bind_target(bt)?;
-                if *tc == TargetCountAst::UpToX {
-                    builder.up_to_x_target_count = true;
-                } else {
-                    builder.x_target_count = true;
-                }
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Exile,
-                    });
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::Exact(n),
-            } if filter.zone.is_some() && *n >= 2 => {
-                let bt = match lower_target_subject(
-                    &SubjectRefAst::TargetObject {
-                        filter: filter.clone(),
-                        count: TargetCountAst::Exact(1),
-                    },
-                    vocabulary,
-                )? {
-                    BodyTarget::SingleOwnGraveyardCard => {
-                        BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
-                    }
-                    other @ (BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
-                    _ => return Err("oracle:unsupported-exile-gy-target"),
-                };
-                builder.bind_target(bt)?;
-                builder.graveyard_target_bounds = Some((usize::from(*n), usize::from(*n)));
-                builder.instructions.push(Instruction::ExileGraveyardTarget);
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::UpTo(max),
-            } if filter.zone.is_some() && *max > 0 => {
-                let bt = match lower_target_subject(
-                    &SubjectRefAst::TargetObject {
-                        filter: filter.clone(),
-                        count: TargetCountAst::Exact(1),
-                    },
-                    vocabulary,
-                )? {
-                    BodyTarget::SingleOwnGraveyardCard => {
-                        BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
-                    }
-                    other @ (BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
-                    _ => return Err("oracle:unsupported-exile-gy-target"),
-                };
-                builder.bind_target(bt)?;
-                builder.graveyard_target_bounds = Some((0, usize::from(*max)));
-                builder.instructions.push(Instruction::ExileGraveyardTarget);
-                Ok(())
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: count @ (TargetCountAst::ChosenX | TargetCountAst::AnyNumber),
-            } if filter.zone.is_some() && (*count != TargetCountAst::ChosenX || !in_trigger) => {
-                let bt = match lower_target_subject(
-                    &SubjectRefAst::TargetObject {
-                        filter: filter.clone(),
-                        count: TargetCountAst::Exact(1),
-                    },
-                    vocabulary,
-                )? {
-                    BodyTarget::SingleOwnGraveyardCard => {
-                        BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
-                    }
-                    other @ (BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
-                    _ => return Err("oracle:unsupported-exile-gy-target"),
-                };
-                builder.bind_target(bt)?;
-                builder.graveyard_target_bounds = Some((0, usize::MAX));
-                if *count == TargetCountAst::ChosenX {
-                    builder.x_target_count = true;
-                }
-                builder.instructions.push(Instruction::ExileGraveyardTarget);
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(raw)
-                if raw
-                    .trim()
-                    .eq_ignore_ascii_case("all cards from target player's hand and graveyard") =>
-            {
-                let player = lower_resolving_player_in_context(
-                    PlayerRefAst::TargetPlayer,
-                    builder,
-                    in_trigger,
-                )?;
-                // Both zones belong to one target and move in one simultaneous batch.
-                builder.instructions.push(Instruction::ExileGroupFromZone {
-                    players: AffectedPlayers::One(player),
-                    zone: SourceZoneFilter::HandOrGraveyard,
-                    filter: Box::new(ObjectFilter::any()),
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(raw)
-                if matches!(
-                    raw.trim().to_ascii_lowercase().as_str(),
-                    "your hand"
-                        | "target player's hand"
-                        | "target opponent's hand"
-                        | "that player's hand"
-                        | "their hand"
-                        | "each opponent's hand"
-                        | "your opponents' hands"
-                        | "opponents' hands"
-                        | "each player's hand"
-                        | "all hands"
-                ) =>
-            {
-                let low = raw.trim().to_ascii_lowercase();
-                let players = match low.as_str() {
-                    "your hand" => AffectedPlayers::One(ResolvingPlayer::Controller),
-                    "target player's hand" => {
-                        AffectedPlayers::One(lower_resolving_player_in_context(
-                            PlayerRefAst::TargetPlayer,
-                            builder,
-                            in_trigger,
-                        )?)
-                    }
-                    "target opponent's hand" => {
-                        AffectedPlayers::One(lower_resolving_player_in_context(
-                            PlayerRefAst::TargetOpponent,
-                            builder,
-                            in_trigger,
-                        )?)
-                    }
-                    "that player's hand" | "their hand" => {
-                        AffectedPlayers::One(lower_resolving_player_in_context(
-                            PlayerRefAst::ThatPlayer,
-                            builder,
-                            in_trigger,
-                        )?)
-                    }
-                    "each opponent's hand" | "your opponents' hands" | "opponents' hands" => {
-                        AffectedPlayers::EachOpponent
-                    }
-                    "each player's hand" | "all hands" => AffectedPlayers::EachPlayer,
-                    _ => return Err("oracle:unsupported-exile"),
-                };
-                builder.instructions.push(Instruction::ExileGroupFromZone {
-                    players,
-                    zone: SourceZoneFilter::Hand,
-                    filter: Box::new(ObjectFilter::any()),
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(raw)
-                if matches!(
-                    raw.trim().to_ascii_lowercase().as_str(),
-                    "your graveyard"
-                        | "target player's graveyard"
-                        | "target opponent's graveyard"
-                        | "that player's graveyard"
-                        | "their graveyard"
-                        | "each opponent's graveyard"
-                        | "your opponents' graveyards"
-                        | "opponents' graveyards"
-                        | "each player's graveyard"
-                        | "all graveyards"
-                ) =>
-            {
-                let low = raw.trim().to_ascii_lowercase();
-                match low.as_str() {
-                    "each player's graveyard" | "all graveyards" => {
-                        builder.instructions.push(Instruction::ExileAllGraveyards);
-                    }
-                    "your graveyard" => {
-                        builder
-                            .instructions
-                            .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
-                                ResolvingPlayer::Controller,
-                            )));
-                    }
-                    "target player's graveyard" => {
-                        let p = lower_resolving_player_in_context(
-                            PlayerRefAst::TargetPlayer,
-                            builder,
-                            in_trigger,
-                        )?;
-                        builder
-                            .instructions
-                            .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(p)));
-                    }
-                    "target opponent's graveyard" => {
-                        let p = lower_resolving_player_in_context(
-                            PlayerRefAst::TargetOpponent,
-                            builder,
-                            in_trigger,
-                        )?;
-                        builder
-                            .instructions
-                            .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(p)));
-                    }
-                    "that player's graveyard" | "their graveyard" => {
-                        let p = lower_resolving_player_in_context(
-                            PlayerRefAst::ThatPlayer,
-                            builder,
-                            in_trigger,
-                        )?;
-                        builder
-                            .instructions
-                            .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(p)));
-                    }
-                    "each opponent's graveyard"
-                    | "your opponents' graveyards"
-                    | "opponents' graveyards" => {
-                        builder
-                            .instructions
-                            .push(Instruction::ExilePlayerGraveyards(
-                                AffectedPlayers::EachOpponent,
-                            ));
-                    }
-                    _ => return Err("oracle:unsupported-exile"),
-                }
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(_)
-                if matches!(
-                    builder.target,
-                    BodyTarget::SinglePermanent
-                        | BodyTarget::SingleCreature
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
-                ) =>
-            {
-                builder.instructions.push(Instruction::ExileTarget);
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(_)
-                if last_instruction_created_tokens(&builder.instructions) =>
-            {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::CreatedTokens,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::LastMoved,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(_)
-                if matches!(
-                    builder.target,
-                    BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::FilteredAnyGraveyardCard { .. }
-                ) =>
-            {
-                builder.instructions.push(Instruction::ExileGraveyardTarget);
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(_)
-                if matches!(
-                    builder.target,
-                    BodyTarget::SingleOwnGraveyardCard
-                        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                        | BodyTarget::SingleSpell(_)
-                ) =>
-            {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TargetObject,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(_)
-                if has_checked_revealed_top_strict(&builder.instructions) =>
-            {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::RevealedCard,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            SubjectRefAst::TriggerSubject if in_trigger => {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TriggeringObject,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(raw)
-                if in_trigger
-                    && (!self_pronoun_valid || !is_self_anaphora_label(raw))
-                    && builder.target == BodyTarget::None =>
-            {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::TriggeringObject,
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                });
-                Ok(())
-            }
-            SubjectRefAst::AttachedHost(_) => {
-                builder.instructions.push(Instruction::MoveGroup {
-                    group: Box::new(ObjectFilter::Clause(ObjectClause::any().attached_to_self())),
-                    destination: PublicZoneDestination::Exile,
-                });
-                Ok(())
-            }
-            SubjectRefAst::All(f) | SubjectRefAst::Each(f)
-                if try_lower_move_last_moved_filtered(
-                    f,
-                    SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                    builder,
-                    vocabulary,
-                )? =>
-            {
-                Ok(())
-            }
-            SubjectRefAst::All(f) | SubjectRefAst::Each(f)
-                if f.zone.is_none() && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0 =>
-            {
-                let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
-                bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::MoveGroup {
-                    group: Box::new(obj),
-                    destination: PublicZoneDestination::Exile,
-                });
-                Ok(())
-            }
-            SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
-                let mut inner = f.as_ref().clone();
-                let is_linked_exile = (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0;
-                let (players, zone) = if is_linked_exile
-                    && matches!(f.zone, None | Some(ZoneFilter::Exile))
-                {
-                    inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
-                    (
-                        AffectedPlayers::One(ResolvingPlayer::Controller),
-                        SourceZoneFilter::LinkedExile,
-                    )
-                } else {
-                    match f.zone {
-                        Some(ZoneFilter::YourHand) => (
-                            AffectedPlayers::One(ResolvingPlayer::Controller),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::TargetPlayerHand) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::TargetOpponentHand) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetOpponent,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
-                            (AffectedPlayers::EachOpponent, SourceZoneFilter::Hand)
-                        }
-                        Some(ZoneFilter::EachPlayerHand | ZoneFilter::AnyHand) => {
-                            (AffectedPlayers::EachPlayer, SourceZoneFilter::Hand)
-                        }
-                        Some(ZoneFilter::ThatPlayerHand) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::ThatPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::YourGraveyard) => (
-                            AffectedPlayers::One(ResolvingPlayer::Controller),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => (
-                            AffectedPlayers::EachOpponent,
-                            SourceZoneFilter::OpponentGraveyard,
-                        ),
-                        Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
-                            (AffectedPlayers::EachPlayer, SourceZoneFilter::AnyGraveyard)
-                        }
-                        Some(ZoneFilter::ThatPlayerGraveyard) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::ThatPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::TargetPlayerGraveyard) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::TargetOpponentGraveyard) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetOpponent,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::DefendingPlayerGraveyard) => (
-                            AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::YourLibrary) => (
-                            AffectedPlayers::One(ResolvingPlayer::Controller),
-                            SourceZoneFilter::YourLibrary,
-                        ),
-                        Some(ZoneFilter::Battlefield) => {
-                            (AffectedPlayers::EachPlayer, SourceZoneFilter::Battlefield)
-                        }
-                        Some(ZoneFilter::Exile)
-                            if matches!(
-                                f.controller,
-                                Some(
-                                    ControllerRelation::Opponent
-                                        | ControllerRelation::Opponents
-                                        | ControllerRelation::OwnerOpponent
-                                )
-                            ) =>
-                        {
-                            inner.controller = None;
-                            (
-                                AffectedPlayers::EachOpponent,
-                                SourceZoneFilter::OpponentExile,
-                            )
-                        }
-                        _ => return Err("oracle:unsupported-exile"),
-                    }
-                };
-                inner.zone = None;
-                let obj = if is_unrestricted_filter(&inner) {
-                    ObjectFilter::any()
-                } else {
-                    lower_object_filter(&inner, vocabulary)?
-                };
-                bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::ExileGroupFromZone {
-                    players,
-                    zone,
-                    filter: Box::new(obj),
-                });
-                Ok(())
-            }
-            SubjectRefAst::Group(f)
-                if f.zone.is_none()
-                    && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
-                    && f.controller == Some(ControllerRelation::You) =>
-            {
-                if let Ok(ptf) = lower_permanent_type_filter(f, vocabulary) {
-                    builder
-                        .instructions
-                        .push(Instruction::ExileChosenPermanents {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: ptf,
-                        });
-                } else {
-                    let mut inner = f.as_ref().clone();
-                    inner.controller = None;
-                    let obj = lower_object_filter(&inner, vocabulary)?;
-                    builder.instructions.push(Instruction::ExileFromZone {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        zone: spellwake_engine::activated::CostExileZone::Battlefield,
-                        amount: ValueExpr::literal(1),
-                        filter: Box::new(obj),
-                    });
-                }
-                Ok(())
-            }
-            SubjectRefAst::Group(f)
-                if matches!(
-                    f.zone,
-                    Some(ZoneFilter::YourHand | ZoneFilter::YourGraveyard)
-                ) =>
-            {
-                let zone = if f.zone == Some(ZoneFilter::YourHand) {
-                    spellwake_engine::activated::CostExileZone::Hand
-                } else {
-                    spellwake_engine::activated::CostExileZone::Graveyard
-                };
-                let mut inner = f.as_ref().clone();
-                inner.zone = None;
-                let obj = if is_unrestricted_filter(&inner) {
-                    ObjectFilter::any()
-                } else {
-                    lower_object_filter(&inner, vocabulary)?
-                };
-                builder.instructions.push(Instruction::ExileFromZone {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    zone,
-                    amount: ValueExpr::literal(1),
-                    filter: Box::new(obj),
-                });
-                Ok(())
-            }
-            SubjectRefAst::Group(f)
-                if ((f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
-                    && matches!(f.zone, None | Some(ZoneFilter::Exile)))
-                    || matches!(
-                        f.zone,
-                        Some(
-                            ZoneFilter::TargetPlayerHand
-                                | ZoneFilter::TargetOpponentHand
-                                | ZoneFilter::OpponentHand
-                                | ZoneFilter::OpponentsHands
-                                | ZoneFilter::EachPlayerHand
-                                | ZoneFilter::AnyHand
-                                | ZoneFilter::ThatPlayerHand
-                                | ZoneFilter::OpponentGraveyard
-                                | ZoneFilter::OpponentsGraveyards
-                                | ZoneFilter::AnyGraveyard
-                                | ZoneFilter::AllGraveyards
-                                | ZoneFilter::ThatPlayerGraveyard
-                                | ZoneFilter::TargetPlayerGraveyard
-                                | ZoneFilter::TargetOpponentGraveyard
-                                | ZoneFilter::DefendingPlayerGraveyard
-                        )
                     ) =>
-            {
-                let mut inner = f.as_ref().clone();
-                let (players, zone) = if (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
-                    && matches!(f.zone, None | Some(ZoneFilter::Exile))
                 {
-                    inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
-                    (
-                        AffectedPlayers::One(ResolvingPlayer::Controller),
-                        SourceZoneFilter::LinkedExile,
-                    )
-                } else {
-                    match f.zone {
-                        Some(ZoneFilter::TargetPlayerHand) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::TargetOpponentHand) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetOpponent,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
-                            (AffectedPlayers::EachOpponent, SourceZoneFilter::Hand)
-                        }
-                        Some(ZoneFilter::EachPlayerHand | ZoneFilter::AnyHand) => {
-                            (AffectedPlayers::EachPlayer, SourceZoneFilter::Hand)
-                        }
-                        Some(ZoneFilter::ThatPlayerHand) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::ThatPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Hand,
-                        ),
-                        Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => (
-                            AffectedPlayers::EachOpponent,
-                            SourceZoneFilter::OpponentGraveyard,
-                        ),
-                        Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
-                            (AffectedPlayers::EachPlayer, SourceZoneFilter::AnyGraveyard)
-                        }
-                        Some(ZoneFilter::ThatPlayerGraveyard) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::ThatPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::TargetPlayerGraveyard) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetPlayer,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::TargetOpponentGraveyard) => (
-                            AffectedPlayers::One(lower_resolving_player_in_context(
-                                PlayerRefAst::TargetOpponent,
-                                builder,
-                                in_trigger,
-                            )?),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        Some(ZoneFilter::DefendingPlayerGraveyard) => (
-                            AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
-                            SourceZoneFilter::Graveyard,
-                        ),
-                        _ => return Err("oracle:unsupported-exile"),
-                    }
-                };
-                inner.zone = None;
-                let obj = if is_unrestricted_filter(&inner) {
-                    ObjectFilter::any()
-                } else {
-                    lower_object_filter(&inner, vocabulary)?
-                };
-                bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::ExileGroupFromZone {
-                    players,
-                    zone,
-                    filter: Box::new(obj),
-                });
-                Ok(())
-            }
-            SubjectRefAst::Group(f)
-                if f.zone.is_none()
-                    && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
-                    && f.controller != Some(ControllerRelation::You)
-                    && !f.any_spell
-                    && !f.is_ability =>
-            {
-                let mut trial = builder.clone();
-                let obj = lower_object_filter_in_context(f, &trial, in_trigger, vocabulary)?;
-                if obj.has_target_player() {
-                    return Err("oracle:unsupported-exile");
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
+                    Ok(())
                 }
-                trial.instructions.push(Instruction::SelectZoneCardsToZone {
-                    player: ResolvingPlayer::Controller,
-                    source_zone: SourceZoneFilter::AnyBattlefield,
-                    filter: Box::new(obj),
-                    min: ValueExpr::literal(1),
-                    max: ValueExpr::literal(1),
-                    destination: SubjectDestination::Exile {
-                        delayed_return: None,
-                    },
-                    reveal: false,
-                });
-                *builder = trial;
-                Ok(())
-            }
-            SubjectRefAst::Compound(items) if !items.is_empty() => {
-                let mut shared_player_target: Option<BodyTarget> = None;
-                for (idx, it) in items.iter().enumerate() {
-                    let prev_target = builder.target;
-                    let mut eff_it = it.clone();
-                    if idx > 0
-                        && let Some(bound_player_bt) = shared_player_target
-                    {
-                        let rewrite_zone = |z: &mut Option<ZoneFilter>| match (*z, bound_player_bt)
-                        {
-                            (Some(ZoneFilter::TargetPlayerHand), BodyTarget::SinglePlayer) => {
-                                *z = Some(ZoneFilter::ThatPlayerHand);
-                            }
-                            (Some(ZoneFilter::TargetPlayerGraveyard), BodyTarget::SinglePlayer) => {
-                                *z = Some(ZoneFilter::ThatPlayerGraveyard);
-                            }
-                            (Some(ZoneFilter::TargetOpponentHand), BodyTarget::SingleOpponent) => {
-                                *z = Some(ZoneFilter::ThatPlayerHand);
-                            }
-                            (
-                                Some(ZoneFilter::TargetOpponentGraveyard),
-                                BodyTarget::SingleOpponent,
-                            ) => {
-                                *z = Some(ZoneFilter::ThatPlayerGraveyard);
-                            }
-                            _ => {}
-                        };
-                        match &mut eff_it {
-                            SubjectRefAst::All(f)
-                            | SubjectRefAst::Each(f)
-                            | SubjectRefAst::Group(f) => rewrite_zone(&mut f.zone),
-                            SubjectRefAst::Anaphora(raw) => {
-                                let l = raw.trim().to_ascii_lowercase();
-                                if bound_player_bt == BodyTarget::SinglePlayer
-                                    && l == "target player's graveyard"
-                                {
-                                    *raw = "that player's graveyard".to_string();
-                                } else if bound_player_bt == BodyTarget::SinglePlayer
-                                    && l == "target player's hand"
-                                {
-                                    *raw = "that player's hand".to_string();
-                                } else if bound_player_bt == BodyTarget::SingleOpponent
-                                    && l == "target opponent's graveyard"
-                                {
-                                    *raw = "that player's graveyard".to_string();
-                                } else if bound_player_bt == BodyTarget::SingleOpponent
-                                    && l == "target opponent's hand"
-                                {
-                                    *raw = "that player's hand".to_string();
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    lower_instruction(
-                        &InstructionAst::Exile {
-                            actor: None,
-                            subject: Box::new(eff_it),
-                            random: false,
-                            face_down: false,
-                            into_pile: false,
+                SubjectRefAst::Anaphora(_)
+                    if matches!(
+                        builder.target,
+                        BodyTarget::SingleOwnGraveyardCard
+                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                            | BodyTarget::SingleSpell(_)
+                    ) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::TargetObject,
+                            SubjectDestination::Exile {
+                                delayed_return: None,
+                            },
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if has_checked_revealed_top_strict(&builder.instructions) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::RevealedCard,
+                            SubjectDestination::Exile {
+                                delayed_return: None,
+                            },
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::TriggerSubject if in_trigger => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::TriggeringObject,
+                            SubjectDestination::Exile {
+                                delayed_return: None,
+                            },
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if in_trigger
+                        && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                        && builder.target == BodyTarget::None =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::TriggeringObject,
+                            SubjectDestination::Exile {
+                                delayed_return: None,
+                            },
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::AttachedHost(_) => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                            ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                            PublicZoneDestination::Exile,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                    if try_lower_move_last_moved_filtered(
+                        f,
+                        SubjectDestination::Exile {
+                            delayed_return: None,
                         },
                         builder,
                         vocabulary,
-                        ids,
-                        in_trigger,
-                        self_pronoun_valid,
-                        bound_x,
-                    )?;
-                    if idx == 0
-                        && prev_target == BodyTarget::None
-                        && matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        )
-                    {
-                        shared_player_target = Some(builder.target);
-                    }
+                    )? =>
+                {
+                    Ok(())
                 }
-                Ok(())
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                    if f.zone.is_none()
+                        && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0 =>
+                {
+                    let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
+                    bind_filter_player_target(builder, &obj)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                            obj,
+                            PublicZoneDestination::Exile,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                    let mut inner = f.as_ref().clone();
+                    let is_linked_exile = (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0;
+                    let (players, zone) =
+                        if is_linked_exile && matches!(f.zone, None | Some(ZoneFilter::Exile)) {
+                            inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+                            (
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                SourceZoneFilter::LinkedExile,
+                            )
+                        } else {
+                            match f.zone {
+                                Some(ZoneFilter::YourHand) => (
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    SourceZoneFilter::Hand,
+                                ),
+                                Some(ZoneFilter::TargetPlayerHand) => (
+                                    AffectedPlayers::One(lower_resolving_player_in_context(
+                                        PlayerRefAst::TargetPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?),
+                                    SourceZoneFilter::Hand,
+                                ),
+                                Some(ZoneFilter::TargetOpponentHand) => (
+                                    AffectedPlayers::One(lower_resolving_player_in_context(
+                                        PlayerRefAst::TargetOpponent,
+                                        builder,
+                                        in_trigger,
+                                    )?),
+                                    SourceZoneFilter::Hand,
+                                ),
+                                Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
+                                    (AffectedPlayers::EachOpponent, SourceZoneFilter::Hand)
+                                }
+                                Some(ZoneFilter::EachPlayerHand | ZoneFilter::AnyHand) => {
+                                    (AffectedPlayers::EachPlayer, SourceZoneFilter::Hand)
+                                }
+                                Some(ZoneFilter::ThatPlayerHand) => (
+                                    AffectedPlayers::One(lower_resolving_player_in_context(
+                                        PlayerRefAst::ThatPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?),
+                                    SourceZoneFilter::Hand,
+                                ),
+                                Some(ZoneFilter::YourGraveyard) => (
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    SourceZoneFilter::Graveyard,
+                                ),
+                                Some(
+                                    ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
+                                ) => (
+                                    AffectedPlayers::EachOpponent,
+                                    SourceZoneFilter::OpponentGraveyard,
+                                ),
+                                Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
+                                    (AffectedPlayers::EachPlayer, SourceZoneFilter::AnyGraveyard)
+                                }
+                                Some(ZoneFilter::ThatPlayerGraveyard) => (
+                                    AffectedPlayers::One(lower_resolving_player_in_context(
+                                        PlayerRefAst::ThatPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?),
+                                    SourceZoneFilter::Graveyard,
+                                ),
+                                Some(ZoneFilter::TargetPlayerGraveyard) => (
+                                    AffectedPlayers::One(lower_resolving_player_in_context(
+                                        PlayerRefAst::TargetPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?),
+                                    SourceZoneFilter::Graveyard,
+                                ),
+                                Some(ZoneFilter::TargetOpponentGraveyard) => (
+                                    AffectedPlayers::One(lower_resolving_player_in_context(
+                                        PlayerRefAst::TargetOpponent,
+                                        builder,
+                                        in_trigger,
+                                    )?),
+                                    SourceZoneFilter::Graveyard,
+                                ),
+                                Some(ZoneFilter::DefendingPlayerGraveyard) => (
+                                    AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
+                                    SourceZoneFilter::Graveyard,
+                                ),
+                                Some(ZoneFilter::YourLibrary) => (
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    SourceZoneFilter::YourLibrary,
+                                ),
+                                Some(ZoneFilter::Battlefield) => {
+                                    (AffectedPlayers::EachPlayer, SourceZoneFilter::Battlefield)
+                                }
+                                Some(ZoneFilter::Exile)
+                                    if matches!(
+                                        f.controller,
+                                        Some(
+                                            ControllerRelation::Opponent
+                                                | ControllerRelation::Opponents
+                                                | ControllerRelation::OwnerOpponent
+                                        )
+                                    ) =>
+                                {
+                                    inner.controller = None;
+                                    (
+                                        AffectedPlayers::EachOpponent,
+                                        SourceZoneFilter::OpponentExile,
+                                    )
+                                }
+                                _ => return Err("oracle:unsupported-exile"),
+                            }
+                        };
+                    inner.zone = None;
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter(&inner, vocabulary)?
+                    };
+                    bind_filter_player_target(builder, &obj)?;
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(players, zone, obj));
+                    Ok(())
+                }
+                SubjectRefAst::Group(f)
+                    if f.zone.is_none()
+                        && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
+                        && f.controller == Some(ControllerRelation::You) =>
+                {
+                    if let Ok(ptf) = lower_permanent_type_filter(f, vocabulary) {
+                        builder
+                        .instructions
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_chosen_permanents(AffectedPlayers::One(ResolvingPlayer::Controller), ValueExpr::literal(1), ptf));
+                    } else {
+                        let mut inner = f.as_ref().clone();
+                        inner.controller = None;
+                        let obj = lower_object_filter(&inner, vocabulary)?;
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(AffectedPlayers::One(ResolvingPlayer::Controller), spellwake_engine::activated::CostExileZone::Battlefield, ValueExpr::literal(1), obj));
+                    }
+                    Ok(())
+                }
+                SubjectRefAst::Group(f)
+                    if matches!(
+                        f.zone,
+                        Some(ZoneFilter::YourHand | ZoneFilter::YourGraveyard)
+                    ) =>
+                {
+                    let zone = if f.zone == Some(ZoneFilter::YourHand) {
+                        spellwake_engine::activated::CostExileZone::Hand
+                    } else {
+                        spellwake_engine::activated::CostExileZone::Graveyard
+                    };
+                    let mut inner = f.as_ref().clone();
+                    inner.zone = None;
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter(&inner, vocabulary)?
+                    };
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            zone,
+                            ValueExpr::literal(1),
+                            obj,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Group(f)
+                    if ((f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        && matches!(f.zone, None | Some(ZoneFilter::Exile)))
+                        || matches!(
+                            f.zone,
+                            Some(
+                                ZoneFilter::TargetPlayerHand
+                                    | ZoneFilter::TargetOpponentHand
+                                    | ZoneFilter::OpponentHand
+                                    | ZoneFilter::OpponentsHands
+                                    | ZoneFilter::EachPlayerHand
+                                    | ZoneFilter::AnyHand
+                                    | ZoneFilter::ThatPlayerHand
+                                    | ZoneFilter::OpponentGraveyard
+                                    | ZoneFilter::OpponentsGraveyards
+                                    | ZoneFilter::AnyGraveyard
+                                    | ZoneFilter::AllGraveyards
+                                    | ZoneFilter::ThatPlayerGraveyard
+                                    | ZoneFilter::TargetPlayerGraveyard
+                                    | ZoneFilter::TargetOpponentGraveyard
+                                    | ZoneFilter::DefendingPlayerGraveyard
+                            )
+                        ) =>
+                {
+                    let mut inner = f.as_ref().clone();
+                    let (players, zone) = if (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0)
+                        != 0
+                        && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                    {
+                        inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+                        (
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            SourceZoneFilter::LinkedExile,
+                        )
+                    } else {
+                        match f.zone {
+                            Some(ZoneFilter::TargetPlayerHand) => (
+                                AffectedPlayers::One(lower_resolving_player_in_context(
+                                    PlayerRefAst::TargetPlayer,
+                                    builder,
+                                    in_trigger,
+                                )?),
+                                SourceZoneFilter::Hand,
+                            ),
+                            Some(ZoneFilter::TargetOpponentHand) => (
+                                AffectedPlayers::One(lower_resolving_player_in_context(
+                                    PlayerRefAst::TargetOpponent,
+                                    builder,
+                                    in_trigger,
+                                )?),
+                                SourceZoneFilter::Hand,
+                            ),
+                            Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
+                                (AffectedPlayers::EachOpponent, SourceZoneFilter::Hand)
+                            }
+                            Some(ZoneFilter::EachPlayerHand | ZoneFilter::AnyHand) => {
+                                (AffectedPlayers::EachPlayer, SourceZoneFilter::Hand)
+                            }
+                            Some(ZoneFilter::ThatPlayerHand) => (
+                                AffectedPlayers::One(lower_resolving_player_in_context(
+                                    PlayerRefAst::ThatPlayer,
+                                    builder,
+                                    in_trigger,
+                                )?),
+                                SourceZoneFilter::Hand,
+                            ),
+                            Some(
+                                ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
+                            ) => (
+                                AffectedPlayers::EachOpponent,
+                                SourceZoneFilter::OpponentGraveyard,
+                            ),
+                            Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
+                                (AffectedPlayers::EachPlayer, SourceZoneFilter::AnyGraveyard)
+                            }
+                            Some(ZoneFilter::ThatPlayerGraveyard) => (
+                                AffectedPlayers::One(lower_resolving_player_in_context(
+                                    PlayerRefAst::ThatPlayer,
+                                    builder,
+                                    in_trigger,
+                                )?),
+                                SourceZoneFilter::Graveyard,
+                            ),
+                            Some(ZoneFilter::TargetPlayerGraveyard) => (
+                                AffectedPlayers::One(lower_resolving_player_in_context(
+                                    PlayerRefAst::TargetPlayer,
+                                    builder,
+                                    in_trigger,
+                                )?),
+                                SourceZoneFilter::Graveyard,
+                            ),
+                            Some(ZoneFilter::TargetOpponentGraveyard) => (
+                                AffectedPlayers::One(lower_resolving_player_in_context(
+                                    PlayerRefAst::TargetOpponent,
+                                    builder,
+                                    in_trigger,
+                                )?),
+                                SourceZoneFilter::Graveyard,
+                            ),
+                            Some(ZoneFilter::DefendingPlayerGraveyard) => (
+                                AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
+                                SourceZoneFilter::Graveyard,
+                            ),
+                            _ => return Err("oracle:unsupported-exile"),
+                        }
+                    };
+                    inner.zone = None;
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter(&inner, vocabulary)?
+                    };
+                    bind_filter_player_target(builder, &obj)?;
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(players, zone, obj));
+                    Ok(())
+                }
+                SubjectRefAst::Group(f)
+                    if f.zone.is_none()
+                        && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
+                        && f.controller != Some(ControllerRelation::You)
+                        && !f.any_spell
+                        && !f.is_ability =>
+                {
+                    let mut trial = builder.clone();
+                    let obj = lower_object_filter_in_context(f, &trial, in_trigger, vocabulary)?;
+                    if obj.has_target_player() {
+                        return Err("oracle:unsupported-exile");
+                    }
+                    trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::AnyBattlefield, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Exile {
+                        delayed_return: None,
+                    }, false));
+                    *builder = trial;
+                    Ok(())
+                }
+                SubjectRefAst::Compound(items) if !items.is_empty() => {
+                    let mut shared_player_target: Option<BodyTarget> = None;
+                    for (idx, it) in items.iter().enumerate() {
+                        let prev_target = builder.target;
+                        let mut eff_it = it.clone();
+                        if idx > 0
+                            && let Some(bound_player_bt) = shared_player_target
+                        {
+                            let rewrite_zone =
+                                |z: &mut Option<ZoneFilter>| match (*z, bound_player_bt) {
+                                    (
+                                        Some(ZoneFilter::TargetPlayerHand),
+                                        BodyTarget::SinglePlayer,
+                                    ) => {
+                                        *z = Some(ZoneFilter::ThatPlayerHand);
+                                    }
+                                    (
+                                        Some(ZoneFilter::TargetPlayerGraveyard),
+                                        BodyTarget::SinglePlayer,
+                                    ) => {
+                                        *z = Some(ZoneFilter::ThatPlayerGraveyard);
+                                    }
+                                    (
+                                        Some(ZoneFilter::TargetOpponentHand),
+                                        BodyTarget::SingleOpponent,
+                                    ) => {
+                                        *z = Some(ZoneFilter::ThatPlayerHand);
+                                    }
+                                    (
+                                        Some(ZoneFilter::TargetOpponentGraveyard),
+                                        BodyTarget::SingleOpponent,
+                                    ) => {
+                                        *z = Some(ZoneFilter::ThatPlayerGraveyard);
+                                    }
+                                    _ => {}
+                                };
+                            match &mut eff_it {
+                                SubjectRefAst::All(f)
+                                | SubjectRefAst::Each(f)
+                                | SubjectRefAst::Group(f) => rewrite_zone(&mut f.zone),
+                                SubjectRefAst::Anaphora(raw) => {
+                                    let l = raw.trim().to_ascii_lowercase();
+                                    if bound_player_bt == BodyTarget::SinglePlayer
+                                        && l == "target player's graveyard"
+                                    {
+                                        *raw = "that player's graveyard".to_string();
+                                    } else if bound_player_bt == BodyTarget::SinglePlayer
+                                        && l == "target player's hand"
+                                    {
+                                        *raw = "that player's hand".to_string();
+                                    } else if bound_player_bt == BodyTarget::SingleOpponent
+                                        && l == "target opponent's graveyard"
+                                    {
+                                        *raw = "that player's graveyard".to_string();
+                                    } else if bound_player_bt == BodyTarget::SingleOpponent
+                                        && l == "target opponent's hand"
+                                    {
+                                        *raw = "that player's hand".to_string();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        lower_instruction(
+                            &InstructionAst::Exile {
+                                actor: None,
+                                subject: Box::new(eff_it),
+                                random: false,
+                                face_down: false,
+                                into_pile: false,
+                            },
+                            builder,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        )?;
+                        if idx == 0
+                            && prev_target == BodyTarget::None
+                            && matches!(
+                                builder.target,
+                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                            )
+                        {
+                            shared_player_target = Some(builder.target);
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Err("oracle:unsupported-exile"),
             }
-            _ => Err("oracle:unsupported-exile"),
-        },
+        }
         InstructionAst::Exile {
             actor: Some(actor_player),
             subject,
@@ -1410,11 +1431,7 @@ pub(super) fn lower_zone_moves_instruction(
                         "their hand" | "your hand" | "that player's hand"
                     ) =>
                 {
-                    builder.instructions.push(Instruction::ExileGroupFromZone {
-                        players,
-                        zone: SourceZoneFilter::Hand,
-                        filter: Box::new(ObjectFilter::any()),
-                    });
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(players, SourceZoneFilter::Hand, ObjectFilter::any()));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1425,7 +1442,7 @@ pub(super) fn lower_zone_moves_instruction(
                 {
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(players));
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(players));
                     Ok(())
                 }
                 SubjectRefAst::Group(f)
@@ -1452,12 +1469,14 @@ pub(super) fn lower_zone_moves_instruction(
                     } else {
                         lower_object_filter(&inner, vocabulary)?
                     };
-                    builder.instructions.push(Instruction::ExileFromZone {
-                        players,
-                        zone: spellwake_engine::activated::CostExileZone::Hand,
-                        amount: ValueExpr::literal(1),
-                        filter: Box::new(obj),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                            players,
+                            spellwake_engine::activated::CostExileZone::Hand,
+                            ValueExpr::literal(1),
+                            obj,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Group(f)
@@ -1485,12 +1504,14 @@ pub(super) fn lower_zone_moves_instruction(
                     } else {
                         lower_object_filter(&inner, vocabulary)?
                     };
-                    builder.instructions.push(Instruction::ExileFromZone {
-                        players,
-                        zone: spellwake_engine::activated::CostExileZone::Graveyard,
-                        amount: ValueExpr::literal(1),
-                        filter: Box::new(obj),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                            players,
+                            spellwake_engine::activated::CostExileZone::Graveyard,
+                            ValueExpr::literal(1),
+                            obj,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Group(f)
@@ -1512,23 +1533,14 @@ pub(super) fn lower_zone_moves_instruction(
                     if let Ok(ptf) = lower_permanent_type_filter(&inner, vocabulary) {
                         builder
                             .instructions
-                            .push(Instruction::ExileChosenPermanents {
-                                players,
-                                amount: ValueExpr::literal(1),
-                                filter: ptf,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_chosen_permanents(players, ValueExpr::literal(1), ptf));
                     } else {
                         let obj = if is_unrestricted_filter(&inner) {
                             ObjectFilter::any()
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::ExileFromZone {
-                            players,
-                            zone: spellwake_engine::activated::CostExileZone::Battlefield,
-                            amount: ValueExpr::literal(1),
-                            filter: Box::new(obj),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(players, spellwake_engine::activated::CostExileZone::Battlefield, ValueExpr::literal(1), obj));
                     }
                     Ok(())
                 }
@@ -1582,11 +1594,7 @@ pub(super) fn lower_zone_moves_instruction(
                         lower_object_filter(&inner, vocabulary)?
                     };
                     bind_filter_player_target(builder, &obj)?;
-                    builder.instructions.push(Instruction::ExileGroupFromZone {
-                        players,
-                        zone,
-                        filter: Box::new(obj),
-                    });
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(players, zone, obj));
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-exile"),
@@ -1610,24 +1618,30 @@ pub(super) fn lower_zone_moves_instruction(
             };
             match eff_subj {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::AbilitySource,
-                        destination: exile_until_dest,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::AbilitySource,
+                            exile_until_dest,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::TriggeringObject,
-                        destination: exile_until_dest,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::TriggeringObject,
+                            exile_until_dest,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::AttachedHost(_) => {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::AttachedHost,
-                        destination: exile_until_dest,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::AttachedHost,
+                            exile_until_dest,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
@@ -1639,19 +1653,23 @@ pub(super) fn lower_zone_moves_instruction(
                 SubjectRefAst::Anaphora(_)
                     if last_instruction_created_tokens(&builder.instructions) =>
                 {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::CreatedTokens,
-                        destination: exile_until_dest,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::CreatedTokens,
+                            exile_until_dest,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
                     if last_instruction_moved_object(&builder.instructions) =>
                 {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::LastMoved,
-                        destination: exile_until_dest,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::LastMoved,
+                            exile_until_dest,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1659,10 +1677,12 @@ pub(super) fn lower_zone_moves_instruction(
                         && builder.target == BodyTarget::None
                         && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                 {
-                    builder.instructions.push(Instruction::MoveSubject {
-                        subject: MoveSubjectRef::TriggeringObject,
-                        destination: exile_until_dest,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                            MoveSubjectRef::TriggeringObject,
+                            exile_until_dest,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -1752,9 +1772,7 @@ pub(super) fn lower_zone_moves_instruction(
                     bind_filter_player_target(builder, &obj)?;
                     builder
                         .instructions
-                        .push(Instruction::ExileSubjectUntilSourceLeaves {
-                            subject: Box::new(EffectSubject::Matching(obj)),
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_subject_until_source_leaves(EffectSubject::Matching(obj)));
                     Ok(())
                 }
                 SubjectRefAst::Compound(items) if items.len() == 2 => {
@@ -1818,9 +1836,7 @@ pub(super) fn lower_zone_moves_instruction(
                     builder.bind_target(bt)?;
                     builder
                         .instructions
-                        .push(Instruction::ExileSubjectUntilSourceLeaves {
-                            subject: Box::new(EffectSubject::TargetAndSameNameMatching(obj)),
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_subject_until_source_leaves(EffectSubject::TargetAndSameNameMatching(obj)));
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-target-subject"),
@@ -1830,21 +1846,23 @@ pub(super) fn lower_zone_moves_instruction(
             let w = whose.trim().to_ascii_lowercase();
             match w.as_str() {
                 "all" | "each player" | "each player's" | "all players" | "all players'" => {
-                    builder.instructions.push(Instruction::ExileAllGraveyards);
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_all_graveyards());
                     Ok(())
                 }
                 "all creatures and" => {
-                    builder.instructions.push(Instruction::MoveGroup {
-                        group: Box::new(ObjectFilter::creature()),
-                        destination: PublicZoneDestination::Exile,
-                    });
-                    builder.instructions.push(Instruction::ExileAllGraveyards);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                            ObjectFilter::creature(),
+                            PublicZoneDestination::Exile,
+                        ),
+                    );
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_all_graveyards());
                     Ok(())
                 }
                 "your" => {
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::Controller,
                         )));
                     Ok(())
@@ -1853,15 +1871,13 @@ pub(super) fn lower_zone_moves_instruction(
                 | "opponents" | "opponents'" | "your opponents" | "your opponents'" => {
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(
-                            AffectedPlayers::EachOpponent,
-                        ));
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::EachOpponent,));
                     Ok(())
                 }
                 "defending player" | "defending player's" => {
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::DefendingPlayer,
                         )));
                     Ok(())
@@ -1870,7 +1886,7 @@ pub(super) fn lower_zone_moves_instruction(
                     builder.bind_target(BodyTarget::SinglePlayer)?;
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::TargetPlayer,
                         )));
                     Ok(())
@@ -1879,32 +1895,40 @@ pub(super) fn lower_zone_moves_instruction(
                     builder.bind_target(BodyTarget::SingleOpponent)?;
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::TargetPlayer,
                         )));
                     Ok(())
                 }
                 "target card from a" => {
                     builder.bind_target(BodyTarget::AnyGraveyardCard)?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target creature card from a" => {
                     builder.bind_target(BodyTarget::AnyGraveyardCreature)?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target creature card from your" => {
                     builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
                         ObjectFilter::creature(),
                     ))?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target card from your" => {
                     builder
                         .bind_target(BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any()))?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target noncreature, nonland card from your" => {
@@ -1914,32 +1938,40 @@ pub(super) fn lower_zone_moves_instruction(
                                 .forbid_types(CardTypeMask::CREATURE.union(CardTypeMask::LAND)),
                         ),
                     ))?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target instant or sorcery card from your" => {
                     builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
                         ObjectFilter::instant_or_sorcery(),
                     ))?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target artifact card from your" => {
                     builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
                         ObjectFilter::artifact(),
                     ))?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "target enchantment card from your" => {
                     builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
                         ObjectFilter::enchantment(),
                     ))?;
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 "~ from your" => {
-                    builder.instructions.push(Instruction::ExileAbilitySource);
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source());
                     Ok(())
                 }
                 "that card from your" => {
@@ -1951,7 +1983,7 @@ pub(super) fn lower_zone_moves_instruction(
                 "that player" | "that player's" if in_trigger => {
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::UniqueRelatedPlayer,
                         )));
                     Ok(())
@@ -1964,7 +1996,7 @@ pub(super) fn lower_zone_moves_instruction(
                 {
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::TargetPlayer,
                         )));
                     Ok(())
@@ -1977,7 +2009,7 @@ pub(super) fn lower_zone_moves_instruction(
                     )?;
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(rp)));
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(rp)));
                     Ok(())
                 }
                 "its controller" | "its controller's" => {
@@ -1988,7 +2020,7 @@ pub(super) fn lower_zone_moves_instruction(
                     )?;
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(rp)));
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(rp)));
                     Ok(())
                 }
                 "a creature they control and their"
@@ -1997,32 +2029,36 @@ pub(super) fn lower_zone_moves_instruction(
                         BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                     ) =>
                 {
-                    builder.instructions.push(Instruction::ExileFromZone {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        zone: spellwake_engine::activated::CostExileZone::Battlefield,
-                        amount: ValueExpr::literal(1),
-                        filter: Box::new(ObjectFilter::creature()),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                            AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                            spellwake_engine::activated::CostExileZone::Battlefield,
+                            ValueExpr::literal(1),
+                            ObjectFilter::creature(),
+                        ),
+                    );
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::TargetPlayer,
                         )));
                     Ok(())
                 }
                 "all cards from target player's hand and" | "target player's hand and" => {
                     builder.bind_target(BodyTarget::SinglePlayer)?;
-                    builder.instructions.push(Instruction::ExileFromZone {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        zone: spellwake_engine::activated::CostExileZone::Hand,
-                        amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
-                            ResolvingPlayer::TargetPlayer,
-                        )),
-                        filter: Box::new(ObjectFilter::any()),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                            AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                            spellwake_engine::activated::CostExileZone::Hand,
+                            ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
+                                ResolvingPlayer::TargetPlayer,
+                            )),
+                            ObjectFilter::any(),
+                        ),
+                    );
                     builder
                         .instructions
-                        .push(Instruction::ExilePlayerGraveyards(AffectedPlayers::One(
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
                             ResolvingPlayer::TargetPlayer,
                         )));
                     Ok(())
@@ -2030,37 +2066,25 @@ pub(super) fn lower_zone_moves_instruction(
                 "a card from your" | "one card from your" => {
                     builder
                         .instructions
-                        .push(Instruction::ExileCardsFromGraveyard {
-                            player: ResolvingPlayer::Controller,
-                            count: NonZeroU8::new(1).ok_or("oracle:unreachable")?,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::Controller, NonZeroU8::new(1).ok_or("oracle:unreachable")?));
                     Ok(())
                 }
                 "two cards from your" => {
                     builder
                         .instructions
-                        .push(Instruction::ExileCardsFromGraveyard {
-                            player: ResolvingPlayer::Controller,
-                            count: NonZeroU8::new(2).ok_or("oracle:unreachable")?,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::Controller, NonZeroU8::new(2).ok_or("oracle:unreachable")?));
                     Ok(())
                 }
                 "three cards from your" => {
                     builder
                         .instructions
-                        .push(Instruction::ExileCardsFromGraveyard {
-                            player: ResolvingPlayer::Controller,
-                            count: NonZeroU8::new(3).ok_or("oracle:unreachable")?,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::Controller, NonZeroU8::new(3).ok_or("oracle:unreachable")?));
                     Ok(())
                 }
                 "a card from their" | "one card from their" if in_trigger => {
                     builder
                         .instructions
-                        .push(Instruction::ExileCardsFromGraveyard {
-                            player: ResolvingPlayer::UniqueRelatedPlayer,
-                            count: NonZeroU8::new(1).ok_or("oracle:unreachable")?,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::UniqueRelatedPlayer, NonZeroU8::new(1).ok_or("oracle:unreachable")?));
                     Ok(())
                 }
                 other => {
@@ -2088,12 +2112,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 .trim_end_matches(" card")
                                 .trim();
                             if let Some(obj) = parse_look_top_pick_filter(type_phrase, vocabulary) {
-                                builder.instructions.push(Instruction::ExileFromZone {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                    zone: spellwake_engine::activated::CostExileZone::Graveyard,
-                                    amount: ValueExpr::literal(cnt),
-                                    filter: Box::new(obj),
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(AffectedPlayers::One(ResolvingPlayer::Controller), spellwake_engine::activated::CostExileZone::Graveyard, ValueExpr::literal(cnt), obj));
                                 return Ok(());
                             }
                         }
@@ -2133,12 +2152,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 if let Some(bt) = bind {
                                     builder.bind_target(bt)?;
                                 }
-                                builder.instructions.push(Instruction::ExileFromZone {
-                                    players: AffectedPlayers::One(rp),
-                                    zone: spellwake_engine::activated::CostExileZone::Graveyard,
-                                    amount: ValueExpr::count_graveyard(rp, obj),
-                                    filter: Box::new(obj),
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(AffectedPlayers::One(rp), spellwake_engine::activated::CostExileZone::Graveyard, ValueExpr::count_graveyard(rp, obj), obj));
                                 return Ok(());
                             }
                         }
@@ -2228,7 +2242,9 @@ pub(super) fn lower_zone_moves_instruction(
                     if chosen_x_bounds {
                         builder.x_target_count = true;
                     }
-                    builder.instructions.push(Instruction::ExileGraveyardTarget);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
             }
@@ -2387,11 +2403,7 @@ pub(super) fn lower_zone_moves_instruction(
             }
             builder
                 .instructions
-                .push(Instruction::ReturnRandomGraveyardCards {
-                    filter: obj_filter,
-                    count: nz,
-                    to_battlefield,
-                });
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards((obj_filter).map(|b| *b), nz, to_battlefield));
             Ok(())
         }
         InstructionAst::ReturnZone {
@@ -2491,17 +2503,17 @@ pub(super) fn lower_zone_moves_instruction(
             } else {
                 (ValueExpr::literal(0), ValueExpr::literal(1))
             };
-            builder
-                .instructions
-                .push(Instruction::SelectZoneCardsToZone {
-                    player: sel_player,
-                    source_zone: src_zone,
-                    filter: Box::new(obj),
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(
+                    sel_player,
+                    src_zone,
+                    obj,
                     min,
                     max,
                     destination,
-                    reveal: false,
-                });
+                    false,
+                ),
+            );
             Ok(())
         }
         InstructionAst::ReturnZone {
@@ -2592,7 +2604,7 @@ pub(super) fn lower_zone_moves_instruction(
                         builder.bind_target(bt)?;
                         builder
                             .instructions
-                            .push(Instruction::PutTargetInLibrary(pl));
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(pl));
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -2697,10 +2709,12 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_x {
                             builder.x_target_count = true;
                         }
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Group(f) => {
@@ -2718,15 +2732,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: sel_player,
-                                source_zone: src_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Library(pl),
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, src_zone, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Library(pl), false));
                         return Ok(());
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
@@ -2734,12 +2740,9 @@ pub(super) fn lower_zone_moves_instruction(
                             let adj = normalize_resolving_spell_lib_placement(pl, builder.target);
                             builder
                                 .instructions
-                                .push(Instruction::PutResolvingSpellInLibrary(adj));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_resolving_spell_in_library(adj));
                         } else {
-                            builder.instructions.push(Instruction::MoveSubject {
-                                subject: MoveSubjectRef::AbilitySource,
-                                destination: SubjectDestination::Library(pl),
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::AbilitySource, SubjectDestination::Library(pl)));
                         }
                         return Ok(());
                     }
@@ -2748,55 +2751,67 @@ pub(super) fn lower_zone_moves_instruction(
                     {
                         builder
                             .instructions
-                            .push(Instruction::PutTargetInLibrary(pl));
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(pl));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_created_tokens(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::CreatedTokens,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::CreatedTokens,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::LastMoved,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::LastMoved,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AttachedHost,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AttachedHost,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if has_checked_revealed_top_strict(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::RevealedCard,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::RevealedCard,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -2842,12 +2857,9 @@ pub(super) fn lower_zone_moves_instruction(
                         if pl == LibraryPlacement::Bottom && builder.target == BodyTarget::None {
                             builder
                                 .instructions
-                                .push(Instruction::PutGroupOnLibraryBottom(Box::new(obj)));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_group_on_library_bottom(obj));
                         } else {
-                            builder.instructions.push(Instruction::MoveGroupToLibrary {
-                                group: obj,
-                                placement: pl,
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group_to_library(obj, pl));
                         }
                         return Ok(());
                     }
@@ -2868,11 +2880,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::MoveGraveyardGroupOwned {
-                                players,
-                                filter: Box::new(obj),
-                                destination: SubjectDestination::Library(pl),
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, SubjectDestination::Library(pl)));
                         return Ok(());
                     }
                     _ => return Err("oracle:unsupported-return-dest"),
@@ -2891,7 +2899,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else if !in_trigger && !self_pronoun_valid {
                             builder
                                 .instructions
-                                .push(Instruction::ReturnResolvingSpellToHand);
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_resolving_spell_to_hand());
                         } else {
                             builder.instructions.push(Instruction::ReturnSourceToHand);
                         }
@@ -2927,7 +2935,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
                                 builder
                                     .instructions
-                                    .push(Instruction::ReturnTargetGraveyardCreatureToHand);
+                                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             }
                             Some(ZoneFilter::AnyGraveyard | ZoneFilter::OpponentGraveyard) => {
                                 let mut inner = filter.as_ref().clone();
@@ -2996,7 +3004,7 @@ pub(super) fn lower_zone_moves_instruction(
                                     Some((usize::from(*n), usize::from(*n)));
                                 builder
                                     .instructions
-                                    .push(Instruction::ReturnTargetGraveyardCreatureToHand);
+                                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             } else {
                                 builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
                                     filter: obj,
@@ -3004,10 +3012,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 })?;
                                 builder.graveyard_target_bounds =
                                     Some((usize::from(*n), usize::from(*n)));
-                                builder.instructions.push(Instruction::MoveSubject {
-                                    subject: MoveSubjectRef::TargetObject,
-                                    destination: SubjectDestination::Hand,
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Hand));
                             }
                             Ok(())
                         } else if filter.zone.is_none() && from_zone.is_none() {
@@ -3066,17 +3071,14 @@ pub(super) fn lower_zone_moves_instruction(
                                 builder.graveyard_target_bounds = Some((0, usize::from(*max)));
                                 builder
                                     .instructions
-                                    .push(Instruction::ReturnTargetGraveyardCreatureToHand);
+                                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             } else {
                                 builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
                                     filter: obj,
                                     opponents_only: gy_zone == Some(ZoneFilter::OpponentGraveyard),
                                 })?;
                                 builder.graveyard_target_bounds = Some((0, usize::from(*max)));
-                                builder.instructions.push(Instruction::MoveSubject {
-                                    subject: MoveSubjectRef::TargetObject,
-                                    destination: SubjectDestination::Hand,
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Hand));
                             }
                             Ok(())
                         } else if filter.zone.is_none() && from_zone.is_none() {
@@ -3145,7 +3147,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 }
                                 builder
                                     .instructions
-                                    .push(Instruction::ReturnTargetGraveyardCreatureToHand);
+                                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             } else {
                                 builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
                                     filter: obj,
@@ -3157,10 +3159,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 } else if *count == TargetCountAst::UpToX {
                                     builder.up_to_x_target_count = true;
                                 }
-                                builder.instructions.push(Instruction::MoveSubject {
-                                    subject: MoveSubjectRef::TargetObject,
-                                    destination: SubjectDestination::Hand,
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Hand));
                             }
                             Ok(())
                         } else if filter.zone.is_none() && from_zone.is_none() {
@@ -3195,20 +3194,19 @@ pub(super) fn lower_zone_moves_instruction(
                         {
                             builder.instructions.push(Instruction::ReturnToOwnersHand);
                         } else {
-                            builder.instructions.push(Instruction::MoveSubject {
-                                subject: MoveSubjectRef::TargetObject,
-                                destination: SubjectDestination::Hand,
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Hand));
                         }
                         Ok(())
                     }
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::LastMoved,
-                            destination: SubjectDestination::Hand,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::LastMoved,
+                                SubjectDestination::Hand,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -3218,17 +3216,16 @@ pub(super) fn lower_zone_moves_instruction(
                             && !last_instruction_moved_object(&builder.instructions)
                             && !has_prior_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::ReturnLinkedExile {
-                            destination: SubjectDestination::Hand,
-                            only_first: is_singular_linked_exile_anaphora(raw),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(SubjectDestination::Hand, is_singular_linked_exile_anaphora(raw)));
                         Ok(())
                     }
                     SubjectRefAst::Anaphora(_) if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: SubjectDestination::Hand,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                SubjectDestination::Hand,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::Group(f)
@@ -3250,15 +3247,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::Controller,
-                                source_zone: SourceZoneFilter::LinkedExile,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Hand,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::LinkedExile, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Hand, false));
                         Ok(())
                     }
                     SubjectRefAst::Group(f)
@@ -3276,15 +3265,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::Controller,
-                                source_zone: SourceZoneFilter::LastMoved,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Hand,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::LastMoved, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Hand, false));
                         Ok(())
                     }
                     SubjectRefAst::Group(f)
@@ -3302,15 +3283,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::Controller,
-                                source_zone: SourceZoneFilter::Graveyard,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Hand,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::Graveyard, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Hand, false));
                         Ok(())
                     }
                     SubjectRefAst::Group(f) if f.zone.is_some() || from_zone.is_some() => {
@@ -3331,15 +3304,7 @@ pub(super) fn lower_zone_moves_instruction(
                         if obj.has_target_player() {
                             return Err("oracle:unsupported-return-hand");
                         }
-                        trial.instructions.push(Instruction::SelectZoneCardsToZone {
-                            player: sel_player,
-                            source_zone: src_zone,
-                            filter: Box::new(obj),
-                            min: ValueExpr::literal(1),
-                            max: ValueExpr::literal(1),
-                            destination: SubjectDestination::Hand,
-                            reveal: false,
-                        });
+                        trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, src_zone, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Hand, false));
                         *builder = trial;
                         Ok(())
                     }
@@ -3351,15 +3316,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::Controller,
-                                source_zone: SourceZoneFilter::Battlefield,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Hand,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::Battlefield, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Hand, false));
                         Ok(())
                     }
                     SubjectRefAst::Group(f)
@@ -3401,20 +3358,16 @@ pub(super) fn lower_zone_moves_instruction(
                         let ptf = lower_permanent_type_filter(f, vocabulary)?;
                         builder
                             .instructions
-                            .push(Instruction::ReturnControlledPermanents {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                amount: ValueExpr::literal(1),
-                                filter: ptf,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_controlled_permanents(AffectedPlayers::One(ResolvingPlayer::Controller), ValueExpr::literal(1), ptf));
                         Ok(())
                     }
                     SubjectRefAst::AttachedHost(_) => {
-                        builder.instructions.push(Instruction::MoveGroup {
-                            group: Box::new(ObjectFilter::Clause(
-                                ObjectClause::any().attached_to_self(),
-                            )),
-                            destination: PublicZoneDestination::Hand,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                                ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                                PublicZoneDestination::Hand,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -3455,10 +3408,12 @@ pub(super) fn lower_zone_moves_instruction(
                         inner.zone = None;
                         let obj = lower_object_filter(&inner, vocabulary)?;
                         bind_filter_player_target(builder, &obj)?;
-                        builder.instructions.push(Instruction::MoveGroup {
-                            group: Box::new(obj),
-                            destination: PublicZoneDestination::Hand,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                                obj,
+                                PublicZoneDestination::Hand,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -3503,7 +3458,7 @@ pub(super) fn lower_zone_moves_instruction(
                         {
                             builder
                                 .instructions
-                                .push(Instruction::ReturnOwnGraveyardCardsOfTypeToHand(ct));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_own_graveyard_cards_of_type_to_hand(ct));
                             return Ok(());
                         }
                         let obj = if is_unrestricted_filter(&inner) {
@@ -3511,12 +3466,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::MoveGraveyardGroup {
-                            filter: Box::new(obj),
-                            all_graveyards: all_gy,
-                            to_battlefield: false,
-                            tapped: false,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group(obj, all_gy, false, false));
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -3536,11 +3486,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::MoveGraveyardGroupOwned {
-                                players,
-                                filter: Box::new(obj),
-                                destination: SubjectDestination::Hand,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, SubjectDestination::Hand));
                         Ok(())
                     }
                     SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -3633,10 +3579,12 @@ pub(super) fn lower_zone_moves_instruction(
                         Ok(())
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AbilitySource,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AbilitySource,
+                                bf_dest,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::TargetObject {
@@ -3665,7 +3613,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 {
                                     builder
                                         .instructions
-                                        .push(Instruction::ReturnOwnGraveyardCreatureToBattlefield);
+                                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false));
                                 } else if !has_extra_bf_mods
                                     && matches!(
                                         bt,
@@ -3674,15 +3622,10 @@ pub(super) fn lower_zone_moves_instruction(
                                     )
                                 {
                                     builder.instructions.push(
-                                        Instruction::ReturnOwnGraveyardPermanentToBattlefield {
-                                            tapped: enters_tapped,
-                                        },
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(enters_tapped),
                                     );
                                 } else {
-                                    builder.instructions.push(Instruction::MoveSubject {
-                                        subject: MoveSubjectRef::TargetObject,
-                                        destination: bf_dest,
-                                    });
+                                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, bf_dest));
                                 }
                                 Ok(())
                             }
@@ -3698,15 +3641,12 @@ pub(super) fn lower_zone_moves_instruction(
                                 )?;
                                 builder.bind_target(bt)?;
                                 if has_extra_bf_mods {
-                                    builder.instructions.push(Instruction::MoveSubject {
-                                        subject: MoveSubjectRef::TargetObject,
-                                        destination: bf_dest,
-                                    });
+                                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, bf_dest));
                                 } else if !enters_tapped
                                     && bt == BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                                 {
                                     builder.instructions.push(
-                                        Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker,
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                                     );
                                 } else if matches!(
                                     bt,
@@ -3718,25 +3658,17 @@ pub(super) fn lower_zone_moves_instruction(
                                         | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                                 ) {
                                     builder.instructions.push(
-                                        Instruction::ReturnOwnGraveyardPermanentToBattlefield {
-                                            tapped: enters_tapped,
-                                        },
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(enters_tapped),
                                     );
                                 } else {
-                                    builder.instructions.push(Instruction::MoveSubject {
-                                        subject: MoveSubjectRef::TargetObject,
-                                        destination: bf_dest,
-                                    });
+                                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, bf_dest));
                                 }
                                 Ok(())
                             }
                             None if has_extra_bf_mods => {
                                 let bt = lower_target_subject(subject, vocabulary)?;
                                 builder.bind_target(bt)?;
-                                builder.instructions.push(Instruction::MoveSubject {
-                                    subject: MoveSubjectRef::TargetObject,
-                                    destination: bf_dest,
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, bf_dest));
                                 Ok(())
                             }
                             _ => Err("oracle:unsupported-reanimate-zone"),
@@ -3788,10 +3720,12 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_x {
                             builder.x_target_count = true;
                         }
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                bf_dest,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -3834,12 +3768,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::MoveGraveyardGroup {
-                            filter: Box::new(obj),
-                            all_graveyards: all_gy,
-                            to_battlefield: true,
-                            tapped: enters_tapped,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group(obj, all_gy, true, enters_tapped));
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -3859,18 +3788,16 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::MoveGraveyardGroupOwned {
-                                players,
-                                filter: Box::new(obj),
-                                destination: bf_dest,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, bf_dest));
                         Ok(())
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                bf_dest,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::Anaphora(raw) => {
@@ -3880,10 +3807,7 @@ pub(super) fn lower_zone_moves_instruction(
                             && !last_instruction_moved_object(&builder.instructions)
                             && !has_prior_moved_object(&builder.instructions)
                         {
-                            builder.instructions.push(Instruction::ReturnLinkedExile {
-                                destination: bf_dest,
-                                only_first: is_singular_linked_exile_anaphora(raw),
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(bf_dest, is_singular_linked_exile_anaphora(raw)));
                             return Ok(());
                         }
                         let subj_ref = if builder.target != BodyTarget::None
@@ -3901,17 +3825,20 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             return Err("oracle:unsupported-return-bf");
                         };
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: subj_ref,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                subj_ref, bf_dest,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AttachedHost,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AttachedHost,
+                                bf_dest,
+                            ),
+                        );
                         Ok(())
                     }
                     SubjectRefAst::Group(f) => {
@@ -3990,15 +3917,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: sel_player,
-                                source_zone: src_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: bf_dest,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, src_zone, obj, ValueExpr::literal(1), ValueExpr::literal(1), bf_dest, false));
                         Ok(())
                     }
                     SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -4050,10 +3969,7 @@ pub(super) fn lower_zone_moves_instruction(
                             && !last_instruction_moved_object(&builder.instructions)
                             && !has_prior_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::ReturnLinkedExile {
-                            destination: SubjectDestination::Graveyard,
-                            only_first: is_singular_linked_exile_anaphora(raw),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(SubjectDestination::Graveyard, is_singular_linked_exile_anaphora(raw)));
                         Ok(())
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -4276,11 +4192,7 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                     trial
                         .instructions
-                        .push(Instruction::MoveGraveyardGroupOwned {
-                            players,
-                            filter: Box::new(obj),
-                            destination,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, destination));
                     *builder = trial;
                     Ok(())
                 }
@@ -4337,15 +4249,7 @@ pub(super) fn lower_zone_moves_instruction(
                         )?;
                         let loop_body = ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::LoopPlayer,
-                                source_zone: src_zone,
-                                filter: Box::new(obj),
-                                min,
-                                max,
-                                destination,
-                                reveal: false,
-                            }],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::LoopPlayer, src_zone, obj, min, max, destination, false)],
                         );
                         trial.instructions.push(Instruction::ForEachPlayer {
                             players,
@@ -4357,15 +4261,7 @@ pub(super) fn lower_zone_moves_instruction(
                             &mut trial,
                             in_trigger,
                         )?;
-                        trial.instructions.push(Instruction::SelectZoneCardsToZone {
-                            player: rp,
-                            source_zone: src_zone,
-                            filter: Box::new(obj),
-                            min,
-                            max,
-                            destination,
-                            reveal: false,
-                        });
+                        trial.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(rp, src_zone, obj, min, max, destination, false));
                     }
                     *builder = trial;
                     Ok(())
@@ -4456,10 +4352,12 @@ pub(super) fn lower_zone_moves_instruction(
                     } => {
                         let bt = lower_target_subject(subject, vocabulary)?;
                         builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                bf_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -4525,10 +4423,12 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                bf_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -4574,10 +4474,7 @@ pub(super) fn lower_zone_moves_instruction(
                             && !last_instruction_moved_object(&builder.instructions)
                             && !has_prior_moved_object(&builder.instructions)
                         {
-                            builder.instructions.push(Instruction::ReturnLinkedExile {
-                                destination: bf_dest,
-                                only_first: is_singular_linked_exile_anaphora(raw),
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(bf_dest, is_singular_linked_exile_anaphora(raw)));
                             return Ok(());
                         }
                         let subj_ref = if builder.target != BodyTarget::None
@@ -4600,31 +4497,38 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             return Err("oracle:unsupported-move-zone");
                         };
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: subj_ref,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                subj_ref, bf_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                bf_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AttachedHost,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AttachedHost,
+                                bf_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AbilitySource,
-                            destination: bf_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AbilitySource,
+                                bf_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -4666,15 +4570,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::Controller,
-                                source_zone: SourceZoneFilter::Hand,
-                                filter: Box::new(obj),
-                                min: hand_match_count.clone(),
-                                max: hand_match_count,
-                                destination: bf_dest,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::Hand, obj, hand_match_count.clone(), hand_match_count, bf_dest, false));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -4691,12 +4587,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::MoveGraveyardGroup {
-                            filter: Box::new(obj),
-                            all_graveyards: all_gy,
-                            to_battlefield: true,
-                            tapped: enters_tapped,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group(obj, all_gy, true, enters_tapped));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -4712,11 +4603,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::MoveGraveyardGroupOwned {
-                                players,
-                                filter: Box::new(obj),
-                                destination: bf_dest,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, bf_dest));
                         return Ok(());
                     }
                     SubjectRefAst::Group(f) => {
@@ -4778,12 +4665,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 inner.zone = None;
                                 if let Ok(obj) = lower_object_filter(&inner, vocabulary) {
                                     builder.instructions.push(
-                                        Instruction::PutHandPermanentFiltered {
-                                            player: ResolvingPlayer::Controller,
-                                            filter: Box::new(obj),
-                                            maximum: 1,
-                                            tapped: enters_tapped,
-                                        },
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_hand_permanent_filtered(ResolvingPlayer::Controller, obj, 1, enters_tapped),
                                     );
                                     return Ok(());
                                 }
@@ -4803,15 +4685,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: sel_player,
-                                source_zone: src_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: bf_dest,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, src_zone, obj, ValueExpr::literal(1), ValueExpr::literal(1), bf_dest, false));
                         return Ok(());
                     }
                     SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -4859,13 +4733,11 @@ pub(super) fn lower_zone_moves_instruction(
                         if !in_trigger && !self_pronoun_valid {
                             builder
                                 .instructions
-                                .push(Instruction::PutResolvingSpellInLibrary(
-                                    LibraryPlacement::BottomRandom,
-                                ));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_resolving_spell_in_library(LibraryPlacement::BottomRandom,));
                         } else {
                             builder
                                 .instructions
-                                .push(Instruction::ShuffleAbilitySourceIntoLibrary);
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_ability_source_into_library());
                         }
                         return Ok(());
                     }
@@ -4878,7 +4750,7 @@ pub(super) fn lower_zone_moves_instruction(
                             builder.bind_target(bt)?;
                             builder
                                 .instructions
-                                .push(Instruction::ShuffleTargetIntoLibrary);
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library());
                             return Ok(());
                         }
                     }
@@ -4887,7 +4759,7 @@ pub(super) fn lower_zone_moves_instruction(
                     {
                         builder
                             .instructions
-                            .push(Instruction::ShuffleTargetIntoLibrary);
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library());
                         return Ok(());
                     }
                     _ => {}
@@ -4910,9 +4782,7 @@ pub(super) fn lower_zone_moves_instruction(
                     {
                         builder
                             .instructions
-                            .push(Instruction::PutResolvingSpellInLibrary(
-                                LibraryPlacement::FromTop(idx),
-                            ));
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_resolving_spell_in_library(LibraryPlacement::FromTop(idx),));
                         return Ok(());
                     }
                 } else {
@@ -4966,10 +4836,7 @@ pub(super) fn lower_zone_moves_instruction(
                     if let Some(subj_ref) = subj_ref {
                         builder
                             .instructions
-                            .push(Instruction::PutSubjectIntoLibraryFromTop {
-                                subject: subj_ref,
-                                offset: offset_expr,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_subject_into_library_from_top(subj_ref, offset_expr));
                         return Ok(());
                     }
                 }
@@ -4999,7 +4866,7 @@ pub(super) fn lower_zone_moves_instruction(
                             builder.bind_target(bt)?;
                             builder
                                 .instructions
-                                .push(Instruction::PutTargetInLibrary(pl));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(pl));
                             return Ok(());
                         }
                     }
@@ -5139,10 +5006,12 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Group(f) => {
@@ -5160,15 +5029,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: sel_player,
-                                source_zone: src_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Library(pl),
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, src_zone, obj, ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Library(pl), false));
                         return Ok(());
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
@@ -5176,12 +5037,9 @@ pub(super) fn lower_zone_moves_instruction(
                             let adj = normalize_resolving_spell_lib_placement(pl, builder.target);
                             builder
                                 .instructions
-                                .push(Instruction::PutResolvingSpellInLibrary(adj));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_resolving_spell_in_library(adj));
                         } else {
-                            builder.instructions.push(Instruction::MoveSubject {
-                                subject: MoveSubjectRef::AbilitySource,
-                                destination: SubjectDestination::Library(pl),
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::AbilitySource, SubjectDestination::Library(pl)));
                         }
                         return Ok(());
                     }
@@ -5190,16 +5048,18 @@ pub(super) fn lower_zone_moves_instruction(
                     {
                         builder
                             .instructions
-                            .push(Instruction::PutTargetInLibrary(pl));
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(pl));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_created_tokens(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::CreatedTokens,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::CreatedTokens,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -5207,40 +5067,50 @@ pub(super) fn lower_zone_moves_instruction(
                             || (is_last_moved_card_anaphora(raw)
                                 && has_prior_moved_object(&builder.instructions)) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::LastMoved,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::LastMoved,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AttachedHost,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AttachedHost,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) if in_trigger => {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if has_checked_revealed_top_strict(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::RevealedCard,
-                            destination: SubjectDestination::Library(pl),
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::RevealedCard,
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -5265,12 +5135,9 @@ pub(super) fn lower_zone_moves_instruction(
                         if pl == LibraryPlacement::Bottom && builder.target == BodyTarget::None {
                             builder
                                 .instructions
-                                .push(Instruction::PutGroupOnLibraryBottom(Box::new(obj)));
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_group_on_library_bottom(obj));
                         } else {
-                            builder.instructions.push(Instruction::MoveGroupToLibrary {
-                                group: obj,
-                                placement: pl,
-                            });
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group_to_library(obj, pl));
                         }
                         return Ok(());
                     }
@@ -5287,11 +5154,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::MoveGraveyardGroupOwned {
-                                players,
-                                filter: Box::new(obj),
-                                destination: SubjectDestination::Library(pl),
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, SubjectDestination::Library(pl)));
                         return Ok(());
                     }
                     SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -5394,7 +5257,7 @@ pub(super) fn lower_zone_moves_instruction(
                         if !in_trigger && !self_pronoun_valid {
                             builder
                                 .instructions
-                                .push(Instruction::ReturnResolvingSpellToHand);
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_resolving_spell_to_hand());
                         } else {
                             builder.instructions.push(Instruction::ReturnSourceToHand);
                         }
@@ -5404,19 +5267,21 @@ pub(super) fn lower_zone_moves_instruction(
                         && pd == PublicZoneDestination::Exile =>
                     {
                         if !in_trigger && !self_pronoun_valid {
-                            builder.instructions.push(Instruction::ExileResolvingSpell);
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell());
                         } else {
-                            builder.instructions.push(Instruction::ExileAbilitySource);
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source());
                         }
                         return Ok(());
                     }
                     s if is_self_pronoun(s, builder, self_pronoun_valid)
                         && pd == PublicZoneDestination::Graveyard =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::AbilitySource,
-                            destination: SubjectDestination::Graveyard,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::AbilitySource,
+                                SubjectDestination::Graveyard,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5434,7 +5299,9 @@ pub(super) fn lower_zone_moves_instruction(
                     } if filter.zone.is_none() && pd == PublicZoneDestination::Exile => {
                         let bt = lower_battlefield_body_target(filter, vocabulary)?;
                         builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::ExileTarget);
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5443,10 +5310,12 @@ pub(super) fn lower_zone_moves_instruction(
                     } if let Some(sd) = subj_dest_from_pd(pd) => {
                         let bt = lower_target_subject(subject, vocabulary)?;
                         builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5603,10 +5472,12 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -5618,17 +5489,9 @@ pub(super) fn lower_zone_moves_instruction(
                     {
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: ResolvingPlayer::Controller,
-                                source_zone: SourceZoneFilter::CommandZone,
-                                filter: Box::new(ObjectFilter::any().with_flags(
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::CommandZone, ObjectFilter::any().with_flags(
                                     spellwake_engine::program::ObjectFilterFlags::COMMANDER_ONLY,
-                                )),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: SubjectDestination::Hand,
-                                reveal: false,
-                            });
+                                ), ValueExpr::literal(1), ValueExpr::literal(1), SubjectDestination::Hand, false));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -5648,7 +5511,7 @@ pub(super) fn lower_zone_moves_instruction(
                             .push(if pd == PublicZoneDestination::Hand {
                                 Instruction::ReturnToOwnersHand
                             } else {
-                                Instruction::ExileTarget
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()
                             });
                         return Ok(());
                     }
@@ -5660,20 +5523,24 @@ pub(super) fn lower_zone_moves_instruction(
                             )
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TargetObject,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if last_instruction_created_tokens(&builder.instructions)
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::CreatedTokens,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::CreatedTokens,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -5682,10 +5549,12 @@ pub(super) fn lower_zone_moves_instruction(
                                 && has_prior_moved_object(&builder.instructions)))
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::LastMoved,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::LastMoved,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -5695,19 +5564,23 @@ pub(super) fn lower_zone_moves_instruction(
                         ) && has_checked_revealed_top_strict(&builder.instructions)
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::RevealedCard,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::RevealedCard,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject
                         if in_trigger && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -5728,12 +5601,12 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) => {
-                        builder.instructions.push(Instruction::MoveGroup {
-                            group: Box::new(ObjectFilter::Clause(
-                                ObjectClause::any().attached_to_self(),
-                            )),
-                            destination: pd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                                ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
+                                pd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -5771,12 +5644,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::MoveGraveyardGroup {
-                            filter: Box::new(obj),
-                            all_graveyards: all_gy,
-                            to_battlefield: false,
-                            tapped: false,
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group(obj, all_gy, false, false));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -5794,11 +5662,7 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::MoveGraveyardGroupOwned {
-                                players,
-                                filter: Box::new(obj),
-                                destination: sd,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(players, obj, sd));
                         return Ok(());
                     }
                     SubjectRefAst::Group(f) => {
@@ -5824,25 +5688,18 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         builder
                             .instructions
-                            .push(Instruction::SelectZoneCardsToZone {
-                                player: sel_player,
-                                source_zone: src_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                destination: subj_dest,
-                                reveal: false,
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, src_zone, obj, ValueExpr::literal(1), ValueExpr::literal(1), subj_dest, false));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if builder.target == BodyTarget::None
                             && let Some(group_obj) = builder.last_group_filter =>
                     {
-                        builder.instructions.push(Instruction::MoveGroup {
-                            group: Box::new(group_obj),
-                            destination: pd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                                group_obj, pd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -5854,10 +5711,7 @@ pub(super) fn lower_zone_moves_instruction(
                             && !has_prior_moved_object(&builder.instructions)
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::ReturnLinkedExile {
-                            destination: sd,
-                            only_first: is_singular_linked_exile_anaphora(raw),
-                        });
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(sd, is_singular_linked_exile_anaphora(raw)));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -5871,10 +5725,12 @@ pub(super) fn lower_zone_moves_instruction(
                             },
                             _ => return Err("oracle:unsupported-move-zone"),
                         };
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::TriggeringObject,
-                            destination: subj_dest,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TriggeringObject,
+                                subj_dest,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -5887,13 +5743,10 @@ pub(super) fn lower_zone_moves_instruction(
                                 builder.instructions.push(Instruction::ReturnSourceToHand);
                             }
                             PublicZoneDestination::Exile => {
-                                builder.instructions.push(Instruction::ExileAbilitySource);
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source());
                             }
                             PublicZoneDestination::Graveyard => {
-                                builder.instructions.push(Instruction::MoveSubject {
-                                    subject: MoveSubjectRef::AbilitySource,
-                                    destination: SubjectDestination::Graveyard,
-                                });
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::AbilitySource, SubjectDestination::Graveyard));
                             }
                             _ => return Err("oracle:unsupported-move-zone"),
                         }
@@ -5903,10 +5756,12 @@ pub(super) fn lower_zone_moves_instruction(
                         if has_checked_revealed_top_strict(&builder.instructions)
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
-                        builder.instructions.push(Instruction::MoveSubject {
-                            subject: MoveSubjectRef::RevealedCard,
-                            destination: sd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::RevealedCard,
+                                sd,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -5916,10 +5771,11 @@ pub(super) fn lower_zone_moves_instruction(
                         inner.zone = None;
                         let obj = lower_object_filter(&inner, vocabulary)?;
                         bind_filter_player_target(builder, &obj)?;
-                        builder.instructions.push(Instruction::MoveGroup {
-                            group: Box::new(obj),
-                            destination: pd,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                                obj, pd,
+                            ),
+                        );
                         return Ok(());
                     }
                     _ => {}
@@ -6068,265 +5924,277 @@ pub(super) fn lower_zone_moves_instruction(
             half: false,
             rounding: None,
             chooser: None,
-        } => match subject.as_ref() {
-            s if count.is_none()
-                && matches!(player, PlayerRefAst::You)
-                && is_self_pronoun(s, builder, self_pronoun_valid) =>
-            {
-                if in_trigger || self_pronoun_valid {
-                    builder.instructions.push(Instruction::SacrificeSubject {
-                        subject: Box::new(EffectSubject::AbilitySource),
+        } => {
+            match subject.as_ref() {
+                s if count.is_none()
+                    && matches!(player, PlayerRefAst::You)
+                    && is_self_pronoun(s, builder, self_pronoun_valid) =>
+                {
+                    if in_trigger || self_pronoun_valid {
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(EffectSubject::AbilitySource));
+                        Ok(())
+                    } else {
+                        Err("oracle:unsupported-sacrifice")
+                    }
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(1),
+                } if count.is_none()
+                    && filter.zone.is_none()
+                    && matches!(
+                        player,
+                        PlayerRefAst::You
+                            | PlayerRefAst::ThatObjectController
+                            | PlayerRefAst::ItsController
+                            | PlayerRefAst::ThatPlayer
+                    ) =>
+                {
+                    let bt = lower_battlefield_body_target(filter, vocabulary)?;
+                    builder.bind_target(bt)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                            EffectSubject::TargetObject,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::TriggerSubject if count.is_none() && in_trigger => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                            EffectSubject::TriggerSubject,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::AttachedHost(_)
+                    if count.is_none() && (in_trigger || self_pronoun_valid) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                            EffectSubject::Matching(ObjectFilter::Clause(
+                                ObjectClause::any().attached_to_self(),
+                            )),
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(raw) if count.is_none() => {
+                    let low_raw = raw.trim().to_ascii_lowercase();
+                    let eff_subj = if is_permanent_body_target(builder.target) {
+                        EffectSubject::TargetObject
+                    } else if last_instruction_created_tokens(&builder.instructions) {
+                        EffectSubject::CreatedTokens
+                    } else if matches!(
+                        low_raw.as_str(),
+                        "this creature"
+                            | "this permanent"
+                            | "this artifact"
+                            | "this enchantment"
+                            | "this land"
+                    ) && (in_trigger || self_pronoun_valid)
+                    {
+                        EffectSubject::AbilitySource
+                    } else if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) {
+                        EffectSubject::TriggerSubject
+                    } else if self_pronoun_valid {
+                        EffectSubject::AbilitySource
+                    } else if last_instruction_moved_object(&builder.instructions) {
+                        EffectSubject::LastMoved
+                    } else if let Some(group_obj) = builder.last_group_filter {
+                        EffectSubject::Matching(group_obj)
+                    } else {
+                        return Err("oracle:unsupported-sacrifice");
+                    };
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                            eff_subj,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::All(f) if count.is_none() && f.zone.is_none() => {
+                    let mut inner = f.as_ref().clone();
+                    match player {
+                        PlayerRefAst::You => {
+                            if inner.controller.is_none()
+                                || inner.controller == Some(ControllerRelation::You)
+                            {
+                                inner.controller = Some(ControllerRelation::You);
+                            } else {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                        }
+                        PlayerRefAst::EachOpponent => {
+                            if inner.controller.is_none()
+                                || matches!(
+                                    inner.controller,
+                                    Some(
+                                        ControllerRelation::ThatPlayer
+                                            | ControllerRelation::Opponent
+                                            | ControllerRelation::Opponents
+                                    )
+                                )
+                            {
+                                inner.controller = Some(ControllerRelation::Opponent);
+                            } else {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                        }
+                        PlayerRefAst::EachPlayer => {
+                            if inner.controller.is_none()
+                                || inner.controller == Some(ControllerRelation::ThatPlayer)
+                            {
+                                inner.controller = None;
+                            } else {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                        }
+                        PlayerRefAst::EachOtherPlayer => {
+                            if inner.controller.is_none()
+                                || matches!(
+                                    inner.controller,
+                                    Some(
+                                        ControllerRelation::ThatPlayer | ControllerRelation::NotYou
+                                    )
+                                )
+                            {
+                                inner.controller = Some(ControllerRelation::NotYou);
+                            } else {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                        }
+                        PlayerRefAst::TargetPlayer => {
+                            if inner.controller.is_none()
+                                || matches!(
+                                    inner.controller,
+                                    Some(
+                                        ControllerRelation::ThatPlayer
+                                            | ControllerRelation::TargetPlayer
+                                    )
+                                )
+                            {
+                                inner.controller = Some(ControllerRelation::TargetPlayer);
+                            } else {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                        }
+                        PlayerRefAst::TargetOpponent => {
+                            if inner.controller.is_none()
+                                || matches!(
+                                    inner.controller,
+                                    Some(
+                                        ControllerRelation::ThatPlayer
+                                            | ControllerRelation::TargetOpponent
+                                    )
+                                )
+                            {
+                                inner.controller = Some(ControllerRelation::TargetOpponent);
+                            } else {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                        }
+                        PlayerRefAst::ThatPlayer => {
+                            if inner.controller.is_some()
+                                && inner.controller != Some(ControllerRelation::ThatPlayer)
+                            {
+                                return Err("oracle:sacrifice-all-unsupported");
+                            }
+                            if builder.target == BodyTarget::SingleOpponent {
+                                inner.controller = Some(ControllerRelation::TargetOpponent);
+                            } else if builder.target == BodyTarget::SinglePlayer {
+                                inner.controller = Some(ControllerRelation::TargetPlayer);
+                            } else {
+                                inner.controller = Some(ControllerRelation::ThatPlayer);
+                            }
+                        }
+                        PlayerRefAst::DefendingPlayer
+                            if inner.controller.is_none()
+                                || matches!(
+                                    inner.controller,
+                                    Some(
+                                        ControllerRelation::ThatPlayer
+                                            | ControllerRelation::DefendingPlayer
+                                    )
+                                ) =>
+                        {
+                            inner.controller = Some(ControllerRelation::DefendingPlayer);
+                        }
+                        _ => return Err("oracle:sacrifice-all-unsupported"),
+                    }
+                    let obj = lower_object_filter(&inner, vocabulary)?;
+                    bind_filter_player_target(builder, &obj)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                            EffectSubject::Matching(obj),
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Group(f) | SubjectRefAst::Each(f) => {
+                    let f = strip_matching_chooser(f, *player);
+                    let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
+                    if count.is_none()
+                        && matches!(player, PlayerRefAst::You)
+                        && let Some(sel) = lower_sacrifice_selection(&f, vocabulary)
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::SacrificeMatching(sel));
+                        return Ok(());
+                    }
+                    let amount = match count {
+                        Some(c) => lower_value_expr_in_context(
+                            resolve_x(c, bound_x),
+                            builder,
+                            in_trigger,
+                            vocabulary,
+                        )?,
+                        None => ValueExpr::literal(1),
+                    };
+                    let ptf = lower_permanent_type_filter(&f, vocabulary)?;
+                    builder.instructions.push(Instruction::Sacrifice {
+                        players,
+                        amount,
+                        filter: ptf,
                     });
                     Ok(())
-                } else {
-                    Err("oracle:unsupported-sacrifice")
                 }
-            }
-            SubjectRefAst::TargetObject {
-                filter,
-                count: TargetCountAst::Exact(1),
-            } if count.is_none()
-                && filter.zone.is_none()
-                && matches!(
-                    player,
-                    PlayerRefAst::You
-                        | PlayerRefAst::ThatObjectController
-                        | PlayerRefAst::ItsController
-                        | PlayerRefAst::ThatPlayer
-                ) =>
-            {
-                let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::SacrificeSubject {
-                    subject: Box::new(EffectSubject::TargetObject),
-                });
-                Ok(())
-            }
-            SubjectRefAst::TriggerSubject if count.is_none() && in_trigger => {
-                builder.instructions.push(Instruction::SacrificeSubject {
-                    subject: Box::new(EffectSubject::TriggerSubject),
-                });
-                Ok(())
-            }
-            SubjectRefAst::AttachedHost(_)
-                if count.is_none() && (in_trigger || self_pronoun_valid) =>
-            {
-                builder.instructions.push(Instruction::SacrificeSubject {
-                    subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                        ObjectClause::any().attached_to_self(),
-                    ))),
-                });
-                Ok(())
-            }
-            SubjectRefAst::Anaphora(raw) if count.is_none() => {
-                let low_raw = raw.trim().to_ascii_lowercase();
-                let eff_subj = if is_permanent_body_target(builder.target) {
-                    EffectSubject::TargetObject
-                } else if last_instruction_created_tokens(&builder.instructions) {
-                    EffectSubject::CreatedTokens
-                } else if matches!(
-                    low_raw.as_str(),
-                    "this creature"
-                        | "this permanent"
-                        | "this artifact"
-                        | "this enchantment"
-                        | "this land"
-                ) && (in_trigger || self_pronoun_valid)
-                {
-                    EffectSubject::AbilitySource
-                } else if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) {
-                    EffectSubject::TriggerSubject
-                } else if self_pronoun_valid {
-                    EffectSubject::AbilitySource
-                } else if last_instruction_moved_object(&builder.instructions) {
-                    EffectSubject::LastMoved
-                } else if let Some(group_obj) = builder.last_group_filter {
-                    EffectSubject::Matching(group_obj)
-                } else {
-                    return Err("oracle:unsupported-sacrifice");
-                };
-                builder.instructions.push(Instruction::SacrificeSubject {
-                    subject: Box::new(eff_subj),
-                });
-                Ok(())
-            }
-            SubjectRefAst::All(f) if count.is_none() && f.zone.is_none() => {
-                let mut inner = f.as_ref().clone();
-                match player {
-                    PlayerRefAst::You => {
-                        if inner.controller.is_none()
-                            || inner.controller == Some(ControllerRelation::You)
-                        {
-                            inner.controller = Some(ControllerRelation::You);
+                SubjectRefAst::All(_) => Err("oracle:sacrifice-all-unsupported"),
+                SubjectRefAst::Compound(items) if !items.is_empty() => {
+                    for (idx, it) in items.iter().enumerate() {
+                        let next_player = if idx > 0
+                            && matches!(
+                                player,
+                                PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent
+                            ) {
+                            PlayerRefAst::ThatPlayer
                         } else {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
+                            *player
+                        };
+                        lower_instruction(
+                            &InstructionAst::Sacrifice {
+                                player: next_player,
+                                count: count.clone(),
+                                subject: Box::new(it.clone()),
+                                except: None,
+                                half: false,
+                                rounding: None,
+                                chooser: None,
+                            },
+                            builder,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        )?;
                     }
-                    PlayerRefAst::EachOpponent => {
-                        if inner.controller.is_none()
-                            || matches!(
-                                inner.controller,
-                                Some(
-                                    ControllerRelation::ThatPlayer
-                                        | ControllerRelation::Opponent
-                                        | ControllerRelation::Opponents
-                                )
-                            )
-                        {
-                            inner.controller = Some(ControllerRelation::Opponent);
-                        } else {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
-                    }
-                    PlayerRefAst::EachPlayer => {
-                        if inner.controller.is_none()
-                            || inner.controller == Some(ControllerRelation::ThatPlayer)
-                        {
-                            inner.controller = None;
-                        } else {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
-                    }
-                    PlayerRefAst::EachOtherPlayer => {
-                        if inner.controller.is_none()
-                            || matches!(
-                                inner.controller,
-                                Some(ControllerRelation::ThatPlayer | ControllerRelation::NotYou)
-                            )
-                        {
-                            inner.controller = Some(ControllerRelation::NotYou);
-                        } else {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
-                    }
-                    PlayerRefAst::TargetPlayer => {
-                        if inner.controller.is_none()
-                            || matches!(
-                                inner.controller,
-                                Some(
-                                    ControllerRelation::ThatPlayer
-                                        | ControllerRelation::TargetPlayer
-                                )
-                            )
-                        {
-                            inner.controller = Some(ControllerRelation::TargetPlayer);
-                        } else {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
-                    }
-                    PlayerRefAst::TargetOpponent => {
-                        if inner.controller.is_none()
-                            || matches!(
-                                inner.controller,
-                                Some(
-                                    ControllerRelation::ThatPlayer
-                                        | ControllerRelation::TargetOpponent
-                                )
-                            )
-                        {
-                            inner.controller = Some(ControllerRelation::TargetOpponent);
-                        } else {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
-                    }
-                    PlayerRefAst::ThatPlayer => {
-                        if inner.controller.is_some()
-                            && inner.controller != Some(ControllerRelation::ThatPlayer)
-                        {
-                            return Err("oracle:sacrifice-all-unsupported");
-                        }
-                        if builder.target == BodyTarget::SingleOpponent {
-                            inner.controller = Some(ControllerRelation::TargetOpponent);
-                        } else if builder.target == BodyTarget::SinglePlayer {
-                            inner.controller = Some(ControllerRelation::TargetPlayer);
-                        } else {
-                            inner.controller = Some(ControllerRelation::ThatPlayer);
-                        }
-                    }
-                    PlayerRefAst::DefendingPlayer
-                        if inner.controller.is_none()
-                            || matches!(
-                                inner.controller,
-                                Some(
-                                    ControllerRelation::ThatPlayer
-                                        | ControllerRelation::DefendingPlayer
-                                )
-                            ) =>
-                    {
-                        inner.controller = Some(ControllerRelation::DefendingPlayer);
-                    }
-                    _ => return Err("oracle:sacrifice-all-unsupported"),
+                    Ok(())
                 }
-                let obj = lower_object_filter(&inner, vocabulary)?;
-                bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::SacrificeSubject {
-                    subject: Box::new(EffectSubject::Matching(obj)),
-                });
-                Ok(())
+                _ => Err("oracle:unsupported-sacrifice"),
             }
-            SubjectRefAst::Group(f) | SubjectRefAst::Each(f) => {
-                let f = strip_matching_chooser(f, *player);
-                let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
-                if count.is_none()
-                    && matches!(player, PlayerRefAst::You)
-                    && let Some(sel) = lower_sacrifice_selection(&f, vocabulary)
-                {
-                    builder
-                        .instructions
-                        .push(Instruction::SacrificeMatching(sel));
-                    return Ok(());
-                }
-                let amount = match count {
-                    Some(c) => lower_value_expr_in_context(
-                        resolve_x(c, bound_x),
-                        builder,
-                        in_trigger,
-                        vocabulary,
-                    )?,
-                    None => ValueExpr::literal(1),
-                };
-                let ptf = lower_permanent_type_filter(&f, vocabulary)?;
-                builder.instructions.push(Instruction::Sacrifice {
-                    players,
-                    amount,
-                    filter: ptf,
-                });
-                Ok(())
-            }
-            SubjectRefAst::All(_) => Err("oracle:sacrifice-all-unsupported"),
-            SubjectRefAst::Compound(items) if !items.is_empty() => {
-                for (idx, it) in items.iter().enumerate() {
-                    let next_player = if idx > 0
-                        && matches!(
-                            player,
-                            PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent
-                        ) {
-                        PlayerRefAst::ThatPlayer
-                    } else {
-                        *player
-                    };
-                    lower_instruction(
-                        &InstructionAst::Sacrifice {
-                            player: next_player,
-                            count: count.clone(),
-                            subject: Box::new(it.clone()),
-                            except: None,
-                            half: false,
-                            rounding: None,
-                            chooser: None,
-                        },
-                        builder,
-                        vocabulary,
-                        ids,
-                        in_trigger,
-                        self_pronoun_valid,
-                        bound_x,
-                    )?;
-                }
-                Ok(())
-            }
-            _ => Err("oracle:unsupported-sacrifice"),
-        },
+        }
         InstructionAst::SacrificeAnyNumber { player, subject } => match subject.as_ref() {
             SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f)
                 if f.zone.is_none() =>
@@ -6334,11 +6202,13 @@ pub(super) fn lower_zone_moves_instruction(
                 let f = strip_matching_chooser(f, *player);
                 let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
                 let ptf = lower_permanent_type_filter(&f, vocabulary)?;
-                builder.instructions.push(Instruction::SacrificeUpTo {
-                    players,
-                    amount: ValueExpr::literal(i64::from(u16::MAX)),
-                    filter: ptf,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_up_to(
+                        players,
+                        ValueExpr::literal(i64::from(u16::MAX)),
+                        ptf,
+                    ),
+                );
                 Ok(())
             }
             _ => Err("oracle:unsupported-sacrifice"),
@@ -6400,11 +6270,11 @@ pub(super) fn lower_zone_moves_instruction(
                     players,
                     vec![
                         Instruction::OptionalEffect { chooser: rp },
-                        Instruction::DiscardFiltered {
-                            players: AffectedPlayers::One(rp),
-                            amount: ValueExpr::literal(1),
-                            filter: Box::new(obj_filter),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(
+                            AffectedPlayers::One(rp),
+                            ValueExpr::literal(1),
+                            obj_filter,
+                        ),
                         Instruction::BranchIfFalse {
                             condition: ResolutionCondition {
                                 left: ValueExpr::event(EventValueKind::LastActionSucceeded),
@@ -6426,11 +6296,13 @@ pub(super) fn lower_zone_moves_instruction(
             builder
                 .instructions
                 .push(Instruction::OptionalEffect { chooser: rp });
-            builder.instructions.push(Instruction::DiscardFiltered {
-                players: AffectedPlayers::One(rp),
-                amount: ValueExpr::literal(1),
-                filter: Box::new(obj_filter),
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(
+                    AffectedPlayers::One(rp),
+                    ValueExpr::literal(1),
+                    obj_filter,
+                ),
+            );
             let branch_idx = builder.instructions.len();
             builder.instructions.push(Instruction::BranchIfFalse {
                 condition: ResolutionCondition {
@@ -6466,7 +6338,7 @@ pub(super) fn lower_zone_moves_instruction(
                     count: amt,
                     body: Box::new(ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::DiscardOneAtRandom(rp)],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(rp)],
                     )),
                 });
                 return Ok(());
@@ -6485,10 +6357,12 @@ pub(super) fn lower_zone_moves_instruction(
             anaphora: Some(_),
             random: false,
         } if has_checked_revealed_top(&builder.instructions) => {
-            builder.instructions.push(Instruction::MoveSubject {
-                subject: MoveSubjectRef::RevealedCard,
-                destination: SubjectDestination::Graveyard,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                    MoveSubjectRef::RevealedCard,
+                    SubjectDestination::Graveyard,
+                ),
+            );
             Ok(())
         }
         InstructionAst::Discard {
@@ -6510,11 +6384,11 @@ pub(super) fn lower_zone_moves_instruction(
             };
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
             let obj_filter = lower_object_filter(&stripped, vocabulary)?;
-            builder.instructions.push(Instruction::DiscardFiltered {
-                players,
-                amount: amt,
-                filter: Box::new(obj_filter),
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(
+                    players, amt, obj_filter,
+                ),
+            );
             Ok(())
         }
         InstructionAst::Discard {
@@ -6541,7 +6415,7 @@ pub(super) fn lower_zone_moves_instruction(
                 if amt == ValueExpr::literal(1) {
                     builder
                         .instructions
-                        .push(Instruction::DiscardOneAtRandom(rp));
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(rp));
                     return Ok(());
                 }
                 if let ValueExpr::Literal(n) = &amt
@@ -6551,7 +6425,7 @@ pub(super) fn lower_zone_moves_instruction(
                     for _ in 0..k {
                         builder
                             .instructions
-                            .push(Instruction::DiscardOneAtRandom(rp));
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(rp));
                     }
                     return Ok(());
                 }
@@ -6559,7 +6433,7 @@ pub(super) fn lower_zone_moves_instruction(
                     count: amt,
                     body: Box::new(ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::DiscardOneAtRandom(rp)],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(rp)],
                     )),
                 });
                 return Ok(());
@@ -6634,13 +6508,9 @@ pub(super) fn lower_zone_moves_instruction(
                                 ResolvingPlayer::LoopPlayer,
                             )),
                         },
-                        Some(obj_filter) => Instruction::DiscardFiltered {
-                            players: AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
-                            amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
+                        Some(obj_filter) => crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(AffectedPlayers::One(ResolvingPlayer::LoopPlayer), ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
                                 ResolvingPlayer::LoopPlayer,
-                            )),
-                            filter: obj_filter,
-                        },
+                            )), *(obj_filter)),
                     };
                     push_for_each_player(players, vec![op], &mut trial);
                 } else {
@@ -6650,11 +6520,7 @@ pub(super) fn lower_zone_moves_instruction(
                             players: AffectedPlayers::One(rp),
                             amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)),
                         },
-                        Some(obj_filter) => Instruction::DiscardFiltered {
-                            players: AffectedPlayers::One(rp),
-                            amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)),
-                            filter: obj_filter,
-                        },
+                        Some(obj_filter) => crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(AffectedPlayers::One(rp), ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)), *(obj_filter)),
                     };
                     trial.instructions.push(op);
                 }
@@ -6672,12 +6538,14 @@ pub(super) fn lower_zone_moves_instruction(
                     vocabulary,
                 )?
             };
-            trial.instructions.push(Instruction::DiscardUpToExt {
-                players,
-                max_count: max_expr,
-                filter: lowered_filter,
-                any_number: *any_number,
-            });
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_up_to_ext(
+                    players,
+                    max_expr,
+                    (lowered_filter).map(|b| *b),
+                    *any_number,
+                ),
+            );
             *builder = trial;
             Ok(())
         }
@@ -6722,16 +6590,16 @@ pub(super) fn lower_zone_moves_instruction(
         InstructionAst::ShuffleLibrary {
             player: PlayerRefAst::You,
         } => {
-            builder.instructions.push(Instruction::ShuffleOwnLibrary);
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
+            );
             Ok(())
         }
         InstructionAst::ShuffleLibrary { player } => {
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::ShufflePlayerLibrary(
-                        ResolvingPlayer::LoopPlayer,
-                    )],
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(ResolvingPlayer::LoopPlayer,)],
                     builder,
                 );
                 return Ok(());
@@ -6760,12 +6628,54 @@ pub(super) fn lower_zone_moves_instruction(
                     ctx_p
                 } else if let Some(prior_p) =
                     builder.instructions.iter().rev().find_map(|op| match op {
+                        Instruction::ForEachPlayerQuery { selector, .. } => match selector.as_ref()
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(p)
+                            | spellwake_engine::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::One(p),
+                            ) if *p != ResolvingPlayer::Controller
+                                && (*p != ResolvingPlayer::UniqueRelatedPlayer || in_trigger) =>
+                            {
+                                Some(*p)
+                            }
+                            _ => None,
+                        },
+                        Instruction::ZoneOp(spec) => {
+                            let found_p = match &spec.source {
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone:
+                                        spellwake_engine::toolbox::QueryZone::Hand(ps)
+                                        | spellwake_engine::toolbox::QueryZone::Library(ps)
+                                        | spellwake_engine::toolbox::QueryZone::Graveyard(ps)
+                                        | spellwake_engine::toolbox::QueryZone::ExileOwnedBy(ps),
+                                    ..
+                                } => match ps.as_ref() {
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(p)
+                                    | spellwake_engine::toolbox::PlayerSelector::Group(
+                                        AffectedPlayers::One(p),
+                                    ) => Some(*p),
+                                    _ => None,
+                                },
+                                _ => None,
+                            }
+                            .or(match &spec.shuffle_library {
+                                Some(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(p)
+                                    | spellwake_engine::toolbox::PlayerSelector::Group(
+                                        AffectedPlayers::One(p),
+                                    ),
+                                ) => Some(*p),
+                                _ => None,
+                            });
+                            found_p.filter(|p| {
+                                *p != ResolvingPlayer::Controller
+                                    && (*p != ResolvingPlayer::UniqueRelatedPlayer || in_trigger)
+                            })
+                        }
                         Instruction::RevealUntilMatchExt {
                             library_owner: p, ..
                         }
-                        | Instruction::RevealPlayerHand(p)
                         | Instruction::ExileLibraryTop { player: p, .. }
-                        | Instruction::ExileLibraryTopLinked { player: p, .. }
                         | Instruction::Mill { player: p, .. }
                         | Instruction::LookTopChoose {
                             library_owner: p, ..
@@ -6773,28 +6683,8 @@ pub(super) fn lower_zone_moves_instruction(
                         | Instruction::LookTopChooseExt {
                             library_owner: p, ..
                         }
-                        | Instruction::SelectZoneCardsToZone { player: p, .. }
-                        | Instruction::ShufflePlayerLibrary(p)
-                        | Instruction::DiscardOneAtRandom(p)
                         | Instruction::ExileTopPlay {
                             library_owner: AffectedPlayers::One(p),
-                            ..
-                        }
-                        | Instruction::ExileGroupFromZone {
-                            players: AffectedPlayers::One(p),
-                            ..
-                        }
-                        | Instruction::ExileFromZone {
-                            players: AffectedPlayers::One(p),
-                            ..
-                        }
-                        | Instruction::ExilePlayerGraveyards(AffectedPlayers::One(p))
-                        | Instruction::MoveGraveyardGroupOwned {
-                            players: AffectedPlayers::One(p),
-                            ..
-                        }
-                        | Instruction::DiscardUpToExt {
-                            players: AffectedPlayers::One(p),
                             ..
                         }
                         | Instruction::DrawPlayer {
@@ -6815,23 +6705,15 @@ pub(super) fn lower_zone_moves_instruction(
                             if body.instructions.iter().any(|inner| {
                                 matches!(
                                     inner,
-                                    Instruction::SearchLibrary { .. }
+                                    Instruction::ZoneOp(_)
+                                        | Instruction::ForEachPlayerQuery { .. }
+                                        | Instruction::SearchLibrary { .. }
                                         | Instruction::LookTopChoose { .. }
                                         | Instruction::LookTopChooseExt { .. }
                                         | Instruction::RevealUntilMatchExt { .. }
-                                        | Instruction::RevealPlayerHand(_)
-                                        | Instruction::MoveGroupToLibrary { .. }
-                                        | Instruction::SelectZoneCardsToZone { .. }
-                                        | Instruction::MoveGraveyardGroupOwned { .. }
                                         | Instruction::ExileLibraryTop { .. }
-                                        | Instruction::ExileLibraryTopLinked { .. }
                                         | Instruction::ExileTopPlay { .. }
-                                        | Instruction::ExileGroupFromZone { .. }
-                                        | Instruction::ExileFromZone { .. }
-                                        | Instruction::ExilePlayerGraveyards(_)
                                         | Instruction::Mill { .. }
-                                        | Instruction::MoveSubject { .. }
-                                        | Instruction::PutGroupOnLibraryBottom(_)
                                 )
                             }) =>
                         {
@@ -6842,9 +6724,7 @@ pub(super) fn lower_zone_moves_instruction(
                 {
                     push_for_each_player(
                         loop_players,
-                        vec![Instruction::ShufflePlayerLibrary(
-                            ResolvingPlayer::LoopPlayer,
-                        )],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(ResolvingPlayer::LoopPlayer,)],
                         builder,
                     );
                     return Ok(());
@@ -6855,11 +6735,15 @@ pub(super) fn lower_zone_moves_instruction(
                 lower_resolving_player_in_context(*player, builder, in_trigger)?
             };
             if rp == ResolvingPlayer::Controller {
-                builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
+                );
             } else {
-                builder
-                    .instructions
-                    .push(Instruction::ShufflePlayerLibrary(rp));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(
+                        rp,
+                    ),
+                );
             }
             Ok(())
         }
@@ -6867,13 +6751,19 @@ pub(super) fn lower_zone_moves_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::RevealPlayerHand(ResolvingPlayer::LoopPlayer)],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(
+                            ResolvingPlayer::LoopPlayer,
+                        ),
+                    ],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::RevealPlayerHand(rp));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(rp),
+            );
             Ok(())
         }
         InstructionAst::ShuffleGraveyardIntoLibrary {
@@ -6889,28 +6779,24 @@ pub(super) fn lower_zone_moves_instruction(
                 push_for_each_player(
                     players,
                     vec![
-                        Instruction::MoveGraveyardGroupOwned {
-                            players: AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
-                            filter: Box::new(ObjectFilter::any()),
-                            destination: SubjectDestination::Library(LibraryPlacement::Bottom),
-                        },
-                        Instruction::ShufflePlayerLibrary(ResolvingPlayer::LoopPlayer),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(AffectedPlayers::One(ResolvingPlayer::LoopPlayer), ObjectFilter::any(), SubjectDestination::Library(LibraryPlacement::Bottom)),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(ResolvingPlayer::LoopPlayer),
                     ],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder
-                .instructions
-                .push(Instruction::MoveGraveyardGroupOwned {
-                    players: AffectedPlayers::One(rp),
-                    filter: Box::new(ObjectFilter::any()),
-                    destination: SubjectDestination::Library(LibraryPlacement::Bottom),
-                });
-            builder
-                .instructions
-                .push(Instruction::ShufflePlayerLibrary(rp));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_graveyard_group_owned(
+                    AffectedPlayers::One(rp),
+                    ObjectFilter::any(),
+                    SubjectDestination::Library(LibraryPlacement::Bottom),
+                ),
+            );
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(rp),
+            );
             Ok(())
         }
         InstructionAst::PhaseOut { subject } => match subject.as_ref() {
@@ -6999,9 +6885,7 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 builder
                     .instructions
-                    .push(Instruction::PutResolvingSpellInLibrary(
-                        LibraryPlacement::FromTop(offset_u8),
-                    ));
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_resolving_spell_in_library(LibraryPlacement::FromTop(offset_u8),));
                 return Ok(());
             }
             let subj_ref = lower_move_subject_ref(
@@ -7013,10 +6897,7 @@ pub(super) fn lower_zone_moves_instruction(
             )?;
             builder
                 .instructions
-                .push(Instruction::PutSubjectIntoLibraryFromTop {
-                    subject: subj_ref,
-                    offset: ValueExpr::literal(i64::from(offset_u8)),
-                });
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_subject_into_library_from_top(subj_ref, ValueExpr::literal(i64::from(offset_u8))));
             Ok(())
         }
         InstructionAst::MoveCounted {
@@ -7109,15 +6990,10 @@ pub(super) fn lower_zone_moves_instruction(
             } else {
                 return Err("oracle:unsupported-move-counted-count");
             };
-            let op = Instruction::SelectZoneCardsToZone {
-                player,
-                source_zone: src_zone,
-                filter: Box::new(obj),
-                min,
-                max,
-                destination: subj_dest,
-                reveal: false,
-            };
+            let op =
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(
+                    player, src_zone, obj, min, max, subj_dest, false,
+                );
             if let Some(players) = group_players {
                 push_for_each_player(players, vec![op], builder);
             } else {
@@ -7216,12 +7092,7 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 builder
                     .instructions
-                    .push(Instruction::ExileLibraryTopLinked {
-                        player: rp,
-                        amount: cnt,
-                        group: LinkedExileGroup::SourceLinked,
-                        face_down: *face_down,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top_linked(rp, cnt, LinkedExileGroup::SourceLinked, *face_down));
             } else if !*face_down
                 && let AffectedPlayers::One(rp) = library_owner
                 && let ValueExpr::Literal(n) = &cnt
@@ -7251,7 +7122,7 @@ pub(super) fn lower_zone_moves_instruction(
         } => {
             builder
                 .instructions
-                .push(Instruction::ShuffleEachHandAndGraveyard);
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_each_hand_and_graveyard());
             let amt = lower_value_expr_in_context(
                 resolve_x(draw, bound_x),
                 builder,
@@ -7271,13 +7142,11 @@ pub(super) fn lower_zone_moves_instruction(
             if !in_trigger && !self_pronoun_valid {
                 builder
                     .instructions
-                    .push(Instruction::PutResolvingSpellInLibrary(
-                        LibraryPlacement::BottomRandom,
-                    ));
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_resolving_spell_in_library(LibraryPlacement::BottomRandom,));
             } else {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleAbilitySourceIntoLibrary);
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_ability_source_into_library());
             }
             Ok(())
         }
@@ -7315,7 +7184,7 @@ pub(super) fn lower_zone_moves_instruction(
                 builder.bind_target(bt)?;
                 builder
                     .instructions
-                    .push(Instruction::ShuffleTargetIntoLibrary);
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library());
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -7335,7 +7204,7 @@ pub(super) fn lower_zone_moves_instruction(
                 builder.bind_target(bt)?;
                 builder
                     .instructions
-                    .push(Instruction::ShuffleTargetIntoLibrary);
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library());
                 Ok(())
             }
             SubjectRefAst::TargetObject { filter, count }
@@ -7367,7 +7236,7 @@ pub(super) fn lower_zone_moves_instruction(
                 builder.graveyard_target_bounds = Some((min_t, max_t));
                 builder
                     .instructions
-                    .push(Instruction::ShuffleTargetIntoLibrary);
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library());
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -7394,18 +7263,12 @@ pub(super) fn lower_zone_moves_instruction(
                     "your hand" => {
                         builder
                             .instructions
-                            .push(Instruction::ShuffleSubjectIntoLibrary {
-                                subject: Box::new(EffectSubject::Matching(ObjectFilter::any())),
-                                zone: Some(SourceZoneFilter::Hand),
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(ObjectFilter::any()), Some(SourceZoneFilter::Hand)));
                     }
                     "your hand and graveyard" | "your graveyard and hand" => {
                         builder
                             .instructions
-                            .push(Instruction::ShuffleSubjectIntoLibrary {
-                                subject: Box::new(EffectSubject::Matching(ObjectFilter::any())),
-                                zone: Some(SourceZoneFilter::Hand),
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(ObjectFilter::any()), Some(SourceZoneFilter::Hand)));
                         builder
                             .instructions
                             .push(Instruction::ShuffleOwnGraveyardIntoLibrary);
@@ -7415,23 +7278,17 @@ pub(super) fn lower_zone_moves_instruction(
                     | "their hands and graveyards" => {
                         builder
                             .instructions
-                            .push(Instruction::ShuffleEachHandAndGraveyard);
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_each_hand_and_graveyard());
                     }
                     "all graveyards" => {
                         builder
                             .instructions
-                            .push(Instruction::ShuffleSubjectIntoLibrary {
-                                subject: Box::new(EffectSubject::Matching(ObjectFilter::any())),
-                                zone: Some(SourceZoneFilter::AnyGraveyard),
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(ObjectFilter::any()), Some(SourceZoneFilter::AnyGraveyard)));
                     }
                     _ => {
                         builder
                             .instructions
-                            .push(Instruction::ShuffleSubjectIntoLibrary {
-                                subject: Box::new(EffectSubject::Matching(ObjectFilter::any())),
-                                zone: Some(SourceZoneFilter::OpponentGraveyard),
-                            });
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(ObjectFilter::any()), Some(SourceZoneFilter::OpponentGraveyard)));
                     }
                 }
                 Ok(())
@@ -7441,10 +7298,7 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::CreatedTokens),
-                        zone: None,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::CreatedTokens, None));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
@@ -7456,38 +7310,33 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::TargetObject),
-                        zone: None,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::TargetObject, None));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::LastMoved),
-                        zone: None,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::LastMoved, None));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
                 if has_checked_revealed_top_strict(&builder.instructions) =>
             {
-                builder.instructions.push(Instruction::MoveSubject {
-                    subject: MoveSubjectRef::RevealedCard,
-                    destination: SubjectDestination::Library(LibraryPlacement::Bottom),
-                });
-                builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                        MoveSubjectRef::RevealedCard,
+                        SubjectDestination::Library(LibraryPlacement::Bottom),
+                    ),
+                );
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
+                );
                 Ok(())
             }
             SubjectRefAst::TriggerSubject if in_trigger => {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::TriggerSubject),
-                        zone: None,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::TriggerSubject, None));
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -7497,21 +7346,15 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::TriggerSubject),
-                        zone: None,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::TriggerSubject, None));
                 Ok(())
             }
             SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(ObjectFilter::Clause(
                             ObjectClause::any().attached_to_self(),
-                        ))),
-                        zone: None,
-                    });
+                        )), None));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
@@ -7520,10 +7363,7 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 builder
                     .instructions
-                    .push(Instruction::ShuffleSubjectIntoLibrary {
-                        subject: Box::new(EffectSubject::Matching(group_obj)),
-                        zone: None,
-                    });
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(group_obj), None));
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => {
@@ -7576,10 +7416,7 @@ pub(super) fn lower_zone_moves_instruction(
                 } else {
                     builder
                         .instructions
-                        .push(Instruction::ShuffleSubjectIntoLibrary {
-                            subject: Box::new(EffectSubject::Matching(obj)),
-                            zone,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(obj), zone));
                 }
                 Ok(())
             }
@@ -7657,47 +7494,51 @@ pub(super) fn lower_zone_moves_instruction(
                 if let Some(players) = try_group_affected_players(*p) {
                     push_for_each_player(
                         players,
-                        vec![Instruction::RevealPlayerHand(ResolvingPlayer::LoopPlayer)],
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::LoopPlayer)],
                         builder,
                     );
                     return Ok(());
                 }
                 let rp = lower_resolving_player_in_context(*p, builder, in_trigger)?;
-                builder.instructions.push(Instruction::RevealPlayerHand(rp));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(rp),
+                );
                 Ok(())
             }
-            SubjectRefAst::Anaphora(raw) => match raw.trim().to_ascii_lowercase().as_str() {
-                "your hand" => {
-                    builder
+            SubjectRefAst::Anaphora(raw) => {
+                match raw.trim().to_ascii_lowercase().as_str() {
+                    "your hand" => {
+                        builder
                         .instructions
-                        .push(Instruction::RevealPlayerHand(ResolvingPlayer::Controller));
-                    Ok(())
-                }
-                "their hand" | "that player's hand" => {
-                    let rp = lower_resolving_player_in_context(
-                        PlayerRefAst::ThatPlayer,
-                        builder,
-                        in_trigger,
-                    )?;
-                    builder.instructions.push(Instruction::RevealPlayerHand(rp));
-                    Ok(())
-                }
-                "target player's hand" => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
-                    builder
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::Controller));
+                        Ok(())
+                    }
+                    "their hand" | "that player's hand" => {
+                        let rp = lower_resolving_player_in_context(
+                            PlayerRefAst::ThatPlayer,
+                            builder,
+                            in_trigger,
+                        )?;
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(rp));
+                        Ok(())
+                    }
+                    "target player's hand" => {
+                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder
                         .instructions
-                        .push(Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer));
-                    Ok(())
-                }
-                "target opponent's hand" => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
-                    builder
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::TargetPlayer));
+                        Ok(())
+                    }
+                    "target opponent's hand" => {
+                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder
                         .instructions
-                        .push(Instruction::RevealPlayerHand(ResolvingPlayer::TargetPlayer));
-                    Ok(())
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::TargetPlayer));
+                        Ok(())
+                    }
+                    _ => Err("oracle:unsupported-reveal-cards"),
                 }
-                _ => Err("oracle:unsupported-reveal-cards"),
-            },
+            }
             _ => Err("oracle:unsupported-reveal-cards"),
         },
         InstructionAst::ExileOrRevealTopUntil {
@@ -7807,8 +7648,18 @@ pub(super) fn lower_zone_moves_instruction(
                             ..
                         } => (*count == ValueExpr::literal(1)).then_some(Some(*library_owner)),
                         Instruction::MayRevealLibraryTop => Some(Some(ResolvingPlayer::Controller)),
-                        Instruction::ExileLibraryTop { .. }
-                        | Instruction::ExileLibraryTopLinked { .. } => Some(None),
+                        Instruction::ExileLibraryTop { .. } => Some(None),
+                        Instruction::ZoneOp(spec)
+                            if matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Exile {
+                                    link_group: Some(_),
+                                    ..
+                                }
+                            ) =>
+                        {
+                            Some(None)
+                        }
                         _ => None,
                     });
                     let Some(Some(library_owner)) = prior_owner else {
@@ -7844,7 +7695,7 @@ pub(super) fn lower_zone_moves_instruction(
                     if let Some(players) = try_group_affected_players(*player) {
                         push_for_each_player(
                             players,
-                            vec![Instruction::RevealPlayerHand(ResolvingPlayer::LoopPlayer)],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::LoopPlayer)],
                             builder,
                         );
                         return Ok(());
@@ -7855,7 +7706,11 @@ pub(super) fn lower_zone_moves_instruction(
                         *player
                     };
                     let rp = lower_resolving_player_in_context(effective, builder, in_trigger)?;
-                    builder.instructions.push(Instruction::RevealPlayerHand(rp));
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(
+                            rp,
+                        ),
+                    );
                     Ok(())
                 } else {
                     Err("oracle:unsupported-reveal-by-player")
@@ -7873,9 +7728,19 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::ExileLibraryTop { .. }
-            | Instruction::ExileLibraryTopLinked { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ExileTopForPlay { .. } => return true,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile {
+                        link_group: Some(_),
+                        ..
+                    }
+                ) =>
+            {
+                return true;
+            }
             Instruction::ChooseOneLastMoved { .. }
             | Instruction::GrantLastMovedPlayPermission { .. }
             | Instruction::GrantCardPlayPermission { .. }
@@ -7898,10 +7763,17 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             | Instruction::GainControllerLife { .. }
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
-            | Instruction::RevealPlayerHand(_)
             | Instruction::LookTopChoose {
                 reveal_only: true, ..
             } => continue,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::RevealOnly
+                ) =>
+            {
+                continue;
+            }
             _ => return false,
         }
     }
@@ -7952,12 +7824,12 @@ fn try_lower_move_last_moved_filtered(
         }
         Some(Box::new(obj))
     };
-    builder
-        .instructions
-        .push(Instruction::MoveLastMovedFiltered {
-            filter,
+    builder.instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_last_moved_filtered(
+            (filter).map(|b| *b),
             destination,
-        });
+        ),
+    );
     Ok(true)
 }
 
@@ -7976,25 +7848,14 @@ pub(super) fn has_live_last_moved_producer(
                 );
             }
             Instruction::ExileLibraryTop { .. }
-            | Instruction::ExileLibraryTopLinked { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::ExileTopForPlay { .. }
-            | Instruction::ExileFromZone { .. }
-            | Instruction::ExileGroupFromZone { .. }
-            | Instruction::ExileChosenPermanents { .. }
-            | Instruction::ExileTarget
-            | Instruction::ExileGraveyardTarget
-            | Instruction::ExileSubjectUntilSourceLeaves { .. } => {
+            | Instruction::ExileTopForPlay { .. } => {
                 return matches!(
                     expected,
                     LastMovedProducerKind::Any | LastMovedProducerKind::Exile
                 );
             }
-            Instruction::Discard { .. }
-            | Instruction::DiscardFiltered { .. }
-            | Instruction::DiscardOneAtRandom(_)
-            | Instruction::DiscardUpTo { .. }
-            | Instruction::DiscardUpToExt { .. } => {
+            Instruction::Discard { .. } => {
                 return matches!(
                     expected,
                     LastMovedProducerKind::Any
@@ -8002,9 +7863,7 @@ pub(super) fn has_live_last_moved_producer(
                         | LastMovedProducerKind::Graveyard
                 );
             }
-            Instruction::Sacrifice { .. }
-            | Instruction::SacrificeSubject { .. }
-            | Instruction::SacrificeMatching(_) => {
+            Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_) => {
                 return matches!(
                     expected,
                     LastMovedProducerKind::Any
@@ -8012,32 +7871,52 @@ pub(super) fn has_live_last_moved_producer(
                         | LastMovedProducerKind::Graveyard
                 );
             }
-            Instruction::DestroyGroup(_)
-            | Instruction::DestroyGroupWithoutRegeneration(_)
-            | Instruction::DestroyChosen { .. } => {
-                return matches!(
-                    expected,
-                    LastMovedProducerKind::Any
-                        | LastMovedProducerKind::Destroy
-                        | LastMovedProducerKind::Graveyard
-                );
-            }
-            Instruction::MoveSubject { destination, .. }
-            | Instruction::MoveLastMovedFiltered { destination, .. }
-            | Instruction::SelectZoneCardsToZone { destination, .. }
-            | Instruction::MoveGraveyardGroupOwned { destination, .. } => {
-                return match destination {
-                    SubjectDestination::Exile { .. } => matches!(
+            Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+                if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some() =>
+            {
+                let spec =
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                        .unwrap();
+                return match &spec.destination {
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. } => matches!(
                         expected,
                         LastMovedProducerKind::Any | LastMovedProducerKind::Exile
                     ),
-                    SubjectDestination::Graveyard => matches!(
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                    } => matches!(
+                        expected,
+                        LastMovedProducerKind::Any
+                            | LastMovedProducerKind::Sacrifice
+                            | LastMovedProducerKind::Graveyard
+                    ),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. },
+                    } => matches!(
+                        expected,
+                        LastMovedProducerKind::Any
+                            | LastMovedProducerKind::Destroy
+                            | LastMovedProducerKind::Graveyard
+                    ),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                    } => matches!(
+                        expected,
+                        LastMovedProducerKind::Any
+                            | LastMovedProducerKind::Discard
+                            | LastMovedProducerKind::Graveyard
+                    ),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard { .. } => matches!(
                         expected,
                         LastMovedProducerKind::Any | LastMovedProducerKind::Graveyard
                     ),
+                    spellwake_engine::toolbox::ZoneDest::RevealOnly
+                    | spellwake_engine::toolbox::ZoneDest::None => continue,
                     _ => matches!(expected, LastMovedProducerKind::Any),
                 };
             }
+
             Instruction::LookTopChooseExt { keep_dest, .. }
             | Instruction::RevealUntilMatchExt {
                 match_dest: keep_dest,
@@ -8059,19 +7938,7 @@ pub(super) fn has_live_last_moved_producer(
             Instruction::ChooseObjects { .. } => {
                 return matches!(expected, LastMovedProducerKind::Any);
             }
-            Instruction::MoveGroup { destination, .. } => {
-                return match destination {
-                    PublicZoneDestination::Exile => matches!(
-                        expected,
-                        LastMovedProducerKind::Any | LastMovedProducerKind::Exile
-                    ),
-                    PublicZoneDestination::Graveyard => matches!(
-                        expected,
-                        LastMovedProducerKind::Any | LastMovedProducerKind::Graveyard
-                    ),
-                    _ => matches!(expected, LastMovedProducerKind::Any),
-                };
-            }
+
             Instruction::SearchLibrary { .. }
             | Instruction::ManifestTop { .. }
             | Instruction::ManifestDread => {
@@ -8099,7 +7966,6 @@ pub(super) fn has_live_last_moved_producer(
             | Instruction::GainControllerLife { .. }
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
-            | Instruction::RevealPlayerHand(_)
             | Instruction::LookTopChoose {
                 reveal_only: true, ..
             } => continue,
@@ -8353,9 +8219,15 @@ pub(super) fn has_checked_revealed_top(ops: &[Instruction]) -> bool {
                 ..
             } | Instruction::MayRevealLibraryTop
                 | Instruction::ExileLibraryTop { .. }
-                | Instruction::ExileLibraryTopLinked { .. }
                 | Instruction::RevealUntilMatch { .. }
                 | Instruction::RevealUntilMatchExt { .. }
+        ) || matches!(
+            op,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { link_group: Some(_), .. }
+                )
         )
     })
 }
@@ -8371,7 +8243,13 @@ pub(super) fn has_checked_revealed_top_strict(ops: &[Instruction]) -> bool {
                 ..
             } | Instruction::MayRevealLibraryTop
                 | Instruction::ExileLibraryTop { .. }
-                | Instruction::ExileLibraryTopLinked { .. }
+        ) || matches!(
+            op,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { link_group: Some(_), .. }
+                )
         )
     })
 }
@@ -8495,10 +8373,17 @@ fn can_upgrade_destroy_no_regen(op: &Instruction) -> bool {
     match op {
         Instruction::DestroyTarget
         | Instruction::DestroyCapturedCombatCreature { .. }
-        | Instruction::DestroySubject { .. }
-        | Instruction::DestroyCapturedDamageSource
-        | Instruction::DestroyChosen { .. }
-        | Instruction::DestroyGroup(_) => true,
+        | Instruction::DestroyCapturedDamageSource => true,
+        Instruction::ZoneOp(spec)
+            if matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. }
+                }
+            ) =>
+        {
+            true
+        }
         Instruction::FixedTargetClause(body) => body
             .instructions
             .last()
@@ -8520,32 +8405,35 @@ fn can_upgrade_destroy_no_regen(op: &Instruction) -> bool {
 fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
     match op {
         Instruction::DestroyTarget => {
-            *op = Instruction::DestroyTargetWithoutRegeneration;
+            *op = crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_target(true);
             true
         }
-        Instruction::DestroyCapturedCombatCreature { no_regeneration }
-        | Instruction::DestroySubject {
-            no_regeneration, ..
-        } => {
+        Instruction::DestroyCapturedCombatCreature { no_regeneration } => {
             *no_regeneration = true;
             true
         }
+        Instruction::ZoneOp(spec)
+            if matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { .. }
+                }
+            ) =>
+        {
+            if let spellwake_engine::toolbox::ZoneDest::Graveyard {
+                semantics:
+                    spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate },
+            } = &mut spec.destination
+            {
+                *allow_regenerate = false;
+            }
+            true
+        }
         Instruction::DestroyCapturedDamageSource => {
-            *op = Instruction::DestroySubject {
-                subject: Box::new(EffectSubject::TriggerSubject),
-                no_regeneration: true,
-            };
-            true
-        }
-        Instruction::DestroyChosen {
-            allow_regeneration, ..
-        } => {
-            *allow_regeneration = false;
-            true
-        }
-        Instruction::DestroyGroup(filter) => {
-            let cloned = filter.clone();
-            *op = Instruction::DestroyGroupWithoutRegeneration(cloned);
+            *op = crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_subject(
+                EffectSubject::TriggerSubject,
+                true,
+            );
             true
         }
         Instruction::FixedTargetClause(body) => body
@@ -8657,10 +8545,12 @@ fn lower_linked_exile_group_move(
         }
     }
     if is_unrestricted_filter(&inner) {
-        builder.instructions.push(Instruction::ReturnLinkedExile {
-            destination,
-            only_first: false,
-        });
+        builder.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(
+                destination,
+                false,
+            ),
+        );
         return Ok(());
     }
     let obj = lower_object_filter_in_context(&inner, builder, in_trigger, vocabulary)?;
@@ -8673,73 +8563,47 @@ fn lower_linked_exile_group_move(
         filter: Box::new(linked_obj),
         controller_scope: None,
     };
-    builder
-        .instructions
-        .push(Instruction::SelectZoneCardsToZone {
-            player: ResolvingPlayer::Controller,
-            source_zone: SourceZoneFilter::LinkedExile,
-            filter: Box::new(linked_obj),
-            min: count_expr.clone(),
-            max: count_expr,
+    builder.instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(
+            ResolvingPlayer::Controller,
+            SourceZoneFilter::LinkedExile,
+            linked_obj,
+            count_expr.clone(),
+            count_expr,
             destination,
-            reveal: false,
-        });
+            false,
+        ),
+    );
     Ok(())
 }
 
 fn is_moved_object_instruction(op: &Instruction) -> bool {
     matches!(
         op,
-        Instruction::MoveSubject { .. }
-            | Instruction::MoveLastMovedFiltered { .. }
+        Instruction::ZoneOp(_)
+            | Instruction::ForEachPlayerQuery { .. }
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::ReturnLinkedExile { .. }
-            | Instruction::ReturnCardsExiledWithLink(_)
-            | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::ManifestTop { .. }
-            | Instruction::SelectZoneCardsToZone { .. }
             | Instruction::ChooseObjects { .. }
-            | Instruction::MoveGroup { .. }
-            | Instruction::MoveGroupToLibrary { .. }
-            | Instruction::MoveGraveyardGroup { .. }
-            | Instruction::MoveGraveyardGroupOwned { .. }
-            | Instruction::ReturnOwnGraveyardCreatureToBattlefield
-            | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
-            | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
             | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardTargetsTapped(_)
-            | Instruction::ReturnRandomGraveyardCards { .. }
             | Instruction::ReturnSourceGraveyardToBattlefield { .. }
-            | Instruction::PutHandPermanentFiltered { .. }
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
             | Instruction::ReturnCapturedDyingCreature
-            | Instruction::ReturnTargetGraveyardCreatureToHand
             | Instruction::ReturnToOwnersHand
             | Instruction::RevealUntilMatch { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
-            | Instruction::ExileGroupFromZone { .. }
-            | Instruction::ExileFromZone { .. }
-            | Instruction::ExileChosenPermanents { .. }
-            | Instruction::ExileTarget
-            | Instruction::ExileGraveyardTarget
             | Instruction::ExileLibraryTop { .. }
-            | Instruction::ExileLibraryTopLinked { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ExileTopForPlay { .. }
-            | Instruction::ExileSubjectUntilSourceLeaves { .. }
             | Instruction::Mill { .. }
             | Instruction::Discard { .. }
-            | Instruction::DiscardFiltered { .. }
-            | Instruction::DiscardOneAtRandom(_)
-            | Instruction::DiscardUpTo { .. }
-            | Instruction::DiscardUpToExt { .. }
             | Instruction::ManifestDread
             | Instruction::Incubate { .. }
             | Instruction::SearchLibrary { .. }
@@ -9756,11 +9620,13 @@ mod wave10_zone_tests {
         assert_eq!(spell.body.target, BodyTarget::SinglePlayer);
         assert_eq!(
             spell.body.instructions,
-            vec![Instruction::ExileGroupFromZone {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                zone: SourceZoneFilter::HandOrGraveyard,
-                filter: Box::new(ObjectFilter::any()),
-            }]
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_group_from_zone(
+                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    SourceZoneFilter::HandOrGraveyard,
+                    ObjectFilter::any()
+                )
+            ]
         );
     }
 

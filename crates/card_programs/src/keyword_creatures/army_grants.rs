@@ -98,7 +98,7 @@ pub(super) fn granted_creature_ability(
             body: spellwake_engine::program::ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::None,
                 vec![
-                    spellwake_engine::program::Instruction::ExileAbilitySource,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source(),
                     spellwake_engine::program::Instruction::ReturnExiledTargetCohort {
                         next_end_step: false,
                         owner_controls: false,

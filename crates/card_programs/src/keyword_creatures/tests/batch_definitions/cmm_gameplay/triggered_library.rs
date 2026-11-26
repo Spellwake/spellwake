@@ -670,9 +670,10 @@ fn cmm_zones_inga_scrying_orders_three_and_its_death_counts_itself_and_other_sim
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::DestroyGroup(Box::new(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
                         spellwake_engine::program::ObjectFilter::creature(),
-                    )),
+                        true,
+                    ),
                 ),
             ),
         ];

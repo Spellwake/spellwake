@@ -2481,7 +2481,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
             }])
         }
         CostAtomAst::SacrificeSelf => Ok(vec![Instruction::SacrificeStateTriggerSource]),
-        CostAtomAst::ExileSelf { .. } => Ok(vec![Instruction::ExileAbilitySource]),
+        CostAtomAst::ExileSelf { .. } => Ok(vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source(),
+        ]),
         CostAtomAst::ExertSelf => Ok(vec![Instruction::ExertAbilitySource]),
         CostAtomAst::Behold(filter) => {
             let obj = lower_filter_any(filter)?;
@@ -2516,7 +2518,7 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 || (filter.any_card && filter.predicates.is_empty() && filter.flags.0 == 0);
             if *random {
                 if plain_any && amt == ValueExpr::literal(1) {
-                    return Ok(vec![Instruction::DiscardOneAtRandom(player)]);
+                    return Ok(vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(player)]);
                 }
                 return Err("oracle:unsupported-pay-cost");
             }
@@ -2527,11 +2529,13 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 }])
             } else {
                 let obj = lower_object_filter(filter, vocabulary)?;
-                Ok(vec![Instruction::DiscardFiltered {
-                    players: AffectedPlayers::One(player),
-                    amount: amt,
-                    filter: Box::new(obj),
-                }])
+                Ok(vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(
+                        AffectedPlayers::One(player),
+                        amt,
+                        obj,
+                    ),
+                ])
             }
         }
         CostAtomAst::Sacrifice {
@@ -2564,9 +2568,11 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 ResolvingPlayer::TargetPlayer => obj.of_target_player(),
                 _ => return Err("oracle:unsupported-pay-cost"),
             };
-            Ok(vec![Instruction::SacrificeSubject {
-                subject: Box::new(EffectSubject::Matching(scoped)),
-            }])
+            Ok(vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
+                    EffectSubject::Matching(scoped),
+                ),
+            ])
         }
         CostAtomAst::Exile {
             count,
@@ -2600,18 +2606,17 @@ pub(super) fn lower_resolution_pay_cost_ops(
                     .and_then(|v| u8::try_from(v).ok())
                     .and_then(NonZeroU8::new)
             {
-                return Ok(vec![Instruction::ExileCardsFromGraveyard {
-                    player,
-                    count: nz,
-                }]);
+                return Ok(vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(player, nz)]);
             }
             let obj = lower_filter_any(filter)?;
-            Ok(vec![Instruction::ExileFromZone {
-                players: AffectedPlayers::One(player),
-                zone,
-                amount: amt,
-                filter: Box::new(obj),
-            }])
+            Ok(vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
+                    AffectedPlayers::One(player),
+                    zone,
+                    amt,
+                    obj,
+                ),
+            ])
         }
         CostAtomAst::Exile {
             filter,
@@ -2643,27 +2648,25 @@ pub(super) fn lower_resolution_pay_cost_ops(
             if obj.has_target_player() && player != ResolvingPlayer::TargetPlayer {
                 return Err("oracle:unsupported-pay-cost");
             }
-            Ok(vec![Instruction::SelectZoneCardsToZone {
-                player,
-                source_zone,
-                filter: Box::new(obj),
-                min: ValueExpr::literal(if *min_one { 1 } else { 0 }),
-                max: ValueExpr::literal(999),
-                destination: SubjectDestination::Exile {
-                    delayed_return: None,
-                },
-                reveal: false,
-            }])
+            Ok(vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(
+                    player,
+                    source_zone,
+                    obj,
+                    ValueExpr::literal(if *min_one { 1 } else { 0 }),
+                    ValueExpr::literal(999),
+                    SubjectDestination::Exile {
+                        delayed_return: None,
+                    },
+                    false,
+                ),
+            ])
         }
         CostAtomAst::BounceToHand(subject) => match subject.as_ref() {
             SubjectRefAst::SelfObject => Ok(vec![Instruction::ReturnSourceToHand]),
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                 let ptf = lower_permanent_type_filter(f, vocabulary)?;
-                Ok(vec![Instruction::ReturnControlledPermanents {
-                    players: AffectedPlayers::One(player),
-                    amount: ValueExpr::literal(1),
-                    filter: ptf,
-                }])
+                Ok(vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_controlled_permanents(AffectedPlayers::One(player), ValueExpr::literal(1), ptf)])
             }
             _ => Err("oracle:unsupported-pay-cost"),
         },

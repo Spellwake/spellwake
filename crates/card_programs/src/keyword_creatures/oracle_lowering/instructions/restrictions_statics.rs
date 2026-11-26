@@ -3734,34 +3734,20 @@ pub(super) fn lower_restrictions_statics_instruction(
         } =>
         {
             match builder.instructions.last_mut() {
-                Some(Instruction::MoveSubject {
-                    destination: SubjectDestination::Battlefield { tapped, .. },
-                    ..
-                })
-                | Some(Instruction::SelectZoneCardsToZone {
-                    destination: SubjectDestination::Battlefield { tapped, .. },
-                    ..
-                })
-                | Some(Instruction::MoveLastMovedFiltered {
-                    destination: SubjectDestination::Battlefield { tapped, .. },
-                    ..
-                })
-                | Some(Instruction::ReturnLinkedExile {
-                    destination: SubjectDestination::Battlefield { tapped, .. },
-                    ..
-                })
-                | Some(Instruction::MoveGraveyardGroupOwned {
-                    destination: SubjectDestination::Battlefield { tapped, .. },
-                    ..
-                })
-                | Some(Instruction::MoveGraveyardGroup {
-                    to_battlefield: true,
-                    tapped,
-                    ..
-                })
-                | Some(Instruction::PutHandPermanentsOntoBattlefield { tapped, .. })
-                | Some(Instruction::PutHandPermanentFiltered { tapped, .. })
-                | Some(Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped })
+                Some(Instruction::ZoneOp(spec))
+                    if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                    ) =>
+                {
+                    if let spellwake_engine::toolbox::ZoneDest::Battlefield { tapped, .. } =
+                        &mut spec.destination
+                    {
+                        *tapped = true;
+                    }
+                    Ok(())
+                }
+                Some(Instruction::PutHandPermanentsOntoBattlefield { tapped, .. })
                 | Some(Instruction::ReturnSourceGraveyardToBattlefield { tapped }) => {
                     *tapped = true;
                     Ok(())
@@ -4161,47 +4147,26 @@ pub(super) fn lower_restrictions_statics_instruction(
                         };
                         return Ok(());
                     }
-                    Instruction::MoveSubject {
-                        destination:
-                            SubjectDestination::Battlefield {
-                                tapped, attacking, ..
-                            },
-                        ..
-                    }
-                    | Instruction::SelectZoneCardsToZone {
-                        destination:
-                            SubjectDestination::Battlefield {
-                                tapped, attacking, ..
-                            },
-                        ..
-                    }
-                    | Instruction::MoveLastMovedFiltered {
-                        destination:
-                            SubjectDestination::Battlefield {
-                                tapped, attacking, ..
-                            },
-                        ..
-                    }
-                    | Instruction::ReturnLinkedExile {
-                        destination:
-                            SubjectDestination::Battlefield {
-                                tapped, attacking, ..
-                            },
-                        ..
-                    }
-                    | Instruction::MoveGraveyardGroupOwned {
-                        destination:
-                            SubjectDestination::Battlefield {
-                                tapped, attacking, ..
-                            },
-                        ..
-                    } if defender_scope
-                        == spellwake_engine::token::AttackingDefenderScope::AnyLegal =>
+                    Instruction::ZoneOp(spec)
+                        if defender_scope
+                            == spellwake_engine::token::AttackingDefenderScope::AnyLegal
+                            && matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                            ) =>
                     {
-                        *tapped = true;
-                        *attacking = true;
+                        if let spellwake_engine::toolbox::ZoneDest::Battlefield {
+                            tapped,
+                            attacking,
+                            ..
+                        } = &mut spec.destination
+                        {
+                            *tapped = true;
+                            *attacking = true;
+                        }
                         return Ok(());
                     }
+
                     _ => {}
                 }
             }
@@ -6887,10 +6852,10 @@ fn event_replacement_uses_source(ability: &StaticContinuousAbility) -> bool {
                     target_self: true,
                     ..
                 }
-                | Instruction::MoveSubject {
-                    subject: MoveSubjectRef::AbilitySource,
-                    ..
-                }
+        ) || matches!(
+            op,
+            Instruction::ZoneOp(spec)
+                if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
         ) || matches!(
             op,
             Instruction::PutCountersOnSubject { subject, .. }

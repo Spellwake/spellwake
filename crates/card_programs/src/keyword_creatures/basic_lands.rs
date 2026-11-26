@@ -139,18 +139,16 @@ fn land_instruction(text: &str) -> Option<Instruction> {
     let amount = spellwake_engine::program::ValueExpr::Literal(1.into());
     Some(match text {
         "return a land you control to its owner's hand." => {
-            Instruction::ReturnControlledPermanents {
-                players: spellwake_engine::program::AffectedPlayers::One(
-                    ResolvingPlayer::Controller,
-                ),
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_controlled_permanents(
+                spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::Controller),
                 amount,
-                filter: spellwake_engine::program::PermanentTypeFilter {
+                spellwake_engine::program::PermanentTypeFilter {
                     any_types: Default::default(),
                     required_types: [CardType::Land].into(),
                     forbidden_types: BTreeSet::new(),
                     object_filter: None,
                 },
-            }
+            )
         }
         "you gain 1 life." => Instruction::AdjustControllerLife {
             adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),

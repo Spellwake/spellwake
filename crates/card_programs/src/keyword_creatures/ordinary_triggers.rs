@@ -1334,7 +1334,7 @@ pub(super) fn body(
     if text == "return target land card from your graveyard to the battlefield tapped." {
         return Some(ExecutableBody::new(
             BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::land()),
-            vec![Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped: true }],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(true)],
         ));
     }
     if let Some(description) = text.strip_prefix(
@@ -1651,7 +1651,7 @@ pub(super) fn body(
                     },
                     destination: 3,
                 },
-                Instruction::ReturnOwnGraveyardCreatureToBattlefield,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                 Instruction::Jump { destination: 4 },
                 Instruction::ReturnToOwnersHand,
             ],
@@ -2080,9 +2080,12 @@ pub(super) fn body(
         let kind = vocabulary.resolve_label(subtype)?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DestroyGroup(Box::new(
-                ObjectFilter::creature().without_subtype(kind),
-            ))],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    ObjectFilter::creature().without_subtype(kind),
+                    true,
+                ),
+            ],
         ));
     }
     if text.ends_with('"')
@@ -2145,16 +2148,18 @@ pub(super) fn body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ExileChosenPermanents {
-                players: AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
-                amount,
-                filter: PermanentTypeFilter {
-                    any_types: Default::default(),
-                    required_types: BTreeSet::new(),
-                    forbidden_types: BTreeSet::new(),
-                    object_filter: None,
-                },
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_chosen_permanents(
+                    AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
+                    amount,
+                    PermanentTypeFilter {
+                        any_types: Default::default(),
+                        required_types: BTreeSet::new(),
+                        forbidden_types: BTreeSet::new(),
+                        object_filter: None,
+                    },
+                ),
+            ],
         ));
     }
     if text == "scry X, where X is the number of planeswalkers you control." {
@@ -2375,10 +2380,8 @@ pub(super) fn body(
             [Instruction::GoadTarget
                 | Instruction::DrawController { .. }
                 | Instruction::ReturnToOwnersHand
-                | Instruction::ExileTarget
                 | Instruction::DestroyTarget
-                | Instruction::ReturnOwnGraveyardCreatureToBattlefield
-                | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }]
+                | Instruction::ZoneOp(_)]
         ) {
             return None;
         }

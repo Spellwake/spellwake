@@ -59,28 +59,35 @@ impl EffectWindow {
         })
     }
     fn instruction_uses_random(op: &Instruction) -> bool {
+        if let Instruction::ZoneOp(spec) = op {
+            return spec.shuffle_library.is_some()
+                || matches!(spec.selection, crate::toolbox::ZoneSelection::Random { .. })
+                || matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Library {
+                        position: crate::toolbox::LibraryOrderPos::ShuffleInto
+                            | crate::toolbox::LibraryOrderPos::BottomRandom
+                    }
+                );
+        }
+        if let Instruction::ForEach { body, .. } | Instruction::ForEachPlayerQuery { body, .. } = op
+        {
+            return body.instructions.iter().any(Self::instruction_uses_random);
+        }
+
         match op {
             Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::ReturnRandomLinkedExile
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::ExileNonlandForFormerControllers
-            | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::ReturnRandomGraveyardCards { .. }
             | Instruction::FlipCoin { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::Discover { .. }
-            | Instruction::ShuffleOwnLibrary
-            | Instruction::ShufflePlayerLibrary(_)
-            | Instruction::ShuffleTargetIntoLibrary
-            | Instruction::ShuffleSubjectIntoLibrary { .. }
-            | Instruction::RevealPlayerHand(_)
-            | Instruction::ShuffleAbilitySourceIntoLibrary
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
-            | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::RevealCreatureForEachTargetController
             | Instruction::RevealUntilLandKind
             | Instruction::LookTopPlaneswalkers
@@ -290,16 +297,6 @@ impl EffectWindow {
     ) -> Result<Vec<ObjectId>, EffectError> {
         use crate::program::ResolvingPlayer;
         match instruction {
-            Instruction::DiscardOneAtRandom(role) => {
-                let player = self.resolving_player(*role)?;
-                Ok(self
-                    .window
-                    .cards()
-                    .iter()
-                    .filter(|object| object.zone() == ObjectZone::Hand(player))
-                    .map(GameObject::id)
-                    .collect())
-            }
             Instruction::SacrificeRandomUntilLand => {
                 let player = self.resolving_player(ResolvingPlayer::TargetPlayer)?;
                 Ok(self
@@ -315,26 +312,6 @@ impl EffectWindow {
             }
             _ => Err(EffectError::InconsistentProgram),
         }
-    }
-
-    pub(super) fn random_graveyard_candidates(
-        &self,
-        player: SeatId,
-        filter: Option<crate::program::ObjectFilter>,
-    ) -> Result<Vec<ObjectId>, EffectError> {
-        let evaluated = self.evaluated_characteristics()?;
-        Ok(self
-            .window
-            .cards()
-            .graveyard(player)
-            .iter()
-            .copied()
-            .filter(|object| {
-                evaluated.get(*object).is_some_and(|card| {
-                    filter.is_none_or(|filter| self.matches_graveyard_card(filter, card))
-                })
-            })
-            .collect())
     }
 
     /// A host-owned random-order continuation. It is never published as a player decision.
@@ -366,9 +343,7 @@ impl EffectWindow {
                     | Instruction::ReturnRandomLinkedExile
                     | Instruction::RevealCreatureOfSacrificedType
                     | Instruction::ExileNonlandForFormerControllers
-                    | Instruction::DiscardOneAtRandom(_)
                     | Instruction::SacrificeRandomUntilLand
-                    | Instruction::ReturnRandomGraveyardCards { .. }
                     | Instruction::FlipCoin { .. }
                     | Instruction::RollDie { .. }
                     | Instruction::FlipCoins { .. }
@@ -655,10 +630,7 @@ impl EffectWindow {
                 entropy,
             ));
         }
-        if let Some(
-            instruction @ (Instruction::DiscardOneAtRandom(_)
-            | Instruction::SacrificeRandomUntilLand),
-        ) = self
+        if let Some(instruction @ Instruction::SacrificeRandomUntilLand) = self
             .payloads
             .get(&work.cursor.entry)
             .and_then(StackPayload::instructions)
@@ -671,36 +643,6 @@ impl EffectWindow {
             self.resolution_cursor_mut()
                 .ok_or(EffectError::WrongResolutionFrame)?
                 .random_selection = Some(candidates[index]);
-            return Ok((
-                self.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )?,
-                entropy,
-            ));
-        }
-        if let Some(Instruction::ReturnRandomGraveyardCards { filter, count, .. }) = self
-            .payloads
-            .get(&work.cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(work.cursor.instruction))
-            .cloned()
-        {
-            let mut candidates =
-                self.random_graveyard_candidates(work.chooser, filter.as_deref().copied())?;
-            let mut chosen = BTreeSet::new();
-            let mut entropy = tape.clone();
-            for _ in 0..count.get() {
-                let (index, next) = entropy.uniform_index(candidates.len())?;
-                chosen.insert(candidates.swap_remove(index));
-                entropy = next;
-            }
-            let mut cursor = work.cursor;
-            cursor.results.sampled_graveyard_cards = Some(chosen);
-            self.pending_work = Some(PendingWork::Resolution(cursor));
             return Ok((
                 self.progress_rules(
                     DamageJournal::default(),

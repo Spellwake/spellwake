@@ -3403,9 +3403,6 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
             json!({"tag":"ReturnAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
         }
-        ResolutionSelectionOperation::ExileFromZone { zone, filter } => {
-            json!({"tag":"ExileFromZone","zone":format!("{zone:?}"),"filter":format!("{filter:?}")})
-        }
         ResolutionSelectionOperation::TapOrUntapControlled { tap, filter } => {
             json!({"tag":"TapOrUntapControlled","tap":tap,"filter":format!("{filter:?}")})
         }
@@ -3537,7 +3534,6 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         ResolutionSelectionOperation::GraveyardCreatureToHand => {
             json!({"tag":"GraveyardCreatureToHand"})
         }
-        ResolutionSelectionOperation::DiscardUpTo => json!({"tag":"DiscardUpTo"}),
         ResolutionSelectionOperation::OwnedCommandersToHand => {
             json!({"tag":"OwnedCommandersToHand"})
         }
@@ -3548,9 +3544,6 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
             json!({"tag":"RandomSacrifice","object":opaque(object)})
         }
         ResolutionSelectionOperation::Discard => json!({"tag":"Discard"}),
-        ResolutionSelectionOperation::DiscardFiltered { filter } => {
-            json!({"tag":"DiscardFiltered","filter":opaque(filter)})
-        }
     };
     let selected = |rows: &[spellwake_engine::effects::ResolutionAcceptedSelection]| {
         rows.iter().map(|row|json!({"player":row.player.0,"objects":row.objects.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()

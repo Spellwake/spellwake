@@ -1925,16 +1925,13 @@ pub(super) fn lower_multi_target_fixed_clauses(
                             normalized_ops.push(Instruction::DestroyTarget);
                         }
                         spellwake_engine::program::PermanentTargetAction::Exile => {
-                            normalized_ops.push(Instruction::ExileTarget);
+                            normalized_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target());
                         }
                         spellwake_engine::program::PermanentTargetAction::ReturnToHand => {
                             normalized_ops.push(Instruction::ReturnToOwnersHand);
                         }
                         spellwake_engine::program::PermanentTargetAction::MoveTo(destination) => {
-                            normalized_ops.push(Instruction::MoveSubject {
-                                subject: MoveSubjectRef::TargetObject,
-                                destination,
-                            });
+                            normalized_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, destination));
                         }
                         spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter => {
                             normalized_ops.push(Instruction::PutCountersOnSubject {
@@ -2996,7 +2993,9 @@ pub(super) fn lower_revealed_top_branch(
     let prior_shuffled_target = outer_builder.instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::ShuffleTargetIntoLibrary | Instruction::PutTargetInLibrary(_)
+            Instruction::ZoneOp(spec)
+                if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                    && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Library { .. })
         )
     });
     sub.instructions.push(Instruction::LookTopChoose {
@@ -3063,16 +3062,17 @@ pub(super) fn lower_revealed_top_branch(
                     && !dest_explicitly_under_your_control
                 {
                     for op in &mut sub.instructions[before_len..] {
-                        if let Instruction::MoveSubject {
-                            subject: MoveSubjectRef::RevealedCard,
-                            destination:
-                                SubjectDestination::Battlefield {
-                                    under_owner_control,
-                                    ..
-                                },
-                        } = op
+                        if let Instruction::ZoneOp(spec) = op
+                            && matches!(
+                                spec.source,
+                                spellwake_engine::toolbox::ObjectQuery::Revealed
+                            )
+                            && let spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                controller,
+                                ..
+                            } = &mut spec.destination
                         {
-                            *under_owner_control = true;
+                            *controller = spellwake_engine::toolbox::ZoneController::Owner;
                         }
                     }
                 }
@@ -3199,7 +3199,9 @@ pub(super) fn resolve_their_library_owner(
             if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ShuffleTargetIntoLibrary | Instruction::PutTargetInLibrary(_)
+                    Instruction::ZoneOp(spec)
+                        if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                            && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Library { .. })
                 )
             }) =>
         {
@@ -4054,9 +4056,15 @@ pub(super) fn try_fuse_look_top_extended(
     let (req_bt, library_owner) = parse_look_top_library_owner(library, builder, in_trigger)?;
     let push_shuffle = |ops: &mut Vec<Instruction>, owner: ResolvingPlayer| {
         if owner == ResolvingPlayer::Controller {
-            ops.push(Instruction::ShuffleOwnLibrary);
+            ops.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
+            );
         } else {
-            ops.push(Instruction::ShufflePlayerLibrary(owner));
+            ops.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(
+                    owner,
+                ),
+            );
         }
     };
     // Case 1: 2-step LookTopLibrary(Const(1)) + [Optional?]MoveZone/ReturnZone(card-anaphora, bottom)
@@ -4146,10 +4154,12 @@ pub(super) fn try_fuse_look_top_extended(
                     chooser: ResolvingPlayer::Controller,
                 });
             }
-            builder.instructions.push(Instruction::MoveSubject {
-                subject: MoveSubjectRef::RevealedCard,
-                destination: SubjectDestination::Library(LibraryPlacement::Bottom),
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                    MoveSubjectRef::RevealedCard,
+                    SubjectDestination::Library(LibraryPlacement::Bottom),
+                ),
+            );
             return Some(i + 2);
         }
     }
@@ -6830,9 +6840,10 @@ pub(in super::super) fn lower_instruction_seq(
         {
             let bt = lower_battlefield_body_target(filter, vocabulary)?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::ExileUntilNextEndStep);
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_until_next_end_step(
+                ),
+            );
             i += 2;
             continue;
         }
@@ -8638,37 +8649,15 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::PayEnergy { .. }
                         | Instruction::PayControllerLife(_)
                         | Instruction::PayControllerEnergy(_)
+                        | Instruction::ZoneOp(_)
+                        | Instruction::ForEachPlayerQuery { .. }
                         | Instruction::Sacrifice { .. }
-                        | Instruction::SacrificeSubject { .. }
                         | Instruction::SacrificeMatching(_)
                         | Instruction::SacrificeToContinue { .. }
                         | Instruction::Discard { .. }
-                        | Instruction::DiscardFiltered { .. }
-                        | Instruction::DiscardOneAtRandom(_)
-                        | Instruction::DiscardUpTo { .. }
-                        | Instruction::DiscardUpToExt { .. }
-                        | Instruction::ExileTarget
-                        | Instruction::ExileGraveyardTarget
-                        | Instruction::ExileFromZone { .. }
-                        | Instruction::ExileGroupFromZone { .. }
-                        | Instruction::ExileChosenPermanents { .. }
                         | Instruction::ExileLibraryTop { .. }
-                        | Instruction::ExileLibraryTopLinked { .. }
                         | Instruction::ExileTopPlay { .. }
-                        | Instruction::ExileSubjectUntilSourceLeaves { .. }
-                        | Instruction::MoveSubject { .. }
-                        | Instruction::MoveGroup { .. }
-                        | Instruction::MoveGroupToLibrary { .. }
-                        | Instruction::MoveGraveyardGroup { .. }
-                        | Instruction::MoveGraveyardGroupOwned { .. }
-                        | Instruction::MoveLastMovedFiltered { .. }
-                        | Instruction::SelectZoneCardsToZone { .. }
                         | Instruction::DestroyTarget
-                        | Instruction::DestroyTargetWithoutRegeneration
-                        | Instruction::DestroySubject { .. }
-                        | Instruction::DestroyGroup(_)
-                        | Instruction::DestroyGroupWithoutRegeneration(_)
-                        | Instruction::DestroyChosen { .. }
                         | Instruction::LookTopChoose { .. }
                         | Instruction::LookTopChooseExt { .. }
                         | Instruction::RevealUntilMatch { .. }
@@ -9381,9 +9370,28 @@ pub(in super::super) fn lower_instruction_seq(
                                 found = Some(*amount == 1);
                                 break;
                             }
-                            Instruction::ExileLibraryTopLinked { amount, .. } => {
-                                found = Some(*amount == ValueExpr::literal(1));
-                                break;
+                            Instruction::ZoneOp(spec) => {
+                                match &spec.destination {
+                                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                                    | spellwake_engine::toolbox::ZoneDest::Graveyard { .. }
+                                    | spellwake_engine::toolbox::ZoneDest::Hand => {
+                                        let single = match &spec.source {
+                                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                            slice: spellwake_engine::toolbox::QuerySlice::Top(n), ..
+                                        } => **n == ValueExpr::literal(1),
+                                        spellwake_engine::toolbox::ObjectQuery::Targets
+                                        | spellwake_engine::toolbox::ObjectQuery::Source
+                                        | spellwake_engine::toolbox::ObjectQuery::TriggerSubject
+                                        | spellwake_engine::toolbox::ObjectQuery::AttachedHost
+                                        | spellwake_engine::toolbox::ObjectQuery::Revealed
+                                        | spellwake_engine::toolbox::ObjectQuery::LinkedTarget { .. } => true,
+                                        _ => false,
+                                    };
+                                        found = Some(single);
+                                        break;
+                                    }
+                                    _ => {}
+                                }
                             }
                             Instruction::ExileTopPlay {
                                 count,
@@ -9396,55 +9404,37 @@ pub(in super::super) fn lower_instruction_seq(
                                 );
                                 break;
                             }
-                            Instruction::ExileTopForPlay { .. }
-                            | Instruction::ExileTarget
-                            | Instruction::ExileGraveyardTarget => {
+                            Instruction::ExileTopForPlay { .. } => {
                                 found = Some(true);
                                 break;
                             }
-                            Instruction::ExileFromZone {
-                                amount, players, ..
-                            } => {
-                                found = Some(
-                                    *amount == ValueExpr::literal(1)
-                                        && matches!(players, AffectedPlayers::One(_)),
-                                );
-                                break;
-                            }
-                            Instruction::ExileGroupFromZone { .. }
-                            | Instruction::ExileChosenPermanents { .. }
-                            | Instruction::ExileSubjectUntilSourceLeaves { .. }
-                            | Instruction::Mill { .. }
-                            | Instruction::MillEachPlayer(_)
-                            | Instruction::Discard { .. }
-                            | Instruction::DiscardFiltered { .. }
-                            | Instruction::DiscardOneAtRandom(_)
-                            | Instruction::DiscardUpTo { .. }
-                            | Instruction::DiscardUpToExt { .. } => {
-                                found = Some(false);
-                                break;
-                            }
-                            Instruction::MoveSubject { destination, .. }
-                            | Instruction::MoveLastMovedFiltered { destination, .. }
-                            | Instruction::SelectZoneCardsToZone { destination, .. }
-                            | Instruction::MoveGraveyardGroupOwned { destination, .. }
+                            Instruction::ForEachPlayerQuery { selector, body, .. }
                                 if matches!(
-                                    destination,
-                                    SubjectDestination::Exile { .. }
-                                        | SubjectDestination::Graveyard
-                                        | SubjectDestination::Hand
+                                    body.instructions.as_slice(),
+                                    [Instruction::ZoneOp(_)]
                                 ) =>
                             {
-                                found = Some(matches!(op, Instruction::MoveSubject { .. }));
+                                let single = matches!(
+                                    selector.as_ref(),
+                                    spellwake_engine::toolbox::PlayerSelector::Group(
+                                        AffectedPlayers::One(_)
+                                    )
+                                ) && matches!(
+                                    &body.instructions[0],
+                                    Instruction::ZoneOp(spec)
+                                        if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Exile { .. })
+                                            && matches!(
+                                                &spec.selection,
+                                                spellwake_engine::toolbox::ZoneSelection::Prompt { min, max, .. }
+                                                    if **min == ValueExpr::literal(1) && **max == ValueExpr::literal(1)
+                                            )
+                                );
+                                found = Some(single);
                                 break;
                             }
-                            Instruction::MoveGroup {
-                                destination:
-                                    PublicZoneDestination::Exile
-                                    | PublicZoneDestination::Graveyard
-                                    | PublicZoneDestination::Hand,
-                                ..
-                            } => {
+                            Instruction::Mill { .. }
+                            | Instruction::MillEachPlayer(_)
+                            | Instruction::Discard { .. } => {
                                 found = Some(false);
                                 break;
                             }
@@ -9876,7 +9866,7 @@ pub(in super::super) fn lower_instruction_seq(
                     random_rest_order: random_rest,
                 });
                 if do_shuffle {
-                    builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                 }
                 i += 2;
                 continue;
@@ -9967,7 +9957,7 @@ pub(in super::super) fn lower_instruction_seq(
                         random_rest_order: random_rest,
                     });
                     if rest_shuffle_inline || trailing_shuffle {
-                        builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                     }
                     i += if trailing_shuffle { 3 } else { 2 };
                     continue;
@@ -10177,7 +10167,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 rest_to_bottom: false,
                                 random_rest_order: false,
                             });
-                            builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                             i += 3;
                             continue;
                         }
@@ -10244,7 +10234,7 @@ pub(in super::super) fn lower_instruction_seq(
                                     rest_to_bottom: false,
                                     random_rest_order: false,
                                 });
-                                builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                                 builder.instructions.extend(extra_ops);
                                 i += 4;
                                 continue;
@@ -10422,9 +10412,9 @@ pub(in super::super) fn lower_instruction_seq(
                 let push_shuffle_for_owner =
                     |ops: &mut Vec<Instruction>, owner: ResolvingPlayer| {
                         if owner == ResolvingPlayer::Controller {
-                            ops.push(Instruction::ShuffleOwnLibrary);
+                            ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                         } else {
-                            ops.push(Instruction::ShufflePlayerLibrary(owner));
+                            ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(owner));
                         }
                     };
                 let parse_grant_keep =
@@ -11208,8 +11198,8 @@ pub(in super::super) fn lower_instruction_seq(
                             | Instruction::LookTopChooseExt { .. }
                             | Instruction::RevealUntilMatch { .. }
                             | Instruction::RevealUntilMatchExt { .. },
-                        Instruction::ShuffleOwnLibrary | Instruction::ShufflePlayerLibrary(_)
-                    ]
+                        Instruction::ZoneOp(spec)
+                    ] if spec.shuffle_library.is_some()
                 ) {
                     builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
@@ -11660,7 +11650,7 @@ pub(in super::super) fn lower_instruction_seq(
                         secondary: None,
                     });
                     if consume_shuffle {
-                        builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                     }
                     i += if consume_shuffle { 3 } else { 2 };
                     continue;
@@ -12212,11 +12202,11 @@ pub(in super::super) fn lower_instruction_seq(
                             });
                             if rest_shuffle_inline || trailing_shuffle {
                                 if is_controller_lib {
-                                    builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                                 } else {
                                     builder
                                         .instructions
-                                        .push(Instruction::ShufflePlayerLibrary(library_owner));
+                                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(library_owner));
                                 }
                             }
                             i += if trailing_shuffle { 3 } else { 2 };
@@ -12272,7 +12262,7 @@ pub(in super::super) fn lower_instruction_seq(
                             secondary: None,
                         });
                         if rest_shuffle_inline || trailing_shuffle {
-                            builder.instructions.push(Instruction::ShuffleOwnLibrary);
+                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
                         }
                         i += if trailing_shuffle { 3 } else { 2 };
                         continue;
@@ -12308,15 +12298,7 @@ pub(in super::super) fn lower_instruction_seq(
                     *builder = probe;
                     builder
                         .instructions
-                        .push(Instruction::SelectZoneCardsToZone {
-                            player: sel_player,
-                            source_zone: SourceZoneFilter::LastMoved,
-                            filter: Box::new(mill_pick.filter),
-                            min: mill_pick.min,
-                            max: mill_pick.max,
-                            destination: mill_pick.destination,
-                            reveal: mill_pick.reveal,
-                        });
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(sel_player, SourceZoneFilter::LastMoved, mill_pick.filter, mill_pick.min, mill_pick.max, mill_pick.destination, mill_pick.reveal));
                     i += 2;
                     continue;
                 }
@@ -12551,15 +12533,7 @@ pub(in super::super) fn lower_instruction_seq(
                             )?;
                             builder
                                 .instructions
-                                .push(Instruction::SelectZoneCardsToZone {
-                                    player: ResolvingPlayer::Controller,
-                                    source_zone: SourceZoneFilter::TargetPlayerHand,
-                                    filter: Box::new(obj_filter),
-                                    min: ValueExpr::literal(pick_n),
-                                    max: ValueExpr::literal(pick_n),
-                                    destination: SubjectDestination::Library(lib_place),
-                                    reveal: false,
-                                });
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::Controller, SourceZoneFilter::TargetPlayerHand, obj_filter, ValueExpr::literal(pick_n), ValueExpr::literal(pick_n), SubjectDestination::Library(lib_place), false));
                             i += 3;
                             continue;
                         }

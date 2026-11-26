@@ -94,10 +94,12 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::MoveGroup {
-                    group: Box::new(ObjectFilter::any().with_subtype(nightmare)),
-                    destination: PublicZoneDestination::Exile,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                        ObjectFilter::any().with_subtype(nightmare),
+                        PublicZoneDestination::Exile,
+                    ),
+                ],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -199,7 +201,7 @@ pub(super) fn compile(
                 Instruction::OptionalEffect {
                     chooser: ResolvingPlayer::Controller,
                 },
-                Instruction::ReturnOwnGraveyardCreatureToBattlefield,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
             ],
         ),
     });
@@ -211,6 +213,10 @@ pub(super) fn compile(
 pub(super) fn eldest_reborn_third_chapter() -> ExecutableBody {
     ExecutableBody::new(
         BodyTarget::AnyGraveyardCreatureOrPlaneswalker,
-        vec![Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker],
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
+                false,
+            ),
+        ],
     )
 }
