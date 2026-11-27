@@ -901,24 +901,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if false {
-            let objects = self
-                .legal_permanent_targets()?
-                .into_iter()
-                .collect::<Vec<_>>();
-            if !objects.is_empty() {
-                self.begin_graveyard_returns(
-                    entry,
-                    index,
-                    entry.controller(),
-                    objects,
-                    true,
-                    ctx.append,
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if matches!(
             &instruction,
             Instruction::ZoneOp(spec)

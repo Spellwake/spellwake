@@ -3699,16 +3699,7 @@ impl EffectWindow {
                     .get(&id)
                     .map(|copy| copy.definition.as_ref())
             });
-        let forced_host = self
-            .linked_return_work
-            .as_ref()
-            .filter(|work| work.objects.contains(&id))
-            .and_then(|work| match work.origin {
-                LinkedReturnOrigin::HandOrGraveyardAuras { host, .. } => {
-                    Some(TargetRef::Object(host))
-                }
-                _ => None,
-            });
+        let forced_host = None;
         self.prospective_aura_domain(id, owner, copy, forced_host, evaluated)
     }
 
@@ -3827,7 +3818,6 @@ impl EffectWindow {
                                 | LinkedReturnOrigin::ExileWithCounters { .. }
                                 | LinkedReturnOrigin::Exile
                                 | LinkedReturnOrigin::Hand { .. }
-                                | LinkedReturnOrigin::HandOrGraveyardAuras { .. }
                                 | LinkedReturnOrigin::LibraryTop { .. }
                         )
                     })
@@ -3976,13 +3966,7 @@ impl EffectWindow {
         if objects.is_empty() {
             return Ok(());
         }
-        let auras = match origin {
-            LinkedReturnOrigin::HandOrGraveyardAuras { host, .. } => objects
-                .iter()
-                .map(|&id| (id, TargetRef::Object(host)))
-                .collect(),
-            _ => BTreeMap::new(),
-        };
+        let auras = BTreeMap::new();
         self.linked_return_work = Some(LinkedReturnWork {
             origin,
             objects,
@@ -4219,15 +4203,6 @@ impl EffectWindow {
                 let destination = destinations
                     .get(id)?
                     .physical(Some(origin.entry_controller(card)))?;
-                if matches!(origin, LinkedReturnOrigin::HandOrGraveyardAuras { .. })
-                    && matches!(
-                        (card.zone(), destination),
-                        (ObjectZone::Hand(_), ObjectDestination::Hand)
-                            | (ObjectZone::Graveyard(_), ObjectDestination::Graveyard)
-                    )
-                {
-                    return None;
-                }
                 (!matches!(
                     (origin, destination),
                     (LinkedReturnOrigin::Hand { .. }, ObjectDestination::Hand)
@@ -4330,9 +4305,6 @@ impl EffectWindow {
                 self.characteristics
                     .entered_from_graveyard
                     .insert(movement.after.id());
-            }
-            if false && !movement.after.transformed() {
-                self.window.transform(movement.after.id())?;
             }
             if let LinkedReturnOrigin::Graveyard {
                 entry,

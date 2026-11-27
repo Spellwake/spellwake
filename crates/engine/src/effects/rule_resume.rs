@@ -151,41 +151,7 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            EffectDecision::DamageRecipientChoice(bound) => {
-                let revision = self.next_revision(expected)?;
-                let DecisionReply::ChooseDamageRecipient(recipient) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                if bound.revision != expected
-                    || bound.chooser != actor
-                    || entry.controller() != actor
-                    || bound.entry != cursor.entry
-                    || bound.instruction != cursor.instruction
-                    || cursor.chosen_damage_recipient.is_some()
-                    || !bound.recipients.contains(&recipient)
-                {
-                    return Err(EffectError::WrongResolutionFrame);
-                }
-                let mut next = self.clone();
-                next.revision = revision;
-                next.resolution_cursor_mut()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .chosen_damage_recipient = Some(recipient);
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )
-            }
+            EffectDecision::DamageRecipientChoice(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::DamageSourceChoice(bound) => {
                 let revision = self.next_revision(expected)?;
                 let DecisionReply::ChooseDamageSource(source) = reply else {
@@ -1308,30 +1274,7 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            EffectDecision::CounterRemoval(bound) => {
-                let DecisionReply::RemoveCounters(selected) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let revision = self.next_revision(expected)?;
-                if self.counter_removal_choice()? != *bound {
-                    return Err(EffectError::WrongResolutionFrame);
-                }
-                if actor != bound.chooser() {
-                    return Err(EffectError::WrongChooser);
-                }
-                let mut next = self.clone();
-                next.revision = revision;
-                let mut append = RulesJournal::default();
-                next.remove_counters(bound, &selected, &mut append)?;
-                next.advance_instruction()?;
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    append,
-                )
-            }
+            EffectDecision::CounterRemoval(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::Proliferate(bound) => {
                 let DecisionReply::Proliferate(selected) = reply else {
                     return Err(EffectError::WrongDecisionKind);

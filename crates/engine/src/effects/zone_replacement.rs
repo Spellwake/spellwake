@@ -545,37 +545,6 @@ impl ZoneReplacementBatch {
             .find(|(id, _)| *id == object)
             .map(|(_, seat)| *seat)
     }
-    // Exposed for Wave 7 discard-to-battlefield commit callers outside this module.
-    #[allow(dead_code)]
-    pub(super) fn entering_controller_for(&self, object: ObjectId) -> Option<SeatId> {
-        self.entry_controller(object).or_else(|| {
-            self.candidates
-                .values()
-                .find(|candidate| candidate.before.id() == object)
-                .and_then(|candidate| candidate.entering_controller)
-        })
-    }
-    // Exposed for Wave 7 zone-move commit callers handling replaced Hand/Battlefield moves.
-    #[allow(dead_code)]
-    pub(super) fn physical_destination(
-        &self,
-        object: ObjectId,
-    ) -> Result<ObjectDestination, EffectError> {
-        let destination = self.destination(object)?;
-        let controller = if destination == PublicZoneDestination::Battlefield {
-            self.entering_controller_for(object).or_else(|| {
-                self.candidates
-                    .values()
-                    .find(|candidate| candidate.before.id() == object)
-                    .map(|candidate| candidate.before.owner())
-            })
-        } else {
-            None
-        };
-        destination
-            .physical(controller)
-            .ok_or(ZoneReplacementError::InconsistentBatch.into())
-    }
     pub(super) fn entry_controllers(&self) -> impl Iterator<Item = (ObjectId, SeatId)> + '_ {
         self.selected_controllers
             .iter()
@@ -1651,66 +1620,27 @@ impl EffectWindow {
         selections: Vec<ResolutionAcceptedSelection>,
     ) -> Result<ZoneReplacementBatch, EffectError> {
         let action = match operation {
-            ResolutionSelectionOperation::ShuffleAnnouncedTargets { .. }
-            | ResolutionSelectionOperation::PutInLibrary { .. }
-            | ResolutionSelectionOperation::PutHandCardOnBottom => {
-                ZoneActionKind::EffectPutIntoLibrary
-            }
             ResolutionSelectionOperation::ReturnAnnouncedTargets { .. }
             | ResolutionSelectionOperation::ReturnSingle { .. } => {
                 ZoneActionKind::EffectReturnSelected
             }
-            ResolutionSelectionOperation::ChooseVow
-            | ResolutionSelectionOperation::ChooseCreaturesToKeep
-            | ResolutionSelectionOperation::AttachToSource { .. }
-            | ResolutionSelectionOperation::EnterAurasAttachedToSource { .. }
-            | ResolutionSelectionOperation::CopyDifferentlyNamedTokens
-            | ResolutionSelectionOperation::Populate
+            ResolutionSelectionOperation::Populate
             | ResolutionSelectionOperation::Bolster { .. }
             | ResolutionSelectionOperation::Amass { .. }
-            | ResolutionSelectionOperation::Untap { .. }
-            | ResolutionSelectionOperation::TapOrUntapControlled { .. }
             | ResolutionSelectionOperation::Blight { .. }
             | ResolutionSelectionOperation::CollectEvidence { .. }
-            | ResolutionSelectionOperation::SelectZoneCards { .. }
             | ResolutionSelectionOperation::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
-            ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }
-            | ResolutionSelectionOperation::DestroySingle { .. } => ZoneActionKind::EffectDestroy,
+            ResolutionSelectionOperation::DestroyAnnouncedTargets { .. } => {
+                ZoneActionKind::EffectDestroy
+            }
             ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
-            | ResolutionSelectionOperation::ExileLibrarySegment { .. }
-            | ResolutionSelectionOperation::ExileGraveyardTargets { .. }
-            | ResolutionSelectionOperation::ExileChosenGraveyardCards { .. }
             | ResolutionSelectionOperation::ExileLinkedTargets { .. }
-            | ResolutionSelectionOperation::ExileChosen { .. }
-            | ResolutionSelectionOperation::ExileFromHand { .. }
             | ResolutionSelectionOperation::ExileSingle { .. } => ZoneActionKind::EffectExile,
-            ResolutionSelectionOperation::WholeGroup { destination, .. } => match destination {
-                PublicZoneDestination::Hand => ZoneActionKind::EffectReturnSelected,
-                PublicZoneDestination::Exile => ZoneActionKind::EffectExile,
-                PublicZoneDestination::Graveyard => ZoneActionKind::EffectDestroy,
-                PublicZoneDestination::Battlefield => ZoneActionKind::EffectEnterBattlefield,
-                PublicZoneDestination::Command => {
-                    return Err(EffectError::InconsistentSelectionWork);
-                }
-                PublicZoneDestination::Library => ZoneActionKind::EffectShuffleGraveyard,
-            },
-            ResolutionSelectionOperation::OtherControlledCreature {
-                sacrifice: true, ..
-            }
-            | ResolutionSelectionOperation::SacrificeExceptVowed { .. }
-            | ResolutionSelectionOperation::SacrificeContributor { .. }
-            | ResolutionSelectionOperation::SacrificeColored
-            | ResolutionSelectionOperation::Sacrifice { .. }
-            | ResolutionSelectionOperation::SacrificeMatching { .. }
-            | ResolutionSelectionOperation::RandomSacrifice { .. }
-            | ResolutionSelectionOperation::PayLifeToSaveCreatures { .. } => {
+            ResolutionSelectionOperation::Sacrifice { .. }
+            | ResolutionSelectionOperation::RandomSacrifice { .. } => {
                 ZoneActionKind::EffectSacrifice
-            }
-            ResolutionSelectionOperation::MillEachPlayer { .. } => ZoneActionKind::EffectMill,
-            ResolutionSelectionOperation::LibraryCohortToGraveyard { .. } => {
-                ZoneActionKind::EffectRevealedToGraveyard
             }
             ResolutionSelectionOperation::RevealedHand {
                 action: crate::program::ChosenHandAction::Exile,
@@ -1720,19 +1650,9 @@ impl EffectWindow {
                 action: crate::program::ChosenHandAction::Discard,
                 ..
             }
-            | ResolutionSelectionOperation::Discard
-            | ResolutionSelectionOperation::RandomDiscard { .. } => ZoneActionKind::EffectDiscard,
-            ResolutionSelectionOperation::OtherControlledCreature {
-                sacrifice: false, ..
-            }
-            | ResolutionSelectionOperation::OwnedCommandersToHand
-            | ResolutionSelectionOperation::ReturnToHand { .. }
-            | ResolutionSelectionOperation::GraveyardCreatureToHand
-            | ResolutionSelectionOperation::ReturnGraveyardCardsToHand { .. } => {
-                ZoneActionKind::EffectReturnSelected
-            }
+            | ResolutionSelectionOperation::Discard => ZoneActionKind::EffectDiscard,
         };
-        let mut batch = self.begin_zone_replacements(AuthorizedZoneBatch {
+        self.begin_zone_replacements(AuthorizedZoneBatch {
             cause: EventCause::Instruction {
                 entry: cursor.entry,
                 instruction: cursor.instruction,
@@ -1749,11 +1669,7 @@ impl EffectWindow {
                     })
                 })
                 .collect::<Result<Vec<_>, EffectError>>()?,
-        })?;
-        if let ResolutionSelectionOperation::PutInLibrary { placement, .. } = operation {
-            batch.ordered_library_placement = Some(*placement);
-        }
-        Ok(batch)
+        })
     }
     pub(super) fn begin_zone_replacements(
         &self,
@@ -2664,8 +2580,6 @@ impl EffectWindow {
         Ok(plan)
     }
 
-    // Exposed for Wave 7 zone-move commit hooks outside this module.
-    #[allow(dead_code)]
     pub(super) fn apply_zone_replacement_extras_from_movements(
         &mut self,
         batch: Option<&ZoneReplacementBatch>,
@@ -2685,8 +2599,6 @@ impl EffectWindow {
 
     /// Apply `Program.zone_replacement_extras` (exile/battlefield counters and inline followup bodies)
     /// for every zone replacement ability that actually applied in `batch`.
-    // Exposed for Wave 7 zone-move commit hooks outside this module.
-    #[allow(dead_code)]
     pub(super) fn apply_zone_replacement_extras(
         &mut self,
         batch: &ZoneReplacementBatch,
@@ -2771,8 +2683,6 @@ impl EffectWindow {
         Ok(())
     }
 
-    // Helper for apply_zone_replacement_extras (Wave 7 commit hooks outside this module).
-    #[allow(dead_code)]
     fn place_zone_replacement_counters(
         &mut self,
         object: ObjectId,

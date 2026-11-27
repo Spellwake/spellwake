@@ -474,12 +474,6 @@ enum LinkedReturnOrigin {
         instruction: usize,
         tapped: bool,
     },
-    HandOrGraveyardAuras {
-        player: SeatId,
-        host: ObjectId,
-        entry: StackEntryId,
-        instruction: usize,
-    },
 
     Graveyard {
         player: Option<SeatId>,
@@ -520,9 +514,6 @@ impl LinkedReturnOrigin {
                     card.zone() == ObjectZone::Exile
                 }
                 Self::Hand { player, .. } => card.zone() == ObjectZone::Hand(player),
-                Self::HandOrGraveyardAuras { player, .. } => {
-                    matches!(card.zone(), ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player)
-                }
                 Self::Graveyard { player, .. } => {
                     matches!(card.zone(), ObjectZone::Graveyard(owner) if player.is_none_or(|player| player == owner))
                 }
@@ -539,7 +530,7 @@ impl LinkedReturnOrigin {
             _ => None,
         }
     }
-    fn reason(self, from: ObjectZone) -> crate::occurrence::ZoneReason {
+    fn reason(self, _from: ObjectZone) -> crate::occurrence::ZoneReason {
         match self {
             Self::Manifest { .. } => crate::occurrence::ZoneReason::Manifest,
             Self::ExileWithCounters { .. } | Self::ChosenExile { .. } => {
@@ -547,12 +538,6 @@ impl LinkedReturnOrigin {
             }
             Self::Exile => crate::occurrence::ZoneReason::ReturnFromLinkedExile,
             Self::Hand { .. } => crate::occurrence::ZoneReason::HandToBattlefield,
-            Self::HandOrGraveyardAuras { .. } => match from {
-                ObjectZone::Graveyard(_) => {
-                    crate::occurrence::ZoneReason::ReturnFromGraveyardToBattlefield
-                }
-                _ => crate::occurrence::ZoneReason::HandToBattlefield,
-            },
             Self::Graveyard { .. } => {
                 crate::occurrence::ZoneReason::ReturnFromGraveyardToBattlefield
             }
@@ -570,9 +555,6 @@ impl LinkedReturnOrigin {
                 entry, instruction, ..
             }
             | Self::Hand {
-                entry, instruction, ..
-            }
-            | Self::HandOrGraveyardAuras {
                 entry, instruction, ..
             }
             | Self::Graveyard {

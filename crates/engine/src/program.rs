@@ -745,34 +745,6 @@ pub enum SacrificeSelection {
     OtherPermanent,
 }
 
-impl SacrificeSelection {
-    pub(crate) fn matches(
-        self,
-        permanent: &crate::characteristics::ObjectCharacteristics,
-        source: Option<crate::object_identity::ObjectId>,
-    ) -> bool {
-        let not_source = source != Some(permanent.object);
-        match self {
-            Self::Subtype(kind) => permanent.current_creature_subtypes.contains(&kind),
-            Self::NontokenCreature => permanent.is_creature() && !permanent.is_token,
-            Self::Creature => permanent.is_creature(),
-            Self::OtherCreature => permanent.is_creature() && not_source,
-            Self::Artifact => permanent.has_type(CardType::Artifact),
-            Self::OtherArtifact => permanent.has_type(CardType::Artifact) && not_source,
-            Self::Enchantment => permanent.has_type(CardType::Enchantment),
-            Self::Land => permanent.has_type(CardType::Land),
-            Self::ArtifactOrCreature => {
-                permanent.has_type(CardType::Artifact) || permanent.is_creature()
-            }
-            Self::OtherArtifactOrCreature => {
-                (permanent.has_type(CardType::Artifact) || permanent.is_creature()) && not_source
-            }
-            Self::Permanent => true,
-            Self::OtherPermanent => not_source,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermanentTypeFilter {
     /// When populated, at least one of these evaluated types must be present.
