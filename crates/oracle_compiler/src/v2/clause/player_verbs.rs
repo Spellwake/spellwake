@@ -337,10 +337,14 @@ pub(super) fn parse_player_verb_frame(
                 (),
             ));
         }
-        // `get(s) a/an/<val> <kind> counter(s)` (`gets a poison counter`, `get an experience counter`)
+        // `get(s) [a/an/another/an additional/<val>] <kind> counter(s)`
         {
             let gcp = ts.checkpoint();
-            let count = if ts.eat_word("a") || ts.eat_word("an") {
+            let count = if ts.eat_phrase(&["an", "additional"])
+                || ts.eat_word("another")
+                || ts.eat_word("a")
+                || ts.eat_word("an")
+            {
                 Some(ValueExpr::Const(1))
             } else {
                 try_parse(ts, parse_value_expr).ok()
@@ -415,6 +419,15 @@ pub(super) fn parse_player_verb_frame(
             ));
         }
         let subj = parse_subject_ref(ts)?;
+        if ts.eat_word("from") {
+            let fcp = ts.checkpoint();
+            if ts.eat_word("among") && try_parse(ts, parse_subject_ref).is_ok() {
+                // `play <subj> from among <cards>`
+            } else {
+                ts.restore(fcp);
+                let _ = opt(ts, parse_zone_ref);
+            }
+        }
         let mut free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
             || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
         let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
@@ -556,6 +569,8 @@ pub(super) fn parse_player_verb_frame(
             ts.restore(acp);
         }
         let cp2 = ts.checkpoint();
+        let _ = ts.eat_phrase(&["any", "number", "of"])
+            || (ts.eat_phrase(&["up", "to"]) && opt(ts, parse_value_expr).is_some());
         let subj_opt = if ts.eat_phrase(&["the", "other", "cards"])
             || ts.eat_phrase(&["the", "other", "card"])
         {
@@ -566,9 +581,28 @@ pub(super) fn parse_player_verb_frame(
         if let Some(subj) = subj_opt {
             if ts.eat_word("from") {
                 loop {
-                    let _ = ts.eat_phrase(&["among", "cards", "you", "own", "in"])
-                        || ts.eat_phrase(&["among", "cards", "in"]);
-                    let _ = opt(ts, parse_zone_ref);
+                    let f1_cp = ts.checkpoint();
+                    if ts.eat_word("among") {
+                        let acp = ts.checkpoint();
+                        if (ts.eat_phrase(&["cards", "you", "own", "in"])
+                            || ts.eat_phrase(&["cards", "in"]))
+                            && opt(ts, parse_zone_ref).is_some()
+                        {
+                            // `from among cards [you own] in <zone>`
+                        } else {
+                            ts.restore(acp);
+                            if try_parse(ts, parse_subject_ref).is_ok() {
+                                if ts.eat_word("from") {
+                                    let _ = opt(ts, parse_zone_ref);
+                                }
+                            } else {
+                                ts.restore(f1_cp);
+                                let _ = opt(ts, parse_zone_ref);
+                            }
+                        }
+                    } else {
+                        let _ = opt(ts, parse_zone_ref);
+                    }
                     let fcp = ts.checkpoint();
                     let _ = ts.eat_comma();
                     let _ = ts.eat_word("or") || ts.eat_word("and");
@@ -1365,12 +1399,227 @@ pub(super) fn parse_player_verb_frame(
         return Err(ts.err("expected counters or power/toughness after `double`"));
     }
 
-    // 3j. `exchange control of <subj>`
-    if (ts.eat_phrase(&["exchange", "control", "of"])
-        || ts.eat_phrase(&["exchanges", "control", "of"]))
-        && let Ok(subject) = try_parse(ts, parse_subject_ref)
+    // 3j. `exchange ...` (control, life totals, life total with stat, zones)
+    if ts.eat_word("exchange") || ts.eat_word("exchanges") {
+        // `exchange control of <subj1> [and <subj2>]`
+        if ts.eat_phrase(&["control", "of"])
+            && let Ok(first) = try_parse(ts, parse_subject_ref)
+        {
+            let acp = ts.checkpoint();
+            let subject = if ts.eat_word("and")
+                && let Ok(second) = try_parse(ts, parse_subject_ref)
+            {
+                SubjectRef::Compound(vec![first, second])
+            } else {
+                ts.restore(acp);
+                first
+            };
+            return Ok((vec![Effect::ExchangeControl { subject }], ()));
+        }
+        // `exchange life totals [with <player>]`
+        if ts.eat_phrase(&["life", "totals"]) {
+            let other = if ts.eat_word("with") {
+                parse_player_ref(ts)?
+            } else {
+                PlayerRef::TargetPlayer
+            };
+            return Ok((
+                vec![
+                    Effect::AdjustLife {
+                        player: actor,
+                        amount: ValueExpr::PlayerStat {
+                            player: other,
+                            stat: crate::ast::PlayerStatKind::LifeTotal,
+                        },
+                        op: LifeOp::Set,
+                    },
+                    Effect::AdjustLife {
+                        player: other,
+                        amount: ValueExpr::PlayerStat {
+                            player: actor,
+                            stat: crate::ast::PlayerStatKind::LifeTotal,
+                        },
+                        op: LifeOp::Set,
+                    },
+                ],
+                (),
+            ));
+        }
+        // `exchange <player>'s life total with <subj>'s power/toughness`
+        {
+            let lcp = ts.checkpoint();
+            let life_p = if ts.eat_phrase(&["your", "life", "total"]) {
+                Some(PlayerRef::You)
+            } else if ts.eat_phrase(&["target", "opponent's", "life", "total"]) {
+                Some(PlayerRef::TargetOpponent)
+            } else if ts.eat_phrase(&["target", "player's", "life", "total"]) {
+                Some(PlayerRef::TargetPlayer)
+            } else if ts.eat_phrase(&["their", "life", "total"])
+                || ts.eat_phrase(&["that", "player's", "life", "total"])
+            {
+                Some(PlayerRef::ThatPlayer)
+            } else {
+                None
+            };
+            if let Some(lp) = life_p
+                && ts.eat_word("with")
+                && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                && ts.eat_word("'s")
+            {
+                let stat_opt = if ts.eat_word("toughness") {
+                    Some(crate::ast::StatKind::Toughness)
+                } else if ts.eat_word("power") {
+                    Some(crate::ast::StatKind::Power)
+                } else {
+                    None
+                };
+                if let Some(stat) = stat_opt {
+                    let stat_val = ValueExpr::ObjectStat {
+                        subject: Box::new(subj.clone()),
+                        stat,
+                    };
+                    let life_val = ValueExpr::PlayerStat {
+                        player: lp,
+                        stat: crate::ast::PlayerStatKind::LifeTotal,
+                    };
+                    let (p_expr, t_expr) = if stat == crate::ast::StatKind::Toughness {
+                        (
+                            ValueExpr::ObjectStat {
+                                subject: Box::new(subj.clone()),
+                                stat: crate::ast::StatKind::Power,
+                            },
+                            life_val,
+                        )
+                    } else {
+                        (
+                            life_val,
+                            ValueExpr::ObjectStat {
+                                subject: Box::new(subj.clone()),
+                                stat: crate::ast::StatKind::Toughness,
+                            },
+                        )
+                    };
+                    return Ok((
+                        vec![
+                            Effect::AdjustLife {
+                                player: lp,
+                                amount: stat_val,
+                                op: LifeOp::Set,
+                            },
+                            Effect::MutateObject {
+                                subject: subj,
+                                mutation: ObjectMutation::SetDynamicBasePT {
+                                    power: p_expr,
+                                    toughness: t_expr,
+                                    add_types: crate::ast::CardTypeMask::EMPTY,
+                                    keep_existing_types: true,
+                                },
+                                duration: Duration::Permanent,
+                            },
+                        ],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(lcp);
+        }
+        // `exchange your/their <zone1> and <zone2>` (e.g. `your hand and library`, `your graveyard and library`, `your hand and graveyard`)
+        {
+            let zcp = ts.checkpoint();
+            if let Ok(z1) = try_parse(ts, parse_zone_ref)
+                && ts.eat_word("and")
+            {
+                let z2_opt = if let Ok(z2) = try_parse(ts, parse_zone_ref) {
+                    Some(z2)
+                } else if ts.eat_word("library") {
+                    Some(ZoneRef {
+                        zone: ZoneKind::Library,
+                        owner: z1.owner,
+                    })
+                } else if ts.eat_word("graveyard") {
+                    Some(ZoneRef {
+                        zone: ZoneKind::Graveyard,
+                        owner: z1.owner,
+                    })
+                } else if ts.eat_word("hand") {
+                    Some(ZoneRef {
+                        zone: ZoneKind::Hand,
+                        owner: z1.owner,
+                    })
+                } else {
+                    None
+                };
+                if let Some(z2) = z2_opt {
+                    return Ok((
+                        vec![
+                            Effect::ZoneOp {
+                                actor,
+                                op: ZoneOpKind::Move,
+                                subject: SubjectRef::All(Box::new(ObjectFilter {
+                                    any_card: true,
+                                    zones: vec![z1],
+                                    ..Default::default()
+                                })),
+                                from: vec![z1],
+                                to: Some(ZoneDest {
+                                    zone: z2.zone,
+                                    owner: z2.owner,
+                                    library_position: None,
+                                    library_order: None,
+                                    under_control: None,
+                                }),
+                                modifiers: EntryModifiers::default(),
+                                except: None,
+                                count: None,
+                            },
+                            Effect::ZoneOp {
+                                actor,
+                                op: ZoneOpKind::Move,
+                                subject: SubjectRef::All(Box::new(ObjectFilter {
+                                    any_card: true,
+                                    zones: vec![z2],
+                                    ..Default::default()
+                                })),
+                                from: vec![z2],
+                                to: Some(ZoneDest {
+                                    zone: z1.zone,
+                                    owner: z1.owner,
+                                    library_position: None,
+                                    library_order: None,
+                                    under_control: None,
+                                }),
+                                modifiers: EntryModifiers::default(),
+                                except: None,
+                                count: None,
+                            },
+                        ],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(zcp);
+        }
+        return Err(ts.err("expected target after `exchange`"));
+    }
+
+    // 3k. `control(s) <player> during that player's/their next turn`
     {
-        return Ok((vec![Effect::ExchangeControl { subject }], ()));
+        let ccp = ts.checkpoint();
+        if (ts.eat_word("control") || ts.eat_word("controls"))
+            && let Ok(target_p) = try_parse(ts, parse_player_ref)
+            && (ts.eat_phrase(&["during", "that", "player's", "next", "turn"])
+                || ts.eat_phrase(&["during", "their", "next", "turn"]))
+        {
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject: SubjectRef::Player(target_p),
+                    mutation: ObjectMutation::GainControl { controller: actor },
+                    duration: Duration::UntilEndOfNextTurn,
+                }],
+                (),
+            ));
+        }
+        ts.restore(ccp);
     }
 
     // 4. `pay(s) <cost>`
@@ -2073,7 +2322,12 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
     if ts.eat_word("remove") || ts.eat_word("removes") {
-        if ts.eat_phrase(&["those", "counters"]) || ts.eat_phrase(&["those", "counter"]) {
+        if ts.eat_phrase(&["those", "counters"])
+            || ts.eat_phrase(&["those", "counter"])
+            || ts.eat_phrase(&["all", "of", "them"])
+            || ts.eat_phrase(&["them", "all"])
+            || ts.eat_word("them")
+        {
             let subject = if ts.eat_word("from") {
                 parse_subject_ref(ts)?
             } else {
@@ -2093,7 +2347,12 @@ pub(super) fn parse_player_verb_frame(
             ));
         }
         let _ = ts.eat_phrase(&["up", "to"]);
-        let (all, count) = if ts.eat_word("all") {
+        let (all, count) = if ts.eat_phrase(&["all", "but"]) {
+            let keep = parse_value_expr(ts)?;
+            (false, Some(keep))
+        } else if ts.eat_phrase(&["any", "number", "of"]) {
+            (false, Some(ValueExpr::Const(0)))
+        } else if ts.eat_word("all") {
             (true, None)
         } else if ts.eat_word("a") || ts.eat_word("an") {
             (false, Some(ValueExpr::Const(1)))
@@ -2112,6 +2371,7 @@ pub(super) fn parse_player_verb_frame(
         if !ts.eat_word("from") {
             return Err(ts.err("expected `from` in remove counters"));
         }
+        let _ = ts.eat_word("among");
         let subject = parse_subject_ref(ts)?;
         return Ok((
             vec![Effect::MutateObject {

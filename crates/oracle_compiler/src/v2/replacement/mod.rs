@@ -16,17 +16,80 @@ use crate::v2::value::parse_value_expr;
 /// `If <event> would ..., <instead> instead`,
 /// `The next <flt> you cast this turn enters with ...`).
 pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
-    // 0. `As [~ | it] enters [or is turned face up] / is turned face up / transforms into ~, <body (one or more sentences)>`
+    // 0. `As [~ | it | <flt>] enters [or is turned face up] / is turned face up / transforms into ~ / becomes attached to a creature, <body (one or more sentences)>`
     {
         let cp = ts.checkpoint();
-        if ts.eat_word("as")
-            && (ts.eat_tilde() || ts.eat_word("it"))
-            && (ts.eat_phrase(&["enters", "or", "is", "turned", "face", "up"])
-                || ts.eat_word("enters")
-                || ts.eat_phrase(&["is", "turned", "face", "up"])
-                || (ts.eat_phrase(&["transforms", "into"]) && ts.eat_tilde()))
-            && ts.eat_comma()
-        {
+        let matched_as = if ts.eat_word("as") {
+            if (ts.eat_tilde() || ts.eat_word("it"))
+                && (ts.eat_phrase(&["enters", "or", "is", "turned", "face", "up"])
+                    || ts.eat_word("enters")
+                    || ts.eat_phrase(&["is", "turned", "face", "up"])
+                    || ts.eat_phrase(&["becomes", "attached", "to", "a", "creature"])
+                    || (ts.eat_phrase(&["transforms", "into"]) && ts.eat_tilde()))
+                && ts.eat_comma()
+            {
+                true
+            } else {
+                ts.restore(cp);
+                ts.eat_word("as")
+                    && try_parse(ts, parse_object_filter).is_ok()
+                    && ts.eat_word("enters")
+                    && ts.eat_comma()
+            }
+        } else {
+            false
+        };
+        if matched_as {
+            // `As ~ enters, you may have it become a copy of <flt> [until end of turn] [, except ...]`
+            {
+                let ccp = ts.checkpoint();
+                if ts.eat_phrase(&["you", "may", "have", "it", "become", "a", "copy", "of"]) {
+                    let _ = ts.eat_word("any");
+                    if let Ok(filter) = try_parse(ts, parse_object_filter) {
+                        let _ = ts.eat_phrase(&["until", "end", "of", "turn"]);
+                        let mut exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
+                        parse_extra_copy_exceptions(ts, &mut exceptions);
+                        let _ = ts.eat_period();
+                        if ts.is_eof() {
+                            return Ok(Replacement::EnterAsCopy {
+                                optional: true,
+                                filter,
+                                exceptions,
+                            });
+                        }
+                    }
+                }
+                ts.restore(ccp);
+            }
+            // `As ~ enters [or is turned face up], it becomes your choice of <P/T ...>, ..., or <P/T ...>`
+            {
+                let bcp = ts.checkpoint();
+                if ts.eat_phrase(&["it", "becomes", "your", "choice", "of"])
+                    && let Some(branches) = parse_as_enters_pt_choices(ts)
+                {
+                    let _ = ts.eat_period();
+                    if ts.is_eof() {
+                        return Ok(Replacement::AsEnters(vec![
+                            crate::v2::ir::Effect::PromptChoice {
+                                chooser: PlayerRef::You,
+                                kind: crate::v2::ir::ChoiceKind::ChooseBranch(branches),
+                            },
+                        ]));
+                    }
+                }
+                ts.restore(bcp);
+            }
+            // `As ~ enters, choose a [land type | number | nonbasic land card name | planeswalker type] / choose two colors`
+            {
+                let ch_cp = ts.checkpoint();
+                if let Some(ch_eff) = parse_as_enters_characteristic_choice(ts) {
+                    let _ = ts.eat_period();
+                    if ts.is_eof() {
+                        return Ok(Replacement::AsEnters(vec![ch_eff]));
+                    }
+                }
+                ts.restore(ch_cp);
+            }
             let mut body = Vec::new();
             let mut cur_start = ts.pos;
             let mut sentences: Vec<(usize, usize)> = Vec::new();
@@ -115,30 +178,64 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         ts.restore(dcp);
     }
 
-    // 0b. `You may have ~ enter [tapped] as a copy of <flt> [, except ...]`
+    // 0b. `You may have ~ enter tapped [. If you do, <eff>]` / `You may have ~ enter [tapped] as a copy of <flt> [, except ...]`
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "may", "have"]) && ts.eat_tilde() && ts.eat_word("enter") && {
+        if ts.eat_phrase(&["you", "may", "have"]) && ts.eat_tilde() && ts.eat_word("enter") {
+            let t_cp = ts.checkpoint();
+            if ts.eat_word("tapped") && !ts.peek_phrase(&["as", "a", "copy", "of"]) {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EntersTapped { unless: None });
+                }
+                if ts.eat_phrase(&["if", "you", "do"]) && ts.eat_comma() {
+                    let rem = &ts.tokens[ts.pos..];
+                    let end = if rem
+                        .last()
+                        .is_some_and(|t| matches!(t.kind, crate::v2::lexer::TokenKind::Period))
+                    {
+                        rem.len() - 1
+                    } else {
+                        rem.len()
+                    };
+                    let mut sub = ts.sub_stream(&rem[..end], crate::v2::ir::ParseStage::Effect);
+                    if let Ok(effs) = parse_effect_sentence(&mut sub)
+                        && sub.is_eof()
+                    {
+                        ts.pos = ts.tokens.len();
+                        return Ok(Replacement::AsEnters(vec![
+                            crate::v2::ir::Effect::Optional {
+                                actor: PlayerRef::You,
+                                body: effs,
+                            },
+                        ]));
+                    }
+                }
+            }
+            ts.restore(t_cp);
             let _ = ts.eat_word("tapped");
-            ts.eat_phrase(&["as", "a", "copy", "of"])
-        } {
-            let _ = ts.eat_word("any");
-            let filter = parse_object_filter(ts)?;
-            let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
-            let _ = ts.eat_period();
-            ts.expect_eof()?;
-            return Ok(Replacement::EnterAsCopy {
-                optional: true,
-                filter,
-                exceptions,
-            });
+            if ts.eat_phrase(&["as", "a", "copy", "of"]) {
+                let _ = ts.eat_word("any");
+                if let Ok(filter) = try_parse(ts, parse_object_filter) {
+                    let mut exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
+                    parse_extra_copy_exceptions(ts, &mut exceptions);
+                    let _ = ts.eat_period();
+                    if ts.is_eof() {
+                        return Ok(Replacement::EnterAsCopy {
+                            optional: true,
+                            filter,
+                            exceptions,
+                        });
+                    }
+                }
+            }
         }
         ts.restore(cp);
     }
 
-    // 0c. `All damage / Damage that would be dealt to <from> [by <flt>] is dealt to <to> instead.` (Pariah, Martyrs of Korlis, Veteran Bodyguard)
-    //     `Damage that would reduce your life total to less than <N> reduces it to <N> instead.` (Worship, Ali from Cairo)
-    //     `Damage that would be dealt by ~ can't be prevented.` (Excruciator)
+    // 0c. `All damage / [Combat] damage that would be dealt to <from> [by <flt>] is dealt to <to> instead.`
+    //     `Damage that would reduce your life total to less than <N> reduces it to <N> instead.`
+    //     `[Combat|Noncombat] damage that would be dealt by <src> can't be prevented.`
     {
         let cp = ts.checkpoint();
         let _ = ts.eat_word("all");
@@ -156,6 +253,7 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         }
         ts.restore(cp);
         let _ = ts.eat_word("all");
+        let _ = ts.eat_word("combat") || ts.eat_word("noncombat");
         if ts.eat_phrase(&["damage", "that", "would", "be", "dealt", "by"])
             && let Ok(src) = try_parse(ts, parse_subject_ref)
             && ts.eat_phrase(&["can't", "be", "prevented"])
@@ -628,9 +726,53 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         return Err(ts.err("unsupported `The next ... enters with ...` replacement"));
     }
 
-    // 3. `~ escapes with N <kind> counters on it` / `~ enters tapped [unless <cond>]` / `~ enters with N <kind> counters on it`
-    if ts.eat_tilde() {
+    // 3. `~ escapes with ...` / `~ enters tapped [unless <cond>]` / `~ enters with ...`
+    if ts.eat_tilde() || ts.eat_word("it") {
         if ts.eat_phrase(&["escapes", "with"]) {
+            if let Some(quoted) = ts.next_quoted() {
+                let compiled = crate::v2::card::compile_face_v2(
+                    crate::FaceInput {
+                        name: "~",
+                        type_line: "Permanent",
+                        oracle_text: quoted,
+                    },
+                    ts.vocab,
+                );
+                if compiled.is_ok() {
+                    let _ = ts.eat_period();
+                    ts.expect_eof()?;
+                    return Ok(Replacement::AsEnters(vec![
+                        crate::v2::ir::Effect::ApplyContinuous {
+                            effect: Box::new(crate::v2::ir::StaticAbility::GrantAbility {
+                                subject: SubjectRef::SelfObject,
+                                ability: Box::new(compiled),
+                                condition: None,
+                            }),
+                            duration: crate::v2::ir::Duration::Permanent,
+                        },
+                    ]));
+                }
+            }
+            {
+                let ccp = ts.checkpoint();
+                if ts.eat_phrase(&["your", "choice", "of"])
+                    && (ts.eat_word("a") || ts.eat_word("an"))
+                    && let Ok(kind1) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counter") || ts.eat_word("counters"))
+                    && ts.eat_word("or")
+                    && (ts.eat_word("a") || ts.eat_word("an"))
+                    && let Ok(kind2) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counter") || ts.eat_word("counters"))
+                    && ts.eat_phrase(&["on", "it"])
+                {
+                    let _ = ts.eat_period();
+                    ts.expect_eof()?;
+                    return Ok(Replacement::Rule(
+                        ReplacementRuleKind::EntersWithChoiceCounter { kind1, kind2 },
+                    ));
+                }
+                ts.restore(ccp);
+            }
             let count = if ts.eat_word("a") || ts.eat_word("an") {
                 ValueExpr::Const(1)
             } else {
@@ -646,7 +788,7 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             }
         }
         if ts.eat_phrase(&["enters", "tapped"]) {
-            // Support `~ enters tapped [and] with N <kind> counters on it` (`Vivid Marsh`, `Sphere of the Suns`)
+            // Support `~ enters tapped [and] with N <kind> counters on it`
             if ts.eat_phrase(&["and", "with"]) || ts.eat_word("with") {
                 let count = if ts.eat_word("a") || ts.eat_word("an") {
                     ValueExpr::Const(1)
@@ -677,92 +819,386 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             return Ok(Replacement::EntersTapped { unless });
         }
         if ts.eat_phrase(&["enters", "with"]) {
-            // `~ enters with your choice of a/an <k1> counter or a/an <k2> counter on it` (`Flycatcher Giraffid` Ikoria cycle)
+            // `~ enters with your choice of a/an <k1> counter or a/an <k2> counter on it`
+            // OR `~ enters with your choice of two different counters on it from among <k1>, <k2>, and <k3>`
             {
                 let ccp = ts.checkpoint();
-                if ts.eat_phrase(&["your", "choice", "of"])
-                    && (ts.eat_word("a") || ts.eat_word("an"))
-                    && let Ok(kind1) = try_parse(ts, parse_counter_kind)
-                    && (ts.eat_word("counter") || ts.eat_word("counters"))
-                    && ts.eat_word("or")
-                    && (ts.eat_word("a") || ts.eat_word("an"))
-                    && let Ok(kind2) = try_parse(ts, parse_counter_kind)
-                    && (ts.eat_word("counter") || ts.eat_word("counters"))
-                    && ts.eat_phrase(&["on", "it"])
-                {
-                    let _ = ts.eat_period();
-                    ts.expect_eof()?;
-                    return Ok(Replacement::Rule(
-                        ReplacementRuleKind::EntersWithChoiceCounter { kind1, kind2 },
-                    ));
+                if ts.eat_phrase(&["your", "choice", "of"]) {
+                    if ts.eat_phrase(&["two", "different", "counters", "on", "it", "from", "among"])
+                        && let Ok(kind1) = try_parse(ts, parse_counter_kind)
+                        && ts.eat_comma()
+                        && let Ok(kind2) = try_parse(ts, parse_counter_kind)
+                    {
+                        let _ = ts.eat_comma();
+                        let _ = ts.eat_word("and");
+                        let _ = opt(ts, parse_counter_kind);
+                        let _ = ts.eat_period();
+                        if ts.is_eof() {
+                            return Ok(Replacement::Rule(
+                                ReplacementRuleKind::EntersWithChoiceCounter { kind1, kind2 },
+                            ));
+                        }
+                    }
+                    ts.restore(ccp);
+                    if ts.eat_phrase(&["your", "choice", "of"])
+                        && (ts.eat_word("a") || ts.eat_word("an"))
+                        && let Ok(kind1) = try_parse(ts, parse_counter_kind)
+                        && (ts.eat_word("counter") || ts.eat_word("counters"))
+                        && ts.eat_word("or")
+                        && (ts.eat_word("a") || ts.eat_word("an"))
+                        && let Ok(kind2) = try_parse(ts, parse_counter_kind)
+                        && (ts.eat_word("counter") || ts.eat_word("counters"))
+                        && ts.eat_phrase(&["on", "it"])
+                    {
+                        let _ = ts.eat_period();
+                        ts.expect_eof()?;
+                        return Ok(Replacement::Rule(
+                            ReplacementRuleKind::EntersWithChoiceCounter { kind1, kind2 },
+                        ));
+                    }
                 }
                 ts.restore(ccp);
             }
-            let count_opt = if ts.eat_phrase(&["a", "number", "of"]) {
-                None
-            } else {
-                Some(try_parse(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1)))
-            };
-            let kind = parse_counter_kind(ts)?;
-            if (ts.eat_word("counters") || ts.eat_word("counter")) && ts.eat_phrase(&["on", "it"]) {
-                let count = if let Some(c) = count_opt {
-                    if let Some(scale) = opt(ts, crate::v2::value::parse_for_each_expr) {
-                        ValueExpr::Mul(Box::new(c), Box::new(scale))
-                    } else {
-                        c
-                    }
-                } else if ts.eat_phrase(&["equal", "to"]) {
-                    parse_value_expr(ts)?
+            // `~ enters with <kws> and with <count> <kind> counters on it [, where X is ...]`
+            let mut leading_kws: Option<Vec<crate::v2::ir::KeywordSpec>> = None;
+            {
+                let lkw_cp = ts.checkpoint();
+                if let Ok((kws, _)) = try_parse(ts, crate::v2::keywords::parse_keyword_list)
+                    && ts.eat_phrase(&["and", "with"])
+                {
+                    leading_kws = Some(kws);
                 } else {
-                    return Err(ts.err(
-                        "expected `equal to <val>` after `a number of <kind> counters on it`",
-                    ));
-                };
-                let extra_kws = {
-                    let kwcp = ts.checkpoint();
-                    if ts.eat_phrase(&["and", "with"])
-                        && let Ok((kws, _)) = try_parse(ts, crate::v2::keywords::parse_keyword_list)
-                    {
-                        Some(kws)
-                    } else {
-                        ts.restore(kwcp);
-                        None
-                    }
-                };
-                let cond = if ts.eat_word("if") {
-                    Some(parse_condition(ts)?)
-                } else {
-                    None
-                };
-                let _ = ts.eat_period();
-                ts.expect_eof()?;
-                let base_counters = Replacement::EntersWithCounters {
-                    subject: None,
-                    kind,
-                    count,
-                    additional: false,
-                };
-                let base = if let Some(kws) = extra_kws {
-                    Replacement::Compound(vec![
-                        base_counters,
-                        Replacement::Rule(ReplacementRuleKind::EntersWithKeywords(kws)),
-                    ])
-                } else {
-                    base_counters
-                };
-                return Ok(if let Some(condition) = cond {
-                    Replacement::ConditionalEnters {
-                        condition,
-                        inner: Box::new(base),
-                    }
-                } else {
-                    base
-                });
+                    ts.restore(lkw_cp);
+                }
+            }
+            if let Ok(rep) = parse_enters_with_counters_body(ts, leading_kws) {
+                return Ok(rep);
             }
         }
     }
 
     Err(ts.err("expected replacement effect"))
+}
+
+pub(super) fn parse_enters_with_counters_body(
+    ts: &mut TokenStream<'_>,
+    leading_kws: Option<Vec<crate::v2::ir::KeywordSpec>>,
+) -> PResult<Replacement> {
+    let mut counter_entries: Vec<Replacement> = Vec::new();
+    let mut deferred_equal_to = false;
+    loop {
+        let count_opt = if ts.eat_phrase(&["a", "number", "of"]) {
+            deferred_equal_to = true;
+            None
+        } else if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
+            Some(ValueExpr::Const(1))
+        } else {
+            Some(try_parse(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1)))
+        };
+        let additional = ts.eat_word("additional");
+        let kind = parse_counter_kind(ts)?;
+        if !(ts.eat_word("counters") || ts.eat_word("counter")) {
+            return Err(ts.err("expected `counter` or `counters`"));
+        }
+        let had_on_it = ts.eat_phrase(&["on", "it"]);
+        let mut count = if let Some(c) = count_opt {
+            if let Some(scale) = parse_enters_scale_expr(ts) {
+                if c == ValueExpr::Const(1) {
+                    scale
+                } else {
+                    ValueExpr::Mul(Box::new(c), Box::new(scale))
+                }
+            } else {
+                c
+            }
+        } else if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
+            parse_value_expr(ts)?
+        } else {
+            return Err(
+                ts.err("expected `equal to <val>` after `a number of <kind> counters on it`")
+            );
+        };
+        if ts.eat_comma() && ts.eat_phrase(&["where", "x", "is"]) {
+            count = parse_value_expr(ts)?;
+        }
+        counter_entries.push(Replacement::EntersWithCounters {
+            subject: None,
+            kind,
+            count,
+            additional,
+        });
+        // Multi-counter list: `, a <kind> counter`, `and a <kind> counter`, `plus an additional <kind> counter on it`
+        let next_cp = ts.checkpoint();
+        if !had_on_it && (ts.eat_comma() || ts.eat_word("and")) {
+            let _ = ts.eat_word("and");
+            continue;
+        }
+        if had_on_it
+            && (ts.eat_phrase(&["plus", "an", "additional"]) || ts.eat_word("and"))
+            && !ts
+                .peek_word()
+                .is_some_and(|w| w.eq_ignore_ascii_case("with"))
+        {
+            let probe_cp = ts.checkpoint();
+            if ts.peek_word().is_some_and(|w| {
+                let l = w.to_ascii_lowercase();
+                l == "a"
+                    || l == "an"
+                    || l == "+1/+1"
+                    || crate::vocab::parse_number_word(&l).is_some()
+            }) || matches!(
+                ts.peek().map(|t| &t.kind),
+                Some(
+                    crate::v2::lexer::TokenKind::Number(_)
+                        | crate::v2::lexer::TokenKind::PtMod(_, _)
+                )
+            ) {
+                continue;
+            }
+            ts.restore(probe_cp);
+        }
+        ts.restore(next_cp);
+        if !had_on_it {
+            return Err(ts.err("expected `on it` after counters"));
+        }
+        break;
+    }
+    if let Some(kws) = leading_kws {
+        counter_entries.push(Replacement::Rule(ReplacementRuleKind::EntersWithKeywords(
+            kws,
+        )));
+    }
+    let kwcp = ts.checkpoint();
+    if ts.eat_phrase(&["and", "with"]) {
+        if let Some(quoted) = ts.next_quoted() {
+            let compiled = crate::v2::card::compile_face_v2(
+                crate::FaceInput {
+                    name: "~",
+                    type_line: "Permanent",
+                    oracle_text: quoted,
+                },
+                ts.vocab,
+            );
+            if compiled.is_ok() {
+                counter_entries.push(Replacement::AsEnters(vec![
+                    crate::v2::ir::Effect::ApplyContinuous {
+                        effect: Box::new(crate::v2::ir::StaticAbility::GrantAbility {
+                            subject: SubjectRef::SelfObject,
+                            ability: Box::new(compiled),
+                            condition: None,
+                        }),
+                        duration: crate::v2::ir::Duration::Permanent,
+                    },
+                ]));
+            } else {
+                ts.restore(kwcp);
+            }
+        } else if let Ok((kws, _)) = try_parse(ts, crate::v2::keywords::parse_keyword_list) {
+            counter_entries.push(Replacement::Rule(ReplacementRuleKind::EntersWithKeywords(
+                kws,
+            )));
+        } else {
+            ts.restore(kwcp);
+        }
+    }
+    let cond = if ts.eat_word("if") {
+        Some(parse_condition(ts)?)
+    } else if ts.eat_word("unless") {
+        Some(crate::v2::ir::ConditionExpr::Not(Box::new(
+            parse_condition(ts)?,
+        )))
+    } else {
+        None
+    };
+    let _ = ts.eat_period();
+    ts.expect_eof()?;
+    let base = if counter_entries.len() == 1 {
+        counter_entries.remove(0)
+    } else {
+        Replacement::Compound(counter_entries)
+    };
+    Ok(if let Some(condition) = cond {
+        Replacement::ConditionalEnters {
+            condition,
+            inner: Box::new(base),
+        }
+    } else {
+        base
+    })
+}
+
+fn parse_enters_scale_expr(ts: &mut TokenStream<'_>) -> Option<ValueExpr> {
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&["for", "each", "counter", "removed", "this", "way"]) {
+        return Some(ValueExpr::PriorActionCount(
+            crate::v2::ir::PriorActionKind::CountersRemovedThisWay,
+        ));
+    }
+    if ts.eat_phrase(&["for", "each", "other", "spell", "cast", "this", "turn"]) {
+        return Some(ValueExpr::EventCountThisTurn {
+            event: crate::v2::ir::TurnEventKind::SpellCast,
+            player: None,
+            exclude_first: true,
+        });
+    }
+    if ts.eat_phrase(&["for", "each", "mana", "spent", "to", "cast", "it"]) {
+        return Some(ValueExpr::ManaPaidThisWay);
+    }
+    if ts.eat_phrase(&["for", "each"])
+        && try_parse(ts, parse_object_filter).is_ok()
+        && ts.eat_phrase(&["exiled", "this", "way"])
+    {
+        return Some(ValueExpr::PriorActionCount(
+            crate::v2::ir::PriorActionKind::ExiledThisWay,
+        ));
+    }
+    ts.restore(cp);
+    opt(ts, crate::v2::value::parse_for_each_expr)
+}
+
+fn parse_extra_copy_exceptions(
+    ts: &mut TokenStream<'_>,
+    exceptions: &mut Vec<crate::v2::ir::CopyException>,
+) {
+    use crate::v2::ir::CopyException;
+    loop {
+        let cp = ts.checkpoint();
+        let _ = ts.eat_comma();
+        if ts.eat_phrase(&["and", "it", "loses", "all", "other", "card", "types"])
+            || ts.eat_phrase(&["and", "loses", "all", "other", "card", "types"])
+        {
+            exceptions.push(CopyException::KeepOwnOtherAbilities);
+            continue;
+        }
+        ts.restore(cp);
+        let _ = ts.eat_comma();
+        if ts.eat_phrase(&[
+            "and",
+            "its",
+            "power",
+            "and",
+            "toughness",
+            "are",
+            "equal",
+            "to",
+        ]) && ts.eat_tilde()
+            && ts.eat_phrase(&["'s", "power", "and", "toughness"])
+        {
+            exceptions.push(CopyException::KeepOwnOtherAbilities);
+            continue;
+        }
+        ts.restore(cp);
+        let _ = ts.eat_comma();
+        if ts.eat_word("and")
+            && ts.eat_comma()
+            && ts.eat_phrase(&["if", "it's", "a", "creature"])
+            && ts.eat_comma()
+            && ts.eat_phrase(&["it", "enters", "with"])
+        {
+            let count = try_parse(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1));
+            let _ = ts.eat_word("additional");
+            if let Ok(kind) = try_parse(ts, parse_counter_kind)
+                && (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_phrase(&["on", "it"])
+            {
+                exceptions.push(CopyException::EntersWithCounters {
+                    kind,
+                    count,
+                    condition: None,
+                });
+                if ts.eat_phrase(&["and", "has"])
+                    && let Ok((kws, _)) = try_parse(ts, crate::v2::filter::parse_keyword_list)
+                {
+                    exceptions.push(CopyException::AddKeywords(kws));
+                }
+                continue;
+            }
+        }
+        ts.restore(cp);
+        break;
+    }
+}
+
+fn parse_as_enters_pt_choices(ts: &mut TokenStream<'_>) -> Option<Vec<Vec<crate::v2::ir::Effect>>> {
+    let mut branches: Vec<Vec<crate::v2::ir::Effect>> = Vec::new();
+    loop {
+        let _ = ts.eat_word("a") || ts.eat_word("an");
+        let (p, t) = ts.next_base_pt()?;
+        let mut subtypes = Vec::new();
+        let mut add_types = crate::ast::CardTypeMask::EMPTY;
+        while let Some(w) = ts.peek_word() {
+            let low = w.to_ascii_lowercase();
+            if let Some(ct) = crate::vocab::lookup_card_type(&low) {
+                ts.next_word();
+                add_types = add_types.union(ct);
+            } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                ts.next_word();
+                subtypes.push(sub.to_string());
+            } else {
+                break;
+            }
+        }
+        let keywords = if ts.eat_word("with") {
+            try_parse(ts, crate::v2::filter::parse_keyword_list)
+                .map(|(k, _)| k)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let keep_existing_types = ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"]);
+        branches.push(vec![crate::v2::ir::Effect::MutateObject {
+            subject: SubjectRef::SelfObject,
+            mutation: crate::v2::ir::ObjectMutation::BecomeCreatureTypes {
+                subtypes,
+                add_types,
+                keep_existing_types,
+                base_pt: Some((p, t)),
+                keywords,
+            },
+            duration: crate::v2::ir::Duration::Permanent,
+        }]);
+        let had_comma = ts.eat_comma();
+        let had_or = ts.eat_word("or");
+        if had_comma || had_or {
+            continue;
+        }
+        break;
+    }
+    if branches.len() >= 2 {
+        Some(branches)
+    } else {
+        None
+    }
+}
+
+fn parse_as_enters_characteristic_choice(
+    ts: &mut TokenStream<'_>,
+) -> Option<crate::v2::ir::Effect> {
+    use crate::v2::ir::{CharacteristicKind, ChoiceKind, Effect};
+    if !ts.eat_word("choose") {
+        return None;
+    }
+    let kind = if ts.eat_phrase(&["a", "land", "type"]) {
+        CharacteristicKind::BasicLandType
+    } else if ts.eat_phrase(&["a", "number"]) {
+        CharacteristicKind::Number
+    } else if ts.eat_phrase(&["two", "colors"]) {
+        CharacteristicKind::Color
+    } else if ts.eat_phrase(&["a", "nonbasic", "land", "card", "name"]) {
+        CharacteristicKind::CardName
+    } else if ts.eat_phrase(&["a", "planeswalker", "type"]) {
+        CharacteristicKind::CardType
+    } else if ts.eat_phrase(&[
+        "a", "creature", "card", "name", "and", "a", "creature", "type",
+    ]) {
+        CharacteristicKind::CreatureType
+    } else {
+        return None;
+    };
+    Some(Effect::PromptChoice {
+        chooser: PlayerRef::You,
+        kind: ChoiceKind::ChooseCharacteristic(kind),
+    })
 }
 
 pub(super) fn lookup_predefined_token(low: &str) -> Option<crate::v2::ir::PredefinedToken> {

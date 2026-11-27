@@ -279,6 +279,9 @@ fn parse_zone_verb_frame_inner(
 
     // 9. `sacrifice(s) ...`
     if ts.eat_word("sacrifice") || ts.eat_word("sacrifices") {
+        if let Some(res) = super::zone_ext::try_parse_sacrifice_half(ts, actor) {
+            return res;
+        }
         if ts.eat_phrase(&["the", "rest"]) {
             return Ok((
                 vec![Effect::ZoneOp {
@@ -461,6 +464,9 @@ fn parse_zone_verb_frame_inner(
 
     // 12. `exile(s) ...`
     if ts.eat_word("exile") || ts.eat_word("exiles") {
+        if let Some(res) = super::zone_ext::try_parse_exile_ext(ts, actor) {
+            return res;
+        }
         // `exile their hand` / `exile all cards from their hand [face down]`
         if ts.eat_phrase(&["their", "hand"]) || ts.eat_phrase(&["your", "hand"]) {
             let face_down = ts.eat_phrase(&["face", "down"]);
@@ -930,6 +936,9 @@ fn parse_zone_verb_frame_inner(
 
     // 13. `return(s) ...` (both `return <subj> [from <zone>] [except <exc>] to <dest> [from <zone>]` AND `returns to their hand <subj>`)
     if ts.eat_word("return") || ts.eat_word("returns") {
+        if let Some(res) = super::zone_ext::try_parse_return_ext(ts, actor) {
+            return res;
+        }
         // Inverted destination-first: `returns to their hand each card they exiled this way`
         if ts.peek_word().is_some_and(|w| w.eq_ignore_ascii_case("to")) {
             let (dest, modifiers) = parse_zone_dest(ts)?;
@@ -1026,7 +1035,8 @@ fn parse_zone_verb_frame_inner(
                 None
             }
         };
-        let (dest, modifiers) = parse_zone_dest(ts)?;
+        let (mut dest, modifiers) = parse_zone_dest(ts)?;
+        super::zone_ext::parse_trailing_under_control(ts, &mut dest);
         if ts.eat_word("from") {
             from.push(parse_zone_ref(ts)?);
         }
@@ -1442,6 +1452,9 @@ fn parse_zone_verb_frame_inner(
                 (),
             ));
         }
+        if let Some(res) = super::zone_ext::try_parse_put_ext(ts, actor) {
+            return res;
+        }
         // 14c. `put them back in any order` / `put <subj> on top` / `put [up to <val> | a random] <subj> [from <zone>] into/onto/on <dest> [from <zone>]`
         let put_count = {
             let pcp = ts.checkpoint();
@@ -1560,7 +1573,8 @@ fn parse_zone_verb_frame_inner(
                 break;
             }
         }
-        let (dest, modifiers) = parse_zone_dest(ts)?;
+        let (mut dest, modifiers) = parse_zone_dest(ts)?;
+        super::zone_ext::parse_trailing_under_control(ts, &mut dest);
         if ts.eat_word("from") {
             from.push(parse_zone_ref(ts)?);
         }
@@ -1585,21 +1599,25 @@ fn parse_zone_verb_frame_inner(
             || ts.eat_phrase(&["instead", "of", "into", "its", "owner's", "graveyard"])
             || ts.eat_phrase(&["instead", "of", "into", "their", "graveyard"])
             || ts.eat_phrase(&["instead", "of", "into", "your", "graveyard"]);
-        let mut out = vec![Effect::ZoneOp {
+        let first_put = Effect::ZoneOp {
             actor,
             op: ZoneOpKind::Move,
-            subject,
-            from,
+            subject: subject.clone(),
+            from: from.clone(),
             to: Some(dest),
             modifiers,
             except: None,
-            count: put_count,
-        }];
+            count: put_count.clone(),
+        };
+        let mut out = super::zone_ext::maybe_wrap_put_or_dest(
+            ts, actor, first_put, &subject, &from, &put_count,
+        );
         let cp = ts.checkpoint();
         if ts.eat_word("and")
             && let Ok(s2) = try_parse(ts, parse_subject_ref)
-            && let Ok((d2, m2)) = try_parse(ts, parse_zone_dest)
+            && let Ok((mut d2, m2)) = try_parse(ts, parse_zone_dest)
         {
+            super::zone_ext::parse_trailing_under_control(ts, &mut d2);
             out.push(Effect::ZoneOp {
                 actor,
                 op: ZoneOpKind::Move,
@@ -1616,8 +1634,11 @@ fn parse_zone_verb_frame_inner(
         return Ok((out, ()));
     }
 
-    // 15. `move(s) [any number of | <cnt>] [<kind>] counter(s) from <src> onto/to <dst>` (NEVER stores `"a"`!)
+    // 15. `move(s) [all | any number of | <cnt>] [<kind>] counter(s) from [among] <src> onto/to <dst>`
     if ts.eat_word("move") || ts.eat_word("moves") {
+        if let Some(res) = super::zone_ext::try_parse_move_ext(ts) {
+            return res;
+        }
         let count = if ts.eat_phrase(&["any", "number", "of"]) {
             ValueExpr::Const(0)
         } else if ts.eat_word("a") || ts.eat_word("an") {
@@ -1829,12 +1850,18 @@ fn parse_zone_verb_frame_inner(
                 && ts.eat_word("into")
                 && let Ok(zref) = try_parse(ts, parse_zone_ref)
             {
+                let mut from = Vec::new();
+                if ts.eat_word("from")
+                    && let Ok(fz) = try_parse(ts, parse_zone_ref)
+                {
+                    from.push(fz);
+                }
                 return Ok((
                     vec![Effect::ZoneOp {
                         actor,
                         op: ZoneOpKind::Shuffle,
                         subject,
-                        from: Vec::new(),
+                        from,
                         to: Some(ZoneDest {
                             zone: zref.zone,
                             owner: zref.owner,

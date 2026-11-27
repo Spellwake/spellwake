@@ -14,6 +14,20 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     let _ = ts.eat_phrase(&["an", "additional"]);
     {
         let tm_cp = ts.checkpoint();
+        if ts.eat_phrase(&["twice", "that", "much"])
+            && let Some(mc) = ts.eat_mana_cost()
+        {
+            return Ok(ManaSpec::Scaled {
+                base: Box::new(ManaSpec::Exact(mc)),
+                scale: ValueExpr::Mul(
+                    Box::new(ValueExpr::Const(2)),
+                    Box::new(ValueExpr::PriorActionCount(
+                        crate::v2::ir::PriorActionKind::ThatMany,
+                    )),
+                ),
+            });
+        }
+        ts.restore(tm_cp);
         if ts.eat_phrase(&["that", "much"])
             && let Some(mc) = ts.eat_mana_cost()
         {
@@ -103,6 +117,18 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     ]) || ts.eat_phrase(&["one", "mana", "of", "any", "color"])
     {
         let _ = ts.eat_phrase(&["in", "your", "commander's", "color", "identity"]);
+        let acp = ts.checkpoint();
+        if ts.eat_word("among") && try_parse(ts, parse_object_filter).is_ok() {
+            // Optional `among <flt>` restriction (e.g. `among legendary permanents you control`)
+            let ccp = ts.checkpoint();
+            if ts.eat_word("and") && try_parse(ts, parse_object_filter).is_ok() {
+                // Compound `among <flt1> and <flt2>`
+            } else {
+                ts.restore(ccp);
+            }
+        } else {
+            ts.restore(acp);
+        }
         return Ok(ManaSpec::AnyColor {
             amount: ValueExpr::Const(1),
             single_color: true,
@@ -110,52 +136,74 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     }
     {
         let cp = ts.checkpoint();
-        if let Ok(amount) = try_parse(ts, parse_value_expr)
-            && ts.eat_word("mana")
-        {
-            if ts.eat_phrase(&["of", "the", "chosen", "color"]) {
-                return Ok(ManaSpec::ChosenColor(amount));
-            }
-            if ts.eat_phrase(&["of", "that", "color"]) {
-                return Ok(ManaSpec::ThatColor(amount));
-            }
-            if ts.eat_phrase(&["of", "any", "one", "color"])
-                || ts.eat_phrase(&["of", "any", "color"])
-            {
-                return Ok(ManaSpec::AnyColor {
-                    amount,
-                    single_color: true,
-                });
-            }
-            if ts.eat_phrase(&["in", "any", "combination", "of", "colors"]) {
-                return Ok(ManaSpec::AnyColor {
-                    amount,
-                    single_color: false,
-                });
-            }
-            if ts.eat_phrase(&["in", "any", "combination", "of"])
-                && let Some(first_mc) = ts.eat_mana_cost()
-            {
-                let mut opts = vec![first_mc];
-                loop {
-                    let ocp = ts.checkpoint();
-                    let _ = ts.eat_comma();
-                    if (ts.eat_word("and/or") || ts.eat_word("or") || ts.eat_word("and"))
-                        && let Some(next_mc) = ts.eat_mana_cost()
-                    {
-                        opts.push(next_mc);
-                        continue;
-                    }
-                    ts.restore(ocp);
-                    break;
-                }
-                return Ok(ManaSpec::Scaled {
-                    base: Box::new(ManaSpec::Choice(opts)),
+        if let Ok(amount) = try_parse(ts, parse_value_expr) {
+            if let Some(mc) = ts.eat_mana_cost() {
+                let first = ManaSpec::Scaled {
+                    base: Box::new(ManaSpec::Exact(mc)),
                     scale: amount,
-                });
+                };
+                let ocp = ts.checkpoint();
+                if ts.eat_word("or")
+                    && let Ok(amt2) = try_parse(ts, parse_value_expr)
+                    && let Some(mc2) = ts.eat_mana_cost()
+                {
+                    return Ok(ManaSpec::Either(
+                        Box::new(first),
+                        Box::new(ManaSpec::Scaled {
+                            base: Box::new(ManaSpec::Exact(mc2)),
+                            scale: amt2,
+                        }),
+                    ));
+                }
+                ts.restore(ocp);
+                return Ok(first);
             }
-            if ts.eat_phrase(&["of", "different", "colors"]) {
-                return Ok(ManaSpec::DifferentColors(amount));
+            if ts.eat_word("mana") {
+                if ts.eat_phrase(&["of", "the", "chosen", "color"]) {
+                    return Ok(ManaSpec::ChosenColor(amount));
+                }
+                if ts.eat_phrase(&["of", "that", "color"]) || ts.eat_phrase(&["of", "that", "type"])
+                {
+                    return Ok(ManaSpec::ThatColor(amount));
+                }
+                if ts.eat_phrase(&["of", "any", "one", "color"])
+                    || ts.eat_phrase(&["of", "any", "color"])
+                {
+                    return Ok(ManaSpec::AnyColor {
+                        amount,
+                        single_color: true,
+                    });
+                }
+                if ts.eat_phrase(&["in", "any", "combination", "of", "colors"]) {
+                    return Ok(ManaSpec::AnyColor {
+                        amount,
+                        single_color: false,
+                    });
+                }
+                if ts.eat_phrase(&["in", "any", "combination", "of"])
+                    && let Some(first_mc) = ts.eat_mana_cost()
+                {
+                    let mut opts = vec![first_mc];
+                    loop {
+                        let ocp = ts.checkpoint();
+                        let _ = ts.eat_comma();
+                        if (ts.eat_word("and/or") || ts.eat_word("or") || ts.eat_word("and"))
+                            && let Some(next_mc) = ts.eat_mana_cost()
+                        {
+                            opts.push(next_mc);
+                            continue;
+                        }
+                        ts.restore(ocp);
+                        break;
+                    }
+                    return Ok(ManaSpec::Scaled {
+                        base: Box::new(ManaSpec::Choice(opts)),
+                        scale: amount,
+                    });
+                }
+                if ts.eat_phrase(&["of", "different", "colors"]) {
+                    return Ok(ManaSpec::DifferentColors(amount));
+                }
             }
         }
         ts.restore(cp);
@@ -347,43 +395,210 @@ pub(super) fn parse_keyword_action_verb(
         "don't", "lose", "this", "mana", "as", "steps", "and", "phases", "end",
     ]) || ts.eat_phrase(&[
         "doesn't", "lose", "this", "mana", "as", "steps", "and", "phases", "end",
-    ]) {
+    ]) || ts.eat_phrase(&["don't", "lose", "this", "mana", "as", "steps", "end"])
+        || ts.eat_phrase(&["doesn't", "lose", "this", "mana", "as", "steps", "end"])
+    {
         return Ok(Effect::MutatePlayer {
             player: actor,
             mutation: PlayerMutation::Action(PlayerActionKind::KeepManaAcrossSteps),
             duration: Duration::UntilEndOfTurn,
         });
     }
-    if (ts.eat_word("skip") || ts.eat_word("skips"))
-        && (ts.eat_phrase(&["your", "next"]) || ts.eat_phrase(&["their", "next"]))
-    {
-        if ts.eat_word("turn") {
-            return Ok(Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::Action(PlayerActionKind::SkipNextTurn),
-                duration: Duration::Instant,
-            });
-        }
-        if ts.eat_phrase(&["draw", "step"]) {
-            return Ok(Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::DrawStep),
-                duration: Duration::Instant,
-            });
-        }
-        if ts.eat_phrase(&["untap", "step"]) {
-            return Ok(Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::UntapStep),
-                duration: Duration::Instant,
-            });
-        }
-        if ts.eat_phrase(&["combat", "phase"]) {
+    if ts.eat_phrase(&["end", "the", "turn"]) || ts.eat_phrase(&["ends", "the", "turn"]) {
+        return Ok(Effect::MutatePlayer {
+            player: actor,
+            mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::CleanupStep),
+            duration: Duration::Instant,
+        });
+    }
+    if ts.eat_phrase(&["time", "travel"]) || ts.eat_phrase(&["time", "travels"]) {
+        let time_subj = SubjectRef::All(Box::new(crate::v2::ir::ObjectFilter {
+            predicates: vec![crate::v2::ir::FilterPredicate::HasCounterKind(
+                crate::v2::ir::CounterKind::Time,
+            )],
+            ..Default::default()
+        }));
+        let eff = Effect::PromptChoice {
+            chooser: actor,
+            kind: crate::v2::ir::ChoiceKind::ChooseBranch(vec![
+                vec![Effect::MutateObject {
+                    subject: time_subj.clone(),
+                    mutation: ObjectMutation::PutCounters {
+                        kind: crate::v2::ir::CounterKind::Time,
+                        count: ValueExpr::Const(1),
+                    },
+                    duration: Duration::Instant,
+                }],
+                vec![Effect::MutateObject {
+                    subject: time_subj,
+                    mutation: ObjectMutation::RemoveCounters {
+                        kind: crate::v2::ir::CounterKind::Time,
+                        count: Some(ValueExpr::Const(1)),
+                        all: false,
+                    },
+                    duration: Duration::Instant,
+                }],
+            ]),
+        };
+        return Ok(wrap_optional_repeat_times(ts, eff));
+    }
+    if ts.eat_word("airbend") || ts.eat_word("airbends") {
+        let any_number = ts.eat_phrase(&["any", "number", "of"]);
+        let subject = parse_subject_ref(ts)?;
+        return Ok(Effect::ZoneOp {
+            actor,
+            op: crate::v2::ir::ZoneOpKind::Exile {
+                face_down: false,
+                counters: None,
+            },
+            subject,
+            from: Vec::new(),
+            to: None,
+            modifiers: crate::v2::ir::EntryModifiers::default(),
+            except: None,
+            count: if any_number {
+                Some(crate::v2::ir::CountSpec {
+                    count: ValueExpr::Const(0),
+                    up_to: false,
+                    any_number: true,
+                })
+            } else {
+                None
+            },
+        });
+    }
+    if ts.eat_word("cloak") || ts.eat_word("cloaks") {
+        let (subject, from, count) = if ts.eat_phrase(&["the", "top", "card", "of"]) {
+            let zref = crate::v2::filter::parse_zone_ref(ts)?;
+            (
+                SubjectRef::Group(Box::new(crate::v2::ir::ObjectFilter {
+                    any_card: true,
+                    zones: vec![zref],
+                    ..Default::default()
+                })),
+                vec![zref],
+                Some(crate::v2::ir::CountSpec {
+                    count: ValueExpr::Const(1),
+                    up_to: false,
+                    any_number: false,
+                }),
+            )
+        } else {
+            let subj = parse_subject_ref(ts)?;
+            let mut f = Vec::new();
+            if ts.eat_word("from")
+                && let Ok(zr) = try_parse(ts, crate::v2::filter::parse_zone_ref)
+            {
+                f.push(zr);
+            }
+            (subj, f, None)
+        };
+        return Ok(Effect::ZoneOp {
+            actor,
+            op: crate::v2::ir::ZoneOpKind::Move,
+            subject,
+            from,
+            to: Some(crate::v2::ir::ZoneDest {
+                zone: crate::v2::ir::ZoneKind::Battlefield,
+                owner: crate::v2::ir::ZoneOwner::Default,
+                library_position: None,
+                library_order: None,
+                under_control: None,
+            }),
+            modifiers: crate::v2::ir::EntryModifiers {
+                face_down: true,
+                ..crate::v2::ir::EntryModifiers::default()
+            },
+            except: None,
+            count,
+        });
+    }
+    if ts.eat_word("skip") || ts.eat_word("skips") {
+        if ts.eat_phrase(&["all", "combat", "phases", "of", "their", "next", "turn"])
+            || ts.eat_phrase(&["all", "combat", "phases", "of", "your", "next", "turn"])
+        {
             return Ok(Effect::MutatePlayer {
                 player: actor,
                 mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::BeginningOfCombat),
-                duration: Duration::Instant,
+                duration: Duration::UntilEndOfNextTurn,
             });
+        }
+        if ts.eat_phrase(&["the", "untap", "step", "of", "that", "turn"]) {
+            return Ok(Effect::MutatePlayer {
+                player: actor,
+                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::UntapStep),
+                duration: Duration::UntilEndOfNextTurn,
+            });
+        }
+        if ts.eat_phrase(&["the", "draw", "step", "of", "that", "turn"]) {
+            return Ok(Effect::MutatePlayer {
+                player: actor,
+                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::DrawStep),
+                duration: Duration::UntilEndOfNextTurn,
+            });
+        }
+        if ts.eat_phrase(&["your", "next"]) || ts.eat_phrase(&["their", "next"]) {
+            if ts.eat_word("turn") {
+                return Ok(Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::Action(PlayerActionKind::SkipNextTurn),
+                    duration: Duration::Instant,
+                });
+            }
+            if let Ok(cnt) = try_parse(ts, parse_value_expr)
+                && ts.eat_word("turns")
+            {
+                return Ok(Effect::ForEach {
+                    over: ForEachDomain::Count(cnt),
+                    body: vec![Effect::MutatePlayer {
+                        player: actor,
+                        mutation: PlayerMutation::Action(PlayerActionKind::SkipNextTurn),
+                        duration: Duration::Instant,
+                    }],
+                });
+            }
+            if ts.eat_phrase(&["draw", "step"]) {
+                return Ok(Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::DrawStep),
+                    duration: Duration::Instant,
+                });
+            }
+            if ts.eat_phrase(&["untap", "step"]) {
+                return Ok(Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::UntapStep),
+                    duration: Duration::Instant,
+                });
+            }
+            if ts.eat_phrase(&["combat", "phase"]) {
+                return Ok(Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::SkipNextStep(
+                        crate::ast::TurnStepAst::BeginningOfCombat,
+                    ),
+                    duration: Duration::Instant,
+                });
+            }
+        }
+        if ts.eat_word("your") || ts.eat_word("their") {
+            let step = if ts.eat_phrase(&["draw", "step"]) {
+                Some(crate::ast::TurnStepAst::DrawStep)
+            } else if ts.eat_phrase(&["untap", "step"]) {
+                Some(crate::ast::TurnStepAst::UntapStep)
+            } else if ts.eat_phrase(&["combat", "phase"]) {
+                Some(crate::ast::TurnStepAst::BeginningOfCombat)
+            } else {
+                None
+            };
+            if let Some(st) = step {
+                let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                return Ok(Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::SkipNextStep(st),
+                    duration: dur,
+                });
+            }
         }
     }
     if ts.eat_word("flip") || ts.eat_word("flips") {
@@ -947,21 +1162,60 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 }]);
             }
             ts.restore(dcp);
-            // 5c. `<src> would deal [combat] damage [to <tgt>] this turn/combat, <instead>`
-            if let Ok(src) = try_parse(ts, parse_subject_ref)
+            // 5c. `<src | a source of your choice> would deal [combat] damage [to <tgt> [and/or <tgt2>]] this turn/combat, <instead>`
+            let src_opt = if ts.eat_phrase(&["a", "source", "of", "your", "choice"])
+                || ts.eat_phrase(&["a", "source", "of", "their", "choice"])
+            {
+                Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSource))
+            } else if let Ok(s) = try_parse(ts, parse_subject_ref) {
+                let _ = ts.eat_phrase(&["of", "your", "choice"])
+                    || ts.eat_phrase(&["of", "their", "choice"]);
+                Some(s)
+            } else {
+                None
+            };
+            if let Some(src) = src_opt
                 && ts.eat_phrase(&["would", "deal"])
             {
                 let combat_only = ts.eat_word("combat");
                 if ts.eat_word("damage") {
                     let tgt = if ts.eat_word("to") {
                         let _ = ts.eat_phrase(&["one", "or", "more"]);
-                        try_parse(ts, parse_subject_ref).ok()
+                        if let Ok(t1) = try_parse(ts, parse_subject_ref) {
+                            let tcp = ts.checkpoint();
+                            if (ts.eat_word("and/or") || ts.eat_word("and"))
+                                && let Ok(t2) = try_parse(ts, parse_subject_ref)
+                            {
+                                Some(SubjectRef::Compound(vec![t1, t2]))
+                            } else {
+                                ts.restore(tcp);
+                                Some(t1)
+                            }
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };
                     if (ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["this", "combat"]))
                         && ts.eat_comma()
                     {
+                        if ts.eat_phrase(&["prevent", "all", "but"])
+                            && let Some(rem) =
+                                ts.next_number(false).and_then(|n| u16::try_from(n).ok())
+                            && ts.eat_phrase(&["of", "that", "damage"])
+                        {
+                            return Ok(vec![Effect::ApplyReplacement {
+                                replacement: Box::new(crate::v2::ir::Replacement::DamageRule(
+                                    crate::v2::ir::DamageReplacement::PreventAllBut {
+                                        source: None,
+                                        target: tgt,
+                                        remaining: rem,
+                                    },
+                                )),
+                                duration: Duration::UntilEndOfTurn,
+                            }]);
+                        }
                         if ts.eat_phrase(&["prevent", "that", "damage"]) {
                             return Ok(vec![Effect::PreventDamage {
                                 amount: None,

@@ -15,42 +15,54 @@ use crate::vocab::{lookup_card_type, lookup_color};
 pub(crate) fn parse_token_creation(
     ts: &mut TokenStream<'_>,
 ) -> PResult<(ValueExpr, TokenSpec, EntryModifiers)> {
+    parse_token_creation_named(ts, None)
+}
+
+fn parse_token_creation_named(
+    ts: &mut TokenStream<'_>,
+    explicit_name: Option<&str>,
+) -> PResult<(ValueExpr, TokenSpec, EntryModifiers)> {
     // Named legendary token: `Create <Name>, a[n] [legendary] P/T <colors> <subtypes> creature token [with ...]`
-    // (`Battle at the Helvault`, `Nissa`, `Jiang Yanggu`, `Darkstar`, `Voja`, etc.)
-    {
+    if explicit_name.is_none() {
         let ncp = ts.checkpoint();
-        let mut name_words = 0usize;
-        while name_words < 6 {
+        let mut name_parts: Vec<&str> = Vec::new();
+        while name_parts.len() < 7 {
             if ts.eat_tilde() {
                 let _ = ts.eat_word("'s");
-                name_words += 1;
+                name_parts.push("~");
                 if ts.eat_comma()
                     && (ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]))
                 {
                     break;
                 }
-            } else if ts.peek_word().is_some_and(|w| {
-                w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                    || matches!(w.to_ascii_lowercase().as_str(), "the" | "of" | "and")
-            }) {
+            } else if let Some(w) = ts.peek_word()
+                && (w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    || matches!(
+                        w.to_ascii_lowercase().as_str(),
+                        "the" | "of" | "and" | "to" | "in" | "at" | "on" | "from" | "for"
+                    ))
+            {
                 ts.next_word();
-                name_words += 1;
+                name_parts.push(w);
                 if ts.eat_comma() {
                     if ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]) {
                         break;
                     }
-                    // Could be multi-part title like `Ashaya, the Awoken World, a legendary ...`
                     continue;
                 }
             } else {
                 break;
             }
         }
-        if name_words > 0
+        if !name_parts.is_empty()
             && (ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]))
-            && let Ok(res) = crate::v2::parser::try_parse(ts, parse_token_creation)
         {
-            return Ok(res);
+            let joined = name_parts.join(" ");
+            if let Ok(res) =
+                crate::v2::parser::try_parse(ts, |s| parse_token_creation_named(s, Some(&joined)))
+            {
+                return Ok(res);
+            }
         }
         ts.restore(ncp);
     }
@@ -61,7 +73,11 @@ pub(crate) fn parse_token_creation(
         ValueExpr::Const(1)
     } else if ts.eat_phrase(&["that", "many"]) {
         ValueExpr::PriorActionCount(crate::v2::ir::PriorActionKind::ThatMany)
-    } else if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
+    } else if ts.eat_phrase(&["another", "one"])
+        || ts.eat_phrase(&["an", "additional"])
+        || ts.eat_word("a")
+        || ts.eat_word("an")
+    {
         ValueExpr::Const(1)
     } else {
         parse_value_expr(ts)?
@@ -96,6 +112,15 @@ pub(crate) fn parse_token_creation(
             || ts.eat_phrase(&["that's", "tapped", "and", "attacking"])
         {
             modifiers.tapped = true;
+            modifiers.attacking = true;
+            let _ = ts.eat_phrase(&["that", "opponent"])
+                || ts.eat_phrase(&["that", "player"])
+                || ts.eat_phrase(&["the", "defending", "player"])
+                || ts.eat_phrase(&["defending", "player"]);
+        } else if ts.eat_phrase(&["that's", "attacking"])
+            || ts.eat_phrase(&["that", "are", "attacking"])
+            || ts.eat_word("attacking")
+        {
             modifiers.attacking = true;
             let _ = ts.eat_phrase(&["that", "opponent"])
                 || ts.eat_phrase(&["that", "player"])
@@ -139,6 +164,14 @@ pub(crate) fn parse_token_creation(
             Some(PredefinedToken::CursedRole)
         } else if ts.eat_phrase(&["young", "hero", "role"]) {
             Some(PredefinedToken::YoungHeroRole)
+        } else if ts.peek_word().is_some()
+            && ts.peek_n(1).is_some_and(
+                |t| matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("role")),
+            )
+        {
+            ts.next_word();
+            ts.next_word();
+            Some(PredefinedToken::Role)
         } else if let Some(w) = ts.next_word() {
             match w.to_ascii_lowercase().as_str() {
                 "treasure" => Some(PredefinedToken::Treasure),
@@ -243,7 +276,7 @@ pub(crate) fn parse_token_creation(
             saw_token_word = true;
             break;
         }
-        if low == "and" || low == "colorless" || low == "legendary" {
+        if low == "and" || low == "colorless" || low == "legendary" || low == "snow" {
             ts.next_word();
             continue;
         }
@@ -263,23 +296,28 @@ pub(crate) fn parse_token_creation(
     if !saw_token_word || (power_expr.is_none() && card_types.is_empty() && subtypes.is_empty()) {
         return Err(ts.err("expected P/T or token types before `token`"));
     }
-    // Optional `named [~'s] <Capitalized Name>` (e.g. `create a colorless artifact token named Lotus`, `named ~'s Pridemate`)
+    // Optional `named [~'s] <Capitalized Name>`
+    let mut inline_name: Option<String> = None;
     if ts.eat_word("named") {
-        let mut words_eaten = 0usize;
+        let mut parts: Vec<&str> = Vec::new();
         if ts.eat_tilde() {
             let _ = ts.eat_word("'s");
-            words_eaten += 1;
+            parts.push("~");
         }
-        while words_eaten < 4
+        while parts.len() < 4
             && let Some(w) = ts.peek_word()
             && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
             && !w.eq_ignore_ascii_case("with")
         {
             ts.next_word();
-            words_eaten += 1;
+            parts.push(w);
+        }
+        if !parts.is_empty() {
+            inline_name = Some(parts.join(" "));
         }
     }
 
+    let token_face_name = explicit_name.or(inline_name.as_deref()).unwrap_or("~");
     let mut keywords = Vec::new();
     let mut abilities = Vec::new();
     if ts.eat_word("with") {
@@ -288,7 +326,7 @@ pub(crate) fn parse_token_creation(
             if let Some(quoted) = ts.next_quoted() {
                 let compiled = compile_face_v2(
                     FaceInput {
-                        name: "~",
+                        name: token_face_name,
                         type_line: "Creature",
                         oracle_text: quoted.trim_end_matches(','),
                     },
@@ -330,19 +368,38 @@ pub(crate) fn parse_token_creation(
         }
     }
 
-    // Trailing `that are blue, black, and red`
-    if ts.eat_phrase(&["that", "are"]) || ts.eat_phrase(&["that's"]) {
-        loop {
-            let _ = ts.eat_comma();
-            let _ = ts.eat_word("and");
-            if let Some(w) = ts.peek_word()
-                && let Some(c) = lookup_color(&w.to_ascii_lowercase())
-            {
+    // Trailing `named <Proper Name>` (`Fire Navy Trebuchet`: `... with flying named Ballistic Boulder that's tapped and attacking`)
+    if ts.eat_word("named") {
+        while let Some(w) = ts.peek_word() {
+            if w.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
                 ts.next_word();
-                colors = colors.union(c);
-                continue;
+            } else {
+                break;
             }
-            break;
+        }
+    }
+
+    // Trailing `that are blue, black, and red` / `that's all colors`
+    if ts.eat_phrase(&["that", "are"]) || ts.eat_phrase(&["that's"]) {
+        if ts.eat_phrase(&["all", "colors"]) {
+            colors = ColorMask::WHITE
+                .union(ColorMask::BLUE)
+                .union(ColorMask::BLACK)
+                .union(ColorMask::RED)
+                .union(ColorMask::GREEN);
+        } else {
+            loop {
+                let _ = ts.eat_comma();
+                let _ = ts.eat_word("and");
+                if let Some(w) = ts.peek_word()
+                    && let Some(c) = lookup_color(&w.to_ascii_lowercase())
+                {
+                    ts.next_word();
+                    colors = colors.union(c);
+                    continue;
+                }
+                break;
+            }
         }
     }
 

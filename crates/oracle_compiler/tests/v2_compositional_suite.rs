@@ -5705,3 +5705,185 @@ fn v2_wave14_compositional_grammar_deep_ir_assertions() {
         _ => false,
     }));
 }
+
+/// 18. Deep Wave 15 compositional IR assertions (+1,107 / -0 cards, 89.22% -> 92.66%, 0 IR edits;
+///     modular splits `filter/relatives.rs`, `clause/sentence_ext.rs`, `clause/zone_ext.rs`,
+///     `condition/extended.rs`): iconic staples across filter, clause, static, replacement,
+///     trigger, condition, and value families.
+#[test]
+fn v2_wave15_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        CastPermissionMode, Replacement, StaticAbility, TriggerModifierKind, VarName,
+    };
+
+    let vocab_path = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .expect("SPELLWAKE_CREATURE_VOCABULARY_INPUT must be set");
+    let vocab = Vocabulary::load_from_file(std::path::Path::new(&vocab_path)).expect("load vocab");
+
+    let wave15_cards = [
+        (
+            "Runechanter's Pike",
+            "Artifact - Equipment",
+            "Equipped creature has first strike and gets +X/+0, where X is the number of instant and sorcery cards in your graveyard.\nEquip {2}",
+        ),
+        (
+            "Aettir and Priwen",
+            "Legendary Artifact - Equipment",
+            "Equipped creature has base power and toughness X/X, where X is your life total.\nEquip {5}",
+        ),
+        (
+            "Deep Freeze",
+            "Enchantment - Aura",
+            "Enchant creature\nEnchanted creature has base power and toughness 0/4, has defender, loses all other abilities, and is a blue Wall in addition to its other colors and types.",
+        ),
+        (
+            "Aluren",
+            "Enchantment",
+            "Any player may cast creature spells with mana value 3 or less without paying their mana costs and as though they had flash.",
+        ),
+        (
+            "Academy Manufactor",
+            "Artifact Creature - Assembly-Worker",
+            "If you would create a Clue, Food, or Treasure token, instead create one of each.",
+        ),
+        (
+            "Containment Priest",
+            "Creature - Human Cleric",
+            "Flash\nIf a nontoken creature would enter and it wasn't cast, exile it instead.",
+        ),
+        (
+            "Drannith Magistrate",
+            "Creature - Human Wizard",
+            "Your opponents can't cast spells from anywhere other than their hands.",
+        ),
+        (
+            "Hushbringer",
+            "Creature - Faerie",
+            "Flying, lifelink\nCreatures entering or dying don't cause abilities to trigger.",
+        ),
+        (
+            "Silent Arbiter",
+            "Artifact Creature - Construct",
+            "No more than one creature can attack each combat.\nNo more than one creature can block each combat.",
+        ),
+        (
+            "Upwelling",
+            "Enchantment",
+            "Players don't lose unspent mana as steps and phases end.",
+        ),
+        ("Time Stop", "Instant", "End the turn."),
+        (
+            "Mindslaver",
+            "Legendary Artifact",
+            "{4}, {T}, Sacrifice Mindslaver: You control target player during that player's next turn.",
+        ),
+        (
+            "Tree of Perdition",
+            "Creature - Plant",
+            "Defender\n{T}: Exchange target opponent's life total with Tree of Perdition's toughness.",
+        ),
+        (
+            "Inalla, Archmage Ritualist",
+            "Legendary Creature - Human Wizard",
+            "Eminence \u{2014} Whenever another nontoken Wizard you control enters, if Inalla is in the command zone or on the battlefield, you may pay {1}. If you do, create a token that's a copy of that Wizard. The token gains haste. Exile it at the beginning of the next end step.\nTap five untapped Wizards you control: Target player loses 7 life.",
+        ),
+        (
+            "Squee, the Immortal",
+            "Legendary Creature - Goblin",
+            "You may cast Squee from your graveyard or from exile.",
+        ),
+        (
+            "Archetype of Imagination",
+            "Enchantment Creature - Human Wizard",
+            "Creatures you control have flying.\nCreatures your opponents control lose flying and can't have or gain flying.",
+        ),
+        (
+            "Mox Amber",
+            "Legendary Artifact",
+            "{T}: Add one mana of any color among legendary creatures and planeswalkers you control.",
+        ),
+        (
+            "Notion Thief",
+            "Creature - Human Rogue",
+            "Flash\nIf an opponent would draw a card except the first one they draw in each of their draw steps, instead that player skips that draw and you draw a card.",
+        ),
+        (
+            "Veyran, Voice of Duality",
+            "Legendary Creature - Efreet Wizard",
+            "Magecraft \u{2014} Whenever you cast or copy an instant or sorcery spell, Veyran gets +1/+1 until end of turn.\nIf you casting or copying an instant or sorcery spell causes a triggered ability of a permanent you control to trigger, that ability triggers an additional time.",
+        ),
+        (
+            "Bloodspore Thrinax",
+            "Creature - Lizard",
+            "Devour 1\nEach other creature you control enters with an additional X +1/+1 counters on it, where X is the number of +1/+1 counters on Bloodspore Thrinax.",
+        ),
+    ];
+    for (name, type_line, text) in wave15_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // Deep IR checks across the 4 worker domains
+    let aluren = compile_v2_strict(
+        "Aluren",
+        "Enchantment",
+        "Any player may cast creature spells with mana value 3 or less without paying their mana costs and as though they had flash.",
+        &vocab,
+    );
+    assert!(aluren.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::ZoneCastPermission { mode: CastPermissionMode::WithoutPaying, .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::ZoneCastPermission { mode: CastPermissionMode::AsThoughFlash { .. }, .. }))
+    )));
+
+    let hush = compile_v2_strict(
+        "Hushbringer",
+        "Creature - Faerie",
+        "Flying, lifelink\nCreatures entering or dying don't cause abilities to trigger.",
+        &vocab,
+    );
+    assert!(hush.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::TriggerModifier {
+            kind: TriggerModifierKind::EntersDontTrigger,
+            ..
+        }
+    )));
+
+    let priest = compile_v2_strict(
+        "Containment Priest",
+        "Creature - Human Cleric",
+        "Flash\nIf a nontoken creature would enter and it wasn't cast, exile it instead.",
+        &vocab,
+    );
+    assert!(priest.faces[0].replacements.iter().any(|r| matches!(
+        r,
+        Replacement::ConditionalEnters { .. }
+            | Replacement::EventInstead { .. }
+            | Replacement::Rule(_)
+    )));
+
+    let pike = compile_v2_strict(
+        "Runechanter's Pike",
+        "Artifact - Equipment",
+        "Equipped creature has first strike and gets +X/+0, where X is the number of instant and sorcery cards in your graveyard.\nEquip {2}",
+        &vocab,
+    );
+    assert!(pike.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::BindVariable {
+            var: VarName::X,
+            inner,
+            ..
+        } if matches!(inner.as_ref(), StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::GrantKeywords { .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::ContinuousModifyPT { .. })))
+    )));
+}

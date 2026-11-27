@@ -116,13 +116,12 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
     }
     let subject = parse_subject_ref(ts)?;
     let mut out = parse_subject_predicate(ts, subject.clone())?;
-    // Compositional `and <second predicate on same subject>` (`Wishful Merfolk`, `Xathrid Gorgon`,
-    // `Disciple of Kangee`, `Minsc, Beloved Ranger`, `Coward // Killer`, `March from Velis Vel`,
-    // `Hellcat, Undying Vigilante`, `Gideon, Champion of Justice`, `Jade Orb of Dragonkind`)
+    // Compositional `, <pred2>, and <pred3>` / `and <pred2>` chaining on the same subject
     loop {
         let ccp = ts.checkpoint();
-        let _ = ts.eat_comma();
-        if ts.eat_word("and")
+        let had_comma = ts.eat_comma();
+        let had_and = ts.eat_word("and");
+        if (had_and || had_comma)
             && !ts
                 .peek_word()
                 .is_some_and(|w| w.eq_ignore_ascii_case("target"))
@@ -142,10 +141,24 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
 
     // 1. `<src> deals <amt> damage ...` OR `<src> deals damage equal to <val> to <tgt>` OR `<src> deals damage to <tgt> equal to <val>`
     if ts.eat_word("deals") || ts.eat_word("deal") {
-        // 1a. `deals damage equal to <val> to <tgt>` / `deals damage to <tgt> equal to <val>`
+        // 1a. `deals damage equal to <val> [divided as <player> chooses among <tgt> | to <tgt>]`
+        //     OR `deals damage to <tgt> equal to <val>`
         if ts.eat_word("damage") {
             if ts.eat_phrase(&["equal", "to"]) {
                 let amount = parse_value_expr(ts)?;
+                if ts.eat_phrase(&["divided", "as"]) {
+                    let divider = parse_player_ref(ts)?;
+                    if !(ts.eat_word("chooses") || ts.eat_word("choose")) || !ts.eat_word("among") {
+                        return Err(ts.err("expected `chooses among` in divided damage"));
+                    }
+                    let target = parse_subject_ref(ts)?;
+                    return Ok(vec![Effect::DealDamage {
+                        source: subject,
+                        target,
+                        amount,
+                        divided_by: Some(divider),
+                    }]);
+                }
                 if !ts.eat_word("to") {
                     return Err(ts.err("expected `to` after `damage equal to <val>`"));
                 }
@@ -175,10 +188,46 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
 
         let mut out = Vec::new();
         loop {
-            let amount = parse_value_expr(ts)?;
+            let amount = if ts.eat_phrase(&["that", "much"]) {
+                ValueExpr::PriorActionCount(crate::v2::ir::PriorActionKind::DealtDamageThisWay)
+            } else {
+                parse_value_expr(ts)?
+            };
             let _ = ts.eat_word("of");
             if !ts.eat_word("damage") {
                 return Err(ts.err("expected `damage` after amount"));
+            }
+            // Optional `, rounded down/up [,]` (e.g. `half X damage, rounded down, to any target`)
+            {
+                let rcp = ts.checkpoint();
+                if ts.eat_comma()
+                    && (ts.eat_phrase(&["rounded", "down"]) || ts.eat_phrase(&["rounded", "up"]))
+                {
+                    let _ = ts.eat_comma();
+                } else {
+                    ts.restore(rcp);
+                }
+            }
+            if ts.eat_phrase(&["divided", "evenly"]) {
+                let rcp = ts.checkpoint();
+                if ts.eat_comma()
+                    && (ts.eat_phrase(&["rounded", "down"]) || ts.eat_phrase(&["rounded", "up"]))
+                {
+                    let _ = ts.eat_comma();
+                } else {
+                    ts.restore(rcp);
+                }
+                if !ts.eat_word("among") {
+                    return Err(ts.err("expected `among` after `divided evenly`"));
+                }
+                let target = parse_subject_ref(ts)?;
+                out.push(Effect::DealDamage {
+                    source: subject.clone(),
+                    target,
+                    amount,
+                    divided_by: Some(PlayerRef::You),
+                });
+                break;
             }
             if ts.eat_phrase(&["divided", "as"]) {
                 let divider = parse_player_ref(ts)?;
@@ -263,7 +312,10 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
             } else {
                 ts.eat_word("and")
             };
-            if has_sep && opt(ts, parse_value_expr).is_some() && ts.eat_word("damage") {
+            if has_sep
+                && (ts.eat_phrase(&["that", "much"]) || opt(ts, parse_value_expr).is_some())
+                && ts.eat_word("damage")
+            {
                 ts.restore(cp);
                 if ts.eat_comma() {
                     let _ = ts.eat_word("and");
@@ -278,9 +330,10 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
         return Ok(out);
     }
 
-    // 2. `<subj> gets/get [an additional] +X/+Y [and gains <kws>] [until end of turn] [for each <expr>]`
+    // 2. `<subj> gets/get [an additional | twice] +X/+Y [and gains <kws>] [until end of turn] [for each <expr>]`
     if ts.eat_word("gets") || ts.eat_word("get") {
         let _ = ts.eat_phrase(&["an", "additional"]);
+        let is_twice = ts.eat_word("twice");
         let (power, toughness) = ts
             .next_pt_mod()
             .ok_or_else(|| ts.err("expected P/T modifier after `get(s)`"))?;
@@ -469,7 +522,16 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
             let _ = parse_trailing_duration(ts);
             gained_kws = Some(kws);
         }
-        let scale = opt(ts, parse_for_each_expr).map(Box::new);
+        let scale = opt(ts, parse_for_each_expr)
+            .map(|fe| {
+                if is_twice {
+                    ValueExpr::Mul(Box::new(ValueExpr::Const(2)), Box::new(fe))
+                } else {
+                    fe
+                }
+            })
+            .or_else(|| is_twice.then_some(ValueExpr::Const(2)))
+            .map(Box::new);
         if cant_mut.is_none() && ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
             let _ = parse_trailing_duration(ts);
             cant_mut = Some(ObjectMutation::ApplyRule(
@@ -1628,8 +1690,11 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
             base_pt = Some(pt);
         }
         let mut extra_ability = None;
+        let mut gained_all_creature_types = false;
         if ts.eat_word("with") {
-            if let Some(quoted) = ts.next_quoted() {
+            if ts.eat_phrase(&["all", "creature", "types"]) {
+                gained_all_creature_types = true;
+            } else if let Some(quoted) = ts.next_quoted() {
                 let compiled = compile_face_v2(
                     FaceInput {
                         name: "~",
@@ -1643,7 +1708,9 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                 }
             } else if let Ok((kws, _)) = try_parse(ts, parse_keyword_list) {
                 keywords = kws;
-                if ts.eat_word("and")
+                if ts.eat_phrase(&["and", "all", "creature", "types"]) {
+                    gained_all_creature_types = true;
+                } else if ts.eat_word("and")
                     && let Some(quoted) = ts.next_quoted()
                 {
                     let compiled = compile_face_v2(
@@ -1731,6 +1798,16 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                 out.push(Effect::MutateObject {
                     subject: subject.clone(),
                     mutation: ObjectMutation::RetainTypes(ct),
+                    duration: duration.clone(),
+                });
+            }
+            if gained_all_creature_types {
+                out.push(Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::SubjectRule {
+                        subject: subject.clone(),
+                        rule: SubjectStaticRule::AllCreatureTypes,
+                        condition: None,
+                    }),
                     duration: duration.clone(),
                 });
             }
@@ -2287,5 +2364,5 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
         }]);
     }
 
-    Err(ts.err("expected verb predicate after subject"))
+    super::subject_combat::parse_extra_subject_predicates(ts, subject)
 }

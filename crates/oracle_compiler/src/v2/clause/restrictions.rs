@@ -172,6 +172,18 @@ pub(super) fn parse_activation_restrictions(
             out.push(ActivationRestriction::DuringCombatStep(
                 crate::v2::ir::CombatStepKind::DeclareBlockers,
             ));
+        } else if ts.eat_phrase(&["before", "the", "combat", "damage", "step"]) {
+            out.push(ActivationRestriction::DuringCombatStep(
+                crate::v2::ir::CombatStepKind::DeclareBlockers,
+            ));
+        } else if ts.eat_phrase(&["after", "combat"]) {
+            out.push(ActivationRestriction::OnlyIf(Box::new(
+                crate::v2::ir::ConditionExpr::EventCheck(
+                    crate::v2::ir::EventCheckKind::DuringStep(
+                        crate::ast::TurnStepAst::PostcombatMain,
+                    ),
+                ),
+            )));
         } else if ts.eat_phrase(&["during", "combat"]) {
             out.push(ActivationRestriction::DuringCombat);
         } else if ts.eat_phrase(&["before", "blockers", "are", "declared"]) {

@@ -332,8 +332,11 @@ impl<'a> TokenStream<'a> {
                     }
                     return None;
                 }
-                let n = parse_number_word(&low)?;
+                let mut n = parse_number_word(&low)?;
                 self.pos += 1;
+                if (1..=9).contains(&n) && self.eat_word("hundred") {
+                    n *= 100;
+                }
                 Some(n)
             }
             _ => None,

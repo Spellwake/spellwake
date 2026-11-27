@@ -220,7 +220,9 @@ pub(super) fn parse_filter_post_modifiers(
         }
         if ts.eat_phrase(&["that's", "enchanted", "or", "equipped"])
             || ts.eat_phrase(&["that", "is", "enchanted", "or", "equipped"])
+            || ts.eat_phrase(&["that", "are", "enchanted", "or", "equipped"])
             || ts.eat_phrase(&["that's", "equipped", "or", "enchanted"])
+            || ts.eat_phrase(&["that", "are", "equipped", "or", "enchanted"])
         {
             flt.predicates.push(FilterPredicate::AnyOf(vec![
                 ObjectFilter {
@@ -562,20 +564,45 @@ pub(super) fn parse_filter_post_modifiers(
                     flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
                     continue;
                 }
-                if !ts.peek_phrase(&["the", "first"])
-                    && !ts.peek_phrase(&["the", "battlefield"])
-                    && !ts.peek_phrase(&["your", "hand"])
-                    && !ts.peek_phrase(&["their", "hand"])
-                    && !ts
+                let blocked_zone_or_ordinal = ts.peek_phrase(&["the", "first"])
+                    || ts.peek_phrase(&["your", "first"])
+                    || ts.peek_phrase(&["the", "battlefield"])
+                    || ts.peek_phrase(&["your", "hand"])
+                    || ts.peek_phrase(&["their", "hand"])
+                    || ts.peek_phrase(&["a", "basic", "land", "card", "name"])
+                    || ts
                         .peek_word()
-                        .is_some_and(|w| w.eq_ignore_ascii_case("exile"))
-                    && let Ok(excl) = try_parse(ts, parse_object_filter)
-                {
-                    flt.predicates
-                        .push(FilterPredicate::Exclude(Box::new(SubjectRef::Group(
-                            Box::new(excl),
-                        ))));
-                    continue;
+                        .is_some_and(|w| w.eq_ignore_ascii_case("exile"));
+                if !blocked_zone_or_ordinal {
+                    if let Ok(excl) = try_parse(ts, parse_object_filter) {
+                        flt.predicates
+                            .push(FilterPredicate::Exclude(Box::new(SubjectRef::Group(
+                                Box::new(excl),
+                            ))));
+                        let or_cp = ts.checkpoint();
+                        if ts.eat_word("or") && ts.eat_tilde() {
+                            flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
+                        } else {
+                            ts.restore(or_cp);
+                        }
+                        continue;
+                    }
+                    if let Ok(excl_subj) = try_parse(ts, parse_subject_ref) {
+                        flt.predicates
+                            .push(FilterPredicate::Exclude(Box::new(excl_subj)));
+                        let or_cp = ts.checkpoint();
+                        if ts.eat_word("or") {
+                            if ts.eat_tilde() {
+                                flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
+                            } else if let Ok(excl_subj2) = try_parse(ts, parse_subject_ref) {
+                                flt.predicates
+                                    .push(FilterPredicate::Exclude(Box::new(excl_subj2)));
+                            } else {
+                                ts.restore(or_cp);
+                            }
+                        }
+                        continue;
+                    }
                 }
             }
             ts.restore(ocp);
@@ -970,7 +997,11 @@ pub(super) fn parse_filter_post_modifiers(
             ) {
                 let xcp = ts.checkpoint();
                 ts.next_tok();
-                if ts.eat_phrase(&["in", "its", "mana", "cost"]) {
+                if ts.eat_phrase(&["in", "its", "mana", "cost"])
+                    || ts.eat_phrase(&["in", "its", "mana", "costs"])
+                    || ts.eat_phrase(&["in", "their", "mana", "cost"])
+                    || ts.eat_phrase(&["in", "their", "mana", "costs"])
+                {
                     flt.flags = flt.flags.union(FilterFlags::HAS_X_IN_MANA_COST);
                     continue;
                 }
@@ -1083,7 +1114,7 @@ pub(super) fn parse_filter_post_modifiers(
                 flt.predicates.push(FilterPredicate::HasBasicLandType);
                 continue;
             }
-            if ts.eat_phrase(&["a", "mana", "ability"]) {
+            if ts.eat_phrase(&["a", "mana", "ability"]) || ts.eat_phrase(&["mana", "abilities"]) {
                 flt.predicates.push(FilterPredicate::HasManaAbility);
                 continue;
             }
@@ -1748,6 +1779,20 @@ pub(super) fn parse_filter_post_modifiers(
             flt.combat = Some(crate::ast::CombatState::Blocked);
             continue;
         }
+        {
+            let acp = ts.checkpoint();
+            if (ts.eat_phrase(&["that's", "attacking"])
+                || ts.eat_phrase(&["that", "is", "attacking"])
+                || ts.eat_phrase(&["that", "are", "attacking"]))
+                && let Ok(tgt) = try_parse(ts, parse_subject_ref)
+            {
+                flt.combat = Some(crate::ast::CombatState::Attacking);
+                flt.predicates
+                    .push(FilterPredicate::TargetsSubject(Box::new(tgt)));
+                continue;
+            }
+            ts.restore(acp);
+        }
         if ts.eat_phrase(&["that's", "attacking", "you"])
             || ts.eat_phrase(&["that", "are", "attacking", "you"])
             || ts.eat_phrase(&["it's", "attacking"])
@@ -1872,8 +1917,8 @@ pub(super) fn parse_filter_post_modifiers(
                 // Multi-zone conjunction (`and from <z2>`, `or from <z2>`, `or graveyard`, `and exile`)
                 loop {
                     let m_cp = ts.checkpoint();
-                    if ts.eat_word("and") || ts.eat_word("or") {
-                        let _ = ts.eat_word(&prep);
+                    if ts.eat_word("and") || ts.eat_word("or") || ts.eat_word("and/or") {
+                        let _ = ts.eat_word(&prep) || ts.eat_word("from") || ts.eat_word("in");
                         if let Ok(z2) = try_parse(ts, parse_zone_ref) {
                             flt.zones.push(z2);
                             continue;
@@ -1903,6 +1948,10 @@ pub(super) fn parse_filter_post_modifiers(
                 continue;
             }
             ts.restore(cp);
+        }
+
+        if super::relatives::try_parse_extended_post_modifier(ts, flt)? {
+            continue;
         }
 
         break;
@@ -2005,7 +2054,7 @@ fn parse_one_proper_card_name(ts: &mut TokenStream<'_>) -> Option<String> {
     }
 }
 
-fn parse_single_stat_kind(ts: &mut TokenStream<'_>) -> Option<StatKind> {
+pub(super) fn parse_single_stat_kind(ts: &mut TokenStream<'_>) -> Option<StatKind> {
     if ts.eat_phrase(&["mana", "value"]) || ts.eat_phrase(&["total", "mana", "value"]) {
         Some(StatKind::ManaValue)
     } else if ts.eat_phrase(&["base", "power"]) || ts.eat_word("power") {
@@ -2019,7 +2068,7 @@ fn parse_single_stat_kind(ts: &mut TokenStream<'_>) -> Option<StatKind> {
     }
 }
 
-fn parse_stat_comparison(ts: &mut TokenStream<'_>) -> PResult<(CompareOp, ValueExpr)> {
+pub(super) fn parse_stat_comparison(ts: &mut TokenStream<'_>) -> PResult<(CompareOp, ValueExpr)> {
     if ts.eat_phrase(&["equal", "to"]) {
         return Ok((CompareOp::Eq, parse_value_expr(ts)?));
     }

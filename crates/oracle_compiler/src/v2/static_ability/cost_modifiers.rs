@@ -20,12 +20,22 @@ pub(super) fn parse_next_spell_modifier(
         && let Ok(mut flt) = try_parse(ts, parse_object_filter)
         && (ts.eat_phrase(&["you", "cast", "this", "turn"])
             || ts.eat_phrase(&["you", "cast", "each", "turn"])
+            || ts.eat_phrase(&["you", "cast", "during", "each", "of", "your", "turns"])
             || ts.eat_phrase(&["they", "cast", "this", "turn"])
             || ts.eat_phrase(&["they", "cast", "each", "turn"])
-            || (flt.controller == Some(ControllerRelation::You)
-                && (ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["each", "turn"]))))
+            || (flt.controller.is_some()
+                && (ts.eat_phrase(&["this", "turn"])
+                    || ts.eat_phrase(&["each", "turn"])
+                    || ts.eat_phrase(&["during", "each", "of", "your", "turns"]))))
     {
         flt.controller = Some(ControllerRelation::You);
+        if ts.eat_phrase(&[
+            "that", "mana", "from", "a", "treasure", "was", "spent", "to", "cast",
+        ]) {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                crate::v2::ir::PriorActionKind::CreatedThisWay,
+            ));
+        }
         if ts.eat_phrase(&["can't", "be", "countered"]) {
             return Ok(StaticAbility::NextSpellModifier {
                 filter: flt,
@@ -81,16 +91,34 @@ pub(super) fn parse_next_spell_modifier(
             && (ts.eat_phrase(&["less", "to", "cast"]) || ts.eat_word("less"))
         {
             let scale = opt(ts, parse_for_each_expr);
+            let cost_mod = StaticAbility::CostModifier {
+                subject: flt.clone(),
+                delta,
+                less: true,
+                scale,
+                min_mana: None,
+                condition: condition.clone(),
+            };
+            let effect = if ts.eat_phrase(&[
+                "and", "can", "be", "cast", "as", "though", "it", "had", "flash",
+            ]) {
+                StaticAbility::Compound(vec![
+                    cost_mod,
+                    StaticAbility::ZoneCastPermission {
+                        player: PlayerRef::You,
+                        filter: Some(flt.clone()),
+                        subject: None,
+                        zone: None,
+                        mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
+                        condition,
+                    },
+                ])
+            } else {
+                cost_mod
+            };
             return Ok(StaticAbility::NextSpellModifier {
-                filter: flt.clone(),
-                effect: Box::new(StaticAbility::CostModifier {
-                    subject: flt,
-                    delta,
-                    less: true,
-                    scale,
-                    min_mana: None,
-                    condition,
-                }),
+                filter: flt,
+                effect: Box::new(effect),
             });
         }
     }
@@ -120,9 +148,16 @@ pub(super) fn parse_cost_modifier(
             any_spell: true,
             ..Default::default()
         }
+    } else if ts.eat_phrase(&["your", "commander"]) {
+        ObjectFilter {
+            any_spell: true,
+            controller: Some(ControllerRelation::You),
+            flags: crate::v2::ir::FilterFlags::IS_COMMANDER,
+            ..Default::default()
+        }
     } else {
         let first = parse_object_filter(ts)?;
-        // Support `<flt1> and <flt2> [you cast] cost ...` (`Elemental spells and Warrior spells`, `Goblin spells and Shaman spells`)
+        // Support `<flt1> and <flt2> [you cast] cost ...`
         let acp = ts.checkpoint();
         if ts.eat_word("and")
             && let Ok(second) = try_parse(ts, parse_object_filter)
@@ -145,10 +180,17 @@ pub(super) fn parse_cost_modifier(
         flt.controller = Some(ControllerRelation::Opponents);
     } else if ts.eat_phrase(&["an", "opponent", "casts"]) {
         flt.controller = Some(ControllerRelation::Opponent);
+    } else if ts.eat_phrase(&["enchanted", "player", "casts"]) {
+        flt.controller = Some(ControllerRelation::ThatPlayer);
     } else if ts.eat_phrase(&["players", "cast"]) {
         // Any player
     }
     let _ = ts.eat_phrase(&["each", "turn"]);
+
+    let mut inline_cond: Option<ConditionExpr> = None;
+    if ts.eat_phrase(&["during", "your", "turn"]) {
+        inline_cond = Some(ConditionExpr::Flag(ConditionFlag::IsYourTurn));
+    }
 
     if let Some(n) = nth_spell {
         flt.predicates
@@ -157,6 +199,18 @@ pub(super) fn parse_cost_modifier(
 
     if !(ts.eat_word("cost") || ts.eat_word("costs")) {
         return Err(ts.err("expected `cost` or `costs` in cost modifier"));
+    }
+
+    // `<flt> cost(s) an additional <cost> to cast`
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["an", "additional"])
+            && let Ok(costs) = try_parse(ts, crate::v2::cost::parse_cost_list)
+            && ts.eat_phrase(&["to", "cast"])
+        {
+            return Ok(StaticAbility::AdditionalCost(costs));
+        }
+        ts.restore(acp);
     }
 
     let delta = ts
@@ -171,7 +225,7 @@ pub(super) fn parse_cost_modifier(
         return Err(ts.err("expected `less to cast` or `more to cast`"));
     };
 
-    let scale = opt(ts, parse_for_each_expr);
+    let scale = parse_cost_scale_expr(ts);
     let extra_cond = if ts.eat_word("if") {
         Some(parse_condition(ts)?)
     } else if ts.eat_phrase(&["during", "your", "end", "step"]) {
@@ -180,14 +234,22 @@ pub(super) fn parse_cost_modifier(
         )))
     } else if ts.eat_phrase(&["during", "your", "turn"]) {
         Some(ConditionExpr::Flag(ConditionFlag::IsYourTurn))
+    } else if ts.eat_phrase(&["except", "during", "its", "controller's", "turn"])
+        || ts.eat_phrase(&["except", "during", "their", "controllers'", "turns"])
+    {
+        Some(ConditionExpr::Not(Box::new(ConditionExpr::Flag(
+            ConditionFlag::IsYourTurn,
+        ))))
     } else {
         None
     };
-    let final_cond = match (condition, extra_cond) {
-        (Some(prev), Some(c)) => Some(ConditionExpr::And(Box::new(prev), Box::new(c))),
-        (None, Some(c)) => Some(c),
-        (prev, None) => prev,
-    };
+    let mut final_cond = condition;
+    for c in [inline_cond, extra_cond].into_iter().flatten() {
+        final_cond = Some(match final_cond {
+            Some(prev) => ConditionExpr::And(Box::new(prev), Box::new(c)),
+            None => c,
+        });
+    }
 
     Ok(StaticAbility::CostModifier {
         subject: flt,
@@ -197,4 +259,81 @@ pub(super) fn parse_cost_modifier(
         min_mana: None,
         condition: final_cond,
     })
+}
+
+fn parse_cost_scale_expr(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::ValueExpr> {
+    use crate::v2::ir::{PriorActionKind, TurnEventKind, ValueExpr};
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&[
+        "for", "each", "time", "it's", "been", "cast", "from", "the", "command", "zone", "this",
+        "game",
+    ]) {
+        return Some(ValueExpr::CommanderCastCount(PlayerRef::You));
+    }
+    if ts.eat_phrase(&["for", "each", "other", "spell", "cast", "this", "turn"]) {
+        return Some(ValueExpr::EventCountThisTurn {
+            event: TurnEventKind::SpellCast,
+            player: None,
+            exclude_first: true,
+        });
+    }
+    if ts.eat_phrase(&["for", "each", "permanent", "sacrificed", "this", "turn"]) {
+        return Some(ValueExpr::PriorActionCount(
+            PriorActionKind::SacrificedThisWay,
+        ));
+    }
+    if ts.eat_phrase(&["for", "each", "counter", "removed", "this", "way"]) {
+        return Some(ValueExpr::PriorActionCount(
+            PriorActionKind::CountersRemovedThisWay,
+        ));
+    }
+    if ts.eat_phrase(&[
+        "for",
+        "each",
+        "card",
+        "you've",
+        "cycled",
+        "or",
+        "discarded",
+        "this",
+        "turn",
+    ]) {
+        return Some(ValueExpr::EventCountThisTurn {
+            event: TurnEventKind::CardDiscarded,
+            player: Some(PlayerRef::You),
+            exclude_first: false,
+        });
+    }
+    if ts.eat_phrase(&[
+        "for",
+        "each",
+        "card",
+        "your",
+        "opponents",
+        "have",
+        "drawn",
+        "this",
+        "turn",
+    ]) {
+        return Some(ValueExpr::EventCountThisTurn {
+            event: TurnEventKind::CardDrawn,
+            player: Some(PlayerRef::EachOpponent),
+            exclude_first: false,
+        });
+    }
+    if ts.eat_phrase(&[
+        "for", "each", "creature", "you", "attacked", "with", "this", "turn",
+    ]) {
+        return Some(ValueExpr::Count(Box::new(ObjectFilter {
+            any_types: crate::ast::CardTypeMask::CREATURE,
+            controller: Some(ControllerRelation::You),
+            flags: crate::v2::ir::FilterFlags::ATTACKED_THIS_TURN,
+            ..Default::default()
+        })));
+    }
+    if ts.eat_phrase(&["for", "each", "creature", "it", "targets"]) {
+        return Some(ValueExpr::TargetsBeyondFirst);
+    }
+    ts.restore(cp);
+    opt(ts, parse_for_each_expr)
 }
