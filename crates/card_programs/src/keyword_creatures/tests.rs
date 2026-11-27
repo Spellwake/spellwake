@@ -115,7 +115,7 @@ pub(super) fn sixth_catalogue() -> (
         .get_or_init(|| Registry::from_sixth_keyword_inventory(inventory, &vocabulary).unwrap());
     (inventory, vocabulary, registry)
 }
-pub(super) fn current_catalogue() -> (
+pub(crate) fn current_catalogue() -> (
     &'static Inventory,
     Arc<CreatureTypeVocabulary>,
     &'static Registry,

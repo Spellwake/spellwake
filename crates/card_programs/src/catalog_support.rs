@@ -16,7 +16,7 @@ use spellwake_content::{
 };
 use spellwake_contracts::creature_types::{CreatureTypeVocabulary, CreatureVocabularyId};
 use spellwake_oracle_compiler::{
-    CardInput, CompileOptions, FaceInput, Vocabulary as OracleVocabulary, compile_card_with_options,
+    CardInput, FaceInput, Vocabulary as OracleVocabulary, v2::compile_card_v2,
 };
 use std::collections::BTreeMap;
 
@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 pub const SUPPORT_CACHE_SCHEMA_VERSION: u32 = 1;
 
 /// Rolling compiler revision tag embedded in cached entries; bump whenever lowering semantics change.
-pub const SUPPORT_COMPILER_REVISION: &str = "keyword-gameplay-current-v29-oracle-compiler-v1";
+pub const SUPPORT_COMPILER_REVISION: &str = "keyword-gameplay-current-v30-oracle-compiler-v2";
 
 /// Cached Stage 1 + Stage 2 result for a single card keyed by its semantic fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,14 +138,7 @@ fn eval_stage1_ast(card: &InventoryCard, vocab: &OracleVocabulary) -> bool {
         layout: &card.layout,
         faces,
     };
-    compile_card_with_options(
-        &input,
-        vocab,
-        CompileOptions {
-            allow_tabletop_honor_system: false,
-        },
-    )
-    .strictly_compiled
+    compile_card_v2(&input, vocab).strictly_compiled
 }
 
 /// Evaluate honest Stage 1 (AST parse) and Stage 2 (validated engine `Program` lowering) support

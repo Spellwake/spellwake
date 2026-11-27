@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod catalog_support;
 pub mod commander;
 pub mod custom_card;
+pub mod v2_lowering;
 mod keyword_creatures;
 pub use keyword_creatures::{
     CURRENT_KEYWORD_PROFILE, KEYWORD_CREATURE_PROFILE, KEYWORD_CREATURE_REGISTRY_VERSION,

@@ -445,7 +445,7 @@ fn compile_card_for_profile(
             loyalty_source_verified,
         )
         .or_else(|| {
-            oracle_lowering::compile_planeswalker(
+            crate::v2_lowering::compile_v2_planeswalker(
                 compiler_input,
                 inventory,
                 vocabulary,
@@ -474,7 +474,7 @@ fn compile_card_for_profile(
                     )
                 })
                 .or_else(|| {
-                    oracle_lowering::compile_transforming(
+                    crate::v2_lowering::compile_v2_transforming(
                         card,
                         inventory,
                         vocabulary,
@@ -491,7 +491,7 @@ fn compile_card_for_profile(
                 .oracle_id
                 .as_deref()
                 .and_then(|id| inventory.back_color_indicator(id));
-            oracle_lowering::compile_modal_dfc(
+            crate::v2_lowering::compile_v2_modal_dfc(
                 card,
                 inventory,
                 vocabulary,
@@ -539,7 +539,7 @@ fn compile(
 ) -> Result<Program, &'static str> {
     compile_legacy(card, vocabulary, profile).or_else(|reason| {
         if profile == Profile::Current {
-            oracle_lowering::compile(card, vocabulary).ok_or(reason)
+            crate::v2_lowering::compile_v2(card, vocabulary).ok_or(reason)
         } else {
             Err(reason)
         }
@@ -1270,7 +1270,7 @@ fn compile_legacy(
                 .or_else(|| mana_permanents::compile(card, vocabulary))
                 .or_else(|| avacyn_restored::compile(card, vocabulary))
                 .or_else(|| innistrad::compile(card, vocabulary))
-                .or_else(|| oracle_lowering::compile(card, vocabulary))
+                .or_else(|| crate::v2_lowering::compile_v2(card, vocabulary))
                 .ok_or(reason)
         } else {
             Err(reason)
@@ -1932,7 +1932,7 @@ fn static_keyword(label: &str) -> Option<KeywordAbility> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[allow(dead_code)] // Shared strict loader also exposes wire-view helpers to other consumers.
