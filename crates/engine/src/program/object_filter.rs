@@ -866,11 +866,13 @@ pub enum CombatFilter {
     AttackingOpponentOrPlaneswalker,
     /// Currently attacking any player (not a planeswalker).
     AttackingPlayer,
+    /// Currently blocking the permanent to which the ability source is attached.
+    BlockingAttachedHost,
 }
 
 /// Compact bitflags for less-frequent object predicates.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ObjectFilterFlags(u64);
+pub struct ObjectFilterFlags(u128);
 
 impl ObjectFilterFlags {
     pub const EMPTY: Self = Self(0);
@@ -990,6 +992,10 @@ impl ObjectFilterFlags {
     pub const TOUGHNESS_GREATER_THAN_POWER: Self = Self(1 << 62);
     /// Creature whose power is strictly greater than its toughness.
     pub const POWER_GREATER_THAN_TOUGHNESS: Self = Self(1 << 63);
+    /// Creature that blocked this turn.
+    pub const BLOCKED_THIS_TURN: Self = Self(1 << 64);
+    /// Creature currently paired with the ability source via soulbond.
+    pub const PAIRED_WITH_SELF: Self = Self(1 << 65);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -1464,6 +1470,7 @@ impl ObjectClause {
                     | CombatFilter::AttackingOpponent
                     | CombatFilter::AttackingOpponentOrPlaneswalker
                     | CombatFilter::AttackingPlayer
+                    | CombatFilter::BlockingAttachedHost
             )
     }
 

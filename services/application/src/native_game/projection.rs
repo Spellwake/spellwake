@@ -1126,6 +1126,7 @@ impl Projection<'_, '_> {
         let face_down = physical.face_down().map(|kind| match kind {
             FaceDownKind::Forest => PlayerFaceDownKind::Forest,
             FaceDownKind::Manifest => PlayerFaceDownKind::Manifest,
+            FaceDownKind::Cloak => PlayerFaceDownKind::Cloak,
             FaceDownKind::Morph => PlayerFaceDownKind::Morph,
             FaceDownKind::Disguise => PlayerFaceDownKind::Disguise,
         });

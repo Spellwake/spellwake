@@ -538,6 +538,12 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
     } else if has_did_not_attack {
         sel.attacked_this_turn = Some(false);
     }
+    if f.flags.0 & AstFilterFlags::BLOCKED_THIS_TURN.0 != 0 {
+        sel.blocked_this_turn = Some(true);
+    }
+    if f.flags.0 & AstFilterFlags::PAIRED_WITH_SELF.0 != 0 {
+        sel.paired_with_source = true;
+    }
     if f.flags.0 & AstFilterFlags::DEALT_DAMAGE_THIS_TURN.0 != 0 {
         sel.dealt_damage_this_turn = true;
     }
@@ -572,6 +578,8 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
             | AstFilterFlags::ENTERED_THIS_TURN.0
             | AstFilterFlags::ATTACKED_THIS_TURN.0
             | AstFilterFlags::DID_NOT_ATTACK_THIS_TURN.0
+            | AstFilterFlags::BLOCKED_THIS_TURN.0
+            | AstFilterFlags::PAIRED_WITH_SELF.0
             | AstFilterFlags::DEALT_DAMAGE_THIS_TURN.0
             | AstFilterFlags::ATTACHED_TO_SELF.0
             | AstFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR.0
@@ -1058,6 +1066,25 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                             return Err("oracle:unsupported-selector-predicate");
                         }
                         sel.attacked_this_turn = Some(false);
+                    }
+                    "that blocked this turn" | "blocked this turn" => {
+                        if sel.blocked_this_turn == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.blocked_this_turn = Some(true);
+                    }
+                    "that didn't block this turn" => {
+                        if sel.blocked_this_turn == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.blocked_this_turn = Some(false);
+                    }
+                    "paired with ~"
+                    | "that's paired with ~"
+                    | "that is paired with ~"
+                    | "paired with it"
+                    | "that's paired with it" => {
+                        sel.paired_with_source = true;
                     }
                     "that entered this turn" | "that entered the battlefield this turn" => {
                         sel.entered_this_turn = true;
@@ -2659,6 +2686,48 @@ fn try_specialized_static_source_condition(
                     })
                 }
                 _ => {
+                    if let Some((creatures_only, kw_raw)) = low
+                        .strip_prefix("a card exiled with ~ has ")
+                        .or_else(|| low.strip_prefix("a card exiled with it has "))
+                        .or_else(|| low.strip_prefix("as long as a card exiled with ~ has "))
+                        .or_else(|| low.strip_prefix("as long as a card exiled with it has "))
+                        .map(|kw| (false, kw))
+                        .or_else(|| {
+                            low.strip_prefix("a creature card exiled with ~ has ")
+                                .or_else(|| low.strip_prefix("a creature card exiled with it has "))
+                                .or_else(|| {
+                                    low.strip_prefix(
+                                        "as long as a creature card exiled with ~ has ",
+                                    )
+                                })
+                                .or_else(|| {
+                                    low.strip_prefix(
+                                        "as long as a creature card exiled with it has ",
+                                    )
+                                })
+                                .map(|kw| (true, kw))
+                        })
+                        && let Some(kw) =
+                            lower_keyword_ability_name(kw_raw.trim().trim_end_matches('.'))
+                    {
+                        let mut clause = ObjectClause::any();
+                        if creatures_only {
+                            clause.any_types = CardTypeMask::CREATURE;
+                        }
+                        clause.keyword = Some(kw);
+                        let rc = ResolutionCondition {
+                            left: ValueExpr::Count {
+                                zone: ValueZone::LinkedExile,
+                                filter: Box::new(ObjectFilter::Clause(clause)),
+                                controller_scope: None,
+                            },
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1_i64),
+                        };
+                        if rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok() {
+                            return Some(StaticSourceCondition::Eval(Box::new(rc)));
+                        }
+                    }
                     if let Some(rest) = low
                         .strip_prefix("there is exactly ")
                         .or_else(|| low.strip_prefix("there are exactly "))
@@ -2793,6 +2862,95 @@ fn try_specialized_static_source_condition(
                 )),
                 _ => None,
             }
+        }
+        ConditionAst::HasKeyword { subject, keyword }
+            if !matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+        {
+            let kw = lower_keyword_ability_name(keyword.trim())?;
+            let obj_opt = match subject.as_ref() {
+                SubjectRefAst::Group(f) | SubjectRefAst::All(f)
+                    if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        && matches!(f.zone, None | Some(ZoneFilter::Exile)) =>
+                {
+                    let mut cleaned = f.as_ref().clone();
+                    cleaned.zone = None;
+                    cleaned.flags =
+                        AstFilterFlags(cleaned.flags.0 & !AstFilterFlags::EXILED_WITH_SELF.0);
+                    let mut clause = if is_unrestricted_filter(&cleaned) {
+                        ObjectClause::any()
+                    } else {
+                        match lower_object_filter(&cleaned, vocabulary).ok()? {
+                            ObjectFilter::Clause(c) => c,
+                            ObjectFilter::Either(_, _) => return None,
+                        }
+                    };
+                    if clause.keyword.is_some() && clause.keyword != Some(kw) {
+                        return None;
+                    }
+                    clause.keyword = Some(kw);
+                    Some(ObjectFilter::Clause(clause))
+                }
+                SubjectRefAst::Anaphora(raw) => {
+                    let norm = raw.trim().to_ascii_lowercase();
+                    let creatures_only = match norm.as_str() {
+                        "a card exiled with ~" | "a card exiled with it" => Some(false),
+                        "a creature card exiled with ~" | "a creature card exiled with it" => {
+                            Some(true)
+                        }
+                        _ => None,
+                    }?;
+                    let mut clause = ObjectClause::any();
+                    if creatures_only {
+                        clause.any_types = CardTypeMask::CREATURE;
+                    }
+                    clause.keyword = Some(kw);
+                    Some(ObjectFilter::Clause(clause))
+                }
+                _ => None,
+            };
+            let obj = obj_opt?;
+            let rc = ResolutionCondition {
+                left: ValueExpr::Count {
+                    zone: ValueZone::LinkedExile,
+                    filter: Box::new(obj),
+                    controller_scope: None,
+                },
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1_i64),
+            };
+            (rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok())
+                .then(|| StaticSourceCondition::Eval(Box::new(rc)))
+        }
+        ConditionAst::ZoneObjectCount { filter, op, value }
+            if (filter.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                && matches!(filter.zone, None | Some(ZoneFilter::Exile)) =>
+        {
+            let mut cleaned = filter.as_ref().clone();
+            cleaned.zone = None;
+            cleaned.flags = AstFilterFlags(cleaned.flags.0 & !AstFilterFlags::EXILED_WITH_SELF.0);
+            let obj = if is_unrestricted_filter(&cleaned) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&cleaned, vocabulary).ok()?
+            };
+            let comparison = match op {
+                CompareOp::Ge => Comparison::GreaterOrEqual,
+                CompareOp::Gt => Comparison::Greater,
+                CompareOp::Le => Comparison::LessOrEqual,
+                CompareOp::Lt => Comparison::Less,
+                CompareOp::Eq => Comparison::Equal,
+            };
+            let rc = ResolutionCondition {
+                left: ValueExpr::Count {
+                    zone: ValueZone::LinkedExile,
+                    filter: Box::new(obj),
+                    controller_scope: None,
+                },
+                comparison,
+                right: ValueExpr::literal(i64::from(*value)),
+            };
+            (rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok())
+                .then(|| StaticSourceCondition::Eval(Box::new(rc)))
         }
         ConditionAst::MatchesFilter { subject, filter }
             if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_)) =>
@@ -4822,6 +4980,12 @@ pub(super) fn lower_object_filter(
     if f.flags.0 & AstFilterFlags::ATTACKED_THIS_TURN.0 != 0 {
         clause.flags = clause.flags.union(ObjectFilterFlags::ATTACKED_THIS_TURN);
     }
+    if f.flags.0 & AstFilterFlags::BLOCKED_THIS_TURN.0 != 0 {
+        clause.flags = clause.flags.union(ObjectFilterFlags::BLOCKED_THIS_TURN);
+    }
+    if f.flags.0 & AstFilterFlags::PAIRED_WITH_SELF.0 != 0 {
+        clause.flags = clause.flags.union(ObjectFilterFlags::PAIRED_WITH_SELF);
+    }
     if f.flags.0 & AstFilterFlags::DIED_THIS_TURN.0 != 0 {
         clause.flags = clause.flags.union(ObjectFilterFlags::DIED_THIS_TURN);
     }
@@ -4959,6 +5123,8 @@ pub(super) fn lower_object_filter(
         | AstFilterFlags::DEALT_DAMAGE_THIS_TURN.0
         | AstFilterFlags::ATTACKED_THIS_TURN.0
         | AstFilterFlags::DID_NOT_ATTACK_THIS_TURN.0
+        | AstFilterFlags::BLOCKED_THIS_TURN.0
+        | AstFilterFlags::PAIRED_WITH_SELF.0
         | AstFilterFlags::DIED_THIS_TURN.0
         | AstFilterFlags::MODIFIED.0
         | AstFilterFlags::EQUIPPED.0
@@ -5754,6 +5920,14 @@ pub(super) fn lower_object_filter(
             {
                 set_clause_combat_filter(&mut clause.combat, CombatFilter::BlockingSource)?;
             }
+            FilterPredicateAst::Blocking(subj)
+                if matches!(
+                    peel_battlefield_subject(subj),
+                    SubjectRefAst::AttachedHost(_)
+                ) =>
+            {
+                set_clause_combat_filter(&mut clause.combat, CombatFilter::BlockingAttachedHost)?;
+            }
             FilterPredicateAst::BlockedBy {
                 blocker,
                 this_turn: false,
@@ -6113,6 +6287,28 @@ pub(super) fn lower_object_filter(
                         clause.flags = clause
                             .flags
                             .union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
+                    }
+                    "that blocked this turn" | "blocked this turn" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::BLOCKED_THIS_TURN);
+                    }
+                    "paired with ~"
+                    | "that's paired with ~"
+                    | "that is paired with ~"
+                    | "paired with it"
+                    | "that's paired with it" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::PAIRED_WITH_SELF);
+                    }
+                    "blocking enchanted creature"
+                    | "that's blocking enchanted creature"
+                    | "that is blocking enchanted creature"
+                    | "blocking equipped creature"
+                    | "that's blocking equipped creature"
+                    | "that is blocking equipped creature"
+                    | "blocking attached creature" => {
+                        set_clause_combat_filter(
+                            &mut clause.combat,
+                            CombatFilter::BlockingAttachedHost,
+                        )?;
                     }
                     "kicked" => {
                         clause.flags = clause.flags.union(ObjectFilterFlags::KICKED);
@@ -6870,6 +7066,9 @@ pub(super) fn lower_spell_filter(
             | ZoneFilter::ThatPlayerGraveyard
             | ZoneFilter::TargetPlayerGraveyard,
         ) => SpellCastZoneFilter::Graveyard,
+        Some(ZoneFilter::Exile) if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0 => {
+            SpellCastZoneFilter::LinkedExile
+        }
         Some(ZoneFilter::Exile) => SpellCastZoneFilter::Exile,
         Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand) => SpellCastZoneFilter::Hand,
         _ => return Err("oracle:spell-filter-zone"),
@@ -6912,6 +7111,20 @@ pub(super) fn lower_spell_filter(
                             return Err("oracle:spell-filter-zone");
                         }
                         cast_zone = SpellCastZoneFilter::Exile;
+                        stripped_spell_pred = true;
+                    }
+                    "exiled with ~"
+                    | "cast from among cards exiled with ~"
+                    | "cast from among the cards exiled with ~" => {
+                        if !matches!(
+                            cast_zone,
+                            SpellCastZoneFilter::Any
+                                | SpellCastZoneFilter::Exile
+                                | SpellCastZoneFilter::LinkedExile
+                        ) {
+                            return Err("oracle:spell-filter-zone");
+                        }
+                        cast_zone = SpellCastZoneFilter::LinkedExile;
                         stripped_spell_pred = true;
                     }
                     "cast from your library" => {
@@ -6989,9 +7202,16 @@ pub(super) fn lower_spell_filter(
             return Ok(sf);
         }
     }
-    let obj = if single_target || f.zone.is_some() || stripped_spell_pred {
+    let obj = if single_target
+        || f.zone.is_some()
+        || stripped_spell_pred
+        || cast_zone == SpellCastZoneFilter::LinkedExile
+    {
         let mut stripped = f.clone();
         stripped.flags.0 &= !AstFilterFlags::SINGLE_TARGET.0;
+        if cast_zone == SpellCastZoneFilter::LinkedExile {
+            stripped.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+        }
         stripped.zone = None;
         if stripped_spell_pred {
             stripped.predicates = remaining_predicates;
@@ -7656,6 +7876,7 @@ fn resolve_that_player_for_value_expr(
             Ok(ResolvingPlayer::Controller)
         }
         BodyTarget::FilteredAnyGraveyardCard { .. }
+        | BodyTarget::FilteredExiledCard(_)
         | BodyTarget::AnyGraveyardCard
         | BodyTarget::AnyGraveyardCreature
         | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Ok(ResolvingPlayer::TargetOwner),

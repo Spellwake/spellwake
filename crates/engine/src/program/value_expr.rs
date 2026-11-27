@@ -26,6 +26,8 @@ pub enum ValueZone {
     OpponentsHands,
     /// Exile (either all cards in exile, or cards owned by a specific resolving player).
     Exile(Option<ResolvingPlayer>),
+    /// Cards exiled with / imprinted by the ability source.
+    LinkedExile,
     /// Cards in a resolving player's library.
     Library(ResolvingPlayer),
 }
@@ -893,7 +895,8 @@ impl ValueExpr {
                     | ValueZone::AllGraveyards
                     | ValueZone::AllHands
                     | ValueZone::OpponentsHands
-                    | ValueZone::Exile(None) => true,
+                    | ValueZone::Exile(None)
+                    | ValueZone::LinkedExile => true,
                     ValueZone::Graveyard(p)
                     | ValueZone::Hand(p)
                     | ValueZone::Library(p)
@@ -975,7 +978,8 @@ impl ValueExpr {
                         | ValueZone::AllGraveyards
                         | ValueZone::AllHands
                         | ValueZone::OpponentsHands
-                        | ValueZone::Exile(None) => true,
+                        | ValueZone::Exile(None)
+                        | ValueZone::LinkedExile => true,
                         ValueZone::Graveyard(p)
                         | ValueZone::Hand(p)
                         | ValueZone::Library(p)
@@ -1086,7 +1090,8 @@ impl ValueExpr {
                     | ValueZone::AllGraveyards
                     | ValueZone::AllHands
                     | ValueZone::OpponentsHands
-                    | ValueZone::Exile(None) => true,
+                    | ValueZone::Exile(None)
+                    | ValueZone::LinkedExile => true,
                     ValueZone::Graveyard(p)
                     | ValueZone::Hand(p)
                     | ValueZone::Library(p)
@@ -1173,7 +1178,8 @@ impl ValueExpr {
                         | ValueZone::AllGraveyards
                         | ValueZone::AllHands
                         | ValueZone::OpponentsHands
-                        | ValueZone::Exile(None) => true,
+                        | ValueZone::Exile(None)
+                        | ValueZone::LinkedExile => true,
                         ValueZone::Graveyard(p)
                         | ValueZone::Hand(p)
                         | ValueZone::Library(p)
@@ -1679,6 +1685,9 @@ impl ValueExpr {
                     | BodyTarget::FilteredAnyGraveyardCard { .. } => {
                         Ok(Some(OperandFamily::GraveyardCard))
                     }
+                    BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
+                        Ok(Some(OperandFamily::ExiledCard))
+                    }
                     BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
                     BodyTarget::SingleAnyTarget
                     | BodyTarget::SingleCreatureOrPlayer
@@ -1864,6 +1873,9 @@ impl ValueExpr {
                 | BodyTarget::FilteredOwnGraveyardCard(_)
                 | BodyTarget::FilteredAnyGraveyardCard { .. } => {
                     Ok(Some(OperandFamily::GraveyardCard))
+                }
+                BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
+                    Ok(Some(OperandFamily::ExiledCard))
                 }
                 _ => Err(DefinitionError::OperandFamily),
             },

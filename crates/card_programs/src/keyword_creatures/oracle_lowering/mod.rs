@@ -251,6 +251,7 @@ fn compile_modal_dfc_inner(
         FaceLoweringOptions {
             allow_empty_mana_cost: false,
             allow_aftermath: false,
+            allow_fuse: false,
             allow_disturb: false,
             printed_loyalty: front_loyalty,
             printed_defense: None,
@@ -264,6 +265,7 @@ fn compile_modal_dfc_inner(
         FaceLoweringOptions {
             allow_empty_mana_cost: false,
             allow_aftermath: false,
+            allow_fuse: false,
             allow_disturb: false,
             printed_loyalty: back_loyalty,
             printed_defense: None,
@@ -524,6 +526,7 @@ pub(super) fn compile_planeswalker_with_reason(
         FaceLoweringOptions {
             allow_empty_mana_cost: false,
             allow_aftermath: false,
+            allow_fuse: false,
             allow_disturb: false,
             printed_loyalty: Some(loyalty),
             printed_defense: None,
@@ -539,6 +542,7 @@ pub(super) fn compile_planeswalker_with_reason(
 struct FaceLoweringOptions {
     allow_empty_mana_cost: bool,
     allow_aftermath: bool,
+    allow_fuse: bool,
     allow_disturb: bool,
     printed_loyalty: Option<u16>,
     printed_defense: Option<u16>,
@@ -636,6 +640,7 @@ fn compile_transforming_with_reason(
         FaceLoweringOptions {
             allow_empty_mana_cost: false,
             allow_aftermath: false,
+            allow_fuse: false,
             allow_disturb: disturb_cost.is_some(),
             printed_loyalty: front_loyalty,
             printed_defense: front_defense,
@@ -649,6 +654,7 @@ fn compile_transforming_with_reason(
         FaceLoweringOptions {
             allow_empty_mana_cost: true,
             allow_aftermath: false,
+            allow_fuse: false,
             allow_disturb: false,
             printed_loyalty: back_loyalty,
             printed_defense: None,
@@ -773,12 +779,21 @@ pub(crate) fn compile_with_reason(
             .keywords
             .iter()
             .any(|k| k.name.eq_ignore_ascii_case("aftermath"));
+        let has_fuse = |ast: &FaceAst| {
+            ast.keywords
+                .iter()
+                .any(|k| k.name.eq_ignore_ascii_case("fuse") && k.parameter.is_none())
+        };
+        let fuse = !aftermath && (has_fuse(left_ast) || has_fuse(right_ast));
         let mut left = lower_face(
             card,
             left_face,
             left_ast,
             vocabulary,
-            FaceLoweringOptions::default(),
+            FaceLoweringOptions {
+                allow_fuse: fuse,
+                ..FaceLoweringOptions::default()
+            },
         )?;
         let mut right = lower_face(
             card,
@@ -788,6 +803,7 @@ pub(crate) fn compile_with_reason(
             FaceLoweringOptions {
                 allow_empty_mana_cost: false,
                 allow_aftermath: true,
+                allow_fuse: fuse,
                 allow_disturb: false,
                 printed_loyalty: None,
                 printed_defense: None,
@@ -803,6 +819,7 @@ pub(crate) fn compile_with_reason(
             left,
             right,
             aftermath,
+            fuse,
         }
         .into_program()
         .ok_or("oracle:split-combine-failed")?;
@@ -1789,6 +1806,9 @@ fn lower_face(
         {
             continue;
         }
+        if options.allow_fuse && kw.name.eq_ignore_ascii_case("fuse") && kw.parameter.is_none() {
+            continue;
+        }
         if options.allow_disturb && kw.name.eq_ignore_ascii_case("disturb") {
             continue;
         }
@@ -1895,8 +1915,7 @@ fn lower_face(
         .unwrap_or("")
         .to_ascii_lowercase();
     for rep in &face_ast.replacements {
-        if replacement_contains_enters_as_copy(rep) && raw_oracle_low.contains("until end of turn")
-        {
+        if replacement_has_temporary_enters_as_copy(rep) {
             return Err("oracle:unsupported-enters-as-copy");
         }
         if let ReplacementEffectAst::AsEntersAction(ins) = rep {
@@ -3174,6 +3193,7 @@ fn value_expr_needs_cast_source(expr: &ValueExpr) -> bool {
                 | ValueZone::Hand(p)
                 | ValueZone::Library(p)
                 | ValueZone::Exile(Some(p)) => bad_player(p),
+                ValueZone::LinkedExile => true,
                 _ => false,
             };
             bad_zone || controller_scope.is_some_and(bad_player)
@@ -3265,14 +3285,23 @@ fn strip_snow_mana_symbols(raw: &str) -> Option<(String, u8)> {
     Some((out, snow_count))
 }
 
-fn replacement_contains_enters_as_copy(rep: &ReplacementEffectAst) -> bool {
+fn replacement_has_temporary_enters_as_copy(rep: &ReplacementEffectAst) -> bool {
     match rep {
-        ReplacementEffectAst::EntersAsCopy { .. }
-        | ReplacementEffectAst::EntersAsCopyModified(_) => true,
-        ReplacementEffectAst::Compound(items) => {
-            items.iter().any(replacement_contains_enters_as_copy)
+        ReplacementEffectAst::EntersAsCopy { exception, .. } => exception
+            .as_deref()
+            .is_some_and(|e| e.to_ascii_lowercase().contains("until end of turn")),
+        ReplacementEffectAst::EntersAsCopyModified(m) => {
+            m.duration != DurationAst::Permanent
+                || m.exception
+                    .as_deref()
+                    .is_some_and(|e| e.to_ascii_lowercase().contains("until end of turn"))
         }
-        ReplacementEffectAst::ScaledBy { inner, .. } => replacement_contains_enters_as_copy(inner),
+        ReplacementEffectAst::Compound(items) => {
+            items.iter().any(replacement_has_temporary_enters_as_copy)
+        }
+        ReplacementEffectAst::ScaledBy { inner, .. } => {
+            replacement_has_temporary_enters_as_copy(inner)
+        }
         _ => false,
     }
 }

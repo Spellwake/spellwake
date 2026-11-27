@@ -575,7 +575,11 @@ impl EffectWindow {
                             self.face_down_exile.insert(new_id, viewer_seat);
                         }
                         if *link_to_source && let Some(src) = source_id {
-                            self.linked_exiles.entry(src).or_default().push(new_id);
+                            self.characteristics
+                                .linked_exiles
+                                .entry(src)
+                                .or_default()
+                                .push(new_id);
                             self.object_tags.set(
                                 new_id,
                                 TagKey::LinkedSource(src),
@@ -648,7 +652,8 @@ impl EffectWindow {
                             }
                             DelayedReturnTiming::UntilSourceLeaves => {
                                 if !*link_to_source && let Some(src) = source_id {
-                                    self.linked_exiles
+                                    self.characteristics
+                                        .linked_exiles
                                         .entry(src)
                                         .or_default()
                                         .extend(moved_ids.iter().copied());
@@ -882,16 +887,13 @@ impl EffectWindow {
 
                     let before = self.rules_snapshot(None)?;
                     let mut face_up_origins = BTreeMap::new();
-                    if *face_down {
+                    if let Some(kind) = *face_down {
                         for (obj_id, dest) in &to_move {
                             if matches!(dest, ObjectDestination::Battlefield { .. })
                                 && let Some(card) = self.window.cards().get(*obj_id).cloned()
                             {
                                 face_up_origins.insert(*obj_id, card);
-                                self.window.set_orientation(
-                                    *obj_id,
-                                    Some(crate::face_down::FaceDownKind::Manifest),
-                                )?;
+                                self.window.set_orientation(*obj_id, Some(kind))?;
                             }
                         }
                     }

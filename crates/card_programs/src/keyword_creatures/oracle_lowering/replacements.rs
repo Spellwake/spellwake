@@ -7390,6 +7390,10 @@ fn lower_enters_as_copy(
         && ext.extra_static.is_empty()
         && ext.override_pt.is_none()
         && ext.extra_colors.is_empty()
+        && ext.override_colors.is_none()
+        && ext.extra_artifact_subtypes.is_empty()
+        && ext.extra_enchantment_subtypes.is_empty()
+        && ext.extra_supertypes.is_empty()
         && !ext.keep_name
     {
         EntryCopyRule::Matching(Box::new(spellwake_engine::program::EntryCopySpec {
@@ -7482,7 +7486,7 @@ fn parse_entry_copy_condition(
     lower_world_resolution_condition(trimmed, vocabulary)
 }
 
-fn parse_counter_spec_phrase(raw: &str) -> Option<(CounterKind, u8)> {
+pub(super) fn parse_counter_spec_phrase(raw: &str) -> Option<(CounterKind, u8)> {
     let mut s = raw.trim();
     s = s
         .strip_prefix("an additional ")
@@ -7522,6 +7526,179 @@ fn parse_literal_pt_token(raw: &str) -> Option<(RulesInteger, RulesInteger)> {
     Some((p.into(), t.into()))
 }
 
+pub(super) struct ParsedQuotedCopyAbility {
+    pub(super) extra_keywords: BTreeSet<KeywordAbility>,
+    pub(super) extra_activated: Vec<ActivatedAbility>,
+    pub(super) extra_triggered: Vec<TriggeredAbility>,
+    pub(super) extra_static: Vec<StaticContinuousAbility>,
+    pub(super) extra_mana: Vec<ManaAbility>,
+}
+
+pub(super) fn parse_quoted_copy_ability(
+    quoted: &str,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<ParsedQuotedCopyAbility, &'static str> {
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let norm_q = normalize_token_ability_text(quoted, "");
+    let synthetic = compile_card(
+        &CardInput {
+            oracle_id: "",
+            name: "Copy",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Copy",
+                type_line: "Creature",
+                oracle_text: &norm_q,
+            }],
+        },
+        &compiler_vocab,
+    );
+    if !synthetic.strictly_compiled || synthetic.faces.len() != 1 {
+        return Err("oracle:unsupported-enters-as-copy");
+    }
+    let synth_face = &synthetic.faces[0];
+    let mut out = ParsedQuotedCopyAbility {
+        extra_keywords: BTreeSet::new(),
+        extra_activated: Vec::new(),
+        extra_triggered: Vec::new(),
+        extra_static: Vec::new(),
+        extra_mana: Vec::new(),
+    };
+    if let Ok(parts) = lower_granted_ability_face_parts(synth_face, vocabulary, ids) {
+        for part in parts {
+            match part {
+                StaticPart::GrantActivated(ab) => {
+                    out.extra_activated.push(*ab);
+                }
+                StaticPart::GrantTrigger(tr) => {
+                    out.extra_triggered.push(*tr);
+                }
+                StaticPart::Abilities(change) => {
+                    let mut check = change.clone();
+                    check.granted_keywords.clear();
+                    if check == AbilityChange::default() {
+                        out.extra_keywords.extend(change.granted_keywords);
+                    } else {
+                        let st = StaticContinuousAbility::Battlefield {
+                            id: ids.static_id(),
+                            selector: PermanentSelector {
+                                controller: ControllerSelector::SourceItself,
+                                ..PermanentSelector::default()
+                            },
+                            parts: StaticParts(vec![StaticPart::Abilities(change)]),
+                        };
+                        st.validate(vocabulary)
+                            .map_err(|_| "oracle:unsupported-enters-as-copy")?;
+                        out.extra_static.push(st);
+                    }
+                }
+                other => {
+                    let st = StaticContinuousAbility::Battlefield {
+                        id: ids.static_id(),
+                        selector: PermanentSelector {
+                            controller: ControllerSelector::SourceItself,
+                            ..PermanentSelector::default()
+                        },
+                        parts: StaticParts(vec![other]),
+                    };
+                    st.validate(vocabulary)
+                        .map_err(|_| "oracle:unsupported-enters-as-copy")?;
+                    out.extra_static.push(st);
+                }
+            }
+        }
+    } else {
+        if !synth_face.replacements.is_empty() || !synth_face.spell_effects.is_empty() {
+            return Err("oracle:unsupported-enters-as-copy");
+        }
+        let mut scratch = Program::new(
+            BTreeSet::from([CardType::Creature]),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            ProgramKind::Permanent(PermanentDefinition {
+                entry_tap: None,
+                attachment: None,
+                printed_pt: None,
+                casting_cost: None,
+            }),
+        );
+        for (idx, kw) in synth_face.keywords.iter().enumerate() {
+            lower_keyword(kw, idx, synth_face, &mut scratch, vocabulary, ids, false)
+                .map_err(|_| "oracle:unsupported-enters-as-copy")?;
+        }
+        for st in &synth_face.statics {
+            lower_static(st, &mut scratch, vocabulary, ids, false)
+                .map_err(|_| "oracle:unsupported-enters-as-copy")?;
+        }
+        for ab in &synth_face.abilities {
+            lower_ability(ab, &mut scratch, vocabulary, ids)
+                .map_err(|_| "oracle:unsupported-enters-as-copy")?;
+        }
+        if !scratch.activation_restrictions.is_empty()
+            || !scratch.extra_activation_costs.is_empty()
+            || !scratch.activation_hybrid_symbols.is_empty()
+            || !scratch.activation_modes.is_empty()
+            || !scratch.activation_cost_reductions.is_empty()
+            || !scratch.activation_target_cost_reductions.is_empty()
+            || !scratch.loyalty_costs.is_empty()
+            || !scratch.static_conditions.is_empty()
+            || !scratch.zone_replacements.is_empty()
+            || scratch.entry_copy.is_some()
+            || scratch.entry_tap_unless.is_some()
+            || !scratch.cast_reductions.is_empty()
+            || !scratch.entry_counter_abilities.is_empty()
+            || scratch.cannot_be_countered
+            || scratch.cannot_be_copied
+            || scratch.conditional_flash.is_some()
+            || scratch.attack_requirement.is_some()
+            || scratch.combat_limits != Default::default()
+            || scratch.conditional_cost.is_some()
+            || !scratch.additional_cast_costs.is_empty()
+            || !scratch.extra_cast_costs.is_empty()
+        {
+            return Err("oracle:unsupported-enters-as-copy");
+        }
+        let statics: Vec<StaticContinuousAbility> = scratch
+            .continuous
+            .into_iter()
+            .chain(scratch.additional_battlefield_abilities)
+            .collect();
+        for st in &statics {
+            if !st.allowed_as_additional() || st.validate(vocabulary).is_err() {
+                return Err("oracle:unsupported-enters-as-copy");
+            }
+        }
+        if scratch.printed_keywords.is_empty()
+            && scratch.activated.is_empty()
+            && scratch.triggered.is_empty()
+            && scratch.mana.is_empty()
+            && statics.is_empty()
+        {
+            return Err("oracle:unsupported-enters-as-copy");
+        }
+        out.extra_keywords.extend(scratch.printed_keywords);
+        out.extra_activated.extend(scratch.activated);
+        out.extra_triggered.extend(scratch.triggered);
+        out.extra_mana.extend(scratch.mana);
+        out.extra_static.extend(statics);
+    }
+    Ok(out)
+}
+
+fn title_case_copy_subtype(w: &str) -> String {
+    let mut chars = w.chars();
+    match chars.next() {
+        Some(first) => {
+            let mut out = String::with_capacity(w.len());
+            out.push(first.to_ascii_uppercase());
+            out.push_str(&chars.as_str().to_ascii_lowercase());
+            out
+        }
+        None => String::new(),
+    }
+}
+
 fn lower_entry_copy_exception(
     exc_raw: &str,
     ext: &mut EntryCopySpecExt,
@@ -7531,149 +7708,18 @@ fn lower_entry_copy_exception(
     let mut rest = exc_raw.trim().to_string();
 
     // 1. Extract all quoted abilities (`"..."`)
-    let compiler_vocab = cached_compiler_vocab(vocabulary);
     while let Some(q1) = rest.find('"')
         && let Some(q2_rel) = rest[q1 + 1..].find('"')
     {
         let quoted = rest[q1 + 1..q1 + 1 + q2_rel].trim().to_string();
         let before = rest[..q1].trim();
         let after = rest[q1 + 2 + q2_rel..].trim();
-        let norm_q = normalize_token_ability_text(&quoted, "");
-        let synthetic = compile_card(
-            &CardInput {
-                oracle_id: "",
-                name: "Copy",
-                layout: "normal",
-                faces: vec![FaceInput {
-                    name: "Copy",
-                    type_line: "Creature",
-                    oracle_text: &norm_q,
-                }],
-            },
-            &compiler_vocab,
-        );
-        if !synthetic.strictly_compiled || synthetic.faces.len() != 1 {
-            return Err("oracle:unsupported-enters-as-copy");
-        }
-        let synth_face = &synthetic.faces[0];
-        if let Ok(parts) = lower_granted_ability_face_parts(synth_face, vocabulary, ids) {
-            for part in parts {
-                match part {
-                    StaticPart::GrantActivated(ab) => {
-                        ext.extra_activated.push(*ab);
-                    }
-                    StaticPart::GrantTrigger(tr) => {
-                        ext.extra_triggered.push(*tr);
-                    }
-                    StaticPart::Abilities(change) => {
-                        let mut check = change.clone();
-                        check.granted_keywords.clear();
-                        if check == AbilityChange::default() {
-                            ext.extra_keywords.extend(change.granted_keywords);
-                        } else {
-                            let st = StaticContinuousAbility::Battlefield {
-                                id: ids.static_id(),
-                                selector: PermanentSelector {
-                                    controller: ControllerSelector::SourceItself,
-                                    ..PermanentSelector::default()
-                                },
-                                parts: StaticParts(vec![StaticPart::Abilities(change)]),
-                            };
-                            st.validate(vocabulary)
-                                .map_err(|_| "oracle:unsupported-enters-as-copy")?;
-                            ext.extra_static.push(st);
-                        }
-                    }
-                    other => {
-                        let st = StaticContinuousAbility::Battlefield {
-                            id: ids.static_id(),
-                            selector: PermanentSelector {
-                                controller: ControllerSelector::SourceItself,
-                                ..PermanentSelector::default()
-                            },
-                            parts: StaticParts(vec![other]),
-                        };
-                        st.validate(vocabulary)
-                            .map_err(|_| "oracle:unsupported-enters-as-copy")?;
-                        ext.extra_static.push(st);
-                    }
-                }
-            }
-        } else {
-            if !synth_face.replacements.is_empty() || !synth_face.spell_effects.is_empty() {
-                return Err("oracle:unsupported-enters-as-copy");
-            }
-            let mut scratch = Program::new(
-                BTreeSet::from([CardType::Creature]),
-                BTreeSet::new(),
-                BTreeSet::new(),
-                ProgramKind::Permanent(PermanentDefinition {
-                    entry_tap: None,
-                    attachment: None,
-                    printed_pt: None,
-                    casting_cost: None,
-                }),
-            );
-            for (idx, kw) in synth_face.keywords.iter().enumerate() {
-                lower_keyword(kw, idx, synth_face, &mut scratch, vocabulary, ids, false)
-                    .map_err(|_| "oracle:unsupported-enters-as-copy")?;
-            }
-            for st in &synth_face.statics {
-                lower_static(st, &mut scratch, vocabulary, ids, false)
-                    .map_err(|_| "oracle:unsupported-enters-as-copy")?;
-            }
-            for ab in &synth_face.abilities {
-                lower_ability(ab, &mut scratch, vocabulary, ids)
-                    .map_err(|_| "oracle:unsupported-enters-as-copy")?;
-            }
-            if !scratch.activation_restrictions.is_empty()
-                || !scratch.extra_activation_costs.is_empty()
-                || !scratch.activation_hybrid_symbols.is_empty()
-                || !scratch.activation_modes.is_empty()
-                || !scratch.activation_cost_reductions.is_empty()
-                || !scratch.activation_target_cost_reductions.is_empty()
-                || !scratch.loyalty_costs.is_empty()
-                || !scratch.static_conditions.is_empty()
-                || !scratch.zone_replacements.is_empty()
-                || scratch.entry_copy.is_some()
-                || scratch.entry_tap_unless.is_some()
-                || !scratch.cast_reductions.is_empty()
-                || !scratch.entry_counter_abilities.is_empty()
-                || scratch.cannot_be_countered
-                || scratch.cannot_be_copied
-                || scratch.conditional_flash.is_some()
-                || scratch.attack_requirement.is_some()
-                || scratch.combat_limits != Default::default()
-                || scratch.conditional_cost.is_some()
-                || !scratch.additional_cast_costs.is_empty()
-                || !scratch.extra_cast_costs.is_empty()
-            {
-                return Err("oracle:unsupported-enters-as-copy");
-            }
-            let statics: Vec<StaticContinuousAbility> = scratch
-                .continuous
-                .into_iter()
-                .chain(scratch.additional_battlefield_abilities)
-                .collect();
-            for st in &statics {
-                if !st.allowed_as_additional() || st.validate(vocabulary).is_err() {
-                    return Err("oracle:unsupported-enters-as-copy");
-                }
-            }
-            if scratch.printed_keywords.is_empty()
-                && scratch.activated.is_empty()
-                && scratch.triggered.is_empty()
-                && scratch.mana.is_empty()
-                && statics.is_empty()
-            {
-                return Err("oracle:unsupported-enters-as-copy");
-            }
-            ext.extra_keywords.extend(scratch.printed_keywords);
-            ext.extra_activated.extend(scratch.activated);
-            ext.extra_triggered.extend(scratch.triggered);
-            ext.extra_mana.extend(scratch.mana);
-            ext.extra_static.extend(statics);
-        }
+        let parsed = parse_quoted_copy_ability(&quoted, vocabulary, ids)?;
+        ext.extra_keywords.extend(parsed.extra_keywords);
+        ext.extra_activated.extend(parsed.extra_activated);
+        ext.extra_triggered.extend(parsed.extra_triggered);
+        ext.extra_mana.extend(parsed.extra_mana);
+        ext.extra_static.extend(parsed.extra_static);
         rest = format!("{before} {after}").trim().to_string();
     }
 
@@ -7931,6 +7977,12 @@ fn lower_entry_copy_exception(
             "in addition to its other creature types",
             "in addition to his other creature types",
             "in addition to her other creature types",
+            "in addition to its other artifact types",
+            "in addition to his other artifact types",
+            "in addition to her other artifact types",
+            "in addition to its other enchantment types",
+            "in addition to his other enchantment types",
+            "in addition to her other enchantment types",
             "in addition to its other types",
             "in addition to his other types",
             "in addition to her other types",
@@ -7982,6 +8034,12 @@ fn lower_entry_copy_exception(
                 "planeswalker" => {
                     ext.extra_types.insert(CardType::Planeswalker);
                 }
+                "legendary" => {
+                    ext.extra_supertypes.insert(Supertype::Legendary);
+                }
+                "snow" => {
+                    ext.extra_supertypes.insert(Supertype::Snow);
+                }
                 "white" if allows_colors => {
                     ext.extra_colors.insert(Color::White);
                 }
@@ -7998,7 +8056,12 @@ fn lower_entry_copy_exception(
                     ext.extra_colors.insert(Color::Green);
                 }
                 _ => {
-                    if let Some(ct) = resolve_creature_subtype_token(w, vocabulary) {
+                    let titled = title_case_copy_subtype(w);
+                    if let Some(at) = ArtifactSubtype::from_wire_label(&titled) {
+                        ext.extra_artifact_subtypes.insert(at);
+                    } else if let Some(et) = EnchantmentSubtype::from_wire_label(&titled) {
+                        ext.extra_enchantment_subtypes.insert(et);
+                    } else if let Some(ct) = resolve_creature_subtype_token(w, vocabulary) {
                         ext.extra_creature_subtypes.insert(ct);
                     } else {
                         return Err("oracle:unsupported-enters-as-copy");
@@ -8008,6 +8071,91 @@ fn lower_entry_copy_exception(
         }
         let clause_end = pos + suffix_len;
         low = format!("{} {}", &low[..clause_start], &low[clause_end..]);
+    }
+
+    // 6b. Standalone supertype and color-override phrases
+    for phrase in [
+        "it's legendary",
+        "it is legendary",
+        "he's legendary",
+        "he is legendary",
+        "she's legendary",
+        "she is legendary",
+    ] {
+        if let Some(pos) = low.find(phrase) {
+            let after = low[pos + phrase.len()..].trim_start();
+            if after.is_empty()
+                || after.starts_with("and ")
+                || after.starts_with(',')
+                || after.starts_with('.')
+                || after.starts_with(';')
+            {
+                ext.extra_supertypes.insert(Supertype::Legendary);
+                low = format!("{} {}", &low[..pos], &low[pos + phrase.len()..]);
+            }
+        }
+    }
+    for phrase in [
+        "it's colorless",
+        "it is colorless",
+        "he's colorless",
+        "he is colorless",
+        "she's colorless",
+        "she is colorless",
+    ] {
+        if let Some(pos) = low.find(phrase) {
+            let after = low[pos + phrase.len()..].trim_start();
+            if after.is_empty()
+                || after.starts_with("and ")
+                || after.starts_with(',')
+                || after.starts_with('.')
+                || after.starts_with(';')
+            {
+                ext.override_colors = Some(BTreeSet::new());
+                low = format!("{} {}", &low[..pos], &low[pos + phrase.len()..]);
+            }
+        }
+    }
+    for cop in ["it's ", "it is ", "he's ", "he is ", "she's ", "she is "] {
+        if let Some(pos) = low.find(cop) {
+            let after = &low[pos + cop.len()..];
+            let stop = [",", ".", ";"]
+                .into_iter()
+                .filter_map(|m| after.find(m))
+                .min()
+                .unwrap_or(after.len());
+            let seg = after[..stop].trim();
+            let mut colors = BTreeSet::new();
+            let mut valid = !seg.is_empty();
+            for tok in seg.split_whitespace() {
+                match tok {
+                    "and" => {}
+                    "white" => {
+                        colors.insert(Color::White);
+                    }
+                    "blue" => {
+                        colors.insert(Color::Blue);
+                    }
+                    "black" => {
+                        colors.insert(Color::Black);
+                    }
+                    "red" => {
+                        colors.insert(Color::Red);
+                    }
+                    "green" => {
+                        colors.insert(Color::Green);
+                    }
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if valid && !colors.is_empty() {
+                ext.override_colors = Some(colors);
+                low = format!("{} {}", &low[..pos], &low[pos + cop.len() + stop..]);
+            }
+        }
     }
 
     // 7. Standalone literal base power and toughness override

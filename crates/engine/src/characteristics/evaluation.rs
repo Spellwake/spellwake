@@ -243,6 +243,7 @@ pub(crate) fn evaluate(
                 .state
                 .attacked_objects_this_turn
                 .contains(&physical_id),
+            blocked_this_turn: world.state.blocked_objects_this_turn.contains(&physical_id),
             dealt_damage_this_turn: world
                 .state
                 .object_damage_taken_this_turn
@@ -1523,6 +1524,10 @@ fn select_affected(
                 && selector
                     .attacked_this_turn
                     .is_none_or(|want| object.attacked_this_turn == want)
+                && selector
+                    .blocked_this_turn
+                    .is_none_or(|want| object.blocked_this_turn == want)
+                && (!selector.paired_with_source || object.paired_with == Some(source))
                 && (!selector.dealt_damage_this_turn || object.dealt_damage_this_turn)
                 && (!selector.kicked || object.kicked)
                 && (!selector.renowned || object.renowned)
@@ -2701,6 +2706,24 @@ fn generate(
                                 name_rules,
                             ),
                         }),
+                        StaticPart::SetPower(expr) => ResolvedPart::SetPower(numeric(
+                            world,
+                            expr,
+                            sentinel,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        )),
+                        StaticPart::SetToughness(expr) => ResolvedPart::SetToughness(numeric(
+                            world,
+                            expr,
+                            sentinel,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        )),
                         StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
                             power: numeric(
                                 world,
@@ -3068,6 +3091,24 @@ fn generate(
                                 name_rules,
                             ),
                         }),
+                        StaticPart::SetPower(expr) => ResolvedPart::SetPower(numeric(
+                            world,
+                            expr,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        )),
+                        StaticPart::SetToughness(expr) => ResolvedPart::SetToughness(numeric(
+                            world,
+                            expr,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        )),
                         StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
                             power: numeric(
                                 world,
@@ -3151,8 +3192,26 @@ fn generate(
                                     .state
                                     .imprinted_cards
                                     .get(&source)
-                                    .map(|v| v.iter().copied().collect())
-                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .flatten()
+                                    .chain(
+                                        world
+                                            .state
+                                            .ability_donors_in_exile
+                                            .get(&source)
+                                            .into_iter()
+                                            .flatten(),
+                                    )
+                                    .chain(
+                                        world
+                                            .state
+                                            .linked_exiles
+                                            .get(&source)
+                                            .into_iter()
+                                            .flatten(),
+                                    )
+                                    .copied()
+                                    .collect()
                             } else {
                                 BTreeSet::new()
                             };
@@ -3625,6 +3684,13 @@ fn apply_part(
             if let Some(pt) = object.power_toughness.as_mut() {
                 pt.base = pair.clone();
                 pt.derived = pair.clone();
+                pt.applied_effects.push(key);
+            }
+        }
+        ResolvedPart::SetPower(power) => {
+            if let Some(pt) = object.power_toughness.as_mut() {
+                pt.base.power = power.clone();
+                pt.derived.power = power.clone();
                 pt.applied_effects.push(key);
             }
         }

@@ -260,6 +260,12 @@ fn create_token_copy_grants_keywords_subtypes_card_types_and_each_opponent() {
                             strip_mana_cost: false,
                             defender_scope:
                                 spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                            extra_activated: Vec::new(),
+                            extra_triggered: Vec::new(),
+                            extra_static: Vec::new(),
+                            extra_mana: Vec::new(),
+                            extra_counters: Vec::new(),
+                            keep_name: false,
                         }),
                     ),
                 ))],

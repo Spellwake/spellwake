@@ -5969,7 +5969,7 @@ fn parse_toolbox_search_dest(
                 tapped,
                 attacking,
                 transformed,
-                face_down,
+                face_down: face_down.then_some(spellwake_engine::face_down::FaceDownKind::Manifest),
                 entering_counters,
                 attach_to,
             },

@@ -1342,6 +1342,7 @@ impl GameObjects {
                     before.face_down,
                     Some(
                         crate::face_down::FaceDownKind::Manifest
+                            | crate::face_down::FaceDownKind::Cloak
                             | crate::face_down::FaceDownKind::Forest
                     )
                 ) {

@@ -1717,7 +1717,7 @@ fn walk_json_invariants(
             if let Some(flags_num) = map.get("flags").and_then(Value::as_u64)
                 && map.contains_key("any_types")
                 && map.contains_key("forbidden_types")
-                && (flags_num & u64::from(ObjectFilterFlags::MODIFIED.0)) != 0
+                && (flags_num & ObjectFilterFlags::MODIFIED.0) != 0
             {
                 let face_mentions_modified = face_idx
                     .and_then(|i| face_oracles_low.get(i))

@@ -684,6 +684,41 @@ impl EffectWindow {
                                 })
                                 .count()
                         }
+                        ValueZone::LinkedExile => {
+                            let Some(src) = ability_source.or_else(resolve_ability_source) else {
+                                return Ok(0.into());
+                            };
+                            evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    o.zone == ObjectZone::Exile
+                                        && (self
+                                            .characteristics
+                                            .imprinted_cards
+                                            .get(&src)
+                                            .is_some_and(|list| list.contains(&o.object))
+                                            || self
+                                                .characteristics
+                                                .ability_donors_in_exile
+                                                .get(&src)
+                                                .is_some_and(|list| list.contains(&o.object))
+                                            || self
+                                                .characteristics
+                                                .linked_exiles
+                                                .get(&src)
+                                                .is_some_and(|list| list.contains(&o.object)))
+                                        && self.matches_object_filter(
+                                            bound_filter,
+                                            o,
+                                            controller,
+                                            Some(src),
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count()
+                        }
                     };
                     best = Some(match best {
                         Some(prev) => {
@@ -1303,6 +1338,43 @@ impl EffectWindow {
                                         card,
                                         controller,
                                         ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count();
+                        Ok(RulesInteger::from_usize(count))
+                    }
+                    ValueZone::LinkedExile => {
+                        let Some(src) = ability_source.or_else(resolve_ability_source) else {
+                            return Ok(0.into());
+                        };
+                        let evaluated = self.evaluated_characteristics()?;
+                        let count = evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                card.zone == ObjectZone::Exile
+                                    && (self
+                                        .characteristics
+                                        .imprinted_cards
+                                        .get(&src)
+                                        .is_some_and(|list| list.contains(&card.object))
+                                        || self
+                                            .characteristics
+                                            .ability_donors_in_exile
+                                            .get(&src)
+                                            .is_some_and(|list| list.contains(&card.object))
+                                        || self
+                                            .characteristics
+                                            .linked_exiles
+                                            .get(&src)
+                                            .is_some_and(|list| list.contains(&card.object)))
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        card,
+                                        controller,
+                                        Some(src),
                                         &excluded,
                                         &evaluated,
                                     )
@@ -3268,6 +3340,44 @@ impl EffectWindow {
                                         )
                                 })
                                 .count(),
+                            ValueZone::LinkedExile => ability_source
+                                .or_else(resolve_ability_source)
+                                .map_or(0, |src| {
+                                    evaluated
+                                        .objects
+                                        .values()
+                                        .filter(|o| {
+                                            o.zone == ObjectZone::Exile
+                                                && (self
+                                                    .characteristics
+                                                    .imprinted_cards
+                                                    .get(&src)
+                                                    .is_some_and(|list| list.contains(&o.object))
+                                                    || self
+                                                        .characteristics
+                                                        .ability_donors_in_exile
+                                                        .get(&src)
+                                                        .is_some_and(|list| {
+                                                            list.contains(&o.object)
+                                                        })
+                                                    || self
+                                                        .characteristics
+                                                        .linked_exiles
+                                                        .get(&src)
+                                                        .is_some_and(|list| {
+                                                            list.contains(&o.object)
+                                                        }))
+                                                && self.matches_object_filter(
+                                                    **filter,
+                                                    o,
+                                                    controller,
+                                                    Some(src),
+                                                    &excluded,
+                                                    &evaluated,
+                                                )
+                                        })
+                                        .count()
+                                }),
                         }
                     };
                     let own = count_for(seat);
@@ -4039,7 +4149,7 @@ impl EffectWindow {
                     let evaluated = self.evaluated_characteristics()?;
                     let mut exiled_types = BTreeSet::new();
                     for list in [
-                        self.linked_exiles.get(&source_id),
+                        self.characteristics.linked_exiles.get(&source_id),
                         self.characteristics.imprinted_cards.get(&source_id),
                         self.characteristics.ability_donors_in_exile.get(&source_id),
                     ]

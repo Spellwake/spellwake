@@ -27,6 +27,7 @@ pub enum PlayerHybridSide {
 pub enum PlayerCastFace {
     SplitLeft,
     SplitRight,
+    SplitBoth,
     Disturb,
     ModalBack,
     Prototype,
@@ -846,7 +847,11 @@ impl PlayerChoice {
             && (self.casts_adventure()
                 || matches!(
                     self.cast_face(),
-                    Some(PlayerCastFace::Disturb | PlayerCastFace::Prepare)
+                    Some(
+                        PlayerCastFace::Disturb
+                            | PlayerCastFace::Prepare
+                            | PlayerCastFace::SplitBoth
+                    )
                 ))
         {
             return false;
@@ -1051,6 +1056,7 @@ pub struct PlayerAdditionalCost {
 #[serde(rename_all = "kebab-case")]
 pub enum PlayerFaceDownKind {
     Manifest,
+    Cloak,
     Forest,
     Morph,
     Disguise,

@@ -189,6 +189,8 @@ pub struct CastingPayment {
     pub adventure: bool,
     /// Select a printed split half. An omitted selection on a split card casts its left half.
     pub split_half: Option<crate::program::SplitHalf>,
+    /// Cast both halves of a split card with fuse from hand (CR 702.102).
+    pub fused: bool,
     /// Cast the reverse face from your graveyard for its disturb cost.
     pub disturb: bool,
     /// Cast the back face of a modal double-faced card (CR 712.11).

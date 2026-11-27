@@ -468,7 +468,7 @@ fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
                             tapped: false,
                             attacking: false,
                             transformed: false,
-                            face_down: false,
+                            face_down: None,
                             entering_counters: (None)
                                 .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
                                     (
@@ -797,7 +797,7 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
                                 tapped: false,
                                 attacking: false,
                                 transformed: false,
-                                face_down: false,
+                                face_down: None,
                                 entering_counters: Vec::new(),
                                 attach_to: None,
                             }
@@ -840,7 +840,7 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
                                 tapped: false,
                                 attacking: false,
                                 transformed: false,
-                                face_down: false,
+                                face_down: None,
                                 entering_counters: Vec::new(),
                                 attach_to: None,
                             }

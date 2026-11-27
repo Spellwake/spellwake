@@ -496,7 +496,7 @@ impl EffectWindow {
                 if let Some(src) = source_id {
                     match group {
                         None => {
-                            if let Some(list) = self.linked_exiles.get(&src) {
+                            if let Some(list) = self.characteristics.linked_exiles.get(&src) {
                                 out.extend(list.iter().copied().filter(|id| {
                                     self.window
                                         .cards()

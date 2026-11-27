@@ -95,7 +95,7 @@ impl SupertypeMask {
 
 /// Compact bitflags for status, counter, and turn-history predicates on `ObjectFilterAst`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObjectFilterFlags(pub u32);
+pub struct ObjectFilterFlags(pub u64);
 
 impl ObjectFilterFlags {
     pub const EMPTY: Self = Self(0);
@@ -147,6 +147,10 @@ impl ObjectFilterFlags {
     pub const DID_NOT_ATTACK_THIS_TURN: Self = Self(1 << 30);
     /// Indicates `required_keywords` uses OR semantics (`flying or reach`) rather than AND semantics (`flying and vigilance`).
     pub const KEYWORDS_MATCH_ANY: Self = Self(1 << 31);
+    /// Matches creatures that blocked this turn (turn-history predicate).
+    pub const BLOCKED_THIS_TURN: Self = Self(1 << 32);
+    /// Matches a creature paired with this permanent via soulbond.
+    pub const PAIRED_WITH_SELF: Self = Self(1 << 33);
 
     /// Combine two flag sets.
     #[must_use]

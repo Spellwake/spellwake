@@ -281,6 +281,7 @@ native!(ExecutableBody, self, {
         | spellwake_engine::program::BodyTarget::AnyGraveyardCreatureOrPlaneswalker
         | spellwake_engine::program::BodyTarget::FilteredOwnGraveyardCard(_)
         | spellwake_engine::program::BodyTarget::FilteredAnyGraveyardCard { .. }
+        | spellwake_engine::program::BodyTarget::FilteredExiledCard(_)
         | spellwake_engine::program::BodyTarget::SingleOpponentOrPlaneswalker
         | spellwake_engine::program::BodyTarget::SingleSpell(_)
             if !matches!(self.target, spellwake_engine::program::BodyTarget::SingleSpell(f)
@@ -911,6 +912,7 @@ native!(ResolvedContinuousEffect, self, {
         | ResolvedPart::CannotBeTargetedByColors(_)
         | ResolvedPart::CannotBeTargetedBySpellsOfColors(_)
         | ResolvedPart::SetPT(_)
+        | ResolvedPart::SetPower(_)
         | ResolvedPart::SetToughness(_)
         | ResolvedPart::ModifyPT(_)
         | ResolvedPart::GrantLoyalty { .. }

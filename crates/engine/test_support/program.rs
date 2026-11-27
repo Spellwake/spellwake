@@ -2316,6 +2316,9 @@ enum BlockingRestrictionWire {
     CannotBlock {},
     CannotBeBlockedIfPowerOrToughnessAtMostOne {},
     MustAttackEachCombatIfAble {},
+    CannotAttackOwner {},
+    MustBeBlockedByTwoOrMore {},
+    CannotCrewVehicles {},
 }
 impl BlockingRestrictionWire {
     fn native(self, vocabulary: &CreatureTypeVocabulary) -> Result<BlockingRestriction, String> {
@@ -2352,6 +2355,9 @@ impl BlockingRestrictionWire {
                 BlockingRestriction::CannotBeBlockedIfPowerOrToughnessAtMostOne
             }
             Self::MustAttackEachCombatIfAble {} => BlockingRestriction::MustAttackEachCombatIfAble,
+            Self::CannotAttackOwner {} => BlockingRestriction::CannotAttackOwner,
+            Self::MustBeBlockedByTwoOrMore {} => BlockingRestriction::MustBeBlockedByTwoOrMore,
+            Self::CannotCrewVehicles {} => BlockingRestriction::CannotCrewVehicles,
         })
     }
 }
@@ -2483,6 +2489,11 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
         }
         BlockingRestriction::AssignNoCombatDamage => json!({"tag":"AssignNoCombatDamage"}),
         BlockingRestriction::CannotBeRegenerated => json!({"tag":"CannotBeRegenerated"}),
+        BlockingRestriction::CannotAttackOwner => json!({"tag":"CannotAttackOwner"}),
+        BlockingRestriction::MustBeBlockedByTwoOrMore => {
+            json!({"tag":"MustBeBlockedByTwoOrMore"})
+        }
+        BlockingRestriction::CannotCrewVehicles => json!({"tag":"CannotCrewVehicles"}),
     };
     json!({"tag":"BlockingRestriction", "restriction":restriction})
 }
@@ -4819,7 +4830,7 @@ impl Body {
                     )),
                     Op::DamageRelatedPlayerAmount { amount } => Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec { source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource, recipients: spellwake_engine::toolbox::DamageTargetQuery::Players(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::UniqueRelatedPlayer)), amount: spellwake_engine::program::DamageAmountSpec::Expr(amount.native(vocabulary)?), exile_if_dies: false })),
                     Op::DamageOpponentsAmount { amount } => Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec { source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource, recipients: spellwake_engine::toolbox::DamageTargetQuery::Players(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent)), amount: spellwake_engine::program::DamageAmountSpec::Expr(amount.native(vocabulary)?), exile_if_dies: false })),
-                    Op::ReturnGraveyardTargetsTapped { count: _ } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped: true, attacking: false, transformed: false, face_down: false, entering_counters: Vec::new(), attach_to: None }))),
+                    Op::ReturnGraveyardTargetsTapped { count: _ } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped: true, attacking: false, transformed: false, face_down: None, entering_counters: Vec::new(), attach_to: None }))),
                     Op::ReturnChosenXGraveyardCreatures {} => Instruction::ZoneOp(Box::new(
                         spellwake_engine::toolbox::ZoneOpSpec::return_chosen_x_graveyard_creatures(),
                     )),
@@ -4962,14 +4973,14 @@ impl Body {
                     Op::PutOwnHandCardOnLibraryBottom {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), spellwake_engine::program::ObjectFilter::any()), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), min: Box::new(spellwake_engine::program::ValueExpr::literal(1)), max: Box::new(spellwake_engine::program::ValueExpr::literal(1)), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: true }, spellwake_engine::toolbox::ZoneDest::Library { position: spellwake_engine::toolbox::LibraryOrderPos::Bottom }))),
                     Op::PutTargetInLibrary { placement } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Library { position: match placement.as_str() { "Top" => spellwake_engine::toolbox::LibraryOrderPos::Top, "Bottom" => spellwake_engine::toolbox::LibraryOrderPos::Bottom, _ => return Err("invalid library placement".into()) } }))),
                     Op::PutGroupOnLibraryBottom { group } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Battlefield, permanent_group(&group, vocabulary)?), spellwake_engine::toolbox::ZoneDest::Library { position: spellwake_engine::toolbox::LibraryOrderPos::Bottom }))),
-                    Op::ReturnSourceGraveyardToBattlefield { tapped } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped, attacking: false, transformed: false, face_down: false, entering_counters: Vec::new(), attach_to: None }))),
+                    Op::ReturnSourceGraveyardToBattlefield { tapped } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped, attacking: false, transformed: false, face_down: None, entering_counters: Vec::new(), attach_to: None }))),
                     Op::ReturnSourceGraveyardToHand {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::Hand))),
                     Op::ExileTargetUntilSourceLeaves {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: true, delayed_return: None, link_group: None }))),
                     Op::ExileUntilNextEndStep {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: false, delayed_return: Some(spellwake_engine::program::DelayedReturnTiming::NextEndStep), link_group: None }))),
                     Op::ReturnToOwnersHand {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Hand))),
                     Op::ReturnOwnGraveyardCreatureToBattlefield {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::battlefield(spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))))))),
                     Op::ReturnAnyGraveyardCreatureOrPlaneswalker {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::battlefield(spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))))))),
-                    Op::ReturnOwnGraveyardPermanentToBattlefield { tapped } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped, attacking: false, transformed: false, face_down: false, entering_counters: Vec::new(), attach_to: None }))),
+                    Op::ReturnOwnGraveyardPermanentToBattlefield { tapped } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped, attacking: false, transformed: false, face_down: None, entering_counters: Vec::new(), attach_to: None }))),
                     Op::CounterSpell {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard))),
                     Op::WatchNextSpellOrLoyaltyTwice {}=>Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::watch_next_spell_or_loyalty(false))),
                     Op::Myriad {} => Instruction::MutateObject(Box::new(
@@ -7613,6 +7624,8 @@ struct SplitDefinition {
     left: Value,
     right: Value,
     aftermath: bool,
+    #[serde(default)]
+    fuse: bool,
 }
 
 #[derive(Deserialize)]
@@ -8216,7 +8229,7 @@ pub fn decode_for_owner(
             cost.native().map(|cost|SpliceAbility {quality,cost})
         }).transpose()?,
         split: raw.split.map(|split| -> Result<_, String> {Ok(Box::new(spellwake_engine::program::SplitCard {
-            left:decode_for_owner(split.left,vocabulary)?, right:decode_for_owner(split.right,vocabulary)?, aftermath:split.aftermath,
+            left:decode_for_owner(split.left,vocabulary)?, right:decode_for_owner(split.right,vocabulary)?, aftermath:split.aftermath, fuse:split.fuse,
         }))}).transpose()?,
         adventure:raw.adventure.map(|value|decode_for_owner(value,vocabulary).map(Box::new)).transpose()?,
         prepare_spell: None,
@@ -8590,6 +8603,12 @@ pub fn parts_spec(value: &ResolvedPartsSpec) -> Value {
                 ResolvedPartSpec::SetPTExpr { power, toughness } => {
                     json!({"tag":"SetPTExpr","power":instruction_amount(power),"toughness":instruction_amount(toughness)})
                 }
+                ResolvedPartSpec::SetPower(power) => {
+                    json!({"tag":"SetPower","power":instruction_amount(power)})
+                }
+                ResolvedPartSpec::SetToughness(toughness) => {
+                    json!({"tag":"SetToughness","toughness":instruction_amount(toughness)})
+                }
                 ResolvedPartSpec::SwitchPT => json!({"tag":"SwitchPT"}),
                 ResolvedPartSpec::Abilities(value) => ability_part(value),
                 ResolvedPartSpec::BlockingRestriction(value) => blocking_restriction(value),
@@ -8657,6 +8676,9 @@ pub fn resolved_parts(value: &ResolvedParts) -> Value {
                 }),
                 ResolvedPart::SetPT(value) => {
                     json!({"tag":"SetPT","power":value.power,"toughness":value.toughness})
+                }
+                ResolvedPart::SetPower(value) => {
+                    json!({"tag":"SetPower","power":value})
                 }
                 ResolvedPart::SetToughness(value) => {
                     json!({"tag":"SetToughness","toughness":value})
@@ -9765,6 +9787,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
         StaticPart::SetPT(value) => {
             json!({"tag":"SetPT","power":expression(&value.power),"toughness":expression(&value.toughness)})
         }
+        StaticPart::SetPower(power) => {
+            json!({"tag":"SetPower","power":expression(power)})
+        }
+        StaticPart::SetToughness(toughness) => {
+            json!({"tag":"SetToughness","toughness":expression(toughness)})
+        }
         StaticPart::ModifyPT(value) => {
             json!({"tag":"ModifyPT","power":expression(&value.power),"toughness":expression(&value.toughness)})
         }
@@ -10444,6 +10472,9 @@ pub fn body(value: &ExecutableBody) -> Value {
             json!({"tag":"RecentlyDiscardedOrFromLibrary"})
         }
         BodyTarget::OwnedExiledFlashbackCard => json!({"tag":"OwnedExiledFlashbackCard"}),
+        BodyTarget::FilteredExiledCard(filter) => {
+            json!({"tag":"FilteredExiledCard","filter":permanent_group_wire(filter)})
+        }
         BodyTarget::AnyGraveyardCard => json!({"tag":"AnyGraveyardCard"}),
         BodyTarget::AnyGraveyardCreature => json!({"tag":"AnyGraveyardCreature"}),
         BodyTarget::FilteredOwnGraveyardCard(filter) => {
@@ -13525,7 +13556,11 @@ pub fn view(value: &Program) -> Value {
         result["splice"] = json!({format!("{:?}", splice.quality):cost(&splice.cost)});
     }
     if let Some(split) = &value.split {
-        result["split"] = serde_json::json!({"left":view(&split.left), "right":view(&split.right), "aftermath":split.aftermath});
+        result["split"] = if split.fuse {
+            serde_json::json!({"left":view(&split.left), "right":view(&split.right), "aftermath":split.aftermath, "fuse":true})
+        } else {
+            serde_json::json!({"left":view(&split.left), "right":view(&split.right), "aftermath":split.aftermath})
+        };
     }
     if let Some(adventure) = &value.adventure {
         result["adventure"] = view(adventure);

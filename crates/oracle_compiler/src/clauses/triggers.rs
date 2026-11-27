@@ -111,7 +111,7 @@ pub fn parse_trigger_header(header: &str, vocab: &Vocabulary) -> Result<TriggerS
                     let mut combined = Vec::new();
                     let mut all_ok = true;
                     for (i, part) in comma_parts.iter().enumerate() {
-                        let p_clean = if i + 1 == comma_parts.len() {
+                        let p_clean = if i > 0 {
                             part.trim().strip_prefix("or ").unwrap_or(part.trim())
                         } else {
                             part.trim()
@@ -1383,6 +1383,7 @@ pub(crate) fn parse_trigger_events(
     }
     if let Some((subj_raw, rest)) =
         split_once_any(&blow_noturn_zone, &[" is put into ", " are put into "])
+        && !rest.contains(", or ")
     {
         let (sraw, grouped) = peel_one_or_more(subj_raw);
         let dest_zone = if rest.contains("graveyard") {
@@ -1394,9 +1395,14 @@ pub(crate) fn parse_trigger_events(
         } else {
             None
         };
+        let from_zone = if rest.contains("from anywhere other than the battlefield") {
+            "not_battlefield"
+        } else {
+            "any"
+        };
         if let (Some(to_z), Ok(subj)) = (dest_zone, parse_subject_or_target(sraw, vocab)) {
             return Ok(vec![TriggerEventAst::ZoneChange {
-                from: Some("any".to_string()),
+                from: Some(from_zone.to_string()),
                 to: Some(to_z.to_string()),
                 subject: Box::new(subj),
                 grouped,

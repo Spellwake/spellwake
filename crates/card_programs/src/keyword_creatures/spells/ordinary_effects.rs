@@ -281,7 +281,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                                 tapped: true,
                                 attacking: false,
                                 transformed: false,
-                                face_down: false,
+                                face_down: None,
                                 entering_counters: Vec::new(),
                                 attach_to: None,
                             },

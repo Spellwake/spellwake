@@ -376,12 +376,20 @@ impl EntryCopyPool {
             if spec.nonlegendary {
                 def.supertypes.remove(&Supertype::Legendary);
             }
+            def.supertypes.extend(spec.extra_supertypes.iter().copied());
             def.card_types.extend(spec.extra_types.iter().copied());
             def.creature_subtypes
                 .extend(spec.extra_creature_subtypes.iter().copied());
+            def.artifact_subtypes
+                .extend(spec.extra_artifact_subtypes.iter().copied());
+            def.enchantment_subtypes
+                .extend(spec.extra_enchantment_subtypes.iter().copied());
             def.printed_keywords
                 .extend(spec.extra_keywords.iter().copied());
-            if !spec.extra_colors.is_empty() {
+            if let Some(colors) = &spec.override_colors {
+                def.color_indicator = Some(colors.clone());
+                def.effect_defined_colors = Some(colors.clone());
+            } else if !spec.extra_colors.is_empty() {
                 let mut colors = def.defined_colors();
                 colors.extend(spec.extra_colors.iter().copied());
                 def.effect_defined_colors = Some(colors);
@@ -527,7 +535,10 @@ impl EntryCopyPool {
     }
 }
 
-fn fixed_entry_counter(kind: CounterKind, count: u8) -> crate::program::EntryCounterAbility {
+pub(super) fn fixed_entry_counter(
+    kind: CounterKind,
+    count: u8,
+) -> crate::program::EntryCounterAbility {
     match kind {
         CounterKind::PlusOne => {
             crate::program::EntryCounterAbility::FixedPlusOne(i64::from(count).into())

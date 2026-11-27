@@ -1755,11 +1755,29 @@ fn parse_keyword_and_spell_grant_statics_e8(
         }
     }
 
-    // 4. Dynamic X keyword grants ("~ has <kw> x, where x is <expr>", "devour x, where x is <expr>", "craft with <list> <cost>")
-    // (Kodama of the Center Tree, Thromok, Throne of the Grim Captain)
+    // 4. Dynamic X keyword grants ("<subj> has <kw> x, where x is <expr>", "devour x, where x is <expr>", "craft with <list> <cost>")
+    // (Kodama of the Center Tree, Thromok, Infantry Shield, Throne of the Grim Captain)
     if let Some((head, expr_raw)) = low.split_once(" x, where x is ") {
+        if let Some((subj_raw, kw_raw)) = split_once_any(head, &[" has ", " have "]) {
+            let kw = kw_raw.trim();
+            if !kw.is_empty()
+                && kw.split_whitespace().count() <= 2
+                && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+            {
+                return Some(st_s(StaticAbilityAst::GrantKeywordWithCost {
+                    subject: Box::new(subj),
+                    keyword: kw.to_string(),
+                    cost_rule: format!("x={}", expr_raw.trim()),
+                    condition: None,
+                }));
+            }
+        }
         let kw = head.strip_prefix("~ has ").unwrap_or(head).trim();
-        if !kw.is_empty() && kw.split_whitespace().count() <= 2 {
+        if !kw.is_empty()
+            && !kw.starts_with("has ")
+            && !kw.starts_with("have ")
+            && kw.split_whitespace().count() <= 2
+        {
             return Some(st_s(StaticAbilityAst::GrantKeywordWithCost {
                 subject: self_obj(),
                 keyword: kw.to_string(),

@@ -1426,7 +1426,6 @@ pub struct EffectWindow {
     resolution_aura_choices: BTreeMap<ObjectId, TargetRef>,
     settled_entry_destinations: BTreeMap<ObjectId, crate::program::PublicZoneDestination>,
     pending_entry_reveals: Vec<GameObject>,
-    linked_exiles: BTreeMap<ObjectId, Vec<ObjectId>>,
     independent_exile_links:
         BTreeMap<(ObjectId, crate::program::LinkedExileGroup), BTreeSet<ObjectId>>,
     linked_search_results: BTreeMap<ObjectId, Vec<ObjectId>>,
@@ -2541,7 +2540,6 @@ impl EffectWindow {
             resolution_aura_choices: BTreeMap::new(),
             settled_entry_destinations: BTreeMap::new(),
             pending_entry_reveals: Vec::new(),
-            linked_exiles: BTreeMap::new(),
             independent_exile_links: BTreeMap::new(),
             linked_search_results:BTreeMap::new(),
             monarch_linked_exiles: Vec::new(),
@@ -3733,6 +3731,7 @@ impl EffectWindow {
         self.evaluated_characteristics().ok().and_then(|evaluated| {
             evaluated.objects.values().find_map(|source| {
                 let linked = self
+                    .characteristics
                     .linked_exiles
                     .get(&source.object)
                     .is_some_and(|ids| ids.contains(&object))
@@ -3883,7 +3882,8 @@ impl EffectWindow {
                     crate::program::SourceZoneFilter::LinkedExile => {
                         card.zone() == ObjectZone::Exile
                             && active.source_object.is_some_and(|src| {
-                                self.linked_exiles
+                                self.characteristics
+                                    .linked_exiles
                                     .get(&src)
                                     .is_some_and(|list| list.contains(&object))
                                     || self
@@ -5930,6 +5930,7 @@ impl EffectWindow {
                 graveyard_permission: None,
                 adventure: false,
                 split_half: None,
+                fused: false,
                 disturb: false,
                 modal_back: false,
                 prototype: false,
@@ -9058,6 +9059,19 @@ impl EffectWindow {
                     .attacker(id)
                     .is_some_and(|a| a.defending_planeswalker().is_none())
             }),
+            CombatFilter::BlockingAttachedHost => ability_source
+                .and_then(|src| evaluated.get(src))
+                .and_then(|src| match src.attached_to {
+                    Some(TargetRef::Object(host)) => Some(host),
+                    _ => None,
+                })
+                .is_some_and(|host| {
+                    self.combat.as_ref().is_some_and(|combat| {
+                        combat
+                            .blocker(id)
+                            .is_some_and(|b| b.attackers().contains(&host))
+                    })
+                }),
         };
         if !combat_ok {
             return false;
@@ -9174,6 +9188,19 @@ impl EffectWindow {
         {
             return false;
         }
+        if clause.flags.contains(ObjectFilterFlags::BLOCKED_THIS_TURN)
+            && !self.characteristics.blocked_objects_this_turn.contains(&id)
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::PAIRED_WITH_SELF)
+            && !ability_source.is_some_and(|src| {
+                self.characteristics.paired_creatures.get(&src) == Some(&id)
+                    || self.characteristics.paired_creatures.get(&id) == Some(&src)
+            })
+        {
+            return false;
+        }
         if clause
             .flags
             .contains(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN)
@@ -9220,6 +9247,7 @@ impl EffectWindow {
                         .get(&src)
                         .is_some_and(|list| list.contains(&id))
                     || self
+                        .characteristics
                         .linked_exiles
                         .get(&src)
                         .is_some_and(|list| list.contains(&id))
@@ -10117,6 +10145,23 @@ impl EffectWindow {
                     card.card_id().is_some() && card.owner() == controller && card.zone() == ObjectZone::Exile
                 }) && self.face_down_exile_viewer(id).is_none()
                     && self.copiable_program(id).is_some_and(|program| program.flashback.is_some())),
+            BodyTarget::FilteredExiledCard(filter) => {
+                let TargetRef::Object(id) = target else {
+                    return false;
+                };
+                if !self.window.cards().get(id).is_some_and(|card| {
+                    card.card_id().is_some() && card.zone() == ObjectZone::Exile
+                }) {
+                    return false;
+                }
+                let Some(p) = evaluated.get(id) else {
+                    return false;
+                };
+                let excluded = BTreeSet::new();
+                self.matches_object_filter_with_source(
+                    filter, p, controller, source, &excluded, evaluated,
+                )
+            }
             BodyTarget::AnyGraveyardCard => {
                 matches!(target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|object| object.card_id().is_some() && matches!(object.zone(), ObjectZone::Graveyard(_))))
             }
@@ -10322,6 +10367,32 @@ impl EffectWindow {
                             }
                             crate::program::SpellCastZoneFilter::OwnLibrary => {
                                 entry.cast_from_library == Some(controller)
+                            }
+                            crate::program::SpellCastZoneFilter::LinkedExile => {
+                                entry.cast_summary().cast_from_exile
+                                    && source.id.is_some_and(|src| {
+                                        entry.cast_original_object.is_some_and(|orig| {
+                                            self.characteristics
+                                                .linked_exiles
+                                                .get(&src)
+                                                .is_some_and(|list| list.contains(&orig))
+                                                || self
+                                                    .characteristics
+                                                    .imprinted_cards
+                                                    .get(&src)
+                                                    .is_some_and(|list| list.contains(&orig))
+                                                || self
+                                                    .characteristics
+                                                    .ability_donors_in_exile
+                                                    .get(&src)
+                                                    .is_some_and(|list| list.contains(&orig))
+                                                || self.independent_exile_links.iter().any(
+                                                    |((s, _), ids)| {
+                                                        *s == src && ids.contains(&orig)
+                                                    },
+                                                )
+                                        })
+                                    })
                             }
                         };
                         if !zone_ok {

@@ -1532,6 +1532,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::Earthbend { .. }
         | InstructionAst::Incubate { .. }
         | InstructionAst::Investigate { .. }
+        | InstructionAst::Cloak { .. }
         | InstructionAst::Manifest { .. }
         | InstructionAst::MayChooseNewTargetsForCopy => lower_tokens_copies_instruction(
             ins,
@@ -1674,6 +1675,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::InteractiveChoice(..)
         | InstructionAst::Learn
         | InstructionAst::LookAtHand { .. }
+        | InstructionAst::CloakByPlayer { .. }
         | InstructionAst::ManifestByPlayer { .. }
         | InstructionAst::ManualTabletopAction { .. }
         | InstructionAst::Modal { .. }

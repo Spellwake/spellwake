@@ -36,6 +36,54 @@ use crate::filter::{
 use crate::preprocess::{count_symbol_sequence, is_mana_sequence, parse_base_pt};
 use crate::vocab::{Vocabulary, parse_number_word};
 
+fn try_parse_cloak_top_cards(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
+    if let Some(after_c) = low.strip_prefix("cloak the top ")
+        && let Some((cnt_raw, lib_raw)) = after_c.split_once(" cards of ")
+        && let Ok(val) = parse_value_expr(cnt_raw.trim(), vocab)
+    {
+        let lib_trimmed = lib_raw.trim();
+        let subject = if lib_trimmed == "your library" {
+            None
+        } else {
+            Some(Box::new(SubjectRefAst::Anaphora(format!(
+                "top cards of {lib_trimmed}"
+            ))))
+        };
+        return Some(InstructionAst::Cloak {
+            count: Box::new(val),
+            subject,
+        });
+    }
+    if let Some((who_raw, after_c)) = split_once_any(low, &[" cloaks the top ", " cloak the top "])
+        && let Some((cnt_raw, lib_raw)) = after_c.split_once(" cards of ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Ok(val) = parse_value_expr(cnt_raw.trim(), vocab)
+    {
+        let lib_trimmed = lib_raw.trim();
+        if player == PlayerRefAst::You {
+            let subject = if lib_trimmed == "your library" {
+                None
+            } else {
+                Some(Box::new(SubjectRefAst::Anaphora(format!(
+                    "top cards of {lib_trimmed}"
+                ))))
+            };
+            return Some(InstructionAst::Cloak {
+                count: Box::new(val),
+                subject,
+            });
+        }
+        return Some(InstructionAst::CloakByPlayer {
+            player,
+            count: Box::new(val),
+            subject: Some(Box::new(SubjectRefAst::Anaphora(format!(
+                "top cards of {lib_trimmed}"
+            )))),
+        });
+    }
+    None
+}
+
 fn split_copy_and_choose_new_targets(rest: &str) -> Option<&str> {
     for sep in [
         ", and you may choose new targets for ",
@@ -1340,6 +1388,9 @@ pub(super) fn try_parse_named_keyword_actions(
             subject: Box::new(subj),
         });
     }
+    if let Some(cloak_ins) = try_parse_cloak_top_cards(low, vocab) {
+        return Some(cloak_ins);
+    }
     if let Some(subj_raw) = low.strip_prefix("cloak ")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
@@ -2270,12 +2321,15 @@ fn parse_specialized_effect_clauses_a(
         });
     }
 
-    // E3.16: Manifest top N / Cloak top card of <player>'s library
+    // E3.16: Manifest top N / Cloak top N cards of <player>'s library
     if let Some(after_m) = low.strip_prefix("manifest the top ")
         && let Some((cnt_raw, _)) = after_m.split_once(" cards of ")
         && let Ok(val) = parse_value_expr(cnt_raw.trim(), vocab)
     {
         return Some(vec![ins_manifest(val, false, None)]);
+    }
+    if let Some(cloak_ins) = try_parse_cloak_top_cards(low, vocab) {
+        return Some(vec![cloak_ins]);
     }
 
     // E3.17: Bidding / Voting / RepeatSameWay / Secret Choice / Coin-flip & Die-roll outcomes

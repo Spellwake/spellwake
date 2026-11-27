@@ -159,6 +159,9 @@ fn rewrite_battlefield_static_parts(change: CreatureTypeTextChange, parts: &mut 
                 numeric(change, &mut value.power);
                 numeric(change, &mut value.toughness);
             }
+            StaticPart::SetPower(value) | StaticPart::SetToughness(value) => {
+                numeric(change, value);
+            }
             StaticPart::BlockingRestriction(
                 BlockingRestriction::OnlyBlockedBySubtype(value)
                 | BlockingRestriction::CannotBlockSubtype(value)
@@ -259,6 +262,9 @@ fn parts(change: CreatureTypeTextChange, value: &mut ResolvedPartsSpec) {
                 power.rewrite_creature_type(change.from, change.to);
                 toughness.rewrite_creature_type(change.from, change.to);
             }
+            ResolvedPartSpec::SetPower(value) | ResolvedPartSpec::SetToughness(value) => {
+                value.rewrite_creature_type(change.from, change.to);
+            }
             ResolvedPartSpec::Names(_)
             | ResolvedPartSpec::Control(_)
             | ResolvedPartSpec::Color(_)
@@ -336,7 +342,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
     }
     if let crate::program::BodyTarget::FilteredPermanent(filter)
     | crate::program::BodyTarget::FilteredOwnGraveyardCard(filter)
-    | crate::program::BodyTarget::FilteredAnyGraveyardCard { filter, .. } = &mut value.target
+    | crate::program::BodyTarget::FilteredAnyGraveyardCard { filter, .. }
+    | crate::program::BodyTarget::FilteredExiledCard(filter) = &mut value.target
     {
         filter.rewrite_creature_type(change.from, change.to);
     } else if let crate::program::BodyTarget::SingleSpell(filter)
@@ -542,6 +549,18 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     crate::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
                         rewrite_amount(&mut copy.count);
                         words(change, &mut copy.extra_subtypes);
+                        for ability in &mut copy.extra_activated {
+                            body(change, &mut ability.body);
+                        }
+                        for ability in &mut copy.extra_triggered {
+                            trigger(change, ability);
+                        }
+                        for ability in &mut copy.extra_static {
+                            rewrite_static_ability(change, ability);
+                        }
+                        for mana in &mut copy.extra_mana {
+                            rewrite_mana_output(change, &mut mana.output);
+                        }
                     }
                     _ => {}
                 }

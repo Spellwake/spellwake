@@ -1945,6 +1945,9 @@ impl StaticContinuousAbility {
                         expression.validate(vocabulary)?;
                     }
                 }
+                StaticPart::SetPower(expression) | StaticPart::SetToughness(expression) => {
+                    expression.validate(vocabulary)?;
+                }
                 StaticPart::GrantRestriction(restriction) => {
                     validate_static_restriction(restriction, vocabulary)?;
                 }

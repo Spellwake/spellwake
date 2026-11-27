@@ -238,6 +238,9 @@ impl EffectWindow {
                         crate::characteristics::BlockingRestriction::CannotAttackPlayer(
                             protected_seat,
                         ) => *protected_seat == defending_player,
+                        crate::characteristics::BlockingRestriction::CannotAttackOwner => {
+                            defending_player == owner
+                        }
                         crate::characteristics::BlockingRestriction::CannotAttackUnlessDefenderControls(
                             filter,
                         ) => !current.objects.values().any(|perm| {

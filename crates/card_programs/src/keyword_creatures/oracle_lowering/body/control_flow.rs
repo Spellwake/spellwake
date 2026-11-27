@@ -9913,7 +9913,8 @@ pub(in super::super) fn lower_instruction_seq(
                                 break;
                             }
                             Instruction::MutatePlayer(spec) => match &spec.op {
-                                spellwake_engine::toolbox::PlayerMutation::Mill(_) => {
+                                spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                                | spellwake_engine::toolbox::PlayerMutation::Surveil(_) => {
                                     found = Some(false);
                                     break;
                                 }

@@ -112,12 +112,20 @@ impl EffectWindow {
             if minimum > 1 {
                 minimums.insert(id, minimum);
             }
+            let must_be_blocked_by_two = attacker
+                .blocking_restrictions
+                .contains(&BlockingRestriction::MustBeBlockedByTwoOrMore);
             if !available.is_empty()
-                && attacker
+                && (attacker
                     .blocking_restrictions
                     .contains(&BlockingRestriction::MustBeBlocked)
+                    || must_be_blocked_by_two)
             {
                 require_at_least_one_block.insert(id);
+                if must_be_blocked_by_two && available.len() >= 2 && !single_blocker && !max_one {
+                    let entry = minimums.entry(id).or_insert(2);
+                    *entry = (*entry).max(2);
+                }
             }
             for blocker in available {
                 choices.entry(blocker).or_default().push(id);
