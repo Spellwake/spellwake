@@ -164,6 +164,12 @@ pub fn parse_trigger_event(ts: &mut TokenStream<'_>) -> PResult<TriggerEvent> {
             player: None,
         });
     }
+    if ts.eat_phrase(&["becomes", "the", "target", "of"])
+        || ts.eat_phrase(&["become", "the", "target", "of"])
+    {
+        let source = parse_object_filter(ts)?;
+        return Ok(TriggerEvent::BecomesTarget { subject, source });
+    }
     if ts.eat_phrase(&["deals", "combat", "damage"]) || ts.eat_phrase(&["deal", "combat", "damage"])
     {
         let target = if ts.eat_word("to") {

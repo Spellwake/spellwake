@@ -1,7 +1,9 @@
 //! Strictly-typed recursive [`ValueExpr`] parser for `v2`.
 
 use crate::ast::{PlayerStatKind, Rounding, StatKind};
-use crate::v2::filter::{parse_object_filter, parse_player_ref};
+use crate::v2::filter::{
+    parse_counter_kind, parse_object_filter, parse_player_ref, parse_subject_ref,
+};
 use crate::v2::ir::{
     AggregateOp, AnaphoraRef, ManaSymbol, PlayerRef, PriorActionKind, SubjectRef, TurnEventKind,
     ValueExpr, VarName,
@@ -97,6 +99,11 @@ pub fn parse_value_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         });
     }
 
+    // `that many` / `that much`
+    if ts.eat_phrase(&["that", "many"]) || ts.eat_phrase(&["that", "much"]) {
+        return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+    }
+
     // `X`
     if ts.eat_word("x") {
         return Ok(ValueExpr::Var(VarName::X));
@@ -170,6 +177,22 @@ pub fn parse_for_each_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             player: PlayerRef::You,
             stat: PlayerStatKind::CardsInHand,
         });
+    }
+
+    // `<kind> counter on <subj>` (e.g. `for each burden counter on ~`, `for each +1/+1 counter on it`)
+    {
+        let cp = ts.checkpoint();
+        if let Ok(kind) = try_parse(ts, parse_counter_kind)
+            && (ts.eat_word("counter") || ts.eat_word("counters"))
+            && ts.eat_word("on")
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        {
+            return Ok(ValueExpr::CounterCount {
+                subject: Box::new(subject),
+                kind,
+            });
+        }
+        ts.restore(cp);
     }
 
     // `creature exiled this way` -> PriorActionCount(ExiledThisWay) or Count(flt)

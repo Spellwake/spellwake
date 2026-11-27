@@ -38,7 +38,7 @@ struct RawCard {
     type_line: Option<String>,
     #[serde(default)]
     oracle_text: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "faces")]
     card_faces: Option<Vec<RawFace>>,
     #[serde(default)]
     legalities: BTreeMap<String, String>,
@@ -141,14 +141,9 @@ fn run_v2_corpus_audit(
     })?;
     let mut summary = V2CorpusSummary::default();
 
-    let mut handle_line = |line: &str, line_num: usize| -> Result<(), String> {
-        if line.trim().is_empty() {
-            return Ok(());
-        }
-        let raw = serde_json::from_str::<RawCard>(line)
-            .map_err(|e| format!("malformed JSONL card at line {line_num}: {e}"))?;
-        if !all_cards && !is_ordinary_base_format(&raw.legalities) {
-            return Ok(());
+    let mut handle_raw = |raw: RawCard| {
+        if !all_cards && !raw.legalities.is_empty() && !is_ordinary_base_format(&raw.legalities) {
+            return;
         }
         let owned_faces: Vec<(String, String, String)> = match raw.card_faces {
             Some(fs) if !fs.is_empty() => fs
@@ -183,6 +178,15 @@ fn run_v2_corpus_audit(
         };
         let compiled = compile_card_v2(&input, &vocab);
         summary.record(&compiled);
+    };
+
+    let mut handle_line = |line: &str, line_num: usize| -> Result<(), String> {
+        if line.trim().is_empty() {
+            return Ok(());
+        }
+        let raw = serde_json::from_str::<RawCard>(line)
+            .map_err(|e| format!("malformed JSONL card at line {line_num}: {e}"))?;
+        handle_raw(raw);
         Ok(())
     };
 
@@ -190,6 +194,10 @@ fn run_v2_corpus_audit(
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("gz"));
+    let is_json_array = snapshot
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"));
     if is_gz {
         let mut child = Command::new("gzip")
             .args(["-dc"])
@@ -212,6 +220,15 @@ fn run_v2_corpus_audit(
         if !status.success() {
             return Err(format!("gzip exited with status {status}"));
         }
+    } else if is_json_array {
+        let file = File::open(snapshot)
+            .map_err(|e| format!("failed to open snapshot {}: {e}", snapshot.display()))?;
+        let reader = BufReader::new(file);
+        let cards: Vec<RawCard> = serde_json::from_reader(reader)
+            .map_err(|e| format!("malformed JSON array snapshot {}: {e}", snapshot.display()))?;
+        for raw in cards {
+            handle_raw(raw);
+        }
     } else {
         let file = File::open(snapshot)
             .map_err(|e| format!("failed to open snapshot {}: {e}", snapshot.display()))?;
@@ -231,6 +248,26 @@ fn run_v2_corpus_audit(
         "v2 strictly-typed corpus audit: {}/{} ({:.2}%) strictly compiled, {} failed",
         summary.strictly_compiled_cards, summary.total_cards, pct, summary.failed_cards
     );
+    if !summary.error_stage_counts.is_empty() {
+        println!("Error stage counts:");
+        for (stage, count) in &summary.error_stage_counts {
+            println!("  {count:>5}  {stage}");
+        }
+    }
+    if !summary.error_message_counts.is_empty() {
+        let mut buckets: Vec<(&String, &usize)> = summary.error_message_counts.iter().collect();
+        buckets.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        println!("Top failure buckets:");
+        for (bucket, count) in buckets.into_iter().take(20) {
+            println!("  {count:>5}  {bucket}");
+        }
+    }
+    if !summary.sample_failures.is_empty() {
+        println!("Sample failures:");
+        for sample in summary.sample_failures.iter().take(25) {
+            println!("  - {sample}");
+        }
+    }
     if let Some(out_path) = output {
         let json = serde_json::to_string_pretty(&summary)
             .map_err(|e| format!("failed to serialize v2 summary: {e}"))?;

@@ -35,6 +35,7 @@ pub struct V2CorpusSummary {
     pub strictly_compiled_cards: usize,
     pub failed_cards: usize,
     pub error_stage_counts: BTreeMap<String, usize>,
+    pub error_message_counts: BTreeMap<String, usize>,
     pub sample_failures: Vec<String>,
 }
 
@@ -50,7 +51,9 @@ impl V2CorpusSummary {
                 for err in &face.errors {
                     let key = format!("{:?}", err.stage);
                     *self.error_stage_counts.entry(key).or_insert(0) += 1;
-                    if self.sample_failures.len() < 25 {
+                    let msg_key = format!("{:?}: {}", err.stage, err.message);
+                    *self.error_message_counts.entry(msg_key).or_insert(0) += 1;
+                    if self.sample_failures.len() < 40 {
                         self.sample_failures.push(format!(
                             "{} [{:?} @ {}..{}]: {} ({})",
                             card.name,
