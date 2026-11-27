@@ -471,6 +471,11 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }),
         }]);
     }
+    // Extra specialized trigger events delegated to `subject_events`
+    if let Some(evs) = subject_events::try_parse_extra_trigger_event(ts) {
+        return Ok(evs);
+    }
+
     // `a mana ability of <subj> resolves`
     {
         let mcp = ts.checkpoint();
@@ -1517,12 +1522,19 @@ fn try_parse_player_trigger_event(
         return Ok(Some(vec![TriggerEvent::RolledDie { player, value: 0 }]));
     }
     if ts.eat_phrase(&["waterbend"]) {
-        while ts.eat_comma() || ts.eat_word("or") {
+        loop {
+            let lcp = ts.checkpoint();
+            let had_comma = ts.eat_comma();
+            let had_or = ts.eat_word("or");
+            if !had_comma && !had_or {
+                break;
+            }
             if !(ts.eat_word("earthbend")
                 || ts.eat_word("firebend")
                 || ts.eat_word("airbend")
                 || ts.eat_word("waterbend"))
             {
+                ts.restore(lcp);
                 break;
             }
         }
@@ -2033,17 +2045,22 @@ fn try_parse_player_trigger_event(
         }]));
     }
     // State triggers: `<player> control(s) [no | <N> or more] <flt>` / `<player> has/have <N> or (less|more) life` / `has no cards in hand`
-    if ((ts.eat_word("control") || ts.eat_word("controls")) && ts.eat_word("no"))
-        || ts.eat_phrase(&["don't", "control"])
-        || ts.eat_phrase(&["doesn't", "control"])
     {
-        let _ = ts.eat_word("a") || ts.eat_word("an");
-        let filter = parse_object_filter(ts)?;
-        return Ok(Some(vec![TriggerEvent::PlayerObjectEvent {
-            player,
-            kind: PlayerObjectTriggerKind::ControlNo,
-            filter: Some(filter),
-        }]));
+        let ccp = ts.checkpoint();
+        if ((ts.eat_word("control") || ts.eat_word("controls")) && ts.eat_word("no"))
+            || ts.eat_phrase(&["don't", "control"])
+            || ts.eat_phrase(&["doesn't", "control"])
+        {
+            let _ = ts.eat_word("a") || ts.eat_word("an");
+            if let Ok(filter) = try_parse(ts, parse_object_filter) {
+                return Ok(Some(vec![TriggerEvent::PlayerObjectEvent {
+                    player,
+                    kind: PlayerObjectTriggerKind::ControlNo,
+                    filter: Some(filter),
+                }]));
+            }
+        }
+        ts.restore(ccp);
     }
     {
         let ccp = ts.checkpoint();
@@ -2257,13 +2274,20 @@ fn parse_player_cast_trigger(
                     || ts.eat_word("toughness"))
             {
                 let mut saw_list = false;
-                while ts.eat_comma() || ts.eat_word("or") {
+                loop {
+                    let lcp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
+                    let had_or = ts.eat_word("or");
+                    if !had_comma && !had_or {
+                        break;
+                    }
                     if ts.eat_phrase(&["mana", "value"])
                         || ts.eat_word("power")
                         || ts.eat_word("toughness")
                     {
                         saw_list = true;
                     } else {
+                        ts.restore(lcp);
                         break;
                     }
                 }

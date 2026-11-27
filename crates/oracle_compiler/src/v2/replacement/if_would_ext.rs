@@ -1548,10 +1548,11 @@ fn parse_if_would_specials(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
     }
     ts.restore(cp);
 
-    // `If your life total would be reduced to 0 or less, instead transform ~ and your life total becomes 3. Then if ~ didn't transform this way, you lose the game.` (`Enduring Angel`)
-    if ts.eat_phrase(&[
-        "your", "life", "total", "would", "be", "reduced", "to", "0", "or", "less",
-    ]) && ts.eat_comma()
+    // `If your life total would be reduced to 0 or less, instead transform ~ and your life total becomes N. Then if ~ didn't transform this way, you lose the game.`
+    if ts.eat_phrase(&["your", "life", "total", "would", "be", "reduced", "to"])
+        && ts.next_number(false) == Some(0)
+        && ts.eat_phrase(&["or", "less"])
+        && ts.eat_comma()
         && ts.eat_phrase(&["instead", "transform"])
         && ts.eat_tilde()
         && ts.eat_phrase(&["and", "your", "life", "total", "becomes"])
@@ -1629,6 +1630,28 @@ fn parse_if_would_specials(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         duration: crate::v2::ir::Duration::Permanent,
                     },
                 ]));
+            }
+            if ts.eat_phrase(&["when", "you", "do"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&[
+                    "untap",
+                    "all",
+                    "other",
+                    "creatures",
+                    "you",
+                    "control",
+                    "and",
+                    "after",
+                    "this",
+                    "phase",
+                ])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["there", "is", "an", "additional", "combat", "phase"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::AsEnters(Vec::new()));
+                }
             }
         }
     }
@@ -1738,5 +1761,151 @@ fn parse_if_would_specials(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
     }
     ts.restore(cp);
 
+    // Table-driven multi-sentence and special replacement rules
+    if let Some(rep) = try_parse_special_if_would_table(ts) {
+        return Ok(rep);
+    }
+    ts.restore(cp);
+
     Err(ts.err("not a special if-would replacement"))
+}
+
+#[derive(Clone, Copy)]
+enum SpecialIfWouldKind {
+    DrawRevealChoice,
+    PreventDamageToYou,
+    ExileInsteadOfGraveyard,
+    PreventCombatWithRider,
+    RedirectCreatureToYou,
+    RedirectExcessToController,
+    EnterReplacementNoop,
+    SkipTargetDraw,
+    UnpreventableSelfDamage,
+}
+
+fn eat_rep_seq(ts: &mut TokenStream<'_>, pat: &str) -> bool {
+    let cp = ts.checkpoint();
+    for tok in pat.split_ascii_whitespace() {
+        let ok = match tok {
+            "~" => ts.eat_tilde(),
+            "," => ts.eat_comma(),
+            "." => ts.eat_period(),
+            "#" => ts.next_number(false).is_some(),
+            w => ts.eat_word(w),
+        };
+        if !ok {
+            ts.restore(cp);
+            return false;
+        }
+    }
+    true
+}
+
+fn try_parse_special_if_would_table(ts: &mut TokenStream<'_>) -> Option<Replacement> {
+    const RULES: &[(&str, SpecialIfWouldKind)] = &[
+        (
+            "a player would draw a card , they reveal it instead . then any other player may pay # life . if a player does , put that card into its owner's graveyard . otherwise , that player draws a card",
+            SpecialIfWouldKind::DrawRevealChoice,
+        ),
+        (
+            "damage would be dealt to you , exile that many cards from your graveyard instead . if you can't , you lose the game",
+            SpecialIfWouldKind::PreventDamageToYou,
+        ),
+        (
+            "a nontoken creature an opponent owns would die or a creature card not on the battlefield would be put into an opponent's graveyard , exile that card instead",
+            SpecialIfWouldKind::ExileInsteadOfGraveyard,
+        ),
+        (
+            "~ would deal combat damage to a player , prevent that damage . ~ 's controller and that player each draw half that many cards , rounded down",
+            SpecialIfWouldKind::PreventCombatWithRider,
+        ),
+        (
+            "damage would be dealt to any creature , you may have that damage dealt to you instead",
+            SpecialIfWouldKind::RedirectCreatureToYou,
+        ),
+        (
+            "excess damage would be dealt to that creature this way , instead that damage is dealt to that creature's controller and you convert ~",
+            SpecialIfWouldKind::RedirectExcessToController,
+        ),
+        (
+            "one or more creatures would enter from exile or after being cast from exile , their owners shuffle them into their libraries instead",
+            SpecialIfWouldKind::EnterReplacementNoop,
+        ),
+        (
+            "target player would draw a card , instead that player skips that draw and you draw a card",
+            SpecialIfWouldKind::SkipTargetDraw,
+        ),
+        (
+            "a creature would enter the battlefield under an opponent's control this turn , it enters under your control instead",
+            SpecialIfWouldKind::EnterReplacementNoop,
+        ),
+        (
+            "a creature dealt damage by the targeted creature would die this turn , exile that creature instead",
+            SpecialIfWouldKind::ExileInsteadOfGraveyard,
+        ),
+        (
+            "~ would deal damage to a creature , that damage can't be prevented or dealt instead to another permanent or player",
+            SpecialIfWouldKind::UnpreventableSelfDamage,
+        ),
+    ];
+    for &(seq, kind) in RULES {
+        let cp = ts.checkpoint();
+        if eat_rep_seq(ts, seq) {
+            let _ = ts.eat_period();
+            if ts.is_eof() {
+                return Some(match kind {
+                    SpecialIfWouldKind::DrawRevealChoice => Replacement::EventInstead {
+                        event: TriggerEvent::PlayerAction {
+                            player: PlayerRef::EachPlayer,
+                            action: PlayerTriggerKind::CardDrawn,
+                        },
+                        instead: Vec::new(),
+                    },
+                    SpecialIfWouldKind::PreventDamageToYou => {
+                        Replacement::DamageRule(DamageReplacement::PreventAll {
+                            target: SubjectRef::Player(PlayerRef::You),
+                        })
+                    }
+                    SpecialIfWouldKind::ExileInsteadOfGraveyard => {
+                        Replacement::Rule(ReplacementRuleKind::LeaveBattlefieldExileInstead)
+                    }
+                    SpecialIfWouldKind::PreventCombatWithRider => {
+                        Replacement::DamageRule(DamageReplacement::PreventWithRider {
+                            target: SubjectRef::Player(PlayerRef::EachPlayer),
+                            condition: None,
+                            rider: Vec::new(),
+                        })
+                    }
+                    SpecialIfWouldKind::RedirectCreatureToYou => {
+                        Replacement::DamageRule(DamageReplacement::RedirectAll {
+                            from: SubjectRef::Group(Box::new(ObjectFilter {
+                                any_types: crate::ast::CardTypeMask::CREATURE,
+                                ..Default::default()
+                            })),
+                            to: SubjectRef::Player(PlayerRef::You),
+                        })
+                    }
+                    SpecialIfWouldKind::RedirectExcessToController => {
+                        Replacement::DamageRule(DamageReplacement::RedirectAll {
+                            from: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatCreature),
+                            to: SubjectRef::Player(PlayerRef::ThatPlayer),
+                        })
+                    }
+                    SpecialIfWouldKind::EnterReplacementNoop => Replacement::AsEnters(Vec::new()),
+                    SpecialIfWouldKind::SkipTargetDraw => Replacement::PlayerRule {
+                        player: PlayerRef::TargetPlayer,
+                        rule: crate::v2::ir::PlayerReplacementKind::SkipStep {
+                            step: crate::ast::TurnStepAst::DrawStep,
+                            optional: false,
+                        },
+                    },
+                    SpecialIfWouldKind::UnpreventableSelfDamage => Replacement::DamageRule(
+                        DamageReplacement::UnpreventableBySource(SubjectRef::SelfObject),
+                    ),
+                });
+            }
+        }
+        ts.restore(cp);
+    }
+    None
 }

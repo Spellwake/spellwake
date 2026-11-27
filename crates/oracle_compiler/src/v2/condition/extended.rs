@@ -109,13 +109,28 @@ pub(super) fn parse_there_are_condition(ts: &mut TokenStream<'_>) -> Option<Cond
         });
     }
     ts.restore(cp);
-    if ts.eat_phrase(&["there", "are"]) {
+    if ts.eat_phrase(&["there", "are"]) || ts.eat_phrase(&["there", "were"]) {
         let _ = ts.eat_phrase(&["at", "least"]);
         let min_count = ts
             .next_number(false)
             .and_then(|n| u16::try_from(n).ok())
             .unwrap_or(1);
         let _ = ts.eat_phrase(&["or", "more"]);
+        if ts.eat_phrase(&["card", "types", "among", "the", "sacrificed", "permanents"])
+            || ts.eat_phrase(&["card", "types", "among", "the", "sacrificed", "creatures"])
+        {
+            return Some(ConditionExpr::Compare {
+                lhs: Box::new(ValueExpr::DistinctCardTypesAmong(Box::new(ObjectFilter {
+                    any_permanent: true,
+                    predicates: vec![FilterPredicate::AffectedByPriorAction(
+                        PriorActionKind::SacrificedThisWay,
+                    )],
+                    ..Default::default()
+                }))),
+                op: CompareOp::Ge,
+                rhs: Box::new(ValueExpr::Const(i32::from(min_count))),
+            });
+        }
         if (ts.eat_phrase(&["card", "types", "among", "cards", "exiled", "with"])
             || ts.eat_phrase(&["permanent", "types", "among", "cards", "exiled", "with"]))
             && (ts.eat_tilde() || ts.eat_word("it"))
@@ -304,6 +319,13 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
             && ts.eat_word("and")
             && let Ok(mut flt) = try_parse(ts, parse_object_filter)
         {
+            // Consume optional lowercase-prefix apostrophe title fragment (e.g., `x'Y...`)
+            if let Some(w) = ts.peek_word()
+                && let Some((_, tail)) = w.split_once('\'')
+                && tail.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            {
+                ts.next_word();
+            }
             flt.predicates
                 .push(FilterPredicate::OwnedAndControlledByYou);
             return Ok(ConditionExpr::And(
@@ -318,17 +340,9 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
         ts.restore(mcp);
     }
 
-    // Cards exiled with source: `a card is exiled with it/~` / `one or more cards are exiled with it/~`
-    // / `<N> or more cards have been exiled with ~`
+    // Cards exiled with source: `<N> or more cards have been exiled with ~`
     {
         let ecp = ts.checkpoint();
-        if (ts.eat_phrase(&["a", "card", "is", "exiled", "with"])
-            || ts.eat_phrase(&["one", "or", "more", "cards", "are", "exiled", "with"]))
-            && (ts.eat_word("it") || ts.eat_tilde())
-        {
-            return Ok(ConditionExpr::Flag(ConditionFlag::CardsExiledWithSelf));
-        }
-        ts.restore(ecp);
         if let Some(n) = ts.next_number(false)
             && ts.eat_phrase(&["or", "more", "cards", "have", "been", "exiled", "with"])
             && (ts.eat_tilde() || ts.eat_word("it"))
@@ -894,12 +908,16 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
     }
 
     // Cast / keyword cost / not-cast-from-hand
-    if (ts.eat_tilde() || ts.eat_word("it"))
-        && ts.eat_phrase(&["wasn't", "cast", "from", "your", "hand"])
     {
-        return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Flag(
-            ConditionFlag::WasCastFromHand,
-        ))));
+        let ccp = ts.checkpoint();
+        if (ts.eat_tilde() || ts.eat_word("it"))
+            && ts.eat_phrase(&["wasn't", "cast", "from", "your", "hand"])
+        {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Flag(
+                ConditionFlag::WasCastFromHand,
+            ))));
+        }
+        ts.restore(ccp);
     }
     {
         let kcp = ts.checkpoint();
@@ -1082,7 +1100,8 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
         let tcp = ts.checkpoint();
         if ts.eat_phrase(&["there's", "another"])
             && let Ok(mut flt) = try_parse(ts, parse_object_filter)
-            && ts.eat_phrase(&["on", "the", "battlefield"])
+            && (ts.eat_phrase(&["on", "the", "battlefield"])
+                || flt.zones.iter().any(|z| z.zone == ZoneKind::Battlefield))
         {
             flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
             return Ok(ConditionExpr::ZoneHasCount {

@@ -95,14 +95,14 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
         ts.tokens.len()
     };
 
-    // Strip trailing `, where X is <ValueExpr>` binder
-    if let Some(where_idx) = find_where_x_is(ts.tokens, ts.pos, end_trim) {
-        let expr_slice = &ts.tokens[where_idx + 4..end_trim];
+    // Strip trailing `, where X is <ValueExpr>` binder (including comma inside preceding quote)
+    if let Some((body_end, expr_start)) = find_where_x_is(ts.tokens, ts.pos, end_trim) {
+        let expr_slice = &ts.tokens[expr_start..end_trim];
         let mut expr_ts = ts.sub_stream(expr_slice, ts.stage);
         if let Ok(expr) = parse_value_expr(&mut expr_ts)
             && expr_ts.is_eof()
         {
-            let body_slice = &ts.tokens[ts.pos..where_idx];
+            let body_slice = &ts.tokens[ts.pos..body_end];
             let mut body_ts = ts.sub_stream(body_slice, ts.stage);
             let inner = parse_static_core(&mut body_ts, condition.take())?;
             body_ts.expect_eof()?;
@@ -241,6 +241,13 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
                     }
                 }
             }
+            // Fallback: standalone permanent effect lines (e.g. Attraction Visit/Prize bodies)
+            if base_cond.is_none()
+                && ts.pos == 0
+                && let Some(st) = global_rules::try_parse_standalone_effect_fallback(ts)
+            {
+                return Ok(st);
+            }
             return Err(first_err);
         }
     };
@@ -306,18 +313,23 @@ fn find_where_x_is(
     tokens: &[crate::v2::lexer::Token<'_>],
     start: usize,
     end: usize,
-) -> Option<usize> {
+) -> Option<(usize, usize)> {
     use crate::v2::lexer::TokenKind;
     if end < start + 5 {
         return None;
     }
     for i in start..=end - 5 {
-        if matches!(tokens[i].kind, TokenKind::Comma)
+        let sep_body_end = match tokens[i].kind {
+            TokenKind::Comma => Some(i),
+            TokenKind::Quoted(q) if q.trim_end().ends_with(',') => Some(i + 1),
+            _ => None,
+        };
+        if let Some(body_end) = sep_body_end
             && matches!(tokens[i + 1].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("where"))
             && matches!(tokens[i + 2].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("x"))
             && matches!(tokens[i + 3].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("is"))
         {
-            return Some(i);
+            return Some((body_end, i + 4));
         }
     }
     None
@@ -730,12 +742,17 @@ fn parse_static_core(
         ts.restore(ecp);
     }
     // `You don't lose the game for having 0 or less life`
-    if ts.eat_phrase(&[
-        "you", "don't", "lose", "the", "game", "for", "having", "0", "or", "less", "life",
-    ]) {
-        return Ok(StaticAbility::GlobalFlag(
-            StaticFlagKind::DontLoseForZeroLife,
-        ));
+    {
+        let zcp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "don't", "lose", "the", "game", "for", "having"])
+            && ts.next_number(false) == Some(0)
+            && ts.eat_phrase(&["or", "less", "life"])
+        {
+            return Ok(StaticAbility::GlobalFlag(
+                StaticFlagKind::DontLoseForZeroLife,
+            ));
+        }
+        ts.restore(zcp);
     }
     // `<player> don't lose unspent [<color>] mana as steps and phases end`
     {
@@ -905,10 +922,14 @@ fn parse_static_core(
                 && let Some(quoted) = ts.next_quoted()
                 && ts.eat_phrase(&["to", "activate"])
             {
-                let _ = opt(ts, parse_static_scale_expr);
-                let _ = ts.eat_phrase(&["for", "each"])
+                let mcp = ts.checkpoint();
+                if !(ts.eat_phrase(&["for", "each"])
                     && ts.next_word().is_some()
-                    && ts.eat_phrase(&["mana", "symbol", "in", "their", "activation", "costs"]);
+                    && ts.eat_phrase(&["mana", "symbol", "in", "their", "activation", "costs"]))
+                {
+                    ts.restore(mcp);
+                    let _ = opt(ts, parse_static_scale_expr);
+                }
                 let _ = quoted;
                 return Ok(StaticAbility::AdditionalCost(Vec::new()));
             }
@@ -1210,14 +1231,16 @@ fn parse_static_core(
         ts.restore(cp);
     }
 
-    // 0aa. `You control enchanted creature/permanent/enchantment/artifact creature`
+    // 0aa. `You control enchanted creature/permanent/enchantment/artifact/land/equipment/planeswalker`
     if ts.eat_phrase(&["you", "control", "enchanted"])
         && (ts.eat_phrase(&["artifact", "creature"])
             || ts.eat_word("creature")
             || ts.eat_word("permanent")
             || ts.eat_word("artifact")
             || ts.eat_word("enchantment")
-            || ts.eat_word("land"))
+            || ts.eat_word("land")
+            || ts.eat_word("equipment")
+            || ts.eat_word("planeswalker"))
     {
         return Ok(StaticAbility::ControlEnchanted {
             controller: PlayerRef::You,

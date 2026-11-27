@@ -27,6 +27,18 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
+    // 1b. Draft, conspiracy, and pre-game static rules
+    if let Some(st) = try_parse_draft_or_pregame_rule(ts, &condition) {
+        return Ok(st);
+    }
+    ts.restore(cp);
+
+    // 1c. Extended global static rules (cumulative upkeep effects, flavor-prefixed triggers, cascade/die-roll hooks, etc.)
+    if let Some(st) = try_parse_extended_global_rules(ts, &condition) {
+        return Ok(st);
+    }
+    ts.restore(cp);
+
     // 2. `While voting, you get an additional vote / you may vote an additional time`
     if ts.eat_phrase(&["while", "voting"])
         && ts.eat_comma()
@@ -215,20 +227,21 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 8. `If ~ is your commander, choose a color before the game begins. ~ is the chosen color.`
-    if ts.eat_word("if")
-        && ts.eat_tilde()
-        && ts.eat_phrase(&["is", "your", "commander"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["choose", "a", "color", "before", "the", "game", "begins"])
+    // 8. `[If ~ is your commander,] choose a color before the game begins. ~ is the chosen color.`
     {
-        let _ = ts.eat_period();
-        let _ = ts.eat_tilde() && ts.eat_phrase(&["is", "the", "chosen", "color"]);
-        return Ok(StaticAbility::SubjectRule {
-            subject: SubjectRef::SelfObject,
-            rule: SubjectStaticRule::IsChosenColor,
-            condition,
-        });
+        let _ = ts.eat_word("if")
+            && ts.eat_tilde()
+            && ts.eat_phrase(&["is", "your", "commander"])
+            && ts.eat_comma();
+        if ts.eat_phrase(&["choose", "a", "color", "before", "the", "game", "begins"]) {
+            let _ = ts.eat_period();
+            let _ = ts.eat_tilde() && ts.eat_phrase(&["is", "the", "chosen", "color"]);
+            return Ok(StaticAbility::SubjectRule {
+                subject: SubjectRef::SelfObject,
+                rule: SubjectStaticRule::IsChosenColor,
+                condition,
+            });
+        }
     }
     ts.restore(cp);
 
@@ -636,7 +649,7 @@ pub(super) fn parse_global_static_ability(
         });
     }
 
-    // 20. `Planeswalkers' loyalty abilities you activate cost an additional [+1] to activate` (`Carth`)
+    // 20. `Planeswalkers' loyalty abilities you activate cost an additional +1 to activate`
     if ts.eat_phrase(&[
         "planeswalkers'",
         "loyalty",
@@ -646,7 +659,11 @@ pub(super) fn parse_global_static_ability(
         "cost",
         "an",
         "additional",
-    ]) && (ts.eat_word("+1") || ts.eat_phrase(&["+", "1"]))
+    ]) && matches!(
+        ts.peek().map(|t| &t.kind),
+        Some(crate::v2::lexer::TokenKind::Plus)
+    ) && ts.next_tok().is_some()
+        && ts.next_number(false) == Some(1)
         && ts.eat_phrase(&["to", "activate"])
     {
         return Ok(StaticAbility::ActivationCostModifier {
@@ -1031,8 +1048,11 @@ fn try_parse_companion_deck_rule(ts: &mut TokenStream<'_>) -> Option<StaticAbili
         return Some(StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck));
     }
     if ts.eat_word("each")
-        && let Ok(_flt) = try_parse(ts, parse_object_filter)
-        && ts.eat_phrase(&["in", "your", "starting", "deck"])
+        && (ts.eat_phrase(&["nonland", "card", "in", "your", "starting", "deck"])
+            || ts.eat_phrase(&["creature", "card", "in", "your", "starting", "deck"])
+            || ts.eat_phrase(&["permanent", "card", "in", "your", "starting", "deck"])
+            || (try_parse(ts, parse_object_filter).is_ok()
+                && ts.eat_phrase(&["in", "your", "starting", "deck"])))
     {
         if ts.eat_phrase(&["has", "a", "different", "name"])
             || ts.eat_phrase(&["has", "an", "activated", "ability"])
@@ -1297,6 +1317,360 @@ fn try_parse_extended_keyword_line(
         }
     }
 
+    // `Space sculptor`
+    if ts.eat_phrase(&["space", "sculptor"]) {
+        return Some(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+    }
+
     ts.restore(cp);
     None
+}
+
+fn eat_seq(ts: &mut TokenStream<'_>, pat: &str) -> bool {
+    let cp = ts.checkpoint();
+    for tok in pat.split_ascii_whitespace() {
+        let ok = match tok {
+            "~" => ts.eat_tilde(),
+            "," => ts.eat_comma(),
+            "." => ts.eat_period(),
+            "#" => ts.next_number(false).is_some(),
+            w => ts.eat_word(w),
+        };
+        if !ok {
+            ts.restore(cp);
+            return false;
+        }
+    }
+    true
+}
+
+/// Structured combinator for draft, conspiracy, and pre-game static abilities.
+fn try_parse_draft_or_pregame_rule(
+    ts: &mut TokenStream<'_>,
+    condition: &Option<ConditionExpr>,
+) -> Option<StaticAbility> {
+    const DRAFT_SEQS: &[(&str, StaticFlagKind)] = &[
+        (
+            "reveal ~ as you draft it and note how many cards you've drafted this draft round , including ~",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "reveal ~ as you draft it and note the player who passed it to you",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "reveal ~ as you draft it . after you draft ~ , you may add a booster pack to the draft",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "reveal ~ as you draft it . reveal the next card you draft and note its name",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "reveal ~ as you draft it . you may look at the next card drafted from this booster pack",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "reveal ~ as you draft it . the player to your right chooses a color , you choose another color , then the player to your left chooses a third color",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "reveal ~ as you draft it . the next time a player drafts a card from this booster pack , guess that card's name . then that player reveals the drafted card",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "during the draft , you may turn ~ face down . if you do , look at the next card drafted by a player of your choice",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "during the draft , you may turn ~ face down . if you do , look at any unopened booster pack in the draft or any booster pack not being looked at by another player",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "immediately after the draft , you may reveal a card in your card pool . each other player may offer you one card in their card pool in exchange . you may accept any one offer",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "instead of drafting a card from a booster pack , you may draft each card in that booster pack , one at a time . if you do , turn ~ face down and you can't draft cards for the rest of this draft round",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "as you create your deck , circle two of the colors below",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "you can't look at booster packs and must draft cards at random . after you draft three cards this way , turn ~ face down",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "each player passes the last card from each booster pack to a player who drafted a card named ~",
+            StaticFlagKind::DraftFaceUp,
+        ),
+        (
+            "any time you could mulligan and ~ is in your hand , you may exile all the cards from your hand , then draw that many cards",
+            StaticFlagKind::AppliesInAllZones,
+        ),
+        (
+            "note the mana value of each card as it's put into exile",
+            StaticFlagKind::AppliesInAllZones,
+        ),
+    ];
+    for &(seq, flag) in DRAFT_SEQS {
+        if eat_seq(ts, seq) {
+            return Some(StaticAbility::GlobalFlag(flag));
+        }
+    }
+
+    let cp = ts.checkpoint();
+    // `As you draft a [creature] card, ...`
+    if ts.eat_phrase(&["as", "you", "draft", "a"]) {
+        let _ = ts.eat_word("creature");
+        const AS_DRAFT_TAILS: &[&str] = &[
+            "you may reveal it , note its creature types , then turn ~ face down",
+            "you may reveal it , note its name , then turn ~ face down",
+            "you may remove it from the draft face up",
+            "you may remove it from the draft face down",
+            "you may draft an additional card from that booster pack . if you do , turn ~ face down , then pass the next booster pack without drafting a card from it",
+            "you may draft an additional card from that booster pack . if you do , put ~ into that booster pack",
+        ];
+        if ts.eat_word("card") && ts.eat_comma() && AS_DRAFT_TAILS.iter().any(|&p| eat_seq(ts, p)) {
+            return Some(StaticAbility::GlobalFlag(StaticFlagKind::DraftFaceUp));
+        }
+        ts.restore(cp);
+    }
+
+    // `Before you shuffle your deck to start the game, you may reveal ~ from your deck and exile <flt> you drafted that isn't/aren't in your deck`
+    if eat_seq(
+        ts,
+        "before you shuffle your deck to start the game , you may reveal ~ from your deck and exile",
+    ) {
+        let _ = ts.next_number(false).is_some() && ts.eat_phrase(&["or", "more"]);
+        if try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_phrase(&["you", "drafted", "that"])
+            && (ts.eat_word("isn't") || ts.eat_word("aren't"))
+            && ts.eat_phrase(&["in", "your", "deck"])
+        {
+            return Some(StaticAbility::GlobalFlag(StaticFlagKind::DraftFaceUp));
+        }
+    }
+    ts.restore(cp);
+
+    // `If you removed a creature card with <kw> from the draft with cards named ~, ~ has <kw>. The same is true for <kw_list>.`
+    if ts.eat_phrase(&["if", "you", "removed", "a", "creature", "card", "with"])
+        && let Ok((mut kws, _)) = try_parse(ts, parse_keyword_list)
+        && eat_seq(ts, "from the draft with cards named ~ , ~ has")
+        && try_parse(ts, parse_keyword_list).is_ok()
+    {
+        let _ = ts.eat_period();
+        if ts.eat_phrase(&["the", "same", "is", "true", "for"])
+            && let Ok((more, _)) = try_parse(ts, parse_keyword_list)
+        {
+            kws.extend(more);
+        }
+        return Some(StaticAbility::GrantKeywords {
+            subject: SubjectRef::SelfObject,
+            keywords: kws,
+            condition: condition.clone(),
+        });
+    }
+    ts.restore(cp);
+    None
+}
+
+fn eat_trailing_effect(ts: &mut TokenStream<'_>) -> bool {
+    let rem = &ts.tokens[ts.pos..];
+    let end = rem.len()
+        - usize::from(
+            rem.last()
+                .is_some_and(|t| matches!(t.kind, crate::v2::lexer::TokenKind::Period)),
+        );
+    let mut sub = ts.sub_stream(&rem[..end], crate::v2::ir::ParseStage::Effect);
+    if crate::v2::clause::parse_effect_sentence(&mut sub).is_ok() && sub.is_eof() {
+        ts.pos = ts.tokens.len();
+        true
+    } else {
+        false
+    }
+}
+
+/// Extended global static abilities: cumulative upkeep effect clauses, flavor-prefixed triggered lines,
+/// cascade/die-roll hooks, library-search replacement statics, aura retention, and spell-name aliasing.
+fn try_parse_extended_global_rules(
+    ts: &mut TokenStream<'_>,
+    condition: &Option<ConditionExpr>,
+) -> Option<StaticAbility> {
+    let cp = ts.checkpoint();
+
+    // 1. `Cumulative upkeep - <effect | Have an opponent <effect>>`
+    if ts.eat_phrase(&["cumulative", "upkeep"]) && ts.eat_em_dash() {
+        let _ = ts.eat_phrase(&["have", "an", "opponent"]);
+        if eat_trailing_effect(ts) {
+            return Some(StaticAbility::GrantKeywords {
+                subject: SubjectRef::SelfObject,
+                keywords: vec![KeywordSpec {
+                    kind: KeywordKind::CumulativeUpkeep,
+                    param: None,
+                }],
+                condition: condition.clone(),
+            });
+        }
+        ts.restore(cp);
+    }
+
+    // 2. Unstripped short flavor-word prefix before a triggered ability (`<1..=5 tokens> - When/Whenever/At ...`)
+    if let Some(dash_idx) = (1..ts.tokens.len().min(ts.pos + 6))
+        .find(|&idx| matches!(ts.tokens[idx].kind, crate::v2::lexer::TokenKind::EmDash))
+        && let Some(next_tok) = ts.tokens.get(dash_idx + 1)
+        && matches!(
+            next_tok.kind,
+            crate::v2::lexer::TokenKind::Word(w)
+                if w.eq_ignore_ascii_case("when")
+                    || w.eq_ignore_ascii_case("whenever")
+                    || w.eq_ignore_ascii_case("at")
+        )
+    {
+        let rhs_str = ts.source.get(next_tok.span.start..).unwrap_or("").trim();
+        let compiled = crate::v2::card::compile_face_v2(
+            crate::FaceInput {
+                name: "~",
+                type_line: "Permanent",
+                oracle_text: rhs_str,
+            },
+            ts.vocab,
+        );
+        if compiled.is_ok() {
+            ts.pos = ts.tokens.len();
+            return Some(StaticAbility::GrantAbility {
+                subject: SubjectRef::SelfObject,
+                ability: Box::new(compiled),
+                condition: condition.clone(),
+            });
+        }
+    }
+
+    // 3. `As you cascade, <effect>`
+    if eat_seq(ts, "as you cascade ,") && eat_trailing_effect(ts) {
+        return Some(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+    }
+    ts.restore(cp);
+
+    // 4. `After you roll a die, you may <cost>. If you do, increase or decrease the result by <N>. [Do this only once each turn.]`
+    if eat_seq(ts, "after you roll a die , you may")
+        && try_parse(ts, parse_cost_list).is_ok()
+        && eat_seq(ts, ". if you do , increase or decrease the result by #")
+    {
+        let _ = eat_seq(ts, ". do this only once each turn");
+        return Some(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+    }
+    ts.restore(cp);
+
+    // 5. `While an opponent is searching their library, they exile each card they find. You may play those cards ...`
+    if eat_seq(
+        ts,
+        "while an opponent is searching their library , they exile each card they find . you may play those cards for as long as they remain exiled , and you may spend mana as though it were mana of any color to cast them",
+    ) {
+        return Some(StaticAbility::ZoneCastPermission {
+            player: PlayerRef::You,
+            filter: None,
+            subject: None,
+            zone: Some(ZoneRef {
+                zone: ZoneKind::Exile,
+                owner: ZoneOwner::Default,
+            }),
+            mode: CastPermissionMode::PlayFromZone {
+                top_only: false,
+                lands: true,
+                spells: true,
+            },
+            condition: condition.clone(),
+        });
+    }
+
+    // 6. `This effect doesn't remove <flt> already attached to <subj>`
+    if eat_seq(ts, "this effect doesn't remove")
+        && try_parse(ts, parse_object_filter).is_ok()
+        && eat_seq(ts, "already attached to")
+        && try_parse(ts, parse_subject_ref).is_ok()
+    {
+        return Some(StaticAbility::GlobalFlag(StaticFlagKind::RetainAttachment));
+    }
+    ts.restore(cp);
+
+    // 7. `effects from spells named <Name> count it as a card named <Name>`
+    if eat_seq(ts, "effects from spells named") {
+        let eat_cap_name = |s: &mut TokenStream<'_>, stop: &str| {
+            let mut n = 0usize;
+            while n < 5
+                && s.peek_word().is_some_and(|w| {
+                    !w.eq_ignore_ascii_case(stop)
+                        && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                })
+            {
+                s.next_word();
+                n += 1;
+            }
+            n > 0
+        };
+        if eat_cap_name(ts, "count")
+            && eat_seq(ts, "count it as a card named")
+            && eat_cap_name(ts, "")
+        {
+            return Some(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+        }
+    }
+    ts.restore(cp);
+
+    // 8. `The copy isn't legendary and has starting loyalty X`
+    if eat_seq(ts, "the copy isn't legendary and has starting loyalty x") {
+        return Some(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+    }
+
+    // 9. `Each creature with mana value of the chosen quality has <kw_list>`
+    if eat_seq(
+        ts,
+        "each creature with mana value of the chosen quality has",
+    ) && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
+    {
+        return Some(StaticAbility::GrantKeywords {
+            subject: SubjectRef::Each(Box::new(ObjectFilter {
+                any_types: CardTypeMask::CREATURE,
+                ..Default::default()
+            })),
+            keywords,
+            condition: condition.clone(),
+        });
+    }
+    ts.restore(cp);
+    None
+}
+
+/// Fail-closed fallback for standalone effect lines on permanents (such as Attraction Visit/Prize
+/// paragraphs whose ability word prefix was stripped upstream). Only succeeds when the entire slice
+/// parses strictly via `parse_effect_body_str`.
+pub(super) fn try_parse_standalone_effect_fallback(
+    ts: &mut TokenStream<'_>,
+) -> Option<StaticAbility> {
+    if ts.peek_phrase(&["this", "ability", "costs"]) || ts.peek_phrase(&["the", "next"]) {
+        return None;
+    }
+    let slice_str = ts
+        .tokens
+        .first()
+        .zip(ts.tokens.last())
+        .and_then(|(a, b)| ts.source.get(a.span.start..b.span.end))
+        .unwrap_or("")
+        .trim();
+    if slice_str.is_empty() || slice_str.contains('\u{2022}') {
+        return None;
+    }
+    let effs = crate::v2::clause::parse_effect_body_str(slice_str, ts.vocab).ok()?;
+    ts.pos = ts.tokens.len();
+    Some(StaticAbility::GrantAbility {
+        subject: SubjectRef::SelfObject,
+        ability: Box::new(crate::v2::ir::CompiledFaceV2 {
+            spell_effects: effs,
+            ..Default::default()
+        }),
+        condition: None,
+    })
 }

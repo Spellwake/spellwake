@@ -12,6 +12,24 @@ use crate::v2::ir::{
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 
+/// Parse specialized non-subject trigger events (most-common-color state trigger, etc.).
+pub(super) fn try_parse_extra_trigger_event(ts: &mut TokenStream<'_>) -> Option<Vec<TriggerEvent>> {
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&[
+        "the", "chosen", "color", "isn't", "the", "most", "common", "color", "among",
+    ]) && let Ok(flt) = try_parse(ts, parse_object_filter)
+    {
+        let _ = ts.eat_phrase(&["or", "is", "tied", "for", "most", "common"]);
+        return Some(vec![TriggerEvent::PlayerObjectEvent {
+            player: PlayerRef::ChosenPlayer,
+            kind: PlayerObjectTriggerKind::ControlNo,
+            filter: Some(flt),
+        }]);
+    }
+    ts.restore(cp);
+    None
+}
+
 /// Consume optional post-subject relative qualifiers before a subject-headed trigger verb.
 pub(super) fn eat_subject_post_qualifiers(ts: &mut TokenStream<'_>, _subject: &mut SubjectRef) {
     loop {
@@ -38,8 +56,12 @@ pub(super) fn eat_subject_post_qualifiers(ts: &mut TokenStream<'_>, _subject: &m
         {
             let wcp = ts.checkpoint();
             if ts.eat_word("with")
-                && try_parse(ts, parse_object_filter).is_ok()
-                && ts.eat_phrase(&["attached", "to", "it"])
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+                && (ts.eat_phrase(&["attached", "to", "it"])
+                    || flt
+                        .predicates
+                        .iter()
+                        .any(|p| matches!(p, FilterPredicate::AttachedTo(_))))
             {
                 continue;
             }
@@ -55,6 +77,46 @@ pub(super) fn eat_subject_post_qualifiers(ts: &mut TokenStream<'_>, _subject: &m
                 }
             }
             ts.restore(dcp);
+            if ts.eat_word("by") && try_parse(ts, parse_subject_ref).is_ok() {
+                let _ = ts.eat_phrase(&["this", "turn"]);
+                if ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("dies") || w.eq_ignore_ascii_case("die")
+                }) {
+                    continue;
+                }
+            }
+            ts.restore(dcp);
+            if (ts.eat_phrase(&["equipped", "creature", "this", "turn"])
+                || ts.eat_phrase(&["enchanted", "creature", "this", "turn"]))
+                && ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("dies") || w.eq_ignore_ascii_case("die")
+                })
+            {
+                continue;
+            }
+            ts.restore(dcp);
+        }
+        {
+            let ecp = ts.checkpoint();
+            if ts.eat_phrase(&["with", "a", "name", "originally", "printed", "in", "the"]) {
+                let mut words = 0u8;
+                let mut matched = false;
+                while words < 5 {
+                    if ts.eat_word("expansion") {
+                        matched = words > 0;
+                        break;
+                    }
+                    if ts.next_word().is_some() {
+                        words += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if matched {
+                    continue;
+                }
+            }
+            ts.restore(ecp);
         }
         {
             let pcp = ts.checkpoint();
@@ -699,6 +761,15 @@ pub(super) fn parse_subject_trigger_verb(
         ts.restore(acp);
         let source = parse_object_filter(ts)?;
         return Ok(TriggerEvent::BecomesTarget { subject, source });
+    }
+    if ts.eat_phrase(&["is", "on", "the", "battlefield"])
+        || ts.eat_phrase(&["are", "on", "the", "battlefield"])
+    {
+        return Ok(TriggerEvent::ZoneChange {
+            from: None,
+            to: Some(ZoneKind::Battlefield),
+            subject,
+        });
     }
     if ts.eat_phrase(&["is", "milled"]) || ts.eat_phrase(&["are", "milled"]) {
         return Ok(TriggerEvent::PlayerObjectEvent {

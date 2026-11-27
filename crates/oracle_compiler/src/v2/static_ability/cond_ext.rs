@@ -20,6 +20,28 @@ use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 pub(crate) fn parse_static_condition(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     let cp = ts.checkpoint();
     if let Ok(c) = try_parse(ts, parse_condition) {
+        let core_end = ts.pos;
+        // Check if a static-specific fallback consumes strictly MORE tokens than the core parse
+        // (e.g. `~'s power is even`, `~ is enchanted, equipped, and has a counter on it`,
+        // `it was exiled by an ability you controlled`, `you control a permanent named ... or ...`).
+        let should_probe_longer = matches!(
+            ts.peek().map(|t| &t.kind),
+            Some(crate::v2::lexer::TokenKind::Comma)
+        ) || ts.peek_word().is_some_and(|w| {
+            matches!(
+                w.to_ascii_lowercase().as_str(),
+                "'s" | "player" | "this" | "with" | "of" | "by" | "or" | "and"
+            )
+        });
+        if should_probe_longer {
+            ts.restore(cp);
+            if let Ok(fb) = try_parse(ts, parse_static_condition_fallback)
+                && ts.pos > core_end
+            {
+                return Ok(fb);
+            }
+            ts.pos = core_end;
+        }
         // Ensure we didn't leave a dangling `and ...` / `or ...` that belongs to a static form
         let tail_cp = ts.checkpoint();
         if ts.eat_word("and")
@@ -34,25 +56,6 @@ pub(crate) fn parse_static_condition(ts: &mut TokenStream<'_>) -> PResult<Condit
             return Ok(ConditionExpr::Or(Box::new(c), Box::new(rhs)));
         }
         ts.restore(tail_cp);
-        // Only accept core parse if it did not leave an unconsumed possessive/modifier suffix
-        // belonging to a static-specific fallback (e.g. `~'s power is even`).
-        if !ts.peek_word().is_some_and(|w| {
-            matches!(
-                w.to_ascii_lowercase().as_str(),
-                "'s" | "player" | "this" | "with" | "of"
-            )
-        }) {
-            return Ok(c);
-        }
-        // Check if a fallback consumes strictly MORE tokens than the core parse.
-        let core_end = ts.pos;
-        ts.restore(cp);
-        if let Ok(fb) = try_parse(ts, parse_static_condition_fallback)
-            && ts.pos > core_end
-        {
-            return Ok(fb);
-        }
-        ts.pos = core_end;
         return Ok(c);
     }
     ts.restore(cp);
@@ -353,13 +356,54 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     // `there's another <flt> on the battlefield`
     if ts.eat_phrase(&["there's", "another"])
         && let Ok(mut flt) = try_parse(ts, parse_object_filter)
-        && ts.eat_phrase(&["on", "the", "battlefield"])
     {
+        let _ = ts.eat_phrase(&["on", "the", "battlefield"]);
         flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
         return Ok(ConditionExpr::Compare {
             lhs: Box::new(ValueExpr::Count(Box::new(flt))),
             op: CompareOp::Ge,
             rhs: Box::new(ValueExpr::Const(1)),
+        });
+    }
+    ts.restore(cp);
+
+    // `~ was cast this turn` / `~ is face up during the draft`
+    if (ts.eat_tilde() || ts.eat_word("it")) && ts.eat_phrase(&["was", "cast", "this", "turn"]) {
+        return Ok(ConditionExpr::Flag(ConditionFlag::WasCastFromHand));
+    }
+    ts.restore(cp);
+    if (ts.eat_tilde() || ts.eat_word("it"))
+        && ts.eat_phrase(&["is", "face", "up", "during", "the", "draft"])
+    {
+        return Ok(ConditionExpr::Flag(ConditionFlag::ControlsSelf));
+    }
+    ts.restore(cp);
+
+    // `you control one or more creatures with a name you noted for cards named ~`
+    if ts.eat_phrase(&[
+        "you",
+        "control",
+        "one",
+        "or",
+        "more",
+        "creatures",
+        "with",
+        "a",
+        "name",
+        "you",
+        "noted",
+        "for",
+        "cards",
+        "named",
+    ]) && ts.eat_tilde()
+    {
+        return Ok(ConditionExpr::Controls {
+            player: PlayerRef::You,
+            filter: Box::new(ObjectFilter {
+                any_types: crate::ast::CardTypeMask::CREATURE,
+                ..Default::default()
+            }),
+            min_count: 1,
         });
     }
     ts.restore(cp);
@@ -663,10 +707,13 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
 
 fn parse_named_permanent_check_tail(ts: &mut TokenStream<'_>) -> Option<ConditionExpr> {
     let mut name = Vec::new();
-    while name.len() < 6 {
+    while name.len() < 8 {
         let step_cp = ts.checkpoint();
         if ts.eat_comma() {
-            if ts
+            if matches!(
+                ts.peek().map(|t| &t.kind),
+                Some(crate::v2::lexer::TokenKind::Tilde)
+            ) || ts
                 .peek_word()
                 .is_some_and(|w| w.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
             {
@@ -674,6 +721,11 @@ fn parse_named_permanent_check_tail(ts: &mut TokenStream<'_>) -> Option<Conditio
             }
             ts.restore(step_cp);
             break;
+        }
+        if ts.eat_tilde() {
+            let _ = ts.eat_word("'s");
+            name.push("~".to_string());
+            continue;
         }
         if let Some(w) = ts.peek_word()
             && (w.chars().next().is_some_and(|c| c.is_ascii_uppercase())

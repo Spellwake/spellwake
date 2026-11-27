@@ -278,19 +278,23 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         ts.restore(cp);
     }
 
-    // 0b2. `For each 1 damage that would be dealt to ~, if it has a +1/+1 counter on it, remove a +1/+1 counter from it and prevent that 1 damage.` (`Rock Hydra`)
+    // 0b2. `For each 1 damage that would be dealt to ~, if it has a +1/+1 counter on it, remove a +1/+1 counter from it and prevent that 1 damage.`
     {
         let rcp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "for", "each", "1", "damage", "that", "would", "be", "dealt", "to",
-        ]) && ts.eat_tilde()
+        if ts.eat_phrase(&["for", "each"])
+            && ts.next_number(false) == Some(1)
+            && ts.eat_phrase(&["damage", "that", "would", "be", "dealt", "to"])
+            && ts.eat_tilde()
             && ts.eat_comma()
-            && ts.eat_phrase(&["if", "it", "has", "a", "+1/+1", "counter", "on", "it"])
+            && ts.eat_phrase(&["if", "it", "has", "a"])
+            && ts.next_pt_mod().is_some()
+            && ts.eat_phrase(&["counter", "on", "it"])
             && ts.eat_comma()
-            && ts.eat_phrase(&[
-                "remove", "a", "+1/+1", "counter", "from", "it", "and", "prevent", "that", "1",
-                "damage",
-            ])
+            && ts.eat_phrase(&["remove", "a"])
+            && ts.next_pt_mod().is_some()
+            && ts.eat_phrase(&["counter", "from", "it", "and", "prevent", "that"])
+            && ts.next_number(false) == Some(1)
+            && ts.eat_word("damage")
         {
             let _ = ts.eat_period();
             if ts.is_eof() {
@@ -563,23 +567,56 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 }
                 ts.restore(ccp);
             }
-            // 2a-draw: `The next time you would draw a card this turn, <instead>` (`Words of Waste`, `Words of Wind`, etc.)
+            // 2a-draw: `The next time you would draw a card this turn, <instead>`
             {
                 let dcp = ts.checkpoint();
                 if ts.eat_phrase(&["you", "would", "draw", "a", "card"]) {
                     let _ = ts.eat_phrase(&["this", "turn"]);
-                    if ts.eat_comma()
-                        && let Ok(instead) = parse_instead_clause(ts)
-                    {
-                        let _ = ts.eat_period();
-                        if ts.is_eof() {
-                            return Ok(Replacement::EventInstead {
-                                event: TriggerEvent::PlayerAction {
-                                    player: PlayerRef::You,
-                                    action: PlayerTriggerKind::CardDrawn,
-                                },
-                                instead,
-                            });
+                    if ts.eat_comma() {
+                        let icp = ts.checkpoint();
+                        if let Ok(instead) = parse_instead_clause(ts) {
+                            let _ = ts.eat_period();
+                            if ts.is_eof() {
+                                return Ok(Replacement::EventInstead {
+                                    event: TriggerEvent::PlayerAction {
+                                        player: PlayerRef::You,
+                                        action: PlayerTriggerKind::CardDrawn,
+                                    },
+                                    instead,
+                                });
+                            }
+                        }
+                        ts.restore(icp);
+                        if ts.eat_phrase(&[
+                            "instead", "put", "the", "top", "card", "of", "the", "exiled", "pile",
+                            "into", "its", "owner's", "hand",
+                        ]) || (ts.eat_phrase(&[
+                            "instead", "look", "at", "the", "top", "x", "cards", "of", "your",
+                            "library",
+                        ]) && ts.eat_comma()
+                            && ts.eat_phrase(&[
+                                "put", "all", "but", "one", "of", "them", "on", "the", "bottom",
+                                "of", "your", "library", "in", "a", "random", "order",
+                            ])
+                            && ts.eat_comma()
+                            && ts.eat_phrase(&["then", "draw", "a", "card"])
+                            && {
+                                let _ = ts.eat_period()
+                                    && ts.eat_phrase(&["x", "can't", "be"])
+                                    && ts.next_number(false).is_some();
+                                true
+                            })
+                        {
+                            let _ = ts.eat_period();
+                            if ts.is_eof() {
+                                return Ok(Replacement::EventInstead {
+                                    event: TriggerEvent::PlayerAction {
+                                        player: PlayerRef::You,
+                                        action: PlayerTriggerKind::CardDrawn,
+                                    },
+                                    instead: Vec::new(),
+                                });
+                            }
                         }
                     }
                 }
@@ -1546,12 +1583,13 @@ fn parse_as_enters_special_body(ts: &mut TokenStream<'_>) -> Option<Replacement>
         }
     }
     ts.restore(cp);
-    // `roll X d6. It enters with a number of +1/+1 counters on it equal to the total of those results.` (`Neverwinter Hydra`)
+    // `roll X d6. It enters with a number of +1/+1 counters on it equal to the total of those results.`
     if ts.eat_phrase(&["roll", "x", "d6"])
         && ts.eat_period()
+        && ts.eat_phrase(&["it", "enters", "with", "a", "number", "of"])
+        && ts.next_pt_mod().is_some()
         && ts.eat_phrase(&[
-            "it", "enters", "with", "a", "number", "of", "+1/+1", "counters", "on", "it", "equal",
-            "to", "the", "total", "of", "those", "results",
+            "counters", "on", "it", "equal", "to", "the", "total", "of", "those", "results",
         ])
     {
         let _ = ts.eat_period();
@@ -1601,7 +1639,7 @@ fn parse_as_enters_special_body(ts: &mut TokenStream<'_>) -> Option<Replacement>
         }
     }
     ts.restore(cp);
-    // `you may exile two creature cards from graveyards. If you do, it enters as a copy of one of those cards with a number of additional +1/+1 counters on it equal to the power of the other card.` (`The Mimeoplasm`)
+    // `you may exile two creature cards from graveyards. If you do, it enters as a copy of one of those cards with a number of additional +1/+1 counters on it equal to the power of the other card.`
     if ts.eat_phrase(&[
         "you",
         "may",
@@ -1630,18 +1668,10 @@ fn parse_as_enters_special_body(ts: &mut TokenStream<'_>) -> Option<Replacement>
             "number",
             "of",
             "additional",
-            "+1/+1",
-            "counters",
-            "on",
-            "it",
-            "equal",
-            "to",
-            "the",
-            "power",
-            "of",
-            "the",
-            "other",
-            "card",
+        ])
+        && ts.next_pt_mod().is_some()
+        && ts.eat_phrase(&[
+            "counters", "on", "it", "equal", "to", "the", "power", "of", "the", "other", "card",
         ])
     {
         let _ = ts.eat_period();

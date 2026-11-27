@@ -92,6 +92,8 @@ pub(super) fn try_parse_extra_mana_spend_purpose(
         || ts.eat_phrase(&["turn", "permanents", "face", "up"])
         || ts.eat_phrase(&["turn", "a", "permanent", "face", "up"])
         || ts.eat_phrase(&["activate", "power-up", "abilities"])
+        || ts.eat_phrase(&["activate", "equip", "abilities"])
+        || ts.eat_phrase(&["activate", "an", "equip", "ability"])
     {
         return Some(ManaSpendPurpose::ActivateAbilities(None));
     }
@@ -178,12 +180,18 @@ pub(super) fn parse_temporary_static_clause(ts: &mut TokenStream<'_>) -> PResult
 pub(super) fn parse_activation_restrictions(
     ts: &mut TokenStream<'_>,
 ) -> PResult<Vec<ActivationRestriction>> {
-    // `Activate no more than [twice | <N> times] each turn` (`Manaforge Cinder`, `Pit Imp`, `Phyrexian Battleflies`)
+    // `Activate no more than [twice | <N> times] each turn` / `Activate no more times each turn than <val>`
     {
         let ncp = ts.checkpoint();
         if ts.eat_phrase(&["activate", "no", "more", "than"])
             && (ts.eat_phrase(&["twice", "each", "turn"])
                 || (ts.next_number(false).is_some() && ts.eat_phrase(&["times", "each", "turn"])))
+        {
+            return Ok(vec![ActivationRestriction::OnceEachTurn]);
+        }
+        ts.restore(ncp);
+        if ts.eat_phrase(&["activate", "no", "more", "times", "each", "turn", "than"])
+            && crate::v2::parser::try_parse(ts, crate::v2::value::parse_value_expr).is_ok()
         {
             return Ok(vec![ActivationRestriction::OnceEachTurn]);
         }
@@ -211,6 +219,14 @@ pub(super) fn parse_activation_restrictions(
             out.push(ActivationRestriction::AsInstant);
         } else if ts.eat_phrase(&["during", "your", "upkeep"]) {
             out.push(ActivationRestriction::DuringYourUpkeep);
+        } else if ts.eat_phrase(&["during", "any", "upkeep", "step"])
+            || ts.eat_phrase(&["during", "any", "upkeep"])
+        {
+            out.push(ActivationRestriction::OnlyIf(Box::new(
+                crate::v2::ir::ConditionExpr::EventCheck(
+                    crate::v2::ir::EventCheckKind::DuringStep(crate::ast::TurnStepAst::Upkeep),
+                ),
+            )));
         } else if ts.eat_phrase(&["during", "an", "opponent's", "upkeep"])
             || ts.eat_phrase(&["during", "each", "opponent's", "upkeep"])
         {
@@ -290,6 +306,10 @@ pub(super) fn parse_activation_restrictions(
                     ),
                 ),
             )));
+        } else if ts.eat_phrase(&["before", "the", "end", "of", "combat", "step"])
+            || ts.eat_phrase(&["before", "combat"])
+        {
+            out.push(ActivationRestriction::BeforeAttackers);
         } else if ts.eat_phrase(&["during", "combat"]) {
             out.push(ActivationRestriction::DuringCombat);
         } else if ts.eat_phrase(&["before", "blockers", "are", "declared"]) {
@@ -324,14 +344,31 @@ pub(super) fn parse_activation_restrictions(
             {
                 let cond_slice = &ts.tokens[ts.pos..ao_idx];
                 let mut cond_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
-                let cond = parse_condition(&mut cond_ts)?;
+                let cond = parse_condition(&mut cond_ts).or_else(|_| {
+                    cond_ts.pos = 0;
+                    super::sentence_ext::parse_extra_clause_condition(&mut cond_ts)
+                })?;
                 cond_ts.expect_eof()?;
                 ts.pos = ao_idx;
                 out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
             } else {
-                let mut cond = parse_condition(ts)?;
+                let ccp = ts.checkpoint();
+                let mut cond = match parse_condition(ts) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        ts.restore(ccp);
+                        super::sentence_ext::parse_extra_clause_condition(ts)?
+                    }
+                };
                 if ts.eat_phrase(&["or", "if"]) {
-                    let c2 = parse_condition(ts)?;
+                    let c2_cp = ts.checkpoint();
+                    let c2 = match parse_condition(ts) {
+                        Ok(c) => c,
+                        Err(_) => {
+                            ts.restore(c2_cp);
+                            super::sentence_ext::parse_extra_clause_condition(ts)?
+                        }
+                    };
                     cond = crate::v2::ir::ConditionExpr::Or(Box::new(cond), Box::new(c2));
                 }
                 out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
@@ -345,4 +382,200 @@ pub(super) fn parse_activation_restrictions(
         break;
     }
     Ok(out)
+}
+
+/// Parse extended restriction, ability-rule, and additional-cost sentences in effect bodies.
+pub(super) fn parse_extra_restriction_or_cost_sentence(
+    ts: &mut TokenStream<'_>,
+) -> PResult<Vec<Effect>> {
+    use crate::v2::parser::try_parse;
+    let parse_cond = |s: &mut TokenStream<'_>| {
+        let ccp = s.checkpoint();
+        parse_condition(s).or_else(|_| {
+            s.restore(ccp);
+            super::sentence_ext::parse_extra_clause_condition(s)
+        })
+    };
+
+    // 1. `This ability ...` (triggers only once/if, can't be copied, still resolves, costs {M} less/more if)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["this", "ability"]) {
+            if ts.eat_phrase(&["triggers", "only", "once"]) && ts.is_eof() {
+                return Ok(vec![Effect::Restriction(vec![ActivationRestriction::Once])]);
+            }
+            if ts.eat_phrase(&["triggers", "only", "if"])
+                && let Ok(mut cond) = parse_cond(ts)
+            {
+                if ts.eat_phrase(&["or", "if"])
+                    && let Ok(c2) = parse_cond(ts)
+                {
+                    cond = crate::v2::ir::ConditionExpr::Or(Box::new(cond), Box::new(c2));
+                }
+                if ts.is_eof() {
+                    return Ok(vec![Effect::Restriction(vec![
+                        ActivationRestriction::OnlyIf(Box::new(cond)),
+                    ])]);
+                }
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["this", "ability", "can't", "be", "copied"]) {
+                let mut out = vec![Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::RuleRestriction {
+                        subject: None,
+                        rule: RuleRestrictionKind::CantBeCountered,
+                        condition: None,
+                    }),
+                    duration: Duration::Instant,
+                }];
+                if ts.eat_phrase(&["and", "x", "can't", "be"]) && ts.next_number(false) == Some(0) {
+                    out.push(Effect::MutatePlayer {
+                        player: PlayerRef::You,
+                        mutation: PlayerMutation::Action(
+                            crate::v2::ir::PlayerActionKind::XCantBeZero,
+                        ),
+                        duration: Duration::Instant,
+                    });
+                }
+                if ts.is_eof() {
+                    return Ok(out);
+                }
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&[
+                "this", "ability", "still", "resolves", "if", "its", "target", "becomes", "illegal",
+            ]) && ts.is_eof()
+            {
+                return Ok(vec![Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::GlobalFlag(
+                        crate::v2::ir::StaticFlagKind::AppliesInAllZones,
+                    )),
+                    duration: Duration::Instant,
+                }]);
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["this", "ability", "costs"])
+                && let Some(delta) = ts.eat_mana_cost()
+            {
+                let less = if ts.eat_phrase(&["less", "to", "activate"]) {
+                    Some(true)
+                } else if ts.eat_phrase(&["more", "to", "activate"]) {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(less) = less
+                    && ts.eat_word("if")
+                    && let Ok(cond) = parse_cond(ts)
+                    && ts.is_eof()
+                {
+                    return Ok(vec![Effect::ApplyContinuous {
+                        effect: Box::new(StaticAbility::ActivationCostModifier {
+                            delta,
+                            less,
+                            scale: None,
+                            condition: Some(cond),
+                        }),
+                        duration: Duration::Permanent,
+                    }]);
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 2. `Only the player ~ is attacking may activate ...`, `Spend only mana of the chosen color ...`, `For each mana in this ability's activation cost ...`
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["only", "the", "player"])
+            && ts.eat_tilde()
+            && ts.eat_phrase(&["is", "attacking", "may", "activate", "this", "ability"])
+        {
+            let mut r = vec![ActivationRestriction::AllowedPlayer(
+                PlayerRef::DefendingPlayer,
+            )];
+            if ts.eat_phrase(&[
+                "and",
+                "only",
+                "during",
+                "the",
+                "declare",
+                "attackers",
+                "step",
+            ]) {
+                r.push(ActivationRestriction::DuringCombatStep(
+                    crate::v2::ir::CombatStepKind::DeclareAttackers,
+                ));
+            }
+            if ts.is_eof() {
+                return Ok(vec![Effect::Restriction(r)]);
+            }
+        }
+        ts.restore(cp);
+    }
+    if ts.eat_phrase(&[
+        "spend", "only", "mana", "of", "the", "chosen", "color", "to", "activate", "this",
+        "ability",
+    ]) && ts.is_eof()
+    {
+        return Ok(vec![Effect::MutatePlayer {
+            player: PlayerRef::You,
+            mutation: PlayerMutation::ManaRule(crate::v2::ir::ManaRuleKind::SpendOnlyColorOnX(
+                crate::ast::ColorMask::EMPTY,
+            )),
+            duration: Duration::Permanent,
+        }]);
+    }
+    if ts.eat_phrase(&[
+        "for",
+        "each",
+        "mana",
+        "in",
+        "this",
+        "ability's",
+        "activation",
+        "cost",
+    ]) && ts.eat_comma()
+        && ts.eat_phrase(&[
+            "you", "may", "tap", "an", "untapped", "creature", "you", "control", "rather", "than",
+            "pay", "that", "mana",
+        ])
+        && ts.is_eof()
+    {
+        return Ok(vec![Effect::ApplyContinuous {
+            effect: Box::new(StaticAbility::GlobalFlag(
+                crate::v2::ir::StaticFlagKind::CostReductionRule,
+            )),
+            duration: Duration::Permanent,
+        }]);
+    }
+
+    // 3. `As an additional cost to cast ~, <cost_or_effect>`
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["as", "an", "additional", "cost", "to", "cast"])
+            && (ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]))
+            && ts.eat_comma()
+        {
+            let body_cp = ts.checkpoint();
+            let _ = ts.eat_phrase(&["you", "may"]);
+            if let Ok(costs) = try_parse(ts, crate::v2::cost::parse_cost_list)
+                && ts.is_eof()
+            {
+                return Ok(vec![Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::AdditionalCost(costs)),
+                    duration: Duration::Instant,
+                }]);
+            }
+            ts.restore(body_cp);
+            if let Ok(effs) = try_parse(ts, super::parse_sentence_top)
+                && ts.is_eof()
+            {
+                return Ok(effs);
+            }
+        }
+        ts.restore(cp);
+    }
+
+    Err(ts.err("not an extended restriction or cost sentence"))
 }

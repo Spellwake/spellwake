@@ -228,15 +228,48 @@ pub(super) fn parse_extended_subject_predicate(
     }
     ts.restore(cp);
 
-    // 7. `<subj> attack(s) <subj2> each combat if able` (`Public Enemy`)
-    //    `<player> must attack [you or a planeswalker you control] with at least one creature each combat if able` (`Seeker of Slaanesh`, `Trove of Temptation`)
+    // 7. `<subj> attack(s) <target_desc> each combat if able [unless <cond>]`
+    //    `<player> must attack [you or a planeswalker you control] with at least one creature each combat if able`
     if (ts.eat_word("attack") || ts.eat_word("attacks"))
-        && try_parse(ts, parse_subject_ref).is_ok()
+        && (ts.eat_phrase(&[
+            "an",
+            "opponent",
+            "with",
+            "the",
+            "most",
+            "life",
+            "among",
+            "your",
+            "opponents",
+        ]) || (ts.eat_phrase(&["a", "player", "you", "noted", "for", "cards", "named"])
+            && ts.eat_tilde())
+            || try_parse(ts, parse_subject_ref).is_ok())
         && ts.eat_phrase(&["each", "combat", "if", "able"])
     {
+        let final_cond = if ts.eat_word("unless") {
+            let u = ConditionExpr::Not(Box::new(parse_static_condition(ts)?));
+            Some(match condition.clone() {
+                Some(prev) => ConditionExpr::And(Box::new(prev), Box::new(u)),
+                None => u,
+            })
+        } else {
+            condition.clone()
+        };
         return Ok(StaticAbility::SubjectRule {
             subject: subject.clone(),
             rule: SubjectStaticRule::MustAttack,
+            condition: final_cond,
+        });
+    }
+    ts.restore(cp);
+    // `<subj> assigns combat damage as though ~'s/its power were positive`
+    if ts.eat_phrase(&["assigns", "combat", "damage", "as", "though"])
+        && ((ts.eat_tilde() && ts.eat_word("'s")) || ts.eat_word("its"))
+        && ts.eat_phrase(&["power", "were", "positive"])
+    {
+        return Ok(StaticAbility::SubjectRule {
+            subject: subject.clone(),
+            rule: SubjectStaticRule::AssignDamageByToughness,
             condition: condition.clone(),
         });
     }
@@ -424,7 +457,7 @@ pub(super) fn parse_extended_subject_predicate(
     }
     ts.restore(cp);
 
-    // 10. `<subj> aren't put into their owners' graveyards for having 0 loyalty` (`Sanctum Lurker`)
+    // 10. `<subj> aren't put into their owners' graveyards for having 0 loyalty`
     if ts.eat_phrase(&[
         "aren't",
         "put",
@@ -434,15 +467,16 @@ pub(super) fn parse_extended_subject_predicate(
         "graveyards",
         "for",
         "having",
-        "0",
-        "loyalty",
-    ]) {
+    ]) && ts.next_number(false) == Some(0)
+        && ts.eat_word("loyalty")
+    {
         return Ok(StaticAbility::GlobalFlag(
             StaticFlagKind::DontLoseForZeroLife,
         ));
     }
+    ts.restore(cp);
 
-    // 11. `<player> reveals each card they draw` (`Booby Trap`)
+    // 11. `<player> reveals each card they draw`
     if ts.eat_phrase(&["reveals", "each", "card", "they", "draw"]) {
         return Ok(StaticAbility::VisibilityRule {
             player: PlayerRef::ChosenPlayer,
@@ -450,7 +484,7 @@ pub(super) fn parse_extended_subject_predicate(
         });
     }
 
-    // 12. `<subj> of the first chosen type are the second chosen type` (`Illusionary Terrain`)
+    // 12. `<subj> of the first chosen type are the second chosen type`
     if ts.eat_phrase(&[
         "of", "the", "first", "chosen", "type", "are", "the", "second", "chosen", "type",
     ]) {
@@ -462,42 +496,115 @@ pub(super) fn parse_extended_subject_predicate(
     }
     ts.restore(cp);
 
-    // 13. `<subj> gets +X/+Y, where X is ... and Y is ...` (`Aspect of Wolf`, `Phyrexian Ingester`)
+    // 13. `<subj> gets +X/+Y or -X/-Y` with `where X is ... and Y is ...` or multi-sentence X/Y definitions
     if (ts.eat_word("gets") || ts.eat_word("get"))
-        && (ts.eat_word("+x/+y") || ts.eat_word("-x/-y"))
-        && ts.eat_comma()
-        && ts.eat_phrase(&["where", "x", "is"])
+        && let Some(is_neg) = eat_xy_pt_mod(ts)
     {
-        let _ = ts.eat_word("half");
-        if let Ok(x_val) = try_parse(ts, parse_value_expr) {
+        let delta = if is_neg {
+            crate::v2::ir::PtDelta::MinusX
+        } else {
+            crate::v2::ir::PtDelta::PlusX
+        };
+        let x_val_opt = if ts.eat_comma() && ts.eat_phrase(&["where", "x", "is"]) {
+            let _ = ts.eat_word("half");
+            let x_val = if ts.eat_phrase(&["the", "exiled", "creature", "card's", "power"]) {
+                Some(crate::v2::ir::ValueExpr::ObjectStat {
+                    subject: Box::new(SubjectRef::Anaphora(
+                        crate::v2::ir::AnaphoraRef::TheExiledCard,
+                    )),
+                    stat: crate::ast::StatKind::Power,
+                })
+            } else {
+                try_parse(ts, parse_value_expr).ok()
+            };
             let _ = ts.eat_comma()
                 && (ts.eat_phrase(&["rounded", "down"]) || ts.eat_phrase(&["rounded", "up"]));
             let _ = ts.eat_comma();
-            if ts.eat_phrase(&["and", "y", "is"]) {
+            if x_val.is_some() && ts.eat_phrase(&["and", "y", "is"]) && {
                 let _ = ts.eat_word("half");
-                if let Ok(_y_val) = try_parse(ts, parse_value_expr) {
-                    let _ = ts.eat_comma()
-                        && (ts.eat_phrase(&["rounded", "down"])
-                            || ts.eat_phrase(&["rounded", "up"]));
-                    return Ok(StaticAbility::BindVariable {
-                        var: crate::v2::ir::VarName::X,
-                        expr: x_val,
-                        inner: Box::new(StaticAbility::ContinuousModifyPT {
-                            subject: subject.clone(),
-                            power: crate::v2::ir::PtDelta::PlusX,
-                            toughness: crate::v2::ir::PtDelta::PlusX,
-                            grant_keywords: Vec::new(),
-                            scale: None,
-                            condition: condition.clone(),
-                        }),
-                    });
-                }
+                ts.eat_phrase(&["its", "toughness"]) || try_parse(ts, parse_value_expr).is_ok()
+            } {
+                let _ = ts.eat_comma()
+                    && (ts.eat_phrase(&["rounded", "down"]) || ts.eat_phrase(&["rounded", "up"]));
+                x_val
+            } else {
+                None
             }
+        } else if ts.eat_period()
+            && ts.eat_phrase(&["if", "that", "creature", "is", "attacking"])
+            && ts.eat_comma()
+            && ts.eat_phrase(&["x", "is"])
+            && let Ok(x_val) = try_parse(ts, parse_value_expr)
+            && ts.eat_period()
+            && ts.eat_word("otherwise")
+            && ts.eat_comma()
+            && ts.eat_phrase(&["x", "is"])
+            && try_parse(ts, parse_value_expr).is_ok()
+            && ts.eat_period()
+            && ts.eat_phrase(&[
+                "y",
+                "is",
+                "equal",
+                "to",
+                "x",
+                "or",
+                "to",
+                "enchanted",
+                "creature's",
+                "toughness",
+                "minus",
+            ])
+            && ts.next_number(false).is_some()
+            && ts.eat_comma()
+            && ts.eat_phrase(&["whichever", "is", "smaller"])
+        {
+            Some(x_val)
+        } else {
+            None
+        };
+        if let Some(expr) = x_val_opt {
+            return Ok(StaticAbility::BindVariable {
+                var: crate::v2::ir::VarName::X,
+                expr,
+                inner: Box::new(StaticAbility::ContinuousModifyPT {
+                    subject: subject.clone(),
+                    power: delta,
+                    toughness: delta,
+                    grant_keywords: Vec::new(),
+                    scale: None,
+                    condition: condition.clone(),
+                }),
+            });
         }
     }
     ts.restore(cp);
 
     Err(ts.err("not an extended subject predicate"))
+}
+
+fn eat_xy_pt_mod(ts: &mut TokenStream<'_>) -> Option<bool> {
+    use crate::v2::lexer::TokenKind;
+    let cp = ts.checkpoint();
+    let is_neg = match ts.peek().map(|t| &t.kind) {
+        Some(TokenKind::Plus) => false,
+        Some(TokenKind::Minus) => true,
+        _ => return None,
+    };
+    ts.next_tok();
+    if ts.eat_word("x")
+        && matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Slash))
+        && ts.next_tok().is_some()
+        && matches!(
+            ts.peek().map(|t| &t.kind),
+            Some(TokenKind::Plus | TokenKind::Minus)
+        )
+        && ts.next_tok().is_some()
+        && ts.eat_word("y")
+    {
+        return Some(is_neg);
+    }
+    ts.restore(cp);
+    None
 }
 
 /// Try to parse extended `protection from ...` / `hexproof from ...` clauses.
@@ -595,7 +702,35 @@ pub(super) fn parse_static_subject_tail(
             }
             ts.restore(cp);
         }
-        let had_comma = ts.eat_comma();
+        let prev_quoted = ts
+            .pos
+            .checked_sub(1)
+            .and_then(|idx| ts.tokens.get(idx))
+            .and_then(|t| match t.kind {
+                crate::v2::lexer::TokenKind::Quoted(q) => Some(q.trim_end()),
+                _ => None,
+            });
+        // Sentence-ending quoted ability followed by `It's a/an <Sub> in addition to its other types.`
+        if prev_quoted.is_some_and(|q| q.ends_with('.'))
+            && (ts.eat_phrase(&["it's", "a"]) || ts.eat_phrase(&["it's", "an"]))
+            && let Some(w) = ts.peek_word()
+            && let Some(sub) = ts.vocab.lookup_subtype(&w.to_ascii_lowercase())
+        {
+            let sub = sub.to_string();
+            ts.next_word();
+            if ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+            {
+                parts.push(StaticAbility::SetSubtypes {
+                    subject: subject.clone(),
+                    subtypes: vec![sub],
+                    keep_existing: true,
+                });
+                continue;
+            }
+            ts.restore(cp);
+        }
+        let had_comma = ts.eat_comma() || prev_quoted.is_some_and(|q| q.ends_with(','));
         let had_and = ts.eat_word("and");
         if !had_comma && !had_and {
             ts.restore(cp);
@@ -662,6 +797,24 @@ pub(super) fn parse_static_subject_tail(
             let has_cp = ts.checkpoint();
             let _ = ts.eat_word("it") || ts.eat_word("they");
             if ts.eat_word("has") || ts.eat_word("have") {
+                if ts.eat_phrase(&[
+                    "all",
+                    "names",
+                    "of",
+                    "nonlegendary",
+                    "creature",
+                    "cards",
+                    "in",
+                    "addition",
+                    "to",
+                    "its",
+                    "name",
+                ]) || (ts.eat_phrase(&["all", "abilities", "of", "ability", "stickers", "on"])
+                    && ts.eat_tilde())
+                {
+                    parts.push(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+                    continue;
+                }
                 let bp_cp = ts.checkpoint();
                 if ts.eat_phrase(&["base", "power", "and"]) {
                     let _ = ts.eat_word("base");
@@ -784,18 +937,42 @@ pub(super) fn parse_static_subject_tail(
         ts.restore(cp);
         let _ = ts.eat_comma();
         let had_and = ts.eat_word("and");
-        // Trailing `[, ] [and] equip ...` after `"<quoted>"` (`Armed with Proof`, `Dan Lewis`, `Gemcutter Buccaneer`)
+        // Trailing `[, ] [and] equip [<subtype>] {M}` after `"<quoted>"`
         if ts
             .peek_word()
             .is_some_and(|w| w.eq_ignore_ascii_case("equip"))
-            && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
         {
-            parts.push(StaticAbility::GrantKeywords {
-                subject: subject.clone(),
-                keywords,
-                condition: condition.clone(),
-            });
-            continue;
+            if let Ok((keywords, _)) = try_parse(ts, parse_keyword_list) {
+                parts.push(StaticAbility::GrantKeywords {
+                    subject: subject.clone(),
+                    keywords,
+                    condition: condition.clone(),
+                });
+                continue;
+            }
+            let eq_cp = ts.checkpoint();
+            if ts.eat_word("equip") {
+                if ts.peek_word().is_some_and(|w| {
+                    ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some()
+                        || crate::vocab::lookup_card_type(&w.to_ascii_lowercase()).is_some()
+                }) {
+                    ts.next_word();
+                }
+                if let Some(mc) = ts.eat_mana_cost() {
+                    parts.push(StaticAbility::GrantKeywords {
+                        subject: subject.clone(),
+                        keywords: vec![KeywordSpec {
+                            kind: KeywordKind::Equip,
+                            param: Some(crate::v2::ir::KeywordParam::Cost(vec![
+                                crate::v2::ir::Cost::Mana(mc),
+                            ])),
+                        }],
+                        condition: condition.clone(),
+                    });
+                    continue;
+                }
+            }
+            ts.restore(eq_cp);
         }
         let _ = had_and;
         // `assigns combat damage equal to its toughness rather than its power`
@@ -1315,6 +1492,7 @@ pub(crate) fn parse_cant_rule(ts: &mut TokenStream<'_>) -> PResult<RuleRestricti
         }) && let Ok(mut tgt) = try_parse(ts, parse_subject_ref)
         {
             let _ = ts.eat_phrase(&["it", "has", "already", "attacked", "this", "turn"]);
+            let _ = ts.eat_phrase(&["its", "owner", "controls"]);
             let ob_cp = ts.checkpoint();
             if ts.eat_phrase(&["or", "block"]) && try_parse(ts, parse_subject_ref).is_ok() {
                 return Ok(RuleRestrictionKind::CantAttackOrBlock);
@@ -1381,7 +1559,9 @@ pub(crate) fn parse_cant_rule(ts: &mut TokenStream<'_>) -> PResult<RuleRestricti
                 if (ts.eat_phrase(&["you", "pay"])
                     || ts.eat_phrase(&["their", "controller", "pays"])
                     || ts.eat_phrase(&["its", "controller", "pays"]))
-                    && try_parse(ts, crate::v2::cost::parse_cost_atom).is_ok()
+                    && ((ts.next_number(false).is_some() && ts.eat_word("life"))
+                        || ts.eat_mana_cost().is_some()
+                        || try_parse(ts, crate::v2::cost::parse_cost_atom).is_ok())
                 {
                     let _ = opt(ts, parse_static_scale_expr);
                     let _ =

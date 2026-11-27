@@ -71,6 +71,14 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     if ts.eat_phrase(&["one", "mana", "of", "the", "chosen", "color"]) {
         return Ok(ManaSpec::ChosenColor(ValueExpr::Const(1)));
     }
+    if ts.eat_phrase(&[
+        "one", "mana", "of", "either", "of", "the", "circled", "colors",
+    ]) {
+        return Ok(ManaSpec::AnyColor {
+            amount: ValueExpr::Const(1),
+            single_color: true,
+        });
+    }
     if ts.eat_phrase(&["one", "mana", "of", "that", "color"]) {
         return Ok(ManaSpec::ThatColor(ValueExpr::Const(1)));
     }
@@ -346,7 +354,14 @@ fn wrap_optional_repeat_times(ts: &mut TokenStream<'_>, eff: Effect) -> Effect {
         };
     }
     let cp = ts.checkpoint();
-    if let Ok(times) = try_parse(ts, parse_value_expr)
+    let times_opt = if let Some(n) = ts.next_number(false) {
+        Some(ValueExpr::Const(n))
+    } else if ts.eat_word("x") {
+        Some(ValueExpr::Var(crate::v2::ir::VarName::X))
+    } else {
+        try_parse(ts, parse_value_expr).ok()
+    };
+    if let Some(times) = times_opt
         && ts.eat_word("times")
     {
         return Effect::ForEach {
@@ -688,7 +703,15 @@ pub(super) fn parse_keyword_action_verb(
             ValueExpr::Const(2)
         } else {
             let cp = ts.checkpoint();
-            if let Ok(times) = try_parse(ts, parse_value_expr)
+            let v = ts
+                .next_number(false)
+                .map(ValueExpr::Const)
+                .or_else(|| {
+                    ts.eat_word("x")
+                        .then_some(ValueExpr::Var(crate::v2::ir::VarName::X))
+                })
+                .or_else(|| try_parse(ts, parse_value_expr).ok());
+            if let Some(times) = v
                 && ts.eat_word("times")
             {
                 times
@@ -942,7 +965,14 @@ pub(crate) fn parse_damage_redirect_replacement(
         None
     };
     let _ = ts.eat_word("combat");
-    if ts.eat_phrase(&["damage", "that", "would", "be", "dealt"]) {
+    if ts.eat_phrase(&["damage", "that", "would", "be", "dealt"])
+        || ts.eat_phrase(&[
+            "damage", "that", "a", "source", "of", "your", "choice", "would", "deal",
+        ])
+        || ts.eat_phrase(&[
+            "damage", "that", "a", "source", "of", "their", "choice", "would", "deal",
+        ])
+    {
         let mut duration = Duration::Permanent;
         let mut from = SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatDamage);
         loop {
@@ -1050,23 +1080,34 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
             }]);
         }
         ts.restore(ecp);
-        if ts.eat_phrase(&[
-            "the",
-            "replicate",
-            "cost",
-            "is",
-            "equal",
-            "to",
-            "its",
-            "mana",
-            "cost",
-        ]) {
-            return Ok(vec![Effect::ApplyContinuous {
-                effect: Box::new(crate::v2::ir::StaticAbility::AlternativeCost(vec![
-                    crate::v2::ir::Cost::PayAnyAmountMana,
-                ])),
-                duration: Duration::Permanent,
-            }]);
+        if (ts.eat_word("the") || ts.eat_word("its"))
+            && ts.peek_word().is_some_and(|w| {
+                matches!(
+                    w.to_ascii_lowercase().as_str(),
+                    "replicate"
+                        | "encore"
+                        | "embalm"
+                        | "harmonize"
+                        | "unearth"
+                        | "blitz"
+                        | "dash"
+                        | "disturb"
+                        | "foretell"
+                        | "plot"
+                        | "warp"
+                        | "madness"
+                )
+            })
+        {
+            ts.next_word();
+            if ts.eat_phrase(&["cost", "is", "equal", "to", "its", "mana", "cost"]) {
+                return Ok(vec![Effect::ApplyContinuous {
+                    effect: Box::new(crate::v2::ir::StaticAbility::AlternativeCost(vec![
+                        crate::v2::ir::Cost::PayAnyAmountMana,
+                    ])),
+                    duration: Duration::Permanent,
+                }]);
+            }
         }
         ts.restore(ecp);
     }
@@ -1367,16 +1408,23 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                                 duration: Duration::UntilEndOfTurn,
                             }]);
                         }
-                        if ts.eat_phrase(&["it", "deals", "double", "that", "damage", "instead"]) {
-                            return Ok(vec![Effect::ApplyReplacement {
-                                replacement: Box::new(crate::v2::ir::Replacement::ModifyDamage {
-                                    source: None,
-                                    target: tgt,
-                                    add: 0,
-                                    factor: 2,
-                                }),
-                                duration: Duration::UntilEndOfTurn,
-                            }]);
+                        if ts.eat_phrase(&["it", "deals", "double", "that", "damage"]) {
+                            if ts.eat_word("to") {
+                                let _ = try_parse(ts, parse_subject_ref);
+                            }
+                            if ts.eat_word("instead") {
+                                return Ok(vec![Effect::ApplyReplacement {
+                                    replacement: Box::new(
+                                        crate::v2::ir::Replacement::ModifyDamage {
+                                            source: None,
+                                            target: tgt,
+                                            add: 0,
+                                            factor: 2,
+                                        },
+                                    ),
+                                    duration: Duration::UntilEndOfTurn,
+                                }]);
+                            }
                         }
                         if (ts.eat_phrase(&["it", "deals", "that", "damage", "to"])
                             || ts.eat_phrase(&["that", "spell", "deals", "that", "damage", "to"]))

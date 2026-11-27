@@ -36,82 +36,111 @@ pub(super) fn parse_player_or_subject_condition(
                     });
                 }
                 if ts.eat_word("no") {
-                    let filter = parse_object_filter(ts)?;
-                    return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Controls {
-                        player,
-                        filter: Box::new(filter),
-                        min_count: 1,
-                    })));
-                }
-                let _ = ts.eat_phrase(&["at", "least"]) || ts.eat_word("exactly");
-                let (min_count, is_fewer) = if let Some(n) = ts.next_number(false) {
-                    let fewer = ts.eat_phrase(&["or", "fewer"]);
-                    if !fewer {
-                        let _ = ts.eat_phrase(&["or", "more"]);
+                    if let Ok(filter) = try_parse(ts, parse_object_filter) {
+                        return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Controls {
+                            player,
+                            filter: Box::new(filter),
+                            min_count: 1,
+                        })));
                     }
-                    (u16::try_from(n.max(1)).unwrap_or(1), fewer)
+                    ts.restore(cp);
                 } else {
-                    let _ = ts.eat_word("a") || ts.eat_word("an");
-                    (1, false)
-                };
-                let filter = match try_parse(ts, parse_object_filter) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        if !is_fewer
-                            && min_count == 1
-                            && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                    let _ = ts.eat_phrase(&["at", "least"]) || ts.eat_word("exactly");
+                    let (min_count, is_fewer) = if let Some(n) = ts.next_number(false) {
+                        let fewer = ts.eat_phrase(&["or", "fewer"]);
+                        if !fewer {
+                            let _ = ts.eat_phrase(&["or", "more"]);
+                        }
+                        (u16::try_from(n.max(1)).unwrap_or(1), fewer)
+                    } else {
+                        let _ = ts.eat_word("a") || ts.eat_word("an");
+                        (1, false)
+                    };
+                    if let Ok(filter) = try_parse(ts, parse_object_filter) {
+                        let _ = ts.eat_phrase(&["that", "spell", "could", "target"]);
                         {
-                            return Ok(ConditionExpr::ControlsSubject {
-                                player,
-                                subject: Box::new(subj),
+                            let gcp = ts.checkpoint();
+                            if ts.eat_word("with")
+                                && (ts.eat_word("greater") || ts.eat_word("lesser"))
+                                && (ts.eat_phrase(&["mana", "value"])
+                                    || ts.eat_word("power")
+                                    || ts.eat_word("toughness"))
+                                && ts.eat_word("than")
+                                && try_parse(ts, parse_subject_ref).is_ok()
+                            {
+                                // Comparative stat qualifier consumed.
+                            } else {
+                                ts.restore(gcp);
+                            }
+                        }
+                        // Support `you control a permanent of each color`
+                        if ts.eat_phrase(&["of", "each", "color"]) {
+                            return Ok(ConditionExpr::FilterCheck {
+                                filter: Box::new(filter),
+                                kind: FilterConditionKind::ColorsAmong,
+                                value: 5,
                             });
                         }
-                        return Err(e);
-                    }
-                };
-                // Support `you control a permanent of each color`
-                if ts.eat_phrase(&["of", "each", "color"]) {
-                    return Ok(ConditionExpr::FilterCheck {
-                        filter: Box::new(filter),
-                        kind: FilterConditionKind::ColorsAmong,
-                        value: 5,
-                    });
-                }
-                let first_cond = if is_fewer {
-                    ConditionExpr::Not(Box::new(ConditionExpr::Controls {
-                        player,
-                        filter: Box::new(filter),
-                        min_count: min_count.saturating_add(1),
-                    }))
-                } else {
-                    ConditionExpr::Controls {
-                        player,
-                        filter: Box::new(filter),
-                        min_count,
-                    }
-                };
-                // Support `you control <flt1> and <flt2>` (`Okiba Salvage`, `Of One Mind`, `Raka Sanctuary`, `When We Were Young`)
-                let acp = ts.checkpoint();
-                if ts.eat_word("and") {
-                    let min2 = if let Some(n2) = ts.next_number(false) {
-                        let _ = ts.eat_phrase(&["or", "more"]);
-                        u16::try_from(n2.max(1)).unwrap_or(1)
-                    } else {
-                        1
-                    };
-                    if let Ok(flt2) = try_parse(ts, parse_object_filter) {
-                        return Ok(ConditionExpr::And(
-                            Box::new(first_cond),
-                            Box::new(ConditionExpr::Controls {
+                        let first_cond = if is_fewer {
+                            ConditionExpr::Not(Box::new(ConditionExpr::Controls {
                                 player,
-                                filter: Box::new(flt2),
-                                min_count: min2,
-                            }),
-                        ));
+                                filter: Box::new(filter),
+                                min_count: min_count.saturating_add(1),
+                            }))
+                        } else {
+                            ConditionExpr::Controls {
+                                player,
+                                filter: Box::new(filter),
+                                min_count,
+                            }
+                        };
+                        // Support `you control <flt1> and <flt2>` or `you control <flt1> or <flt2>`
+                        let acp = ts.checkpoint();
+                        if ts.eat_word("and") {
+                            let min2 = if let Some(n2) = ts.next_number(false) {
+                                let _ = ts.eat_phrase(&["or", "more"]);
+                                u16::try_from(n2.max(1)).unwrap_or(1)
+                            } else {
+                                1
+                            };
+                            if let Ok(flt2) = try_parse(ts, parse_object_filter) {
+                                return Ok(ConditionExpr::And(
+                                    Box::new(first_cond),
+                                    Box::new(ConditionExpr::Controls {
+                                        player,
+                                        filter: Box::new(flt2),
+                                        min_count: min2,
+                                    }),
+                                ));
+                            }
+                        }
+                        ts.restore(acp);
+                        if ts.eat_word("or")
+                            && let Ok(flt2) = try_parse(ts, parse_object_filter)
+                            && super::at_cond_boundary(ts)
+                        {
+                            return Ok(ConditionExpr::Or(
+                                Box::new(first_cond),
+                                Box::new(ConditionExpr::Controls {
+                                    player,
+                                    filter: Box::new(flt2),
+                                    min_count: 1,
+                                }),
+                            ));
+                        }
+                        ts.restore(acp);
+                        return Ok(first_cond);
+                    }
+                    if !is_fewer
+                        && min_count == 1
+                        && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                    {
+                        return Ok(ConditionExpr::ControlsSubject {
+                            player,
+                            subject: Box::new(subj),
+                        });
                     }
                 }
-                ts.restore(acp);
-                return Ok(first_cond);
             }
             if ts.eat_word("has") || ts.eat_word("have") {
                 if ts.eat_phrase(&["more", "life", "than"])
@@ -754,7 +783,13 @@ pub(super) fn parse_player_or_subject_condition(
                     kind: SubjectConditionKind::WasCast,
                 });
             }
-            if ts.eat_phrase(&["wasn't", "cast"]) {
+            if ts.eat_phrase(&["wasn't", "cast"])
+                && !ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("from")
+                        || w.eq_ignore_ascii_case("for")
+                        || w.eq_ignore_ascii_case("using")
+                })
+            {
                 return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectCheck {
                     subject: Box::new(subj),
                     kind: SubjectConditionKind::WasCast,
@@ -780,7 +815,9 @@ pub(super) fn parse_player_or_subject_condition(
                     kind: SubjectConditionKind::AttackedThisCombat { or_blocked: true },
                 });
             }
-            if ts.eat_phrase(&["attacked", "this", "combat"]) {
+            if ts.eat_phrase(&["attacked", "this", "combat"])
+                || ts.eat_phrase(&["attacked", "this", "turn"])
+            {
                 return Ok(ConditionExpr::SubjectCheck {
                     subject: Box::new(subj),
                     kind: SubjectConditionKind::AttackedThisCombat { or_blocked: false },
@@ -903,6 +940,16 @@ pub(super) fn parse_player_or_subject_condition(
     }
     {
         let lcp = ts.checkpoint();
+        if (ts.eat_phrase(&["a", "nonland", "permanent", "left", "the", "battlefield"])
+            || ts.eat_phrase(&["a", "permanent", "left", "the", "battlefield"]))
+            && {
+                let _ = ts.eat_phrase(&["under", "your", "control"]);
+                ts.eat_phrase(&["this", "turn"])
+            }
+        {
+            return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
+        }
+        ts.restore(lcp);
         if (ts.eat_word("a") || ts.eat_word("an"))
             && try_parse(ts, parse_object_filter).is_ok()
             && (ts.eat_phrase(&[
@@ -1168,11 +1215,18 @@ pub(super) fn parse_player_or_subject_condition(
                 || ts.eat_phrase(&["don't", "have"])
                 || ts.eat_phrase(&["didn't", "have"])
             {
-                let kw = parse_keyword_kind(ts)?;
-                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::HasKeyword {
-                    subject: Box::new(subj),
-                    keyword: kw,
-                })));
+                if let Ok(kw) = try_parse(ts, parse_keyword_kind) {
+                    return Ok(ConditionExpr::Not(Box::new(ConditionExpr::HasKeyword {
+                        subject: Box::new(subj),
+                        keyword: kw,
+                    })));
+                }
+                if ts.next_quoted().is_some() {
+                    return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectCheck {
+                        subject: Box::new(subj),
+                        kind: SubjectConditionKind::HasChosenName,
+                    })));
+                }
             }
             if ts.eat_word("has") || ts.eat_word("have") || ts.eat_word("had") {
                 // `<subj> has the same mana value / power / toughness / color / name / card type as <other>` (`Counterbalance`)
@@ -1376,11 +1430,12 @@ pub(super) fn parse_player_or_subject_condition(
                     }
                 }
                 ts.restore(hcp);
-                let kw = parse_keyword_kind(ts)?;
-                return Ok(ConditionExpr::HasKeyword {
-                    subject: Box::new(subj),
-                    keyword: kw,
-                });
+                if let Ok(kw) = try_parse(ts, parse_keyword_kind) {
+                    return Ok(ConditionExpr::HasKeyword {
+                        subject: Box::new(subj),
+                        keyword: kw,
+                    });
+                }
             }
             if ts.eat_phrase(&["was", "cast", "from"])
                 && let Ok(zone) = try_parse(ts, parse_zone_ref)
@@ -1503,6 +1558,47 @@ pub(super) fn parse_player_or_subject_condition(
             let negated = ts.eat_word("not");
             {
                 let bcp = ts.checkpoint();
+                if ts.eat_phrase(&["attached", "to"])
+                    && let Ok(target) = try_parse(ts, parse_object_filter)
+                {
+                    let base = ConditionExpr::SubjectAttachedTo {
+                        subject: Box::new(SubjectRef::Anaphora(anaph)),
+                        target: Box::new(target),
+                    };
+                    return Ok(if negated {
+                        ConditionExpr::Not(Box::new(base))
+                    } else {
+                        base
+                    });
+                }
+                ts.restore(bcp);
+                if ts.eat_phrase(&["controlled", "by"])
+                    && let Ok(player) = try_parse(ts, parse_player_ref)
+                {
+                    let base = ConditionExpr::ControlsSubject {
+                        player,
+                        subject: Box::new(SubjectRef::Anaphora(anaph)),
+                    };
+                    return Ok(if negated {
+                        ConditionExpr::Not(Box::new(base))
+                    } else {
+                        base
+                    });
+                }
+                ts.restore(bcp);
+                if !negated
+                    && ts.eat_word("the")
+                    && (ts.eat_word("first") || ts.eat_word("second") || ts.eat_word("third"))
+                {
+                    let _ = opt(ts, parse_object_filter);
+                    if ts.eat_phrase(&["you", "cast", "this", "turn"])
+                        || ts.eat_phrase(&["you've", "cast", "this", "turn"])
+                        || ts.eat_phrase(&["you've", "cast", "this", "game"])
+                    {
+                        return Ok(ConditionExpr::Flag(ConditionFlag::FirstTimeEachTurn));
+                    }
+                }
+                ts.restore(bcp);
                 if !negated
                     && (ts.eat_phrase(&["blocking", "or", "blocked", "by"])
                         || ts.eat_phrase(&["blocked", "by"])
@@ -1517,6 +1613,24 @@ pub(super) fn parse_player_or_subject_condition(
                 ts.restore(bcp);
             }
             if let Some(state) = parse_object_state(ts) {
+                if state == ObjectStateKind::Attacking {
+                    let acp = ts.checkpoint();
+                    if !(ts.eat_phrase(&["a", "battle"])
+                        || ts.eat_phrase(&[
+                            "its",
+                            "owner",
+                            "or",
+                            "a",
+                            "permanent",
+                            "its",
+                            "owner",
+                            "controls",
+                        ])
+                        || try_parse(ts, parse_player_ref).is_ok())
+                    {
+                        ts.restore(acp);
+                    }
+                }
                 let mut base = ConditionExpr::SubjectState {
                     subject: Box::new(SubjectRef::Anaphora(anaph)),
                     state,

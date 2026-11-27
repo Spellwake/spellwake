@@ -442,6 +442,38 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
                 }
             }
         }
+        KeywordKind::CumulativeUpkeep => {
+            let _ = ts.eat_em_dash();
+            if let Some(costs) = opt(ts, parse_cost_list) {
+                Some(KeywordParam::Cost(costs))
+            } else {
+                // Non-standard effect cumulative upkeeps (e.g. `Draw a card.`, `Add {R}.`, `Flip a coin.`)
+                let ecp = ts.checkpoint();
+                let start = ts.pos;
+                let mut end = start;
+                while end < ts.tokens.len()
+                    && !matches!(
+                        ts.tokens[end].kind,
+                        TokenKind::Period | TokenKind::Semicolon
+                    )
+                {
+                    end += 1;
+                }
+                if end > start {
+                    let mut sub =
+                        ts.sub_stream(&ts.tokens[start..end], crate::v2::ir::ParseStage::Effect);
+                    if crate::v2::clause::parse_effect_sentence(&mut sub).is_ok() {
+                        ts.pos = end;
+                        Some(KeywordParam::Cost(Vec::new()))
+                    } else {
+                        ts.restore(ecp);
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        }
         KeywordKind::Ward
         | KeywordKind::Kicker
         | KeywordKind::Multikicker
@@ -467,7 +499,6 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         | KeywordKind::Entwine
         | KeywordKind::Overload
         | KeywordKind::Miracle
-        | KeywordKind::CumulativeUpkeep
         | KeywordKind::Madness
         | KeywordKind::Echo
         | KeywordKind::Outlast

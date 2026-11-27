@@ -174,27 +174,38 @@ pub fn parse_effect_sentence(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
 }
 
 fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
-    // Strip optional Saga chapter flavor/ability word prefix (`Gungnir — ...`, `Judgment Bolt — ...`)
+    // Strip optional Saga chapter flavor/ability word prefix (`Word ... --`) OR Pawprint modal prefix (`{P}+ --`)
     {
         let aw_cp = ts.checkpoint();
-        let mut word_count = 0usize;
-        let mut found_dash = false;
-        while word_count < 4 {
-            match ts.peek().map(|t| &t.kind) {
-                Some(TokenKind::Word(_)) => {
-                    ts.next_tok();
-                    word_count += 1;
-                }
-                Some(TokenKind::EmDash) if word_count >= 1 => {
-                    ts.next_tok();
-                    found_dash = true;
-                    break;
-                }
-                _ => break,
-            }
+        let mut sym_count = 0usize;
+        while matches!(
+            ts.peek().map(|t| &t.kind),
+            Some(TokenKind::Mana(crate::v2::ir::ManaSymbol::Pawprint))
+        ) {
+            ts.next_tok();
+            sym_count += 1;
         }
-        if !found_dash {
+        if !(sym_count >= 1 && ts.eat_em_dash()) {
             ts.restore(aw_cp);
+            let mut word_count = 0usize;
+            let mut found_dash = false;
+            while word_count < 4 {
+                match ts.peek().map(|t| &t.kind) {
+                    Some(TokenKind::Word(_)) => {
+                        ts.next_tok();
+                        word_count += 1;
+                    }
+                    Some(TokenKind::EmDash) if word_count >= 1 => {
+                        ts.next_tok();
+                        found_dash = true;
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            if !found_dash {
+                ts.restore(aw_cp);
+            }
         }
     }
     // Strip optional leading `Then [,]`, `Also [,]`, or `Instead [,]` sequential/replacement connector
@@ -336,6 +347,13 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         && ts.is_eof()
     {
         return Ok(extra);
+    }
+    if let Ok(ext) = try_parse(ts, |s| {
+        let res = restrictions::parse_extra_restriction_or_cost_sentence(s)?;
+        s.expect_eof()?;
+        Ok(res)
+    }) {
+        return Ok(ext);
     }
     if let Ok(ext) = try_parse(ts, |s| {
         let res = sentence_ext::parse_leading_sentence_ext(s)?;
@@ -1315,9 +1333,16 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let body_slice = &ts.tokens[ts.pos..body_end];
         let cond_slice = &ts.tokens[if_idx + 1..];
         let mut cond_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
-        if let Ok(cond) = parse_condition(&mut cond_ts)
-            && cond_ts.is_eof()
-        {
+        let parsed_cond = parse_condition(&mut cond_ts)
+            .ok()
+            .filter(|_| cond_ts.is_eof())
+            .or_else(|| {
+                let mut e_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
+                sentence_ext::parse_extra_clause_condition(&mut e_ts)
+                    .ok()
+                    .filter(|_| e_ts.is_eof())
+            });
+        if let Some(cond) = parsed_cond {
             let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
             if let Ok(body) = parse_sentence_top(&mut body_ts)
                 && body_ts.is_eof()
@@ -1339,7 +1364,13 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let body_slice = &ts.tokens[ts.pos..u_idx];
         let tail_slice = &ts.tokens[u_idx + 1..];
         let mut tail_ts = ts.sub_stream(tail_slice, ParseStage::Effect);
-        if let Ok(payer) = try_parse(&mut tail_ts, parse_player_ref) {
+        let payer_opt =
+            if tail_ts.eat_phrase(&["that", "permanent's", "controller", "or", "that", "player"]) {
+                Some(PlayerRef::ThatPlayer)
+            } else {
+                try_parse(&mut tail_ts, parse_player_ref).ok()
+            };
+        if let Some(payer) = payer_opt {
             let pcp = tail_ts.checkpoint();
             let parsed_cost = if let Ok(c) = try_parse(&mut tail_ts, parse_cost_atom)
                 && tail_ts.is_eof()
@@ -1349,7 +1380,9 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 tail_ts.restore(pcp);
                 let _ = tail_ts.eat_word("pays") || tail_ts.eat_word("pay");
                 if let Ok(c) = try_parse(&mut tail_ts, parse_cost_atom) {
-                    if tail_ts.eat_phrase(&["plus", "an", "additional"]) || tail_ts.eat_word("plus")
+                    if tail_ts.eat_phrase(&["plus", "an", "additional"])
+                        || tail_ts.eat_word("plus")
+                        || tail_ts.eat_word("or")
                     {
                         let _ = try_parse(&mut tail_ts, parse_cost_atom);
                     }
@@ -1403,9 +1436,16 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             }
         }
         let mut cond_ts = ts.sub_stream(tail_slice, ParseStage::Effect);
-        if let Ok(cond) = parse_condition(&mut cond_ts)
-            && cond_ts.is_eof()
-        {
+        let parsed_cond = parse_condition(&mut cond_ts)
+            .ok()
+            .filter(|_| cond_ts.is_eof())
+            .or_else(|| {
+                let mut e_ts = ts.sub_stream(tail_slice, ParseStage::Effect);
+                sentence_ext::parse_extra_clause_condition(&mut e_ts)
+                    .ok()
+                    .filter(|_| e_ts.is_eof())
+            });
+        if let Some(cond) = parsed_cond {
             let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
             if let Ok(body) = parse_clause_seq(&mut body_ts, None)
                 && body_ts.is_eof()
@@ -1493,6 +1533,20 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                     crate::ast::TurnStepAst::BeginningOfCombat,
                     crate::v2::ir::StepOwner::ThatPlayer,
                 ))
+            } else if step_ts.eat_phrase(&["your", "next", "main", "phase", "this", "turn"])
+                || step_ts.eat_phrase(&["your", "next", "main", "phase"])
+            {
+                Ok((
+                    crate::ast::TurnStepAst::MainPhase,
+                    crate::v2::ir::StepOwner::YourNext,
+                ))
+            } else if step_ts.eat_phrase(&["that", "player's", "next", "end", "step"])
+                || step_ts.eat_phrase(&["their", "next", "end", "step"])
+            {
+                Ok((
+                    crate::ast::TurnStepAst::EndStep,
+                    crate::v2::ir::StepOwner::ThatPlayer,
+                ))
             } else {
                 step_ts.restore(scp);
                 Err(e)
@@ -1557,13 +1611,21 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         }
     }
 
-    // 11c. Clause sequence with automatic player-actor propagation, plus general trailing `for each <expr>` fallback!
+    // 11c. Clause sequence with automatic player-actor propagation, plus trailing `, rounded up/down` and `for each <expr>` fallbacks!
     {
         let seq_cp = ts.checkpoint();
-        if let Ok(effs) = parse_clause_seq(ts, None)
-            && ts.is_eof()
-        {
-            return Ok(effs);
+        if let Ok(effs) = parse_clause_seq(ts, None) {
+            if ts.is_eof() {
+                return Ok(effs);
+            }
+            let rcp = ts.checkpoint();
+            if ts.eat_comma()
+                && (ts.eat_phrase(&["rounded", "up"]) || ts.eat_phrase(&["rounded", "down"]))
+                && ts.is_eof()
+            {
+                return Ok(effs);
+            }
+            ts.restore(rcp);
         }
         ts.restore(seq_cp);
         if let Some(effs) = sentence_ext::try_parse_trailing_for_each_sentence(ts) {

@@ -81,6 +81,22 @@ pub(super) fn parse_player_static_ability(
                             });
                         }
                     }
+                    // `when each opponent casts their first spell of the game, <effect>`
+                    if ts.eat_phrase(&[
+                        "when", "each", "opponent", "casts", "their", "first", "spell", "of",
+                        "the", "game",
+                    ]) && ts.eat_comma()
+                    {
+                        let rem = &ts.tokens[ts.pos..];
+                        let mut sub = ts.sub_stream(rem, crate::v2::ir::ParseStage::Effect);
+                        if let Ok(effs) = crate::v2::clause::parse_effect_sentence(&mut sub) {
+                            let _ = sub.eat_period();
+                            if sub.is_eof() {
+                                ts.pos = ts.tokens.len();
+                                return Ok(StaticAbility::RevealOpeningHand { effect: effs });
+                            }
+                        }
+                    }
                 }
             }
             if player == PlayerRef::You
@@ -117,10 +133,10 @@ pub(super) fn parse_player_static_ability(
                     restriction: PlayerRestrictionKind::NoMaxHandSize,
                     condition,
                 };
-                if ts.eat_phrase(&[
-                    "and", "don't", "lose", "the", "game", "for", "having", "0", "or", "less",
-                    "life",
-                ]) {
+                if ts.eat_phrase(&["and", "don't", "lose", "the", "game", "for", "having"])
+                    && ts.next_number(false) == Some(0)
+                    && ts.eat_phrase(&["or", "less", "life"])
+                {
                     return Ok(StaticAbility::Compound(vec![
                         first,
                         StaticAbility::GlobalFlag(StaticFlagKind::DontLoseForZeroLife),
@@ -367,6 +383,43 @@ pub(super) fn parse_player_static_ability(
                             },
                         ]));
                     }
+                    // `Whenever you reveal an instant or sorcery card this way, <copy-cast | create legendary token>`
+                    let wcp = ts.checkpoint();
+                    if ts.eat_phrase(&[
+                        "whenever", "you", "reveal", "an", "instant", "or", "sorcery", "card",
+                        "this", "way",
+                    ]) && ts.eat_comma()
+                    {
+                        let body_ok = (ts.eat_phrase(&[
+                            "copy", "that", "card", "and", "you", "may", "cast", "the", "copy",
+                        ]) && ts.eat_period()
+                            && ts.eat_phrase(&["that", "copy", "costs"])
+                            && ts.eat_mana_cost().is_some()
+                            && ts.eat_phrase(&["less", "to", "cast"]))
+                            || (ts.eat_word("create") && {
+                                while ts.peek_word().is_some_and(|w| {
+                                    w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                                }) {
+                                    ts.next_word();
+                                }
+                                if ts.eat_comma()
+                                    && ts.eat_phrase(&["a", "legendary"])
+                                    && ts.next_base_pt().is_some()
+                                {
+                                    while ts.next_word().is_some() {}
+                                    true
+                                } else {
+                                    false
+                                }
+                            });
+                        if body_ok && {
+                            let _ = ts.eat_period();
+                            ts.is_eof()
+                        } {
+                            return Ok(base);
+                        }
+                    }
+                    ts.restore(wcp);
                 }
                 ts.restore(t_cp);
                 return Ok(base);
@@ -435,11 +488,58 @@ pub(super) fn parse_player_static_ability(
                 }
                 ts.restore(mcp);
             }
+            // `<player> who has cast <flt> this turn can't cast additional <flt2>`
+            {
+                let wcp = ts.checkpoint();
+                if ts.eat_phrase(&["who", "has", "cast"])
+                    && try_parse(ts, parse_object_filter).is_ok()
+                    && ts.eat_phrase(&["this", "turn", "can't", "cast", "additional"])
+                    && let Ok(flt) = try_parse(ts, parse_object_filter)
+                {
+                    return Ok(StaticAbility::CantCastSpellsMatching {
+                        player,
+                        filter: flt,
+                        condition,
+                    });
+                }
+                ts.restore(wcp);
+            }
             {
                 let ccp = ts.checkpoint();
                 if ts.eat_phrase(&["can't", "cast"])
                     && let Ok(flt) = try_parse(ts, parse_object_filter)
                 {
+                    let _ = ts.eat_phrase(&[
+                        "that", "share", "a", "color", "with", "the", "spell", "most", "recently",
+                        "cast", "this", "turn",
+                    ]);
+                    let ecp = ts.checkpoint();
+                    if ts.eat_phrase(&[
+                        "or",
+                        "play",
+                        "lands",
+                        "with",
+                        "a",
+                        "name",
+                        "originally",
+                        "printed",
+                        "in",
+                        "the",
+                    ]) {
+                        let mut exp_words = 0usize;
+                        while exp_words < 5
+                            && ts.peek_word().is_some_and(|w| {
+                                !w.eq_ignore_ascii_case("expansion")
+                                    && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                            })
+                        {
+                            ts.next_word();
+                            exp_words += 1;
+                        }
+                        if exp_words == 0 || !ts.eat_word("expansion") {
+                            ts.restore(ecp);
+                        }
+                    }
                     return Ok(StaticAbility::RuleRestriction {
                         subject: Some(SubjectRef::Group(Box::new(flt))),
                         rule: RuleRestrictionKind::CantBeCast,
@@ -830,6 +930,26 @@ pub(super) fn parse_player_static_ability(
                             });
                         }
                         if ts.eat_phrase(&["among", "those", "cards"]) {
+                            return Ok(StaticAbility::ZoneCastPermission {
+                                player,
+                                filter: spell_flt,
+                                subject: None,
+                                zone: Some(crate::v2::ir::ZoneRef {
+                                    zone: crate::v2::ir::ZoneKind::Exile,
+                                    owner: crate::v2::ir::ZoneOwner::Default,
+                                }),
+                                mode: CastPermissionMode::PlayFromZone {
+                                    top_only: false,
+                                    lands: true,
+                                    spells: true,
+                                },
+                                condition,
+                            });
+                        }
+                        if ts.eat_phrase(&["among", "cards", "you", "exiled"]) {
+                            let _ = ts.eat_phrase(&["that", "have"])
+                                && opt(ts, crate::v2::filter::parse_counter_kind).is_some()
+                                && ts.eat_phrase(&["counters", "on", "them"]);
                             return Ok(StaticAbility::ZoneCastPermission {
                                 player,
                                 filter: spell_flt,

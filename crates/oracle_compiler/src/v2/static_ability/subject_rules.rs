@@ -115,44 +115,56 @@ pub(super) fn parse_subject_static_ability(
     // Optional subject post-qualifiers not handled inside `parse_object_filter`
     {
         let qcp = ts.checkpoint();
-        if ts.eat_phrase(&["controlled", "by", "players", "who", "chose"])
-            && (ts.eat_word("war") || ts.eat_word("peace"))
-        {
-            // consumed `Archangel of Strife` qualifier
-        } else if ts.eat_phrase(&["attacking", "the", "last", "chosen", "player"])
-            || ts.eat_phrase(&["played", "by", "your", "opponents"])
-            || ts.eat_phrase(&[
-                "that",
-                "attacked",
-                "during",
-                "their",
-                "controller's",
-                "last",
-                "turn",
-            ])
-            || ts.eat_phrase(&["each", "player", "controls"])
-            || ts.eat_phrase(&["with", "mana", "value", "of", "the", "chosen", "quality"])
-            || ts.eat_phrase(&["without", "mana", "value", "of", "the", "chosen", "quality"])
-            || ts.eat_phrase(&[
-                "with", "mana", "value", "equal", "to", "the", "chosen", "number",
-            ])
-            || ts.eat_phrase(&[
-                "that", "you've", "put", "one", "or", "more", "+1/+1", "counters", "on", "this",
-                "turn",
-            ])
-        {
-            // consumed qualifier
-        } else if ts.eat_phrase(&["that", "are"])
-            && ts
-                .peek_word()
-                .is_some_and(|w| ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some())
-        {
-            ts.next_word();
-            if !ts.eat_phrase(&["and/or", "tokens"]) {
-                ts.restore(qcp);
-            }
+        let _ = ts.eat_phrase(&["controlled", "by", "players"]);
+        if ts.eat_phrase(&["who", "chose"]) && (ts.eat_word("war") || ts.eat_word("peace")) {
+            // consumed faction choice qualifier
         } else {
             ts.restore(qcp);
+            if ts.eat_phrase(&["attacking", "the", "last", "chosen", "player"])
+                || ts.eat_phrase(&["played", "by", "your", "opponents"])
+                || ts.eat_phrase(&[
+                    "that",
+                    "attacked",
+                    "during",
+                    "their",
+                    "controller's",
+                    "last",
+                    "turn",
+                ])
+                || ts.eat_phrase(&["each", "player", "controls"])
+                || ts.eat_phrase(&["with", "mana", "value", "of", "the", "chosen", "quality"])
+                || ts.eat_phrase(&["without", "mana", "value", "of", "the", "chosen", "quality"])
+                || ts.eat_phrase(&[
+                    "with", "mana", "value", "equal", "to", "the", "chosen", "number",
+                ])
+                || (ts.eat_phrase(&["of", "a", "type", "you", "noted", "for", "cards", "named"])
+                    && ts.eat_tilde())
+                || (ts.eat_phrase(&["that", "you've", "put", "one", "or", "more"])
+                    && ts.next_pt_mod().is_some()
+                    && ts.eat_phrase(&["counters", "on", "this", "turn"]))
+            {
+                // consumed qualifier
+            } else if ts.eat_word("tokens")
+                && ts.peek_word().is_some_and(|w| {
+                    matches!(
+                        w.to_ascii_lowercase().as_str(),
+                        "get" | "gets" | "have" | "has"
+                    )
+                })
+            {
+                // consumed trailing `and/or tokens` noun after subtype filter
+            } else if ts.eat_phrase(&["that", "are"])
+                && ts
+                    .peek_word()
+                    .is_some_and(|w| ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some())
+            {
+                ts.next_word();
+                if !ts.eat_phrase(&["and/or", "tokens"]) {
+                    ts.restore(qcp);
+                }
+            } else {
+                ts.restore(qcp);
+            }
         }
     }
 
@@ -791,6 +803,7 @@ pub(super) fn parse_subject_static_ability(
         });
     }
     if ts.eat_phrase(&["is", "colorless"]) || ts.eat_phrase(&["are", "colorless"]) {
+        let _ = ts.eat_phrase(&["sources", "of", "damage"]);
         return Ok(StaticAbility::SubjectRule {
             subject,
             rule: SubjectStaticRule::SetColors {
@@ -1615,7 +1628,21 @@ pub(super) fn parse_subject_static_ability(
         {
             vec![kw]
         } else {
-            parse_keyword_list(ts)?.0
+            // Avoid greedily consuming `and <kw> abilities ...` as a keyword
+            let kw_limit = (ts.pos..ts.tokens.len().saturating_sub(2)).find(|&idx| {
+                matches!(ts.tokens[idx].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("and"))
+                    && matches!(ts.tokens[idx + 2].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("abilities"))
+            });
+            if let Some(lim) = kw_limit
+                && lim > ts.pos
+            {
+                let mut sub = ts.sub_stream(&ts.tokens[ts.pos..lim], ts.stage);
+                let kws = parse_keyword_list(&mut sub)?.0;
+                ts.pos += sub.pos;
+                kws
+            } else {
+                parse_keyword_list(ts)?.0
+            }
         };
         let first_cond = if ts.eat_phrase(&["as", "long", "as"]) || ts.eat_word("if") {
             let c = parse_static_condition(ts)?;
@@ -2243,18 +2270,17 @@ pub(super) fn parse_subject_static_ability(
             if (ts.eat_phrase(&["and", "its", "activated", "abilities"])
                 || ts.eat_phrase(&["and", "their", "activated", "abilities"]))
                 && {
-                    let _ = ts.eat_phrase(&["with", "{t}", "in", "their", "costs"])
-                        || (ts.eat_word("with")
-                            && matches!(
-                                ts.peek().map(|t| &t.kind),
-                                Some(crate::v2::lexer::TokenKind::Mana(
-                                    crate::v2::ir::ManaSymbol::Tap
-                                ))
-                            )
-                            && {
-                                ts.next_tok();
-                                ts.eat_phrase(&["in", "their", "costs"])
-                            });
+                    let _ = ts.eat_word("with")
+                        && matches!(
+                            ts.peek().map(|t| &t.kind),
+                            Some(crate::v2::lexer::TokenKind::Mana(
+                                crate::v2::ir::ManaSymbol::Tap
+                            ))
+                        )
+                        && {
+                            ts.next_tok();
+                            ts.eat_phrase(&["in", "their", "costs"])
+                        };
                     ts.eat_phrase(&["can't", "be", "activated"])
                 }
             {

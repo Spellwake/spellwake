@@ -507,6 +507,14 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
             owner: ZoneOwner::Default,
         });
     }
+    if ts.eat_phrase(&["among", "the", "exiled", "cards"])
+        || ts.eat_phrase(&["among", "those", "exiled", "cards"])
+    {
+        return Ok(ZoneRef {
+            zone: ZoneKind::Exile,
+            owner: ZoneOwner::Default,
+        });
+    }
     // `the hand/graveyard/library of <player>` (`Adamaro, First to Desire`, `Glyph of Reincarnation`)
     {
         let zcp = ts.checkpoint();

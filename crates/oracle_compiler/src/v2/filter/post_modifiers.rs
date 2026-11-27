@@ -550,8 +550,26 @@ pub(super) fn parse_filter_post_modifiers(
             flt.predicates.push(FilterPredicate::SameController);
             continue;
         }
-        if ts.eat_phrase(&["you", "control"]) || ts.eat_phrase(&["you", "cast"]) {
+        if ts.eat_phrase(&["you", "control"]) {
             flt.controller = Some(ControllerRelation::You);
+            if ts.eat_phrase(&["but", "don't", "own"]) {
+                flt.owner = Some(ControllerRelation::Opponent);
+            }
+            continue;
+        }
+        if ts.eat_phrase(&["you", "cast"]) {
+            flt.controller = Some(ControllerRelation::You);
+            if ts.peek_phrase(&["this", "turn"])
+                && ts.peek_n(2).is_some_and(|t| {
+                    matches!(
+                        t.kind,
+                        TokenKind::Word(w)
+                            if w.eq_ignore_ascii_case("that") || w.eq_ignore_ascii_case("of")
+                    )
+                })
+            {
+                ts.eat_phrase(&["this", "turn"]);
+            }
             if ts.eat_phrase(&["but", "don't", "own"]) {
                 flt.owner = Some(ControllerRelation::Opponent);
             }
@@ -635,38 +653,26 @@ pub(super) fn parse_filter_post_modifiers(
             ));
             continue;
         }
-        if ts.eat_phrase(&[
-            "dealt",
-            "damage",
-            "this",
-            "turn",
-            "by",
-            "a",
-            "source",
-            "you",
-            "controlled",
-        ]) || ts.eat_phrase(&[
-            "dealt", "damage", "this", "turn", "by", "a", "source", "you", "control",
-        ]) || ts.eat_phrase(&[
-            "dealt",
-            "damage",
-            "by",
-            "enchanted",
-            "creature",
-            "this",
-            "turn",
-        ]) {
-            flt.flags = flt.flags.union(FilterFlags::DEALT_DAMAGE_THIS_TURN);
-            continue;
-        }
-        if ts.eat_phrase(&["dealt", "damage", "by"])
-            && ts.eat_tilde()
-            && ts.eat_phrase(&["this", "turn"])
         {
-            flt.flags = flt.flags.union(FilterFlags::DEALT_DAMAGE_THIS_TURN);
-            flt.predicates
-                .push(FilterPredicate::DealtDamageBySelfThisTurn);
-            continue;
+            let dd_cp = ts.checkpoint();
+            if ts.eat_phrase(&["dealt", "damage"]) || ts.eat_phrase(&["dealt", "combat", "damage"])
+            {
+                let saw_turn_first = ts.eat_phrase(&["this", "turn"]);
+                if ts.eat_word("by") {
+                    let is_self = ts.eat_tilde();
+                    let matched_src = is_self || try_parse(ts, parse_subject_ref).is_ok();
+                    let saw_turn_after = ts.eat_phrase(&["this", "turn"]);
+                    if matched_src && (saw_turn_first || saw_turn_after) {
+                        flt.flags = flt.flags.union(FilterFlags::DEALT_DAMAGE_THIS_TURN);
+                        if is_self {
+                            flt.predicates
+                                .push(FilterPredicate::DealtDamageBySelfThisTurn);
+                        }
+                        continue;
+                    }
+                }
+            }
+            ts.restore(dd_cp);
         }
         if ts.eat_phrase(&["your", "opponents", "cast"]) || ts.eat_phrase(&["opponents", "cast"]) {
             flt.controller = Some(ControllerRelation::Opponents);
@@ -1202,39 +1208,62 @@ pub(super) fn parse_filter_post_modifiers(
                     continue;
                 }
             }
-            // `with power or toughness <cmp> <val>` -> explicit AnyOf([Power, Toughness])
-            if ts.eat_phrase(&["power", "or", "toughness"])
-                || ts.eat_phrase(&["base", "power", "or", "toughness"])
+            // `with [base] power and toughness <P>/<T>`
+            if (ts.eat_phrase(&["base", "power", "and", "toughness"])
+                || ts.eat_phrase(&["power", "and", "toughness"]))
+                && let Some((p, t)) = ts.next_base_pt()
             {
-                let (op, val) = parse_stat_comparison(ts)?;
-                let p_branch = ObjectFilter {
-                    stat_bounds: vec![StatBound {
-                        stat: StatKind::Power,
-                        op,
-                        value: Box::new(val.clone()),
-                    }],
-                    ..Default::default()
-                };
-                let t_branch = ObjectFilter {
-                    stat_bounds: vec![StatBound {
-                        stat: StatKind::Toughness,
-                        op,
-                        value: Box::new(val),
-                    }],
-                    ..Default::default()
-                };
-                flt.predicates
-                    .push(FilterPredicate::AnyOf(vec![p_branch, t_branch]));
-                continue;
-            }
-            if let Some(stat) = parse_single_stat_kind(ts) {
-                let (op, val) = parse_stat_comparison(ts)?;
                 flt.stat_bounds.push(StatBound {
-                    stat,
-                    op,
-                    value: Box::new(val),
+                    stat: StatKind::Power,
+                    op: CompareOp::Eq,
+                    value: Box::new(ValueExpr::Const(p)),
+                });
+                flt.stat_bounds.push(StatBound {
+                    stat: StatKind::Toughness,
+                    op: CompareOp::Eq,
+                    value: Box::new(ValueExpr::Const(t)),
                 });
                 continue;
+            }
+            // `with <stat1>[, <stat2>][,] [or <stat3>] <cmp> <val>`
+            if let Some(first_stat) = parse_single_stat_kind(ts) {
+                let mut stats = vec![first_stat];
+                loop {
+                    let scp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
+                    let had_or = ts.eat_word("or");
+                    if (had_comma || had_or)
+                        && let Some(next_stat) = parse_single_stat_kind(ts)
+                    {
+                        stats.push(next_stat);
+                        continue;
+                    }
+                    ts.restore(scp);
+                    break;
+                }
+                if let Ok((op, val)) = try_parse(ts, parse_stat_comparison) {
+                    if stats.len() == 1 {
+                        flt.stat_bounds.push(StatBound {
+                            stat: stats[0],
+                            op,
+                            value: Box::new(val),
+                        });
+                    } else {
+                        let branches = stats
+                            .into_iter()
+                            .map(|stat| ObjectFilter {
+                                stat_bounds: vec![StatBound {
+                                    stat,
+                                    op,
+                                    value: Box::new(val.clone()),
+                                }],
+                                ..Default::default()
+                            })
+                            .collect();
+                        flt.predicates.push(FilterPredicate::AnyOf(branches));
+                    }
+                    continue;
+                }
             }
             // `with flying` / `with flying or reach`
             if let Ok((kws, is_or)) = try_parse(ts, parse_keyword_list) {
@@ -1302,13 +1331,24 @@ pub(super) fn parse_filter_post_modifiers(
                     let had_comma = ts.eat_comma();
                     if ts.eat_word("or") || ts.eat_word("and/or") {
                         let _ = ts.eat_word("a") || ts.eat_word("an");
-                        saw_or = true;
-                        continue;
+                        if ts.peek_word().is_some_and(|nw| {
+                            let nl = nw.to_ascii_lowercase();
+                            lookup_color(&nl).is_some()
+                                || lookup_supertype(&nl).is_some()
+                                || lookup_card_type(&nl).is_some()
+                                || ts.vocab.lookup_subtype(&nl).is_some()
+                        }) {
+                            saw_or = true;
+                            continue;
+                        }
+                        ts.restore(sep_cp);
+                        break;
                     }
                     if had_comma
                         && ts.peek_word().is_some_and(|nw| {
                             let nl = nw.to_ascii_lowercase();
                             lookup_color(&nl).is_some()
+                                || lookup_supertype(&nl).is_some()
                                 || lookup_card_type(&nl).is_some()
                                 || ts.vocab.lookup_subtype(&nl).is_some()
                         })
@@ -1336,18 +1376,25 @@ pub(super) fn parse_filter_post_modifiers(
                             flt.all_types = flt.all_types.union(ct);
                         }
                     }
+                    let pcp = ts.checkpoint();
+                    if !(ts.eat_phrase(&["or", "could", "produce"]) && ts.eat_mana_cost().is_some())
+                    {
+                        ts.restore(pcp);
+                    }
                     continue;
                 }
                 ts.restore(cp);
             }
         }
 
-        // Relative clauses starting with `that`
+        // Relative clauses starting with `[or] that`
         if ts
             .peek_word()
             .is_some_and(|w| w.eq_ignore_ascii_case("that"))
+            || ts.peek_phrase(&["or", "that"])
         {
             let cp = ts.checkpoint();
+            let _ = ts.eat_word("or");
             ts.eat_word("that");
             if ts.eat_phrase(&[
                 "was", "put", "there", "from", "your", "library", "this", "turn",
@@ -1555,6 +1602,18 @@ pub(super) fn parse_filter_post_modifiers(
                     continue;
                 }
                 ts.restore(kwcp);
+                if (ts.eat_word("has") || ts.eat_word("have"))
+                    && let Some(stat) = parse_single_stat_kind(ts)
+                    && let Ok((op, val)) = try_parse(ts, parse_stat_comparison)
+                {
+                    flt.stat_bounds.push(StatBound {
+                        stat,
+                        op,
+                        value: Box::new(val),
+                    });
+                    continue;
+                }
+                ts.restore(kwcp);
             }
             if ts.eat_word("targets") || ts.eat_word("target") {
                 if ts.eat_phrase(&["only", "a", "single"]) || ts.eat_word("only") {
@@ -1575,6 +1634,8 @@ pub(super) fn parse_filter_post_modifiers(
             {
                 let mut subs = Vec::new();
                 let mut ctypes = Vec::new();
+                let mut added_colors = ColorMask::EMPTY;
+                let mut added_supers = SupertypeMask::EMPTY;
                 let mut saw_or = false;
                 while let Some(w) = ts.peek_word() {
                     let low = w.to_ascii_lowercase();
@@ -1586,30 +1647,66 @@ pub(super) fn parse_filter_post_modifiers(
                         ctypes.push(ct);
                     } else if let Some(st) = lookup_supertype(&low) {
                         ts.next_word();
-                        flt.required_supertypes = flt.required_supertypes.union(st);
+                        added_supers = added_supers.union(st);
                     } else if let Some(col) = lookup_color(&low) {
                         ts.next_word();
-                        flt.any_colors = flt.any_colors.union(col);
+                        added_colors = added_colors.union(col);
                     } else {
                         break;
                     }
-                    let _ = ts.eat_comma();
+                    let sep_cp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
                     if ts.eat_word("or") || ts.eat_word("and/or") {
                         let _ = ts.eat_word("a") || ts.eat_word("an");
-                        saw_or = true;
+                        if ts.peek_word().is_some_and(|nw| {
+                            let nl = nw.to_ascii_lowercase();
+                            lookup_color(&nl).is_some()
+                                || lookup_supertype(&nl).is_some()
+                                || lookup_card_type(&nl).is_some()
+                                || ts.vocab.lookup_subtype(&nl).is_some()
+                        }) {
+                            saw_or = true;
+                            continue;
+                        }
+                        ts.restore(sep_cp);
+                        break;
                     }
+                    if had_comma
+                        && ts.peek_word().is_some_and(|nw| {
+                            let nl = nw.to_ascii_lowercase();
+                            lookup_color(&nl).is_some()
+                                || lookup_supertype(&nl).is_some()
+                                || lookup_card_type(&nl).is_some()
+                                || ts.vocab.lookup_subtype(&nl).is_some()
+                        })
+                    {
+                        continue;
+                    }
+                    ts.restore(sep_cp);
+                    break;
                 }
-                if !subs.is_empty() || !ctypes.is_empty() {
+                if !subs.is_empty()
+                    || !ctypes.is_empty()
+                    || !added_colors.is_empty()
+                    || !added_supers.is_empty()
+                {
                     if saw_or && subs.len() >= 2 {
                         flt.subtypes_match_any = true;
                     }
                     flt.subtypes.extend(subs);
+                    flt.any_colors = flt.any_colors.union(added_colors);
+                    flt.required_supertypes = flt.required_supertypes.union(added_supers);
                     for ct in ctypes {
                         if saw_or {
                             flt.any_types = flt.any_types.union(ct);
                         } else {
                             flt.all_types = flt.all_types.union(ct);
                         }
+                    }
+                    let pcp = ts.checkpoint();
+                    if !(ts.eat_phrase(&["or", "could", "produce"]) && ts.eat_mana_cost().is_some())
+                    {
+                        ts.restore(pcp);
                     }
                     continue;
                 }
@@ -2005,8 +2102,8 @@ fn parse_one_proper_card_name(ts: &mut TokenStream<'_>) -> Option<String> {
     let mut saw_title_comma = false;
     while parts.len() < 8 {
         if let Some(w) = ts.peek_word() {
-            let starts_upper = w.chars().next().is_some_and(|c| c.is_ascii_uppercase());
-            if starts_upper {
+            let has_upper = w.chars().any(|c| c.is_ascii_uppercase());
+            if has_upper {
                 parts.push(w.to_string());
                 ts.next_word();
                 continue;

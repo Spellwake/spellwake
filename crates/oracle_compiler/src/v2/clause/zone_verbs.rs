@@ -71,6 +71,9 @@ fn parse_zone_verb_frame_inner(
 ) -> PResult<(Vec<Effect>, ())> {
     // 7. `draw(s) ...`
     if ts.eat_word("draw") || ts.eat_word("draws") {
+        if let Some(res) = super::zone_ext::try_parse_draw_ext(ts, actor) {
+            return res;
+        }
         let count = if ts.eat_phrase(&["a", "number", "of", "cards", "equal", "to"])
             || ts.eat_phrase(&["cards", "equal", "to"])
         {
@@ -1409,36 +1412,6 @@ fn parse_zone_verb_frame_inner(
                         }
                         ts.restore(rcp);
                     }
-                    // Support `put a +1/+1 counter on that creature and a +1/+1 counter on ~` (`Juniper Order Ranger`)
-                    {
-                        let jcp = ts.checkpoint();
-                        if ts.eat_word("and") {
-                            let c2 = if ts.eat_word("a") || ts.eat_word("an") {
-                                Some(ValueExpr::Const(1))
-                            } else {
-                                opt(ts, parse_value_expr)
-                            };
-                            if let Some(c2) = c2
-                                && let Ok(k2) = try_parse(ts, parse_counter_kind)
-                                && (ts.eat_word("counter") || ts.eat_word("counters"))
-                                && ts.eat_word("on")
-                                && let Ok(subj2) = try_parse(ts, parse_subject_ref)
-                            {
-                                out.push(Effect::MutateObject {
-                                    subject: subj2,
-                                    mutation: ObjectMutation::PutCounters {
-                                        kind: k2,
-                                        count: c2,
-                                    },
-                                    duration: Duration::Instant,
-                                });
-                            } else {
-                                ts.restore(jcp);
-                            }
-                        } else {
-                            ts.restore(jcp);
-                        }
-                    }
                     return Ok((out, ()));
                 }
             }
@@ -1758,7 +1731,9 @@ fn parse_zone_verb_frame_inner(
         {
             let scp = ts.checkpoint();
             if (ts.eat_phrase(&["their", "hand", "and", "graveyard"])
-                || ts.eat_phrase(&["your", "hand", "and", "graveyard"]))
+                || ts.eat_phrase(&["your", "hand", "and", "graveyard"])
+                || ts.eat_phrase(&["their", "graveyard", "and", "hand"])
+                || ts.eat_phrase(&["your", "graveyard", "and", "hand"]))
                 && ts.eat_word("into")
                 && let Ok(zref) = try_parse(ts, parse_zone_ref)
             {
@@ -1939,6 +1914,9 @@ fn parse_zone_verb_frame_inner(
         if !ts.eat_word("for") {
             return Err(ts.err("expected `for` in search library"));
         }
+        if let Some(res) = super::zone_ext::try_parse_search_for_ext(ts, actor, &libs) {
+            return res;
+        }
         let any_number = ts.eat_phrase(&["any", "number", "of"]) || ts.eat_word("all");
         let up_to = !any_number && ts.eat_phrase(&["up", "to"]);
         let exact = !any_number && !up_to && ts.eat_word("exactly");
@@ -2007,6 +1985,9 @@ fn parse_zone_verb_frame_inner(
 
     // 19. `reveal(s) ...`
     if ts.eat_word("reveal") || ts.eat_word("reveals") {
+        if let Some(res) = super::zone_ext::try_parse_reveal_ext(ts, actor) {
+            return res;
+        }
         // `reveal(s) [a number of cards | <val> cards] from their/your hand [equal to <val>]` (`Acquisitions Expert`, `Taster of Wares`)
         {
             let hcp = ts.checkpoint();

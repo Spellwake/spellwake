@@ -373,18 +373,10 @@ pub(super) fn parse_player_verb_frame(
         return Err(ts.err("expected emblem, energy, or counter after `get(s)`"));
     }
 
-    // 3. `play(s) ...` (both `play lands and cast spells from <zone> [dur]`, `plays with their hand revealed`, and `play that card [without paying its mana cost] [dur]`)
+    // 3. `play(s) ...` (additional land plays, zone permissions, hand revealed, and play permissions)
     if ts.eat_word("play") || ts.eat_word("plays") {
-        if ts.eat_phrase(&["an", "additional", "land"]) {
-            let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            return Ok((
-                vec![Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::AdditionalLandPlay(1),
-                    duration: dur,
-                }],
-                (),
-            ));
+        if let Some(res) = super::player_verbs_ext::try_parse_play_ext(ts, actor) {
+            return res;
         }
         if ts.eat_phrase(&["with", "their", "hand", "revealed"])
             || ts.eat_phrase(&["with", "your", "hand", "revealed"])
@@ -397,29 +389,6 @@ pub(super) fn parse_player_verb_frame(
                         condition: None,
                     }),
                     duration: Duration::UntilEndOfTurn,
-                }],
-                (),
-            ));
-        }
-        if ts.eat_phrase(&["lands", "and", "cast", "spells", "from"]) {
-            let top_only = ts.eat_phrase(&["the", "top", "of"]);
-            let zone = parse_zone_ref(ts)?;
-            let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            return Ok((
-                vec![Effect::ApplyContinuous {
-                    effect: Box::new(StaticAbility::ZoneCastPermission {
-                        player: actor,
-                        filter: None,
-                        subject: None,
-                        zone: Some(zone),
-                        mode: CastPermissionMode::PlayFromZone {
-                            top_only,
-                            lands: true,
-                            spells: true,
-                        },
-                        condition: None,
-                    }),
-                    duration: dur,
                 }],
                 (),
             ));
@@ -1141,13 +1110,22 @@ pub(super) fn parse_player_verb_frame(
             ValueExpr::Const(2)
         } else {
             let ncp = ts.checkpoint();
-            if let Some(n) = ts.next_number(false)
+            let v_opt = if let Some(n) = ts.next_number(false) {
+                Some(ValueExpr::Const(n))
+            } else if ts.eat_word("x") {
+                Some(ValueExpr::Var(crate::v2::ir::VarName::X))
+            } else {
+                None
+            };
+            if let Some(v) = v_opt
                 && ts.eat_word("times")
             {
-                ValueExpr::Const(n)
+                v
             } else {
                 ts.restore(ncp);
-                opt(ts, parse_for_each_expr).unwrap_or(ValueExpr::Const(1))
+                super::player_verbs_ext::try_eat_copy_for_each_target(ts)
+                    .or_else(|| opt(ts, parse_for_each_expr))
+                    .unwrap_or(ValueExpr::Const(1))
             }
         };
         let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
@@ -1260,33 +1238,9 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 3g. `flip(s) a coin [until you lose a flip]` (checkpointed so `flip ~` / `flip it` falls through cleanly!)
-    {
-        let fcp = ts.checkpoint();
-        if (ts.eat_word("flip") || ts.eat_word("flips")) && ts.eat_phrase(&["a", "coin"]) {
-            let flip = Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::Action(PlayerActionKind::FlipCoin),
-                duration: Duration::Instant,
-            };
-            if ts.eat_phrase(&["until", "you", "lose", "a", "flip"])
-                || ts.eat_phrase(&["until", "they", "lose", "a", "flip"])
-            {
-                return Ok((
-                    vec![Effect::Unless {
-                        body: vec![flip],
-                        payer: None,
-                        cost: None,
-                        condition: Some(crate::v2::ir::ConditionExpr::Not(Box::new(
-                            crate::v2::ir::ConditionExpr::Flag(ConditionFlag::WonCoinFlip),
-                        ))),
-                    }],
-                    (),
-                ));
-            }
-            return Ok((vec![flip], ()));
-        }
-        ts.restore(fcp);
+    // 3g. `flip(s) a coin / <val> coins ...` (checkpointed so `flip ~` / `flip it` falls through cleanly!)
+    if let Some(res) = super::player_verbs_ext::try_parse_flip_ext(ts, actor) {
+        return res;
     }
 
     // 3h. `become(s) the monarch` / `take(s) an extra turn [after this one]`
@@ -1758,11 +1712,13 @@ pub(super) fn parse_player_verb_frame(
                 || ts.eat_phrase(&["half", "their", "life", "total"])
                 || ts.eat_phrase(&["half", "your", "life", "total"]))
         {
-            let _ = ts.eat_comma();
-            let rounding = if ts.eat_phrase(&["rounded", "up"]) {
+            let rcp = ts.checkpoint();
+            let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
                 crate::ast::Rounding::Up
+            } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
+                crate::ast::Rounding::Down
             } else {
-                let _ = ts.eat_phrase(&["rounded", "down"]);
+                ts.restore(rcp);
                 crate::ast::Rounding::Down
             };
             return Ok((
@@ -1780,6 +1736,12 @@ pub(super) fn parse_player_verb_frame(
                 }],
                 (),
             ));
+        }
+        if op == LifeOp::Gain
+            && (ts.eat_phrase(&["life", "and", "draw", "cards", "equal", "to"])
+                || ts.eat_phrase(&["life", "and", "draws", "cards", "equal", "to"]))
+        {
+            return super::player_verbs_ext::parse_gain_life_and_draw_tail(ts, actor);
         }
         // Paired `loses life and discards cards equal to <val>`
         if op == LifeOp::Lose
@@ -2139,7 +2101,11 @@ pub(super) fn parse_player_verb_frame(
 
     // 24. `counter <subj> [or ability] [unless its controller pays <cost> [for each <expr>] | unless its controller <effect>]`
     if ts.eat_word("counter") {
-        let subject = parse_subject_ref(ts)?;
+        let subject = if ts.eat_phrase(&["the", "chosen", "spell"]) {
+            SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell)
+        } else {
+            parse_subject_ref(ts)?
+        };
         let _ = ts.eat_phrase(&["or", "ability"]);
         {
             let ucp = ts.checkpoint();
@@ -2243,11 +2209,13 @@ pub(super) fn parse_player_verb_frame(
             || ts.eat_phrase(&["half", "your", "library"])
             || ts.eat_phrase(&["half", "that", "player's", "library"])
         {
-            let _ = ts.eat_comma();
-            let rounding = if ts.eat_phrase(&["rounded", "up"]) {
+            let rcp = ts.checkpoint();
+            let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
                 crate::ast::Rounding::Up
+            } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
+                crate::ast::Rounding::Down
             } else {
-                let _ = ts.eat_phrase(&["rounded", "down"]);
+                ts.restore(rcp);
                 crate::ast::Rounding::Down
             };
             ValueExpr::Div {

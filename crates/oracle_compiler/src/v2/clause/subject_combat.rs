@@ -340,6 +340,20 @@ pub(super) fn parse_subject_cant(
         } else {
             ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlocked)
         }
+    } else if ts.eat_phrase(&[
+        "be",
+        "prevented",
+        "or",
+        "dealt",
+        "instead",
+        "to",
+        "another",
+        "permanent",
+        "or",
+        "player",
+    ]) || ts.eat_phrase(&["be", "prevented"])
+    {
+        ObjectMutation::ApplyRule(RuleRestrictionKind::DamageCantBePrevented)
     } else if ts.eat_phrase(&["be", "regenerated"]) {
         ObjectMutation::CantBeRegenerated
     } else if ts.eat_phrase(&["be", "countered"]) {
@@ -857,7 +871,7 @@ pub(super) fn parse_extra_subject_predicates(
                     duration,
                 }]);
             }
-            if ts.eat_word("unprepared") || ts.eat_word("unblocked") {
+            if ts.eat_word("unprepared") || ts.eat_word("unblocked") || ts.eat_word("blocked") {
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::Instant);
                 return Ok(vec![Effect::MutateObject {
                     subject,
@@ -1076,7 +1090,7 @@ pub(super) fn parse_extra_subject_predicates(
         }]);
     }
 
-    // 14. `<subj> loses/lose all other abilities [dur]` (`Kitesail Larcenist`, `Harold and Bob`)
+    // 14. `<subj> loses/lose all other abilities [dur]`
     if ts.eat_phrase(&["loses", "all", "other", "abilities"])
         || ts.eat_phrase(&["lose", "all", "other", "abilities"])
     {
@@ -1086,6 +1100,338 @@ pub(super) fn parse_extra_subject_predicates(
             mutation: ObjectMutation::RemoveAllAbilities,
             duration,
         }]);
+    }
+
+    // 15. Extended `loses`/`lose` predicates (land types/abilities, landwalk/banding, quoted, unspent mana, counters, fractional/floor life)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_word("loses") || ts.eat_word("lose") {
+            let player = match subject {
+                SubjectRef::Player(p) => p,
+                _ => PlayerRef::ThatPlayer,
+            };
+            if ts.eat_phrase(&["all", "land", "types", "and", "abilities"])
+                || ts.eat_phrase(&["all", "other", "land", "types", "and", "abilities"])
+            {
+                let mut out = vec![
+                    Effect::MutateObject {
+                        subject: subject.clone(),
+                        mutation: ObjectMutation::BecomeCreatureTypes {
+                            subtypes: Vec::new(),
+                            add_types: CardTypeMask::EMPTY,
+                            keep_existing_types: false,
+                            base_pt: None,
+                            keywords: Vec::new(),
+                        },
+                        duration: Duration::Permanent,
+                    },
+                    Effect::MutateObject {
+                        subject: subject.clone(),
+                        mutation: ObjectMutation::RemoveAllAbilities,
+                        duration: Duration::Permanent,
+                    },
+                ];
+                let hcp = ts.checkpoint();
+                if (ts.eat_phrase(&["and", "has"]) || ts.eat_phrase(&["and", "have"]))
+                    && let Some(quoted) = ts.next_quoted()
+                {
+                    let compiled = crate::v2::card::compile_face_v2(
+                        crate::FaceInput {
+                            name: "~",
+                            type_line: "Land",
+                            oracle_text: quoted,
+                        },
+                        ts.vocab,
+                    );
+                    if compiled.is_ok() {
+                        out.push(Effect::MutateObject {
+                            subject,
+                            mutation: ObjectMutation::GrantAbility(Box::new(compiled)),
+                            duration: Duration::Permanent,
+                        });
+                    } else {
+                        ts.restore(hcp);
+                    }
+                } else {
+                    ts.restore(hcp);
+                }
+                return Ok(out);
+            }
+            if ts.eat_phrase(&["all", "landwalk", "abilities"])
+                || ((ts.eat_phrase(&["banding", "and", "all"]) || ts.eat_word("all"))
+                    && ts
+                        .next_quoted()
+                        .is_some_and(|q| q.eq_ignore_ascii_case("bands with other"))
+                    && ts.eat_word("abilities"))
+            {
+                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                return Ok(vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::RemoveKeywords(Vec::new()),
+                    duration,
+                }]);
+            }
+            if ts.next_quoted().is_some() {
+                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                return Ok(vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::RemoveAllAbilities,
+                    duration,
+                }]);
+            }
+            if ts.eat_phrase(&["all", "unspent", "mana"]) {
+                let mut out = vec![Effect::MutatePlayer {
+                    player,
+                    mutation: crate::v2::ir::PlayerMutation::Action(
+                        crate::v2::ir::PlayerActionKind::RepeatProcessOnce,
+                    ),
+                    duration: Duration::Instant,
+                }];
+                if ts.eat_phrase(&["and", "you", "add", "the", "mana", "lost", "this", "way"]) {
+                    out.push(Effect::MutatePlayer {
+                        player: PlayerRef::You,
+                        mutation: crate::v2::ir::PlayerMutation::AddMana(
+                            crate::v2::ir::ManaSpec::AnyColor {
+                                amount: ValueExpr::PriorActionCount(
+                                    crate::v2::ir::PriorActionKind::ThatMany,
+                                ),
+                                single_color: false,
+                            },
+                        ),
+                        duration: Duration::Instant,
+                    });
+                }
+                return Ok(out);
+            }
+            if ts.eat_word("all") {
+                if ts.eat_word("but")
+                    && let Ok(keep) = try_parse(ts, parse_value_expr)
+                    && ts.eat_word("life")
+                {
+                    return Ok(vec![Effect::AdjustLife {
+                        player,
+                        amount: keep,
+                        op: crate::v2::ir::LifeOp::Set,
+                    }]);
+                }
+                let kind = opt(ts, crate::v2::filter::parse_counter_kind)
+                    .unwrap_or(crate::v2::ir::CounterKind::Any);
+                if ts.eat_word("counters") || ts.eat_word("counter") {
+                    return Ok(vec![Effect::MutateObject {
+                        subject,
+                        mutation: ObjectMutation::RemoveCounters {
+                            kind,
+                            count: None,
+                            all: true,
+                        },
+                        duration: Duration::Instant,
+                    }]);
+                }
+            }
+            if ts.eat_phrase(&["a", "third", "of", "their", "life"])
+                || ts.eat_phrase(&["a", "third", "of", "your", "life"])
+            {
+                let rcp = ts.checkpoint();
+                let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
+                    crate::ast::Rounding::Up
+                } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
+                    crate::ast::Rounding::Down
+                } else {
+                    ts.restore(rcp);
+                    crate::ast::Rounding::Up
+                };
+                return Ok(vec![Effect::AdjustLife {
+                    player,
+                    amount: ValueExpr::Div {
+                        expr: Box::new(ValueExpr::PlayerStat {
+                            player,
+                            stat: crate::ast::PlayerStatKind::LifeTotal,
+                        }),
+                        denom: 3,
+                        rounding,
+                    },
+                    op: crate::v2::ir::LifeOp::Lose,
+                }]);
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 16. `phases in`, `is colorless`, `is sacrificed by its controller`, `can cast only one more spell`, `can be the target ... shroud`
+    if ts.eat_phrase(&["phases", "in"]) || ts.eat_phrase(&["phase", "in"]) {
+        return Ok(vec![Effect::MutateObject {
+            subject,
+            mutation: ObjectMutation::StateAction(crate::v2::ir::ObjectStateAction::PhaseOut),
+            duration: Duration::Instant,
+        }]);
+    }
+    if ts.eat_phrase(&["is", "colorless"]) || ts.eat_phrase(&["are", "colorless"]) {
+        let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
+        return Ok(vec![Effect::MutateObject {
+            subject,
+            mutation: ObjectMutation::BecomeColors {
+                colors: crate::ast::ColorMask::EMPTY,
+                keep_existing_colors: false,
+            },
+            duration,
+        }]);
+    }
+    if ts.eat_phrase(&["is", "sacrificed", "by", "its", "controller"])
+        || ts.eat_phrase(&["are", "sacrificed", "by", "their", "controllers"])
+    {
+        return Ok(vec![Effect::ZoneOp {
+            actor: PlayerRef::EachPlayer,
+            op: crate::v2::ir::ZoneOpKind::Sacrifice,
+            subject,
+            from: Vec::new(),
+            to: None,
+            modifiers: crate::v2::ir::EntryModifiers::default(),
+            except: None,
+            count: None,
+        }]);
+    }
+    if ts.eat_phrase(&["can", "cast", "only", "one", "more", "spell"]) {
+        let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+        let player = match subject {
+            SubjectRef::Player(p) => p,
+            _ => PlayerRef::EachPlayer,
+        };
+        return Ok(vec![Effect::ApplyContinuous {
+            effect: Box::new(StaticAbility::PlayerRestriction {
+                player,
+                restriction: crate::v2::ir::PlayerRestrictionKind::CantCastMoreThanOnePerTurn,
+                condition: None,
+            }),
+            duration,
+        }]);
+    }
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&[
+            "can",
+            "be",
+            "the",
+            "target",
+            "of",
+            "spells",
+            "and",
+            "abilities",
+            "controlled",
+            "by",
+        ]) && try_parse(ts, crate::v2::filter::parse_player_ref).is_ok()
+            && ts.eat_phrase(&["as", "though", "it", "didn't", "have", "shroud"])
+        {
+            return Ok(vec![Effect::ApplyContinuous {
+                effect: Box::new(StaticAbility::SubjectRule {
+                    subject,
+                    rule: crate::v2::ir::SubjectStaticRule::IgnoreKeywordForBlocking(
+                        crate::v2::ir::KeywordKind::Shroud,
+                    ),
+                    condition: None,
+                }),
+                duration: Duration::UntilEndOfTurn,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 17. `[this turn] that are <colors> cost(s) {M} less/more to cast` + inline token/mana replacement predicates
+    {
+        let cp = ts.checkpoint();
+        let _ = ts.eat_phrase(&["this", "turn"]);
+        if ts.eat_phrase(&["that", "are"]) {
+            let mut saw_c = false;
+            while let Some(w) = ts.peek_word() {
+                let low = w.to_ascii_lowercase();
+                if crate::vocab::lookup_color(&low).is_some()
+                    || matches!(low.as_str(), "and/or" | "or" | "and")
+                {
+                    saw_c |= crate::vocab::lookup_color(&low).is_some();
+                    ts.next_word();
+                } else {
+                    break;
+                }
+            }
+            if saw_c
+                && (ts.eat_word("cost") || ts.eat_word("costs"))
+                && let Some(delta) = ts.eat_mana_cost()
+            {
+                let less = if ts.eat_phrase(&["less", "to", "cast"]) {
+                    Some(true)
+                } else if ts.eat_phrase(&["more", "to", "cast"]) {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(less) = less {
+                    let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                    return Ok(vec![Effect::ApplyContinuous {
+                        effect: Box::new(StaticAbility::CostModifier {
+                            subject: crate::v2::ir::ObjectFilter {
+                                any_spell: true,
+                                ..Default::default()
+                            },
+                            delta,
+                            less,
+                            scale: None,
+                            min_mana: None,
+                            condition: None,
+                        }),
+                        duration,
+                    }]);
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+    if ts.eat_phrase(&[
+        "that",
+        "would",
+        "be",
+        "created",
+        "under",
+        "an",
+        "opponent's",
+        "control",
+        "this",
+        "turn",
+        "is",
+        "created",
+        "under",
+        "your",
+        "control",
+        "instead",
+    ]) {
+        return Ok(vec![Effect::ApplyReplacement {
+            replacement: Box::new(crate::v2::ir::Replacement::TokenRule {
+                controller: PlayerRef::You,
+                filter: None,
+                rule: crate::v2::ir::TokenReplacementKind::Multiply(1),
+            }),
+            duration: Duration::UntilEndOfTurn,
+        }]);
+    }
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&[
+            "that", "would", "add", "colored", "mana", "instead", "add", "that", "much",
+        ]) && ts
+            .peek_word()
+            .is_some_and(|w| crate::vocab::lookup_color(&w.to_ascii_lowercase()).is_some())
+        {
+            ts.next_word();
+            if ts.eat_word("mana") {
+                return Ok(vec![Effect::ApplyReplacement {
+                    replacement: Box::new(crate::v2::ir::Replacement::Rule(
+                        crate::v2::ir::ReplacementRuleKind::ManaOverride(
+                            crate::v2::ir::ManaCost::default(),
+                        ),
+                    )),
+                    duration: Duration::UntilEndOfTurn,
+                }]);
+            }
+        }
+        ts.restore(cp);
     }
 
     Err(ts.err("expected verb predicate after subject"))

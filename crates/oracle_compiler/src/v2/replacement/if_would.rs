@@ -1,7 +1,6 @@
 //! `If <event> would ...` replacement effect parser for `v2`.
 
 use crate::v2::clause::parse_effect_sentence;
-use crate::v2::condition::parse_condition;
 use crate::v2::filter::{parse_counter_kind, parse_object_filter, parse_subject_ref};
 use crate::v2::ir::{
     DamageReplacement, ObjectFilter, PlayerActionKind, PlayerRef, PlayerReplacementKind,
@@ -9,6 +8,7 @@ use crate::v2::ir::{
     TriggerEvent, ValueExpr, ZoneKind,
 };
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
+use crate::v2::static_ability::cond_ext::parse_static_condition;
 use crate::v2::value::parse_value_expr;
 
 use super::{lookup_predefined_token, parse_instead_clause};
@@ -443,7 +443,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         ts.restore(cp);
     }
 
-    // 1a0f2. `If you tap <flt> for mana, it produces twice / three times as much of that mana instead.` (`Nyxbloom Ancient`, `Mana Reflection`, `Virtue of Strength`)
+    // 1a0f2. `If <player> tap(s) <flt> for mana, it produces <mult | mana override> instead ...`
     {
         let cp = ts.checkpoint();
         if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
@@ -453,6 +453,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
             && ts.eat_comma()
             && ts.eat_phrase(&["it", "produces"])
         {
+            let p_cp = ts.checkpoint();
             let mult = if ts.eat_word("twice") {
                 Some(2i32)
             } else if ts.eat_phrase(&["three", "times"]) {
@@ -482,6 +483,29 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                             duration: crate::v2::ir::Duration::Instant,
                         }],
                     });
+                }
+            }
+            ts.restore(p_cp);
+            let mc_opt = if let Some(mc) = ts.eat_mana_cost() {
+                Some(mc)
+            } else if ts.eat_phrase(&["colorless", "mana"]) {
+                Some(crate::v2::ir::ManaCost {
+                    symbols: vec![crate::v2::ir::ManaSymbol::Colorless],
+                })
+            } else if ts.eat_phrase(&["one", "mana", "of", "a", "color", "of", "your", "choice"])
+                || ts.eat_phrase(&["mana", "of", "a", "color", "of", "your", "choice"])
+            {
+                Some(crate::v2::ir::ManaCost::default())
+            } else {
+                None
+            };
+            if let Some(mc) = mc_opt
+                && ts.eat_phrase(&["instead", "of", "any", "other", "type"])
+            {
+                let _ = ts.eat_phrase(&["and", "amount"]);
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::Rule(ReplacementRuleKind::ManaOverride(mc)));
                 }
             }
         }
@@ -612,10 +636,10 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         ts.restore(cp);
     }
 
-    // 1a0f. `If [a land | <flt>] is tapped for mana, it produces [{M} | colorless mana | mana of a color of your choice] instead of any other type [and amount].`
+    // 1a0f. `If [<subj> | <flt>] is tapped for mana, it produces [{M} | colorless mana | mana of a color of your choice] instead of [any other type [and amount] | <color> mana].`
     {
         let cp = ts.checkpoint();
-        if try_parse(ts, parse_object_filter).is_ok()
+        if (try_parse(ts, parse_object_filter).is_ok() || try_parse(ts, parse_subject_ref).is_ok())
             && ts.eat_phrase(&["is", "tapped", "for", "mana"])
             && ts.eat_comma()
             && ts.eat_phrase(&["it", "produces"])
@@ -632,7 +656,13 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                 None
             };
             if let Some(mc) = mc_opt
-                && ts.eat_phrase(&["instead", "of", "any", "other", "type"])
+                && (ts.eat_phrase(&["instead", "of", "any", "other", "type"])
+                    || (ts.eat_phrase(&["instead", "of"])
+                        && ts.peek_word().is_some_and(|w| {
+                            crate::vocab::lookup_color(&w.to_ascii_lowercase()).is_some()
+                        })
+                        && ts.next_word().is_some()
+                        && ts.eat_word("mana")))
             {
                 let _ = ts.eat_phrase(&["and", "amount"]);
                 let _ = ts.eat_period();
@@ -978,13 +1008,15 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         }
         ts.restore(cp);
     }
-    // 1b0. `If [you | an opponent] would put one or more counters on <flt> [or on yourself | or player], [they] put ... instead [, rounded down].`
+    // 1b0. `If [you | an opponent] would put one or more [<kind>] counters on <flt> [or on yourself | or player], [they] put ... instead [, rounded down].`
     {
         let cp = ts.checkpoint();
-        if (ts.eat_phrase(&["you", "would", "put", "one", "or", "more", "counters", "on"])
-            || ts.eat_phrase(&[
-                "an", "opponent", "would", "put", "one", "or", "more", "counters", "on",
-            ]))
+        if (ts.eat_phrase(&["you", "would", "put", "one", "or", "more"])
+            || ts.eat_phrase(&["an", "opponent", "would", "put", "one", "or", "more"]))
+            && {
+                let _ = opt(ts, parse_counter_kind);
+                ts.eat_phrase(&["counters", "on"])
+            }
             && let Ok(flt) = try_parse(ts, parse_object_filter)
         {
             let _ = ts.eat_phrase(&["or", "on", "yourself"]) || ts.eat_phrase(&["or", "player"]);
@@ -1006,8 +1038,9 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                 };
                 if (add != 0 || factor != 0)
                     && (ts.eat_phrase(&["of", "each", "of", "those", "kinds", "of", "counters"])
-                        || ts.eat_phrase(&["of", "those", "counters"]))
-                    && ts.eat_phrase(&["on", "that", "permanent"])
+                        || ts.eat_phrase(&["of", "those", "counters"])
+                        || (opt(ts, parse_counter_kind).is_some() && ts.eat_word("counters")))
+                    && (ts.eat_phrase(&["on", "that", "permanent"]) || ts.eat_phrase(&["on", "it"]))
                 {
                     let _ = ts.eat_phrase(&["or", "player"]);
                     if ts.eat_word("instead") {
@@ -1107,7 +1140,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["you", "would", "gain", "life"]) {
             let while_cond = if ts.eat_word("while") {
-                opt(ts, parse_condition)
+                opt(ts, parse_static_condition)
             } else {
                 None
             };
@@ -1187,7 +1220,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
             if (ts.eat_word("counters") || ts.eat_word("counter"))
                 && ts.eat_phrase(&["would", "be", "put", "on"])
             {
-                let _ = ts.eat_word("a") || ts.eat_word("an");
+                let _ = ts.eat_word("a") || ts.eat_word("an") || ts.eat_word("any");
                 let flt_opt = if ts.eat_tilde() {
                     Some(ObjectFilter::default())
                 } else {
@@ -1288,7 +1321,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
             let scp = ts.checkpoint();
             let mut src_flt = ObjectFilter::default();
             let mut matched_src_word = false;
-            let _ = ts.eat_word("a") || ts.eat_word("an");
+            let _ = ts.eat_word("a") || ts.eat_word("an") || ts.eat_word("any");
             if ts.eat_word("another") {
                 src_flt.flags = src_flt
                     .flags
@@ -1338,7 +1371,10 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                 src_flt_opt = Some(src_flt);
             } else {
                 ts.restore(scp);
-                if ts.eat_tilde() || ts.eat_phrase(&["enchanted", "creature"]) {
+                if ts.eat_tilde()
+                    || ts.eat_phrase(&["enchanted", "creature"])
+                    || ts.eat_phrase(&["that", "creature"])
+                {
                     src_flt_opt = Some(ObjectFilter::default());
                 } else if let Ok(mut f) = try_parse(ts, parse_object_filter) {
                     let ocp = ts.checkpoint();
@@ -1413,6 +1449,8 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                         let _ =
                             ts.eat_phrase(&["or", "a", "permanent", "that", "player", "controls"]);
                         Some(SubjectRef::Player(PlayerRef::ChosenPlayer))
+                    } else if ts.eat_phrase(&["one", "of", "your", "opponents"]) {
+                        Some(SubjectRef::Player(PlayerRef::AnyOpponent))
                     } else if let Some(mut first_tgt) = opt(ts, parse_subject_ref) {
                         let mut tgts = vec![first_tgt.clone()];
                         loop {
@@ -1460,7 +1498,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                 };
                 let _ = ts.eat_phrase(&["this", "turn"]);
                 let while_cond = if ts.eat_word("while") {
-                    opt(ts, parse_condition)
+                    opt(ts, parse_static_condition)
                 } else {
                     None
                 };
@@ -1552,6 +1590,9 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                         {
                             if ts.eat_word("to") {
                                 let _ = opt(ts, parse_subject_ref);
+                                if ts.eat_word("or") && opt(ts, parse_subject_ref).is_none() {
+                                    let _ = ts.eat_word("permanent") || ts.eat_word("player");
+                                }
                             }
                             if ts.eat_word("instead") {
                                 let _ = ts.eat_period();
@@ -1748,13 +1789,22 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                         {
                             let dcp = ts.checkpoint();
                             if ts.eat_phrase(&["that", "much", "damage", "plus"]) {
-                                if ts.eat_word("x")
-                                    && ts.eat_comma()
-                                    && ts.eat_phrase(&["where", "x", "is"])
-                                    && let Ok(add) = try_parse(ts, parse_value_expr)
-                                {
+                                if ts.eat_word("x") {
+                                    let add = if ts.eat_comma()
+                                        && ts.eat_phrase(&["where", "x", "is"])
+                                        && let Ok(val) = try_parse(ts, parse_value_expr)
+                                    {
+                                        val
+                                    } else {
+                                        ValueExpr::Var(crate::v2::ir::VarName::X)
+                                    };
                                     if ts.eat_word("to") {
                                         let _ = opt(ts, parse_subject_ref);
+                                        if ts.eat_word("or") && opt(ts, parse_subject_ref).is_none()
+                                        {
+                                            let _ =
+                                                ts.eat_word("permanent") || ts.eat_word("player");
+                                        }
                                     }
                                     if leading_instead || ts.eat_word("instead") {
                                         let _ = ts.eat_period();
@@ -1873,7 +1923,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
             })
         } else {
             ts.restore(cp);
-            try_parse(ts, parse_condition).ok()
+            try_parse(ts, parse_static_condition).ok()
         };
         if let Some(condition) = cond_opt {
             let _ = ts.eat_phrase(&["with", "its"])

@@ -638,7 +638,32 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Ok(Cost::RevealFromHand { count, filter });
     }
 
-    // `Choose <keywords>` (`Phyrexian Splicer`) OR `Choose <subj1> [or <subj2>]`
+    // `Roll a d<N>` / `Roll a <N>-sided die`
+    {
+        let rcp = ts.checkpoint();
+        if ts.eat_word("roll") {
+            let _ = ts.eat_word("a") || ts.eat_word("an");
+            if let Some(w) = ts.peek_word()
+                && let Some(rest) = w.strip_prefix('d').or_else(|| w.strip_prefix('D'))
+                && let Ok(sides) = rest.parse::<i32>()
+            {
+                ts.next_word();
+                return Ok(Cost::ChooseObject(SubjectRef::OneOfThem(ValueExpr::Const(
+                    sides,
+                ))));
+            }
+            if let Some(sides) = ts.next_number(false)
+                && (ts.eat_phrase(&["sided", "die"]) || ts.eat_word("die"))
+            {
+                return Ok(Cost::ChooseObject(SubjectRef::OneOfThem(ValueExpr::Const(
+                    sides,
+                ))));
+            }
+        }
+        ts.restore(rcp);
+    }
+
+    // `Choose <keywords>` OR `Choose <subj1> [or <subj2>]`
     if ts.eat_word("choose") {
         if let Ok((kws, is_or)) = try_parse(ts, parse_keyword_list) {
             let flt = ObjectFilter {

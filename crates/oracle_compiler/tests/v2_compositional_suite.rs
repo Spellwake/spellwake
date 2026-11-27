@@ -3684,20 +3684,24 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
         "Target artifact or creature you control gains protection from artifacts or from the color of your choice until end of turn.",
         &vocab,
     );
-    assert!(matches!(
-        blessing.faces[0].spell_effects.as_slice(),
-        [Effect::MutateObject {
-            mutation: ObjectMutation::GrantKeywords(kws),
-            duration: Duration::UntilEndOfTurn,
-            ..
-        }] if matches!(
-            kws.as_slice(),
-            [spellwake_oracle_compiler::v2::ir::KeywordSpec {
-                kind: KeywordKind::Protection,
-                param: Some(KeywordParam::ChosenColor),
-            }]
-        )
-    ));
+    assert!(
+        matches!(
+            blessing.faces[0].spell_effects.as_slice(),
+            [Effect::MutateObject {
+                mutation: ObjectMutation::GrantKeywords(kws),
+                duration: Duration::UntilEndOfTurn,
+                ..
+            }] if matches!(
+                kws.as_slice(),
+                [spellwake_oracle_compiler::v2::ir::KeywordSpec {
+                    kind: KeywordKind::Protection,
+                    param: Some(KeywordParam::ChosenColor),
+                }]
+            )
+        ),
+        "Apostle's Blessing got: {:?}",
+        blessing.faces[0].spell_effects
+    );
 }
 
 /// 13. Deep Wave 10 compositional IR assertions (85.55% -> 86.16%, +198 cards, 0 regressions,
@@ -6066,4 +6070,207 @@ fn v2_wave16_compositional_grammar_deep_ir_assertions() {
             .iter()
             .any(|e| matches!(e, Effect::StartingWith { .. }))
     );
+}
+
+#[test]
+fn v2_wave17_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{Ability, ChoiceKind, Cost, Effect, StaticAbility};
+
+    let vocab = v2_vocab();
+
+    // 20 iconic Wave 17 cards spanning reflexive modals, pawprint Spree, Siege bullets,
+    // 100% Cost/Trigger coverage, Companions, Licids, and complex conditional effects.
+    let wave17_cards: &[(&str, &str, &str)] = &[
+        (
+            "Hylda of the Icy Crown",
+            "Legendary Creature - Human Warlock",
+            "Whenever you tap an untapped creature an opponent controls, you may pay {1}. When you do, choose one \u{2014}\n\u{2022} Create a 4/4 white and blue Elemental creature token.\n\u{2022} Put a +1/+1 counter on each creature you control.\n\u{2022} Scry 2, then draw a card.",
+        ),
+        (
+            "Caesar, Legion's Emperor",
+            "Legendary Creature - Human Soldier",
+            "Whenever you attack, you may sacrifice another creature. When you do, choose two \u{2014}\n\u{2022} Create two 1/1 red and white Soldier creature tokens with haste that are tapped and attacking.\n\u{2022} You draw a card and you lose 1 life.\n\u{2022} Caesar deals damage equal to the number of creature tokens you control to target opponent.",
+        ),
+        (
+            "Monastery Siege",
+            "Enchantment",
+            "As this enchantment enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your draw step, draw an additional card, then discard a card.\n\u{2022} Dragons \u{2014} Spells your opponents cast that target you or a permanent you control cost {2} more to cast.",
+        ),
+        (
+            "Season of Loss",
+            "Sorcery",
+            "Choose up to five {P} worth of modes. You may choose the same mode more than once.\n{P} \u{2014} Each player sacrifices a creature of their choice.\n{P}{P} \u{2014} Draw a card for each creature that died under your control this turn.\n{P}{P}{P} \u{2014} Each opponent loses X life, where X is the number of creature cards in your graveyard.",
+        ),
+        (
+            "Timely Reinforcements",
+            "Sorcery",
+            "If you have less life than an opponent, you gain 6 life. If you control fewer creatures than an opponent, create three 1/1 white Soldier creature tokens.",
+        ),
+        (
+            "Tishana's Tidebinder",
+            "Creature - Merfolk Wizard",
+            "Flash\nWhen this creature enters, counter up to one target activated or triggered ability. If an ability of an artifact, creature, or planeswalker is countered this way, that permanent loses all abilities for as long as this creature remains on the battlefield.",
+        ),
+        (
+            "Duskana, the Rage Mother",
+            "Legendary Creature - Bear",
+            "When Duskana enters, draw a card for each creature you control with base power and toughness 2/2.\nWhenever a creature you control with base power and toughness 2/2 attacks, it gets +3/+3 until end of turn.",
+        ),
+        (
+            "Zimone, All-Questioning",
+            "Legendary Creature - Human Wizard",
+            "At the beginning of your end step, if a land entered the battlefield under your control this turn and you control a prime number of lands, create Primo, the Indivisible, a legendary 0/0 green and blue Fractal creature token, then put that many +1/+1 counters on it.",
+        ),
+        (
+            "Preacher of the Schism",
+            "Creature - Vampire Cleric",
+            "Deathtouch\nWhenever this creature attacks the player with the most life or tied for most life, create a 1/1 white Vampire creature token with lifelink.\nWhenever this creature attacks while you have the most life or are tied for most life, you draw a card and you lose 1 life.",
+        ),
+        (
+            "Talion, the Kindly Lord",
+            "Legendary Creature - Faerie Noble",
+            "Flying\nAs Talion enters, choose a number between 1 and 10.\nWhenever an opponent casts a spell with mana value, power, or toughness equal to the chosen number, that player loses 2 life and you draw a card.",
+        ),
+        (
+            "Opposition Agent",
+            "Creature - Human Rogue",
+            "Flash\nYou control your opponents while they're searching their libraries.\nWhile an opponent is searching their library, they exile each card they find. You may play those cards for as long as they remain exiled, and you may spend mana as though it were mana of any color to cast them.",
+        ),
+        (
+            "Spy Kit",
+            "Artifact - Equipment",
+            "Equipped creature gets +1/+1 and has all names of nonlegendary creature cards in addition to its name.\nEquip {2}",
+        ),
+        (
+            "Zur's Weirding",
+            "Enchantment",
+            "Players play with their hands revealed.\nIf a player would draw a card, they reveal it instead. Then any other player may pay 2 life. If a player does, put that card into its owner's graveyard. Otherwise, that player draws a card.",
+        ),
+        (
+            "Lurrus of the Dream-Den",
+            "Legendary Creature - Cat Nightmare",
+            "Companion \u{2014} Each permanent card in your starting deck has mana value 2 or less.\nLifelink\nOnce during each of your turns, you may cast a permanent spell with mana value 2 or less from your graveyard.",
+        ),
+        (
+            "Quickening Licid",
+            "Creature - Licid",
+            "{1}{W}, {T}: This creature loses this ability and becomes an Aura enchantment with enchant creature. Attach it to target creature. You may pay {W} to end this effect.\nEnchanted creature has first strike.",
+        ),
+        (
+            "Ink-Treader Nephilim",
+            "Creature - Nephilim",
+            "Whenever a player casts an instant or sorcery spell, if that spell targets only this creature, copy the spell for each other creature that spell could target. Each copy targets a different one of those creatures.",
+        ),
+        (
+            "Unbound Flourishing",
+            "Enchantment",
+            "Whenever you cast a permanent spell with a mana cost that contains {X}, double the value of X.\nWhenever you cast an instant or sorcery spell or activate an ability, if that spell's mana cost or that ability's activation cost contains {X}, copy that spell or ability. You may choose new targets for the copy.",
+        ),
+        (
+            "Rowan, Scion of War",
+            "Legendary Creature - Human Wizard",
+            "Menace\n{T}: Spells you cast this turn that are black and/or red cost {X} less to cast, where X is the amount of life you lost this turn. Activate only as a sorcery.",
+        ),
+        (
+            "Sab-Sunen, Luxa Embodied",
+            "Legendary Creature - God",
+            "Reach, trample, indestructible\nSab-Sunen can't attack or block unless it has an even number of counters on it.\nAt the beginning of your first main phase, put a +1/+1 counter on Sab-Sunen. Then if it has an odd number of counters on it, draw two cards.",
+        ),
+        (
+            "Clay Golem",
+            "Artifact Creature - Golem",
+            "{6}, Roll a d8: Monstrosity X, where X is the result.\nBerserk \u{2014} When this creature becomes monstrous, destroy target permanent.",
+        ),
+    ];
+
+    for (name, type_line, text) in wave17_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // 1. Hylda of the Icy Crown -> Triggered ability with ReflexiveTrigger containing 3-mode Modal
+    let hylda = compile_v2_strict(
+        "Hylda of the Icy Crown",
+        "Legendary Creature - Human Warlock",
+        "Whenever you tap an untapped creature an opponent controls, you may pay {1}. When you do, choose one \u{2014}\n\u{2022} Create a 4/4 white and blue Elemental creature token.\n\u{2022} Put a +1/+1 counter on each creature you control.\n\u{2022} Scry 2, then draw a card.",
+        &vocab,
+    );
+    assert!(hylda.faces[0].abilities.iter().any(|a| matches!(
+        a,
+        Ability::Triggered { body, .. }
+            if body.iter().any(|e| matches!(
+                e,
+                Effect::ReflexiveTrigger(inner)
+                    if inner.iter().any(|ie| matches!(
+                        ie,
+                        Effect::PromptChoice { kind: ChoiceKind::Modal { modes, .. }, .. } if modes.len() == 3
+                    ))
+            ))
+    )));
+
+    // 2. Season of Loss -> Pawprint Spree with 3 modes
+    let season = compile_v2_strict(
+        "Season of Loss",
+        "Sorcery",
+        "Choose up to five {P} worth of modes. You may choose the same mode more than once.\n{P} \u{2014} Each player sacrifices a creature of their choice.\n{P}{P} \u{2014} Draw a card for each creature that died under your control this turn.\n{P}{P}{P} \u{2014} Each opponent loses X life, where X is the number of creature cards in your graveyard.",
+        &vocab,
+    );
+    assert!(season.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::PromptChoice { kind: ChoiceKind::Spree { modes }, .. } if modes.len() == 3
+    )));
+
+    // 3. Monastery Siege -> Replacement choice + Khans triggered + Dragons static cost modifier
+    let siege = compile_v2_strict(
+        "Monastery Siege",
+        "Enchantment",
+        "As this enchantment enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your draw step, draw an additional card, then discard a card.\n\u{2022} Dragons \u{2014} Spells your opponents cast that target you or a permanent you control cost {2} more to cast.",
+        &vocab,
+    );
+    assert!(!siege.faces[0].replacements.is_empty());
+    assert!(
+        siege.faces[0]
+            .abilities
+            .iter()
+            .any(|a| matches!(a, Ability::Triggered { .. }))
+    );
+    assert!(
+        siege.faces[0]
+            .statics
+            .iter()
+            .any(|s| matches!(s, StaticAbility::CostModifier { .. }))
+    );
+
+    // 4. Lurrus of the Dream-Den -> Companion + graveyard ZoneCastPermission
+    let lurrus = compile_v2_strict(
+        "Lurrus of the Dream-Den",
+        "Legendary Creature - Cat Nightmare",
+        "Companion \u{2014} Each permanent card in your starting deck has mana value 2 or less.\nLifelink\nOnce during each of your turns, you may cast a permanent spell with mana value 2 or less from your graveyard.",
+        &vocab,
+    );
+    assert!(
+        lurrus.faces[0]
+            .statics
+            .iter()
+            .any(|s| matches!(s, StaticAbility::ZoneCastPermission { .. }))
+    );
+
+    // 5. Clay Golem -> Activated ability with Mana + Roll-a-d8 ChooseObject cost
+    let golem = compile_v2_strict(
+        "Clay Golem",
+        "Artifact Creature - Golem",
+        "{6}, Roll a d8: Monstrosity X, where X is the result.\nBerserk \u{2014} When this creature becomes monstrous, destroy target permanent.",
+        &vocab,
+    );
+    assert!(golem.faces[0].abilities.iter().any(|a| matches!(
+        a,
+        Ability::Activated { cost, .. }
+            if cost.len() == 2 && cost.iter().any(|c| matches!(c, Cost::ChooseObject(_)))
+    )));
 }

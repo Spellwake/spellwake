@@ -1287,18 +1287,29 @@ pub(super) fn try_parse_player_verb_ext(
         ts.restore(cp);
     }
 
-    // 14. `repeat(s) this process [for ... | until no one ... | until all ...]`
-    //     (`Eureka`, `Hypergenesis`, `Plague of Vermin`, `Struggle for Sanity`, `Thieves' Auction`, `Equipoise`, `Kathril`, `Helm of Obedience`)
+    // 14. `repeat(s) this process [for ... | until no one ... | until all ... | except ...]`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["repeat", "this", "process"])
             || ts.eat_phrase(&["repeats", "this", "process"])
         {
-            if ts.eat_phrase(&["any", "number", "of", "times"]) || ts.eat_word("once") {
-                // Standard repeat-count suffix (`Ad Nauseam`, etc.)
+            if ts.eat_phrase(&["as", "many", "times", "as", "they", "choose"])
+                || ts.eat_phrase(&["as", "many", "times", "as", "you", "choose"])
+                || ts.eat_phrase(&["any", "number", "of", "times"])
+                || ts.eat_word("once")
+            {
+                // Standard repeat-count suffix
+            } else if ts.eat_word("except") {
+                if (ts.eat_phrase(&["that", "opponent", "can't", "choose"])
+                    || ts.eat_phrase(&["that", "player", "can't", "choose"]))
+                    && ts.eat_phrase(&["a", "card", "already", "chosen", "for"])
+                    && ts.eat_tilde()
+                {
+                    // Repeat exclusion clause
+                }
             } else if ts.eat_word("for") {
                 if try_parse(ts, parse_keyword_list).is_ok() {
-                    // `Kathril`: `for first strike, double strike, ...`
+                    // Keyword list repeat
                 } else {
                     while let Ok(_f) = try_parse(ts, parse_object_filter) {
                         let _ = ts.eat_comma();
@@ -1312,8 +1323,12 @@ pub(super) fn try_parse_player_verb_ext(
                 let _ = ts.eat_phrase(&["have", "been", "chosen"])
                     || ts.eat_phrase(&["have", "been", "exiled"])
                     || ts.eat_phrase(&["have", "been", "discarded"]);
+            } else if ts.eat_phrase(&[
+                "until", "both", "players'", "coins", "come", "up", "heads", "on", "the", "same",
+                "flip",
+            ]) {
+                // Coin-flip termination clause
             } else if ts.eat_word("until") {
-                // `Helm of Obedience`: `until a creature card or X cards have been put into their graveyard this way, whichever comes first`
                 let _ = try_parse(ts, parse_object_filter);
                 if ts.eat_word("or") {
                     let _ = opt(ts, parse_value_expr);
@@ -1330,6 +1345,144 @@ pub(super) fn try_parse_player_verb_ext(
                     player: actor,
                     mutation: PlayerMutation::Action(PlayerActionKind::RepeatProcessOnce),
                     duration: Duration::Instant,
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+    }
+
+    // 15. `note(s) (the number and kind of counters ... | the name of <subj>)`
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_word("note") || ts.eat_word("notes") {
+            if ts.eat_phrase(&[
+                "the", "number", "and", "kind", "of", "counters", "that", "were", "on",
+            ]) && try_parse(ts, parse_subject_ref).is_ok()
+            {
+                return Some(Ok((
+                    vec![Effect::BindVariable {
+                        var: VarName::X,
+                        expr: ValueExpr::PriorActionCount(PriorActionKind::ThatMany),
+                        body: Vec::new(),
+                    }],
+                    (),
+                )));
+            }
+            ts.restore(cp);
+            if (ts.eat_word("note") || ts.eat_word("notes"))
+                && ts.eat_phrase(&["the", "name", "of"])
+                && let Ok(s) = try_parse(ts, parse_subject_ref)
+            {
+                return Some(Ok((
+                    vec![Effect::PromptChoice {
+                        chooser: actor,
+                        kind: ChoiceKind::ChooseObject(s),
+                    }],
+                    (),
+                )));
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 16. `lock or unlock a door of <subj>`, `reorder your graveyard as you choose`, `guesses whether ...`, bidding verbs
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["lock", "or", "unlock", "a", "door", "of"])
+            && let Ok(s) = try_parse(ts, parse_subject_ref)
+        {
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseObject(s),
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["reorder", "your", "graveyard", "as", "you", "choose"])
+            || ts.eat_phrase(&["reorders", "their", "graveyard", "as", "they", "choose"])
+        {
+            return Some(Ok((
+                vec![Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::Action(PlayerActionKind::RepeatProcessOnce),
+                    duration: Duration::Instant,
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if (ts.eat_phrase(&["guesses", "whether"]) || ts.eat_phrase(&["guess", "whether"]))
+            && !ts.is_eof()
+        {
+            ts.pos = ts.tokens.len();
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseCharacteristic(CharacteristicKind::BinaryMode),
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["bid", "life"]) || ts.eat_phrase(&["bids", "life"]) {
+            if ts.eat_phrase(&["for", "control", "of"]) {
+                let _ = try_parse(ts, parse_subject_ref);
+            }
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseCharacteristic(CharacteristicKind::Number),
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["start", "the", "bidding", "with", "a", "bid", "of"])
+            && (ts.eat_phrase(&["any", "number"]) || try_parse(ts, parse_value_expr).is_ok())
+        {
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseCharacteristic(CharacteristicKind::Number),
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["top", "the", "high", "bid"])
+            || ts.eat_phrase(&["tops", "the", "high", "bid"])
+        {
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseCharacteristic(CharacteristicKind::Number),
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["decide", "whether", "to", "flip", "again"])
+            || ts.eat_phrase(&["decides", "whether", "to", "flip", "again"])
+        {
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseCharacteristic(CharacteristicKind::BinaryMode),
+                }],
+                (),
+            )));
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["choose", "how", "those", "creatures", "block"])
+            || ts.eat_phrase(&["chooses", "how", "those", "creatures", "block"])
+        {
+            return Some(Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: ChoiceKind::ChooseCharacteristic(CharacteristicKind::BinaryMode),
                 }],
                 (),
             )));
@@ -1440,6 +1593,21 @@ pub(super) fn try_parse_double_ext(
                 subject: SubjectRef::Player(actor),
                 mutation: ObjectMutation::DoubleCounters { kind: None },
                 duration: Duration::Instant,
+            }],
+            (),
+        )));
+    }
+    if ts.eat_phrase(&["the", "value", "of", "x"])
+        || ts.eat_phrase(&["the", "life", "stakes", "with", "each", "flip"])
+    {
+        return Some(Ok((
+            vec![Effect::BindVariable {
+                var: VarName::X,
+                expr: ValueExpr::Mul(
+                    Box::new(ValueExpr::Const(2)),
+                    Box::new(ValueExpr::Var(VarName::X)),
+                ),
+                body: Vec::new(),
             }],
             (),
         )));
@@ -1592,6 +1760,14 @@ pub(super) fn try_parse_roll_ext(
         }]
     };
     let _ = opt(ts, parse_for_each_expr);
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["and", "add"]) && try_parse(ts, parse_value_expr).is_ok() {
+            // Die roll modifier (`Roll a d20 and add <val>`)
+        } else {
+            ts.restore(acp);
+        }
+    }
     if ts.eat_phrase(&["and", "choose", "one", "result"])
         || ts.eat_phrase(&["and", "ignore", "the", "lower", "roll"])
         || ts.eat_phrase(&["and", "ignore", "all", "but", "the", "highest", "roll"])
@@ -1660,4 +1836,211 @@ pub(super) fn parse_trailing_play_mana_rider(
         }
     }
     ts.restore(cp);
+}
+
+/// Parse `gain(s) life and draw(s) cards equal to <val>` tail.
+pub(super) fn parse_gain_life_and_draw_tail(
+    ts: &mut TokenStream<'_>,
+    actor: PlayerRef,
+) -> PResult<(Vec<Effect>, ())> {
+    let val = parse_value_expr(ts)?;
+    Ok((
+        vec![
+            Effect::AdjustLife {
+                player: actor,
+                amount: val.clone(),
+                op: LifeOp::Gain,
+            },
+            Effect::ZoneOp {
+                actor,
+                op: ZoneOpKind::Draw,
+                subject: SubjectRef::Player(actor),
+                from: vec![ZoneRef {
+                    zone: ZoneKind::Library,
+                    owner: ZoneOwner::Default,
+                }],
+                to: Some(ZoneDest {
+                    zone: ZoneKind::Hand,
+                    owner: ZoneOwner::Default,
+                    library_position: None,
+                    library_order: None,
+                    under_control: None,
+                }),
+                modifiers: EntryModifiers::default(),
+                except: None,
+                count: Some(CountSpec {
+                    count: val,
+                    up_to: false,
+                    any_number: false,
+                }),
+            },
+        ],
+        (),
+    ))
+}
+
+/// Extended `play(s)` clauses (`play [up to] <N|X|an> additional land(s)` and `play lands and cast spells from ...`).
+pub(super) fn try_parse_play_ext(
+    ts: &mut TokenStream<'_>,
+    actor: PlayerRef,
+) -> Option<PResult<(Vec<Effect>, ())>> {
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&["an", "additional", "land"]) {
+        let dur =
+            super::subject_combat::parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+        return Some(Ok((
+            vec![Effect::MutatePlayer {
+                player: actor,
+                mutation: PlayerMutation::AdditionalLandPlay(1),
+                duration: dur,
+            }],
+            (),
+        )));
+    }
+    let _up_to = ts.eat_phrase(&["up", "to"]);
+    let land_n = ts
+        .next_number(false)
+        .map(|n| u8::try_from(n.max(1)).unwrap_or(1))
+        .or_else(|| ts.eat_word("x").then_some(0u8));
+    if let Some(n) = land_n
+        && (ts.eat_phrase(&["additional", "lands"]) || ts.eat_phrase(&["additional", "land"]))
+    {
+        let dur =
+            super::subject_combat::parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+        return Some(Ok((
+            vec![Effect::MutatePlayer {
+                player: actor,
+                mutation: PlayerMutation::AdditionalLandPlay(n),
+                duration: dur,
+            }],
+            (),
+        )));
+    }
+    ts.restore(cp);
+    if ts.eat_phrase(&["lands", "and", "cast", "spells", "from"]) {
+        let top_only = ts.eat_phrase(&["the", "top", "of"]);
+        let zone_opt = if eat_extended_cast_source(ts) {
+            Some(None)
+        } else {
+            try_parse(ts, parse_zone_ref).ok().map(Some)
+        };
+        if let Some(zone) = zone_opt {
+            let eat_free = |s: &mut TokenStream<'_>| {
+                s.eat_phrase(&["without", "paying", "their", "mana", "costs"])
+                    || s.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+            };
+            let _ = eat_free(ts);
+            let dur = super::subject_combat::parse_trailing_duration(ts)
+                .unwrap_or(Duration::UntilEndOfTurn);
+            let _ = eat_free(ts);
+            return Some(Ok((
+                vec![Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::ZoneCastPermission {
+                        player: actor,
+                        filter: None,
+                        subject: None,
+                        zone,
+                        mode: crate::v2::ir::CastPermissionMode::PlayFromZone {
+                            top_only,
+                            lands: true,
+                            spells: true,
+                        },
+                        condition: None,
+                    }),
+                    duration: dur,
+                }],
+                (),
+            )));
+        }
+    }
+    ts.restore(cp);
+    None
+}
+
+/// Extended `flip(s)` coin clauses (`flip a coin [N times | until ...]`, `flip <val> coins`).
+pub(super) fn try_parse_flip_ext(
+    ts: &mut TokenStream<'_>,
+    actor: PlayerRef,
+) -> Option<PResult<(Vec<Effect>, ())>> {
+    let cp = ts.checkpoint();
+    if !(ts.eat_word("flip") || ts.eat_word("flips")) {
+        return None;
+    }
+    let flip = Effect::MutatePlayer {
+        player: actor,
+        mutation: PlayerMutation::Action(PlayerActionKind::FlipCoin),
+        duration: Duration::Instant,
+    };
+    if ts.eat_phrase(&["a", "coin"]) {
+        let _ = opt(ts, |s| {
+            let v = s
+                .next_number(false)
+                .map(ValueExpr::Const)
+                .map_or_else(|| parse_value_expr(s), Ok)?;
+            if s.eat_word("times") {
+                Ok(v)
+            } else {
+                Err(s.err("expected times"))
+            }
+        });
+        let _ = ts.eat_word("or");
+        if ts.eat_phrase(&["until", "you", "lose", "a", "flip"])
+            || ts.eat_phrase(&["until", "they", "lose", "a", "flip"])
+        {
+            let _ = ts.eat_phrase(&["or", "choose", "to", "stop", "flipping"]);
+            let wcp = ts.checkpoint();
+            if !(ts.eat_comma() && ts.eat_phrase(&["whichever", "comes", "first"])) {
+                ts.restore(wcp);
+            }
+            return Some(Ok((
+                vec![Effect::Unless {
+                    body: vec![flip],
+                    payer: None,
+                    cost: None,
+                    condition: Some(crate::v2::ir::ConditionExpr::Not(Box::new(
+                        crate::v2::ir::ConditionExpr::Flag(
+                            crate::v2::ir::ConditionFlag::WonCoinFlip,
+                        ),
+                    ))),
+                }],
+                (),
+            )));
+        }
+        return Some(Ok((vec![flip], ())));
+    }
+    if let Ok(cnt) = try_parse(ts, parse_value_expr)
+        && ts.eat_word("coins")
+    {
+        return Some(Ok((
+            vec![Effect::ForEach {
+                over: ForEachDomain::Count(cnt),
+                body: vec![flip],
+            }],
+            (),
+        )));
+    }
+    ts.restore(cp);
+    None
+}
+
+/// Parse `for each other <flt> [or player] (that|the) spell [or ability] could target`.
+pub(super) fn try_eat_copy_for_each_target(ts: &mut TokenStream<'_>) -> Option<ValueExpr> {
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&["for", "each", "other"]) && try_parse(ts, parse_object_filter).is_ok() {
+        let _ = ts.eat_phrase(&["or", "player"]);
+        if [
+            &["that", "spell", "or", "ability", "could", "target"][..],
+            &["the", "spell", "or", "ability", "could", "target"][..],
+            &["that", "spell", "could", "target"][..],
+            &["the", "spell", "could", "target"][..],
+            &["that", "ability", "could", "target"][..],
+        ]
+        .iter()
+        .any(|p| ts.eat_phrase(p))
+        {
+            return Some(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+        }
+    }
+    ts.restore(cp);
+    None
 }
