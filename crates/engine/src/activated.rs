@@ -77,6 +77,10 @@ pub enum ActivationRestriction {
     MinClassLevel(u8),
     /// Activate only while this Case permanent is solved (CR 719.3b).
     SourceIsSolved,
+    /// Activate only while this Room permanent's specified door is unlocked (CR 709.5e).
+    RoomDoorUnlocked(crate::program::SplitHalf),
+    /// Activate only while this Room permanent's specified door is locked (CR 709.5e).
+    RoomDoorLocked(crate::program::SplitHalf),
     /// Activate only if your life total is at least this amount.
     ControllerLifeAtLeast(u16),
     /// Activate only if your life total is at most this amount.

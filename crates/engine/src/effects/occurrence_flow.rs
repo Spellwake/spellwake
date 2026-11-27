@@ -214,10 +214,29 @@ impl EffectWindow {
                 .delay_rebound(source, moved.after.id(), entry.controller());
         }
         let mut entry_counters = None;
+        let mut entry_door_unlocked = None;
         if let Some(movement) = &mut movement
             && movement.after.zone() == ObjectZone::Battlefield
             && movement.before.zone() != ObjectZone::Battlefield
         {
+            if let Some(half) = movement.before.split_half() {
+                let doors = self
+                    .characteristics
+                    .unlocked_doors
+                    .entry(movement.after.id())
+                    .or_default();
+                match half {
+                    crate::program::SplitHalf::Left => doors.left = true,
+                    crate::program::SplitHalf::Right => doors.right = true,
+                }
+                let fully_unlocked = doors.fully_unlocked();
+                entry_door_unlocked = Some((
+                    movement.after.id(),
+                    entry.controller(),
+                    half,
+                    fully_unlocked,
+                ));
+            }
             self.stage_resolution_entry_choice(movement.before.id(), movement.after.id())?;
             self.characteristics
                 .register_battlefield_entry(movement.after.id())?;
@@ -388,6 +407,14 @@ impl EffectWindow {
                 };
                 let mut rows = vec![value];
                 rows.extend(saga_completion);
+                if let Some((object, player, half, fully_unlocked)) = entry_door_unlocked {
+                    rows.push(RulesOccurrence::DoorUnlocked {
+                        object,
+                        player,
+                        half,
+                        fully_unlocked,
+                    });
+                }
                 if let Some((source, object, added)) = entry_counters {
                     rows.push(RulesOccurrence::CountersPlaced {
                         object,

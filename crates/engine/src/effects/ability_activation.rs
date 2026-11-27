@@ -2832,6 +2832,24 @@ impl EffectWindow {
             {
                 return Err(EffectError::ActivationConditionNotMet);
             }
+            ActivationRestriction::RoomDoorUnlocked(half)
+                if !self
+                    .characteristics
+                    .unlocked_doors
+                    .get(&source)
+                    .is_some_and(|doors| doors.is_unlocked(*half)) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::RoomDoorLocked(half)
+                if self
+                    .characteristics
+                    .unlocked_doors
+                    .get(&source)
+                    .is_some_and(|doors| doors.is_unlocked(*half)) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
             ActivationRestriction::ControllerLifeAtLeast(min)
                 if !self
                     .life

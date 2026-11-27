@@ -7664,6 +7664,7 @@ pub(in super::super) fn lower_instruction_seq(
             BoundRaw(&'a ValueExprAst, &'a str),
             ManaChoice(&'a [String]),
             ManaOrLife(&'a str, &'a ValueExprAst),
+            AnyMana,
         }
         fn expand_hybrid_mana_costs(raw: &str) -> Option<Vec<ManaCost>> {
             let (base, x_cnt, hybrids) = parse_mana_cost_full(raw)?;
@@ -7962,6 +7963,15 @@ pub(in super::super) fn lower_instruction_seq(
                 {
                     Some((default_player, OptManaSpec::ScaledTwiceX, &opt_inner[1..]))
                 }
+                Some(InstructionAst::PayAnyAmountOfMana { player }) => Some((
+                    if *player == PlayerRefAst::You {
+                        default_player
+                    } else {
+                        *player
+                    },
+                    OptManaSpec::AnyMana,
+                    &opt_inner[1..],
+                )),
                 Some(InstructionAst::PlayerPayCost {
                     player,
                     cost: CostAtomAst::PayMana(raw),
@@ -8130,6 +8140,18 @@ pub(in super::super) fn lower_instruction_seq(
                         payer,
                         fixed: ManaCost::free(),
                         extra_generic: scale_value_expr(x_val, 2),
+                        paid_destination: 0,
+                        declined_destination: 0,
+                    })
+                }
+                OptManaSpec::AnyMana => {
+                    if group_players.is_some() {
+                        return Err("oracle:unsupported-pay-any-mana");
+                    }
+                    Some(Instruction::OfferDynamicManaPayment {
+                        payer,
+                        fixed: ManaCost::free(),
+                        extra_generic: ValueExpr::chosen_x(),
                         paid_destination: 0,
                         declined_destination: 0,
                     })
@@ -8733,7 +8755,24 @@ pub(in super::super) fn lower_instruction_seq(
                     _ => {}
                 }
             }
-            // Standalone optional mana payment: emit OfferManaPayment directly without OptionalEffect.
+            // Standalone optional mana payment: emit OfferDynamicManaPayment directly without OptionalEffect.
+            if matches!(mana_spec, OptManaSpec::AnyMana) {
+                let offer_idx = builder.instructions.len();
+                builder.instructions.push(with_offer_dests(
+                    offer_template,
+                    offer_idx + 2,
+                    offer_idx + 1,
+                ));
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(
+                            ValueExpr::literal(0),
+                        ),
+                    )));
+                i += 1;
+                continue;
+            }
             let offer_idx = builder.instructions.len();
             builder.instructions.push(with_offer_dests(
                 offer_template,
@@ -13547,20 +13586,68 @@ pub(in super::super) fn lower_instruction_seq(
                         BodyTarget::SinglePlayer
                     })?;
                     if optional_choose {
-                        if trailing_target_draw.is_some() {
-                            builder.instructions.push(Instruction::OptionalSequence {
-                                chooser: ResolvingPlayer::Controller,
-                                instructions: 2,
-                            });
+                        let inspect_dest = if matches!(&ins[i], InstructionAst::RevealHand { .. }) {
+                            spellwake_engine::toolbox::ZoneDest::RevealOnly
                         } else {
-                            builder.instructions.push(Instruction::OptionalEffect {
-                                chooser: ResolvingPlayer::Controller,
+                            spellwake_engine::toolbox::ZoneDest::LookOnly {
+                                viewer: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            }
+                        };
+                        builder.instructions.push(Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                            ResolvingPlayer::TargetPlayer,
+                                        ),
+                                    )),
+                                    ObjectFilter::any(),
+                                ),
+                                inspect_dest,
+                            ),
+                        )));
+                        let mut take_ops = vec![Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
+                                minimum_mana_value,
+                                nonland_only,
+                                filter,
+                                nz,
+                                action,
+                            ),
+                        ))];
+                        if let Some(draw_amt) = trailing_target_draw {
+                            take_ops.push(Instruction::BranchIfFalse {
+                                condition: ResolutionCondition {
+                                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                    comparison: Comparison::GreaterOrEqual,
+                                    right: ValueExpr::literal(1),
+                                },
+                                destination: 3,
                             });
+                            take_ops.push(super::super::toolbox_emit::draw_target_player(draw_amt));
                         }
-                    }
-                    builder
-                        .instructions
-                        .push(Instruction::MutatePlayer(Box::new(
+                        builder.instructions.push(Instruction::ChooseOption {
+                            chooser: ResolvingPlayer::Controller,
+                            options: vec![
+                                ChooseOptionBranch {
+                                    label: "Choose card from revealed hand".to_owned(),
+                                    body: ExecutableBody::new(BodyTarget::None, take_ops),
+                                },
+                                ChooseOptionBranch {
+                                    label: "Decline".to_owned(),
+                                    body: ExecutableBody::new(
+                                        BodyTarget::None,
+                                        vec![Instruction::Jump { destination: 1 }],
+                                    ),
+                                },
+                            ],
+                        });
+                    } else {
+                        builder
+                            .instructions
+                            .push(Instruction::MutatePlayer(Box::new(
                             spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
                                 minimum_mana_value,
                                 nonland_only,
@@ -13569,10 +13656,11 @@ pub(in super::super) fn lower_instruction_seq(
                                 action,
                             ),
                         )));
-                    if let Some(draw_amt) = trailing_target_draw {
-                        builder
-                            .instructions
-                            .push(super::super::toolbox_emit::draw_target_player(draw_amt));
+                        if let Some(draw_amt) = trailing_target_draw {
+                            builder
+                                .instructions
+                                .push(super::super::toolbox_emit::draw_target_player(draw_amt));
+                        }
                     }
                     i += fused_step;
                     continue;

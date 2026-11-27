@@ -135,6 +135,40 @@ pub(crate) fn evaluate(
             defined.mana_value = mana_value;
         }
         let is_battlefield = physical.zone() == ObjectZone::Battlefield;
+        if is_battlefield
+            && copy_timestamp.is_none()
+            && physical.face_down().is_none()
+            && let Some(split) = program.split.as_deref()
+            && split.is_room()
+        {
+            let doors = world
+                .state
+                .unlocked_doors
+                .get(&physical.id())
+                .copied()
+                .unwrap_or_default();
+            match (doors.left, doors.right) {
+                (true, true) => {}
+                (true, false) => {
+                    defined.names = split.left.names.clone();
+                    defined.mana_value = split.left.mana_value();
+                    defined.colored_mana_symbols = split.left.colored_mana_symbols();
+                    defined.colors = split.left.defined_colors();
+                }
+                (false, true) => {
+                    defined.names = split.right.names.clone();
+                    defined.mana_value = split.right.mana_value();
+                    defined.colored_mana_symbols = split.right.colored_mana_symbols();
+                    defined.colors = split.right.defined_colors();
+                }
+                (false, false) => {
+                    defined.names = spellwake_contracts::names::ObjectNames::nameless();
+                    defined.mana_value = 0.into();
+                    defined.colored_mana_symbols.clear();
+                    defined.colors.clear();
+                }
+            }
+        }
         let power_toughness = (defined.types.contains(&CardType::Creature)
             || !is_battlefield && defined.printed_pt.is_some())
         .then(|| initial_pt(physical.id(), &defined));

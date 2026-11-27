@@ -1739,6 +1739,62 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 self_pronoun_valid,
                             );
                         }
+                        if filter.is_none()
+                            && subject.is_none()
+                            && let Some((subj_raw, supp)) = rule_body
+                                .strip_prefix("activated abilities of ")
+                                .and_then(|rest| {
+                                    rest.strip_suffix(
+                                        " can't be activated unless they're mana abilities",
+                                    )
+                                    .map(|s| (s.trim(), ActivationSuppression::NonMana))
+                                    .or_else(|| {
+                                        rest.strip_suffix(" can't be activated")
+                                            .map(|s| (s.trim(), ActivationSuppression::All))
+                                    })
+                                })
+                            && !subj_raw.is_empty()
+                        {
+                            let vocab_ref = cached_compiler_vocab(vocabulary);
+                            if let Ok(subj) =
+                                spellwake_oracle_compiler::filter::parse_subject_or_target(
+                                    subj_raw, &vocab_ref,
+                                )
+                            {
+                                let anaphora_has_perm_anchor =
+                                    !matches!(&subj, SubjectRefAst::Anaphora(_))
+                                        || is_permanent_body_target(builder.target)
+                                        || last_instruction_moved_object(&builder.instructions)
+                                        || last_instruction_created_tokens(&builder.instructions);
+                                if anaphora_has_perm_anchor
+                                    && (!eff_dur.requires_ability_source()
+                                        || in_trigger
+                                        || self_pronoun_valid)
+                                {
+                                    let lock_parts = vec![ResolvedPartSpec::Abilities(
+                                        AbilityChange {
+                                            suppressed_activations: Some(supp),
+                                            ..AbilityChange::default()
+                                        },
+                                    )];
+                                    let mut trial = builder.clone();
+                                    if emit_resolved_parts_for_subject(
+                                        &subj,
+                                        ResolvedPartsSpec(lock_parts),
+                                        eff_dur,
+                                        &mut trial,
+                                        vocabulary,
+                                        in_trigger,
+                                        self_pronoun_valid,
+                                    )
+                                    .is_ok()
+                                    {
+                                        *builder = trial;
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
                     }
                     if rule_low.contains("can't gain life") || rule_low == "cant_gain_life" {
                         let players = match subject.as_deref() {
@@ -3329,6 +3385,55 @@ pub(super) fn lower_restrictions_statics_instruction(
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(r_low.as_str(), "open an attraction" | "open one attraction")
+                || r_low
+                    .strip_prefix("open ")
+                    .and_then(|s| s.strip_suffix(" attractions"))
+                    .and_then(|n_raw| {
+                        let t = n_raw.trim();
+                        parse_small_number_word(t).or_else(|| t.parse::<u16>().ok())
+                    })
+                    .is_some_and(|n| (1..=10).contains(&n))
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let count = if matches!(r_low.as_str(), "open an attraction" | "open one attraction") {
+                1u16
+            } else {
+                r_low
+                    .strip_prefix("open ")
+                    .and_then(|s| s.strip_suffix(" attractions"))
+                    .and_then(|n_raw| {
+                        let t = n_raw.trim();
+                        parse_small_number_word(t).or_else(|| t.parse::<u16>().ok())
+                    })
+                    .ok_or("oracle:unsupported-instruction")?
+            };
+            for _ in 0..count {
+                builder.instructions.push(Instruction::SideDeckOp(Box::new(
+                    spellwake_engine::toolbox::SideDeckOpSpec {
+                        owner: Some(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        )),
+                        kind: spellwake_engine::toolbox::SideDeckKind::Attraction,
+                        op: spellwake_engine::toolbox::SideDeckOpKind::AdvanceTop,
+                        bind_succeeded: None,
+                    },
+                )));
+            }
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
         } if restriction.eq_ignore_ascii_case("choose new targets for it")
             || restriction.eq_ignore_ascii_case("choose a new target for it")
             || restriction.eq_ignore_ascii_case("you may choose new targets for it")
@@ -3356,24 +3461,49 @@ pub(super) fn lower_restrictions_statics_instruction(
                     | "play only as a sorcery"
                     | "cast it only as a sorcery"
                     | "play it only as a sorcery"
+                    | "any time you could cast a sorcery"
+                    | "only any time you could cast a sorcery"
             )
-        } && matches!(
-            builder.instructions.last(),
-            Some(Instruction::ApplyContinuous(spec))
-                if matches!(
-                    &spec.payload,
-                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
-                        if matches!(rule.as_ref(), TemporaryRuleKind::ZoneCastPermission { .. })
+        } && builder
+            .instructions
+            .iter()
+            .rev()
+            .take_while(|op| {
+                matches!(
+                    op,
+                    Instruction::ApplyContinuous(spec)
+                        if matches!(
+                            &spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(_)
+                        )
                 )
-        ) =>
+            })
+            .any(|op| {
+                matches!(
+                    op,
+                    Instruction::ApplyContinuous(spec)
+                        if matches!(
+                            &spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
+                                if matches!(rule.as_ref(), TemporaryRuleKind::ZoneCastPermission { .. })
+                        )
+                )
+            }) =>
         {
-            if let Some(Instruction::ApplyContinuous(spec)) = builder.instructions.last_mut()
-                && let spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) =
-                    &mut spec.payload
-                && let TemporaryRuleKind::ZoneCastPermission { sorcery_only, .. } = rule.as_mut()
-            {
-                *sorcery_only = true;
-                return Ok(());
+            for op in builder.instructions.iter_mut().rev() {
+                if let Instruction::ApplyContinuous(spec) = op
+                    && let spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) =
+                        &mut spec.payload
+                {
+                    if let TemporaryRuleKind::ZoneCastPermission { sorcery_only, .. } =
+                        rule.as_mut()
+                    {
+                        *sorcery_only = true;
+                        return Ok(());
+                    }
+                    continue;
+                }
+                break;
             }
             Err("oracle:unsupported-instruction")
         }
@@ -4465,14 +4595,20 @@ pub(super) fn lower_restrictions_statics_instruction(
             matches!(
                 r_low.as_str(),
                 "the token enters tapped and attacking"
+                    | "the tokens enter tapped and attacking"
                     | "those tokens enter tapped and attacking"
                     | "it enters tapped and attacking"
+                    | "they enter tapped and attacking"
                     | "the token enters tapped and attacking that player"
+                    | "the tokens enter tapped and attacking that player"
                     | "those tokens enter tapped and attacking that player"
                     | "it enters tapped and attacking that player"
+                    | "they enter tapped and attacking that player"
                     | "the token enters tapped and attacking defending player"
+                    | "the tokens enter tapped and attacking defending player"
                     | "those tokens enter tapped and attacking defending player"
                     | "it enters tapped and attacking defending player"
+                    | "they enter tapped and attacking defending player"
             )
         } =>
         {
@@ -4497,16 +4633,20 @@ pub(super) fn lower_restrictions_statics_instruction(
             let can_upgrade = matches!(
                 builder.instructions.last(),
                 Some(Instruction::CreateTokens { creations })
-                    if creations.len() == 1
-                        && creations[0].recipients == TokenRecipients::Controller
-                        && creations[0].definition.program().has_type(CardType::Creature)
+                    if !creations.is_empty()
+                        && creations.iter().all(|c| {
+                            c.recipients == TokenRecipients::Controller
+                                && c.definition.program().has_type(CardType::Creature)
+                        })
             );
             if can_upgrade
                 && let Some(Instruction::CreateTokens { creations }) =
                     builder.instructions.last_mut()
             {
-                creations[0].enters_tapped = true;
-                creations[0].attacking_defender = Some(defender_scope);
+                for creation in creations {
+                    creation.enters_tapped = true;
+                    creation.attacking_defender = Some(defender_scope);
+                }
                 return Ok(());
             }
             if let Some(last) = builder.instructions.last_mut() {
@@ -5376,6 +5516,86 @@ pub(super) fn lower_restrictions_statics_instruction(
                     }
                 }
             }
+            if let Some(who_str) = body.strip_suffix(" can't gain life") {
+                let mut trial = builder.clone();
+                let players_opt = match who_str.trim() {
+                    "players" | "each player" => Some(AffectedPlayers::EachPlayer),
+                    "you" => Some(AffectedPlayers::One(ResolvingPlayer::Controller)),
+                    "opponents" | "your opponents" | "each opponent" => {
+                        Some(AffectedPlayers::EachOpponent)
+                    }
+                    "target player" => trial
+                        .bind_target(BodyTarget::SinglePlayer)
+                        .ok()
+                        .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
+                    "target opponent" => trial
+                        .bind_target(BodyTarget::SingleOpponent)
+                        .ok()
+                        .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
+                    "that player" | "they" => lower_resolving_player_in_context(
+                        PlayerRefAst::ThatPlayer,
+                        &mut trial,
+                        in_trigger,
+                    )
+                    .ok()
+                    .map(AffectedPlayers::One),
+                    _ => None,
+                };
+                if let Some(players) = players_opt {
+                    trial.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::PlayerCantGainLife { players },
+                            dur,
+                        ),
+                    );
+                    *builder = trial;
+                    return Ok(());
+                }
+            }
+            if let Some((subj_raw, supp)) = body
+                .strip_prefix("activated abilities of ")
+                .and_then(|rest| {
+                    rest.strip_suffix(" can't be activated unless they're mana abilities")
+                        .map(|s| (s.trim(), ActivationSuppression::NonMana))
+                        .or_else(|| {
+                            rest.strip_suffix(" can't be activated")
+                                .map(|s| (s.trim(), ActivationSuppression::All))
+                        })
+                })
+                && !subj_raw.is_empty()
+                && (!dur.requires_ability_source() || in_trigger || self_pronoun_valid)
+            {
+                let vocab_ref = cached_compiler_vocab(vocabulary);
+                if let Ok(subj) =
+                    spellwake_oracle_compiler::filter::parse_subject_or_target(subj_raw, &vocab_ref)
+                {
+                    let anaphora_has_perm_anchor = !matches!(&subj, SubjectRefAst::Anaphora(_))
+                        || is_permanent_body_target(builder.target)
+                        || last_instruction_moved_object(&builder.instructions)
+                        || last_instruction_created_tokens(&builder.instructions);
+                    if anaphora_has_perm_anchor {
+                        let lock_parts = vec![ResolvedPartSpec::Abilities(AbilityChange {
+                            suppressed_activations: Some(supp),
+                            ..AbilityChange::default()
+                        })];
+                        let mut trial = builder.clone();
+                        if emit_resolved_parts_for_subject(
+                            &subj,
+                            ResolvedPartsSpec(lock_parts),
+                            dur,
+                            &mut trial,
+                            vocabulary,
+                            in_trigger,
+                            self_pronoun_valid,
+                        )
+                        .is_ok()
+                        {
+                            *builder = trial;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             if let Some((who_str, br)) = body
                 .strip_suffix(" can't attack")
                 .map(|w| (w.trim(), BlockingRestriction::CannotAttack))
@@ -5397,6 +5617,25 @@ pub(super) fn lower_restrictions_statics_instruction(
                             body.strip_suffix(" can't attack you or permanents you control")
                         })
                         .map(|w| (w.trim(), BlockingRestriction::CannotAttackSourceController))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" attacks each combat if able")
+                        .or_else(|| body.strip_suffix(" attack each combat if able"))
+                        .map(|w| (w.trim(), BlockingRestriction::MustAttackEachCombatIfAble))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" blocks each combat if able")
+                        .or_else(|| body.strip_suffix(" block each combat if able"))
+                        .map(|w| (w.trim(), BlockingRestriction::MustBlockEachCombatIfAble))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" must be blocked if able")
+                        .map(|w| (w.trim(), BlockingRestriction::MustBeBlocked))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" assigns no combat damage")
+                        .or_else(|| body.strip_suffix(" assign no combat damage"))
+                        .map(|w| (w.trim(), BlockingRestriction::AssignNoCombatDamage))
                 })
             {
                 let flt_opt = match who_str {
@@ -5420,6 +5659,37 @@ pub(super) fn lower_restrictions_statics_instruction(
                         ),
                     );
                     return Ok(());
+                }
+                if !who_str.is_empty()
+                    && (!dur.requires_ability_source() || in_trigger || self_pronoun_valid)
+                {
+                    let vocab_ref = cached_compiler_vocab(vocabulary);
+                    if let Ok(subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
+                        who_str, &vocab_ref,
+                    ) {
+                        let anaphora_has_perm_anchor =
+                            !matches!(&subj, SubjectRefAst::Anaphora(_))
+                                || is_permanent_body_target(builder.target)
+                                || last_instruction_moved_object(&builder.instructions)
+                                || last_instruction_created_tokens(&builder.instructions);
+                        if anaphora_has_perm_anchor {
+                            let mut trial = builder.clone();
+                            if emit_resolved_parts_for_subject(
+                                &subj,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                dur,
+                                &mut trial,
+                                vocabulary,
+                                in_trigger,
+                                self_pronoun_valid,
+                            )
+                            .is_ok()
+                            {
+                                *builder = trial;
+                                return Ok(());
+                            }
+                        }
+                    }
                 }
             }
             if body.contains("as though they didn't have hexproof")
@@ -8875,14 +9145,30 @@ pub(super) fn parse_temp_permanent_lock_parts(rule_body: &str) -> Option<Vec<Res
         | "cantactivateabilities"
         | "activated_abilities_cant_be_activated"
         | "cant_activate_abilities"
+        | "activated abilities can't be activated"
         | "its activated abilities can't be activated"
-        | "their activated abilities can't be activated" => {
+        | "their activated abilities can't be activated"
+        | "activated abilities of that permanent can't be activated"
+        | "activated abilities of that creature can't be activated"
+        | "activated abilities of that artifact can't be activated"
+        | "activated abilities of that enchantment can't be activated"
+        | "activated abilities of that land can't be activated"
+        | "activated abilities of that planeswalker can't be activated"
+        | "activated abilities of that source can't be activated" => {
             (false, Some(ActivationSuppression::All), false)
         }
         "nonmanaactivatedabilitiescantbeactivated"
         | "cant_activate_nonmana_abilities"
+        | "activated abilities can't be activated unless they're mana abilities"
         | "its activated abilities can't be activated unless they're mana abilities"
-        | "their activated abilities can't be activated unless they're mana abilities" => {
+        | "their activated abilities can't be activated unless they're mana abilities"
+        | "activated abilities of that permanent can't be activated unless they're mana abilities"
+        | "activated abilities of that creature can't be activated unless they're mana abilities"
+        | "activated abilities of that artifact can't be activated unless they're mana abilities"
+        | "activated abilities of that enchantment can't be activated unless they're mana abilities"
+        | "activated abilities of that land can't be activated unless they're mana abilities"
+        | "activated abilities of that planeswalker can't be activated unless they're mana abilities"
+        | "activated abilities of that source can't be activated unless they're mana abilities" => {
             (false, Some(ActivationSuppression::NonMana), false)
         }
         "detain"

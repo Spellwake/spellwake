@@ -3728,12 +3728,7 @@ mod wave12_token_ability_tests {
                 program_evidence: "test",
             };
             let result = compile_with_reason(&card, &vocab);
-            if name == "Hunt for Specimens" {
-                // Learn was unsupported before the E14 token AST migration.
-                assert_eq!(result.unwrap_err(), "oracle:unsupported-instruction");
-            } else {
-                result.unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
+            result.unwrap_or_else(|error| panic!("{name}: {error}"));
         }
     }
 }

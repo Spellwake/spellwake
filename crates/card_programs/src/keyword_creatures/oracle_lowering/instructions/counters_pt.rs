@@ -1,5 +1,25 @@
 use super::*;
 
+fn is_explicit_self_permanent_noun(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "this creature"
+            | "this permanent"
+            | "this artifact"
+            | "this enchantment"
+            | "this land"
+            | "this planeswalker"
+            | "this battle"
+            | "this saga"
+            | "this room"
+            | "this vehicle"
+            | "this equipment"
+            | "this aura"
+            | "this artifact creature"
+            | "this enchantment creature"
+    )
+}
+
 fn strip_battlefield_zone_from_subject(subject: &SubjectRefAst) -> SubjectRefAst {
     match subject {
         SubjectRefAst::InZone {
@@ -2691,6 +2711,21 @@ pub(super) fn lower_counters_pt_instruction(
                     s if has_source && is_self_pronoun(s, &trial, self_pronoun_valid) => {
                         Some(EffectSubject::AbilitySource)
                     }
+                    SubjectRefAst::Anaphora(raw)
+                        if has_source
+                            && (is_explicit_self_permanent_noun(raw)
+                                || (trial.target == BodyTarget::None
+                                    && matches!(
+                                        raw.trim().to_ascii_lowercase().as_str(),
+                                        "it" | "him" | "her"
+                                    )
+                                    && prior_op_acted_on_ability_source(&trial.instructions))) =>
+                    {
+                        Some(EffectSubject::AbilitySource)
+                    }
+                    SubjectRefAst::TriggerSubject if in_trigger => {
+                        Some(EffectSubject::TriggerSubject)
+                    }
                     SubjectRefAst::TargetObject {
                         filter,
                         count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
@@ -2882,19 +2917,40 @@ pub(super) fn lower_counters_pt_instruction(
                         | "of each kind already on it"
                         | "each kind already on it"
                         | "another counter of each kind already on it"
+                        | "an additional counter of each kind already on it"
                         | "a counter of each kind already on it"
+                        | "one of each kind already on it"
+                        | "one of each kind on it"
                         | "of each kind already there"
                         | "each kind already there"
                         | "of each kind already on that permanent"
                         | "of each kind already on that creature"
                         | "each kind of counter already on it"
+                        | "of each kind of counter already on it"
                         | "of each kind on it"
                         | "another counter of that kind"
                         | "a counter of each kind on it"
                         | "each kind of counter on it"
+                        | "of each kind of counter on it"
                         | "each kind of counter on that permanent"
+                        | "of each kind of counter on that permanent"
+                        | "of each kind of counter already on that permanent"
                         | "each kind of counter on that creature"
+                        | "of each kind of counter on that creature"
+                        | "of each kind of counter already on that creature"
                         | "another counter of each kind on it"
+                        | "an additional counter of each kind on it"
+                        | "another counter of each kind already on that permanent"
+                        | "another counter of each kind already on that creature"
+                        | "a counter of each kind already on that permanent"
+                        | "a counter of each kind already on that creature"
+                        | "of each kind already on them"
+                        | "each kind already on them"
+                        | "of each kind on them"
+                        | "each kind on them"
+                        | "a counter of each kind already on them"
+                        | "another counter of each kind already on them"
+                        | "an additional counter of each kind already on them"
                 )
             {
                 let eff_subject = match subject.as_ref() {
@@ -2932,6 +2988,21 @@ pub(super) fn lower_counters_pt_instruction(
                     s if has_source && is_self_pronoun(s, &trial, self_pronoun_valid) => {
                         Some(EffectSubject::AbilitySource)
                     }
+                    SubjectRefAst::Anaphora(raw)
+                        if has_source
+                            && (is_explicit_self_permanent_noun(raw)
+                                || (trial.target == BodyTarget::None
+                                    && matches!(
+                                        raw.trim().to_ascii_lowercase().as_str(),
+                                        "it" | "him" | "her"
+                                    )
+                                    && prior_op_acted_on_ability_source(&trial.instructions))) =>
+                    {
+                        Some(EffectSubject::AbilitySource)
+                    }
+                    SubjectRefAst::TriggerSubject if in_trigger => {
+                        Some(EffectSubject::TriggerSubject)
+                    }
                     SubjectRefAst::TargetObject {
                         filter,
                         count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
@@ -2963,19 +3034,27 @@ pub(super) fn lower_counters_pt_instruction(
                     SubjectRefAst::AttachedHost(_) if has_source => Some(EffectSubject::Matching(
                         ObjectFilter::Clause(ObjectClause::any().attached_to_self()),
                     )),
-                    SubjectRefAst::TriggerSubject if in_trigger => {
-                        Some(EffectSubject::TriggerSubject)
+                    SubjectRefAst::Anaphora(raw)
+                        if has_prior_token_creation(&trial.instructions)
+                            && raw.to_ascii_lowercase().contains("token") =>
+                    {
+                        Some(EffectSubject::CreatedTokens)
                     }
                     SubjectRefAst::Anaphora(_) if is_permanent_body_target(trial.target) => {
                         Some(EffectSubject::TargetObject)
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_created_tokens(&trial.instructions) =>
+                        if last_instruction_created_tokens(&trial.instructions)
+                            || (has_prior_token_creation(&trial.instructions)
+                                && !is_permanent_body_target(trial.target)
+                                && !has_prior_moved_object(&trial.instructions)) =>
                     {
                         Some(EffectSubject::CreatedTokens)
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_moved_object(&trial.instructions) =>
+                        if last_instruction_moved_object(&trial.instructions)
+                            || (!is_permanent_body_target(trial.target)
+                                && has_prior_moved_object(&trial.instructions)) =>
                     {
                         Some(EffectSubject::LastMoved)
                     }
@@ -3128,7 +3207,7 @@ pub(super) fn lower_counters_pt_instruction(
                     let branch_subject = match subject.as_ref() {
                         SubjectRefAst::TargetObject {
                             filter,
-                            count: TargetCountAst::Exact(1),
+                            count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                         } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                             let mut f_clean = filter.as_ref().clone();
                             f_clean.zone = None;
@@ -3136,17 +3215,36 @@ pub(super) fn lower_counters_pt_instruction(
                                 &f_clean, &trial, in_trigger, vocabulary,
                             )?;
                             trial.bind_target(bt)?;
+                            if *tc == TargetCountAst::UpTo(1) {
+                                trial.up_to_one_target = true;
+                            }
+                            SubjectRefAst::Anaphora("it".to_string())
+                        }
+                        SubjectRefAst::TargetOneOf {
+                            options,
+                            count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                        } => {
+                            let bt = lower_target_one_of_permanent_body_target(
+                                options, &trial, in_trigger, vocabulary,
+                            )?;
+                            trial.bind_target(bt)?;
+                            if *tc == TargetCountAst::UpTo(1) {
+                                trial.up_to_one_target = true;
+                            }
                             SubjectRefAst::Anaphora("it".to_string())
                         }
                         SubjectRefAst::TargetPlayer {
                             opponent_only,
-                            count: TargetCountAst::Exact(1),
+                            count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                         } => {
                             trial.bind_target(if *opponent_only {
                                 BodyTarget::SingleOpponent
                             } else {
                                 BodyTarget::SinglePlayer
                             })?;
+                            if *tc == TargetCountAst::UpTo(1) {
+                                trial.up_to_one_target = true;
+                            }
                             SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
@@ -3298,6 +3396,10 @@ pub(super) fn lower_counters_pt_instruction(
                             .strip_prefix("an additional ")
                             .or_else(|| k.strip_prefix("one additional "))
                             .or_else(|| k.strip_prefix("additional "))
+                            .or_else(|| k.strip_prefix("an extra "))
+                            .or_else(|| k.strip_prefix("one extra "))
+                            .or_else(|| k.strip_prefix("extra "))
+                            .or_else(|| k.strip_prefix("more "))
                             .or_else(|| k.strip_prefix("another "))
                             .or_else(|| k.strip_prefix("a "))
                             .or_else(|| k.strip_prefix("an "))
@@ -3319,15 +3421,15 @@ pub(super) fn lower_counters_pt_instruction(
                     if all_valid && parsed_items.len() >= 2 {
                         let follow_subject = match subject.as_ref() {
                             SubjectRefAst::TargetObject {
-                                count: TargetCountAst::Exact(1),
+                                count: TargetCountAst::Exact(1) | TargetCountAst::UpTo(1),
                                 ..
                             }
                             | SubjectRefAst::TargetOneOf {
-                                count: TargetCountAst::Exact(1),
+                                count: TargetCountAst::Exact(1) | TargetCountAst::UpTo(1),
                                 ..
                             } => Box::new(SubjectRefAst::Anaphora("it".to_string())),
                             SubjectRefAst::TargetPlayer {
-                                count: TargetCountAst::Exact(1),
+                                count: TargetCountAst::Exact(1) | TargetCountAst::UpTo(1),
                                 ..
                             }
                             | SubjectRefAst::Player(
@@ -3370,6 +3472,10 @@ pub(super) fn lower_counters_pt_instruction(
                 .or_else(|| kind_clean.strip_prefix("an additional "))
                 .or_else(|| kind_clean.strip_prefix("additional "))
                 .or_else(|| kind_clean.strip_prefix("one additional "))
+                .or_else(|| kind_clean.strip_prefix("an extra "))
+                .or_else(|| kind_clean.strip_prefix("one extra "))
+                .or_else(|| kind_clean.strip_prefix("extra "))
+                .or_else(|| kind_clean.strip_prefix("more "))
                 .or_else(|| kind_clean.strip_prefix("another "))
                 .or_else(|| kind_clean.strip_prefix("a "))
                 .or_else(|| kind_clean.strip_prefix("an "))
@@ -3390,7 +3496,14 @@ pub(super) fn lower_counters_pt_instruction(
                 })
                 .unwrap_or(kind_clean.trim_end_matches('.').trim())
                 .trim();
-            let ck = parse_counter_kind(kind_clean).ok_or("oracle:put-counter-kind")?;
+            let ck = if matches!(
+                kind_clean,
+                "same" | "of that kind" | "that kind" | "that_kind" | "same kind"
+            ) {
+                infer_prior_counter_kind(&builder.instructions).ok_or("oracle:put-counter-kind")?
+            } else {
+                parse_counter_kind(kind_clean).ok_or("oracle:put-counter-kind")?
+            };
             let amt = lower_value_expr_in_context(
                 resolve_x(count, bound_x),
                 builder,
@@ -3447,11 +3560,15 @@ pub(super) fn lower_counters_pt_instruction(
                 if let SubjectRefAst::Anaphora(raw) = subject.as_ref()
                     && is_player_anaphora_label(raw)
                 {
-                    let players = lower_affected_players_in_context(
-                        PlayerRefAst::ThatPlayer,
-                        builder,
-                        in_trigger,
-                    )?;
+                    let low_p = raw.trim().to_ascii_lowercase();
+                    let pref = if low_p.ends_with("controller") {
+                        PlayerRefAst::ItsController
+                    } else if low_p.ends_with("owner") {
+                        PlayerRefAst::ItsOwner
+                    } else {
+                        PlayerRefAst::ThatPlayer
+                    };
+                    let players = lower_affected_players_in_context(pref, builder, in_trigger)?;
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
                             spellwake_engine::toolbox::PlayerSelector::Group(players),
@@ -3510,8 +3627,95 @@ pub(super) fn lower_counters_pt_instruction(
                     bound_x,
                 );
             }
+            let has_source = in_trigger || self_pronoun_valid || builder.has_source;
+            if let SubjectRefAst::InZone {
+                subject: inner,
+                zone: ZoneFilter::Exile,
+            } = subject.as_ref()
+            {
+                let mut trial = builder.clone();
+                let query_opt = match inner.as_ref() {
+                    s if has_source && is_self_pronoun(s, &trial, self_pronoun_valid) => {
+                        Some(spellwake_engine::toolbox::ObjectQuery::Source)
+                    }
+                    SubjectRefAst::TriggerSubject if in_trigger => {
+                        Some(spellwake_engine::toolbox::ObjectQuery::TriggerSubject)
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if last_instruction_moved_object(&trial.instructions)
+                            || (is_last_moved_card_anaphora(raw)
+                                && has_prior_moved_object(&trial.instructions)) =>
+                    {
+                        Some(spellwake_engine::toolbox::ObjectQuery::LastMoved)
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                        if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0 && has_source =>
+                    {
+                        let mut f_clean = f.as_ref().clone();
+                        f_clean.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+                        f_clean.zone = None;
+                        if is_unrestricted_filter(&f_clean) {
+                            Some(spellwake_engine::toolbox::ObjectQuery::LinkedExile {
+                                group: None,
+                            })
+                        } else {
+                            let obj = lower_object_filter_in_context(
+                                &f_clean, &trial, in_trigger, vocabulary,
+                            )?;
+                            bind_filter_player_target(&mut trial, &obj)?;
+                            Some(spellwake_engine::toolbox::ObjectQuery::filtered(
+                                spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None },
+                                obj,
+                            ))
+                        }
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                        let mut f_clean = f.as_ref().clone();
+                        f_clean.zone = None;
+                        let obj = if is_unrestricted_filter(&f_clean) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter_in_context(
+                                &f_clean, &trial, in_trigger, vocabulary,
+                            )?
+                        };
+                        bind_filter_player_target(&mut trial, &obj)?;
+                        Some(spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Exile,
+                            obj,
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(query) = query_opt {
+                    trial.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                            query, ck, amt,
+                        ),
+                    );
+                    *builder = trial;
+                    return Ok(());
+                }
+            }
             match subject.as_ref() {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                            ck, amt,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if has_source
+                        && (is_explicit_self_permanent_noun(raw)
+                            || (builder.target == BodyTarget::None
+                                && matches!(
+                                    raw.trim().to_ascii_lowercase().as_str(),
+                                    "it" | "him" | "her"
+                                )
+                                && prior_op_acted_on_ability_source(&builder.instructions))) =>
+                {
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
                             ck, amt,
@@ -3887,6 +4091,33 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::Anaphora(_)
                     if try_append_fixed_first_target_counters(builder, ck, amt.clone()) =>
                 {
+                    Ok(())
+                }
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                    if (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0
+                        && matches!(f.zone, None | Some(ZoneFilter::Exile))
+                        && has_source =>
+                {
+                    let mut f_clean = f.as_ref().clone();
+                    f_clean.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
+                    f_clean.zone = None;
+                    let query = if is_unrestricted_filter(&f_clean) {
+                        spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None }
+                    } else {
+                        let obj = lower_object_filter_in_context(
+                            &f_clean, builder, in_trigger, vocabulary,
+                        )?;
+                        bind_filter_player_target(builder, &obj)?;
+                        spellwake_engine::toolbox::ObjectQuery::filtered(
+                            spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None },
+                            obj,
+                        )
+                    };
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                            query, ck, amt,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)

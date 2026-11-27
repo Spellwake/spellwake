@@ -872,7 +872,13 @@ impl EffectWindow {
                         binding: bind_item,
                         value: Box::new(ExecValue::Objects(vec![id])),
                     });
-                    expanded.extend(body.instructions.iter().cloned());
+                    let iter_offset = isize::try_from(expanded.len())
+                        .map_err(|_| EffectError::InconsistentProgram)?;
+                    for op in &body.instructions {
+                        let mut shifted = op.clone();
+                        shifted.shift_jumps(iter_offset, 0);
+                        expanded.push(shifted);
+                    }
                 }
                 self.splice_replacing_current(entry.id(), index, &expanded)?;
                 Ok(StepOutcome::Continue)
@@ -899,7 +905,13 @@ impl EffectWindow {
                         binding: bind_player,
                         value: Box::new(ExecValue::Players(vec![seat])),
                     });
-                    expanded.extend(body.instructions.iter().cloned());
+                    let iter_offset = isize::try_from(expanded.len())
+                        .map_err(|_| EffectError::InconsistentProgram)?;
+                    for op in &body.instructions {
+                        let mut shifted = op.clone();
+                        shifted.shift_jumps(iter_offset, 0);
+                        expanded.push(shifted);
+                    }
                 }
                 if bind_player == crate::toolbox::BindingId::LOOP_PLAYER {
                     expanded.push(Instruction::BindEnv {
