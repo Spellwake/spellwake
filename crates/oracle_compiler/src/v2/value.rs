@@ -97,12 +97,37 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                 None
             };
             if let Some(stat) = stat {
-                if !is_total && let Ok(subject) = try_parse(ts, parse_subject_ref) {
-                    return Ok(ValueExpr::ObjectStat {
-                        subject: Box::new(subject),
-                        stat,
-                    });
+                if !is_total {
+                    // Pick the longer parse between `parse_subject_ref` and `the + parse_object_filter`
+                    // so `the toughness of the card returned this way` doesn't stop after `the card`!
+                    let best_cp = ts.checkpoint();
+                    let subj_res = try_parse(ts, parse_subject_ref).ok();
+                    let subj_pos = ts.pos;
+                    ts.restore(best_cp);
+                    let flt_res = if ts.eat_word("the") || ts.eat_word("all") {
+                        try_parse(ts, parse_object_filter).ok()
+                    } else {
+                        None
+                    };
+                    let flt_pos = ts.pos;
+                    if let Some(flt) = flt_res
+                        && flt_pos > subj_pos
+                    {
+                        return Ok(ValueExpr::ObjectStat {
+                            subject: Box::new(SubjectRef::Group(Box::new(flt))),
+                            stat,
+                        });
+                    }
+                    if let Some(subject) = subj_res {
+                        ts.pos = subj_pos;
+                        return Ok(ValueExpr::ObjectStat {
+                            subject: Box::new(subject),
+                            stat,
+                        });
+                    }
+                    ts.restore(best_cp);
                 }
+                let _ = ts.eat_word("all") || ts.eat_word("the");
                 if let Ok(flt) = try_parse(ts, parse_object_filter) {
                     return Ok(ValueExpr::AggregateStat {
                         op: AggregateOp::Sum,
@@ -1384,9 +1409,41 @@ pub fn parse_for_each_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             Box::new(flt),
         ))));
     }
+    if matches!(
+        ts.peek().map(|t| &t.kind),
+        Some(TokenKind::Mana(ManaSymbol::Snow))
+    ) {
+        let scp = ts.checkpoint();
+        ts.next_tok();
+        if ts.eat_phrase(&["spent", "to", "cast"]) && (ts.eat_tilde() || ts.eat_word("it")) {
+            return Ok(ValueExpr::SnowManaSpent);
+        }
+        ts.restore(scp);
+    }
     if ts.eat_phrase(&["of", "its", "colors"]) {
         return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Anaphora(
             AnaphoraRef::It,
+        ))));
+    }
+    if ts.eat_phrase(&["of", "that", "spell's", "colors"]) {
+        return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Anaphora(
+            AnaphoraRef::ThatSpell,
+        ))));
+    }
+    if ts.eat_phrase(&["of", "the", "sacrificed", "creature's", "colors"])
+        || ts.eat_phrase(&["of", "the", "sacrificed", "permanent's", "colors"])
+    {
+        return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Anaphora(
+            AnaphoraRef::SacrificedObject,
+        ))));
+    }
+    if ts.eat_phrase(&["of", "that", "creature's", "colors"])
+        || ts.eat_phrase(&["of", "that", "permanent's", "colors"])
+        || ts.eat_phrase(&["of", "the", "exiled", "card's", "colors"])
+        || ts.eat_phrase(&["of", "the", "discarded", "card's", "colors"])
+    {
+        return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Anaphora(
+            AnaphoraRef::ThatObject,
         ))));
     }
     {

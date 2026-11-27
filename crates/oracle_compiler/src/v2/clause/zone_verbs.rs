@@ -246,14 +246,17 @@ fn parse_zone_verb_frame_inner(
     // 9. `sacrifice(s) ...`
     if ts.eat_word("sacrifice") || ts.eat_word("sacrifices") {
         // Handle anaphoric / `~` / `all <flt>` subjects (`Sacrifice it`, `Sacrifice ~`, `sacrifices all permanents in the pile of their choice`)
-        let is_explicit_subject = matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Tilde))
-            || ts.peek_word().is_some_and(|w| {
-                w.eq_ignore_ascii_case("it")
-                    || w.eq_ignore_ascii_case("them")
-                    || w.eq_ignore_ascii_case("all")
-                    || w.eq_ignore_ascii_case("that")
-                    || w.eq_ignore_ascii_case("those")
-            });
+        // Guard against `"that many"` which is a dynamic count (`sacrifice that many permanents`), not an explicit subject!
+        let is_that_many = ts.peek_phrase(&["that", "many"]);
+        let is_explicit_subject = !is_that_many
+            && (matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Tilde))
+                || ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("it")
+                        || w.eq_ignore_ascii_case("them")
+                        || w.eq_ignore_ascii_case("all")
+                        || w.eq_ignore_ascii_case("that")
+                        || w.eq_ignore_ascii_case("those")
+                }));
         if is_explicit_subject {
             let subject = parse_subject_ref(ts)?;
             return Ok((
@@ -283,40 +286,87 @@ fn parse_zone_verb_frame_inner(
         };
         let _ = ts.eat_phrase(&["of", "those"]);
         let flt = parse_object_filter(ts)?;
-        return Ok((
-            vec![Effect::ZoneOp {
-                actor,
-                op: ZoneOpKind::Sacrifice,
-                subject: SubjectRef::Group(Box::new(flt)),
-                from: vec![ZoneRef {
-                    zone: ZoneKind::Battlefield,
-                    owner: ZoneOwner::Default,
-                }],
-                to: None,
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: Some(CountSpec {
-                    count,
-                    up_to: false,
-                    any_number,
-                }),
+        let mut out = vec![Effect::ZoneOp {
+            actor,
+            op: ZoneOpKind::Sacrifice,
+            subject: SubjectRef::Group(Box::new(flt)),
+            from: vec![ZoneRef {
+                zone: ZoneKind::Battlefield,
+                owner: ZoneOwner::Default,
             }],
-            (),
-        ));
+            to: None,
+            modifiers: EntryModifiers::default(),
+            except: None,
+            count: Some(CountSpec {
+                count,
+                up_to: false,
+                any_number,
+            }),
+        }];
+        // Support conjoined `sacrifices <flt1> and <flt2> [of their choice]` (`Perilous Predicament`, `To the Slaughter`)
+        loop {
+            let scp = ts.checkpoint();
+            if ts.eat_word("and") {
+                let c2 = if ts.eat_word("a") || ts.eat_word("an") {
+                    ValueExpr::Const(1)
+                } else {
+                    try_parse(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1))
+                };
+                if let Ok(flt2) = try_parse(ts, parse_object_filter) {
+                    out.push(Effect::ZoneOp {
+                        actor,
+                        op: ZoneOpKind::Sacrifice,
+                        subject: SubjectRef::Group(Box::new(flt2)),
+                        from: vec![ZoneRef {
+                            zone: ZoneKind::Battlefield,
+                            owner: ZoneOwner::Default,
+                        }],
+                        to: None,
+                        modifiers: EntryModifiers::default(),
+                        except: None,
+                        count: Some(CountSpec {
+                            count: c2,
+                            up_to: false,
+                            any_number: false,
+                        }),
+                    });
+                    continue;
+                }
+            }
+            ts.restore(scp);
+            break;
+        }
+        return Ok((out, ()));
     }
 
-    // 10. `create(s) <token>`
+    // 10. `create(s) <token1> [, <token2>, and <token3>]`
     if ts.eat_word("create") || ts.eat_word("creates") {
         let (count, spec, modifiers) = parse_token_creation(ts)?;
-        return Ok((
-            vec![Effect::CreateToken {
-                controller: actor,
-                count,
-                spec,
-                modifiers,
-            }],
-            (),
-        ));
+        let mut out = vec![Effect::CreateToken {
+            controller: actor,
+            count,
+            spec,
+            modifiers,
+        }];
+        loop {
+            let tcp = ts.checkpoint();
+            let had_comma = ts.eat_comma();
+            let had_and = ts.eat_word("and");
+            if (had_comma || had_and)
+                && let Ok((c2, s2, m2)) = try_parse(ts, parse_token_creation)
+            {
+                out.push(Effect::CreateToken {
+                    controller: actor,
+                    count: c2,
+                    spec: s2,
+                    modifiers: m2,
+                });
+                continue;
+            }
+            ts.restore(tcp);
+            break;
+        }
+        return Ok((out, ()));
     }
 
     // 11. `destroy(s) <subj>`
@@ -433,6 +483,46 @@ fn parse_zone_verb_frame_inner(
                 ));
             }
             ts.restore(ecp);
+        }
+        // `exile <val> card(s) from the top of <lib>` (`Crumbling Sanctuary`: `exiles that many cards from the top of their library`)
+        {
+            let ttop_cp = ts.checkpoint();
+            if let Ok(count) = try_parse(ts, parse_value_expr)
+                && (ts.eat_word("cards") || ts.eat_word("card"))
+                && ts.eat_phrase(&["from", "the", "top", "of"])
+                && let Ok(zref) = try_parse(ts, parse_zone_ref)
+            {
+                let face_down = ts.eat_phrase(&["face", "down"]);
+                let counters = parse_exile_with_counters(ts);
+                return Ok((
+                    vec![Effect::ZoneOp {
+                        actor,
+                        op: ZoneOpKind::Exile {
+                            face_down,
+                            counters,
+                        },
+                        subject: SubjectRef::Group(Box::new(ObjectFilter {
+                            any_card: true,
+                            zones: vec![zref],
+                            ..Default::default()
+                        })),
+                        from: vec![zref],
+                        to: None,
+                        modifiers: EntryModifiers {
+                            face_down,
+                            ..EntryModifiers::default()
+                        },
+                        except: None,
+                        count: Some(CountSpec {
+                            count,
+                            up_to: false,
+                            any_number: false,
+                        }),
+                    }],
+                    (),
+                ));
+            }
+            ts.restore(ttop_cp);
         }
         // `exile a number of cards from the top of <lib> equal to <val>`
         {
@@ -812,16 +902,36 @@ fn parse_zone_verb_frame_inner(
             ts.restore(scp);
         }
         // 14a. `put a number of <kind> counters on <subj> equal to <val>`
+        //      OR `put a number of <kind> counters equal to <val> on <subj>` (`Ravenous Slime`)
         {
             let cp = ts.checkpoint();
             if ts.eat_phrase(&["a", "number", "of"])
                 && let Ok(kind) = try_parse(ts, parse_counter_kind)
                 && (ts.eat_word("counters") || ts.eat_word("counter"))
-                && ts.eat_word("on")
             {
-                let subject = parse_subject_ref(ts)?;
-                if ts.eat_phrase(&["equal", "to"]) {
-                    let count = parse_value_expr(ts)?;
+                if ts.eat_word("on")
+                    && let Ok(subject) = try_parse(ts, parse_subject_ref)
+                    && ts.eat_phrase(&["equal", "to"])
+                    && let Ok(count) = try_parse(ts, parse_value_expr)
+                {
+                    return Ok((
+                        vec![Effect::MutateObject {
+                            subject,
+                            mutation: ObjectMutation::PutCounters { kind, count },
+                            duration: Duration::Instant,
+                        }],
+                        (),
+                    ));
+                }
+                ts.restore(cp);
+                if ts.eat_phrase(&["a", "number", "of"])
+                    && let Ok(kind) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counters") || ts.eat_word("counter"))
+                    && ts.eat_phrase(&["equal", "to"])
+                    && let Ok(count) = try_parse(ts, parse_value_expr)
+                    && ts.eat_word("on")
+                    && let Ok(subject) = try_parse(ts, parse_subject_ref)
+                {
                     return Ok((
                         vec![Effect::MutateObject {
                             subject,

@@ -1128,6 +1128,156 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             PriorActionKind::ExiledThisWay,
         )));
     }
+    // `a player other than you lost life this turn` (`Ludevic, Necro-Alchemist`)
+    if ts.eat_phrase(&[
+        "a", "player", "other", "than", "you", "lost", "life", "this", "turn",
+    ]) {
+        return Ok(ConditionExpr::PlayerCheck {
+            player: PlayerRef::EachOtherPlayer,
+            kind: PlayerConditionKind::LostLifeThisTurn,
+        });
+    }
+    // `an opponent had <a/an/N [or more]> <flt> enter [the battlefield] under their control this turn` (`Baloth Cage Trap`, `Whiplash Trap`)
+    {
+        let ocp = ts.checkpoint();
+        if ts.eat_phrase(&["an", "opponent", "had"]) {
+            let min_count = if ts.eat_word("a") || ts.eat_word("an") {
+                1u16
+            } else if let Some(n) = ts.next_number(false) {
+                let _ = ts.eat_phrase(&["or", "more"]);
+                u16::try_from(n.max(1)).unwrap_or(1)
+            } else {
+                1u16
+            };
+            if let Ok(flt) = try_parse(ts, parse_object_filter)
+                && (ts.eat_phrase(&[
+                    "enter",
+                    "the",
+                    "battlefield",
+                    "under",
+                    "their",
+                    "control",
+                    "this",
+                    "turn",
+                ]) || ts.eat_phrase(&["enter", "under", "their", "control", "this", "turn"]))
+            {
+                return Ok(ConditionExpr::PermanentEnteredThisTurn {
+                    filter: Box::new(flt),
+                    controller: PlayerRef::AnyOpponent,
+                    min_count,
+                });
+            }
+        }
+        ts.restore(ocp);
+    }
+    // `an opponent drew <N> or more cards this turn` (`Runeflare Trap`)
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["an", "opponent", "drew"])
+            && let Some(n) = ts.next_number(false)
+            && ts.eat_phrase(&["or", "more", "cards", "this", "turn"])
+        {
+            return Ok(ConditionExpr::PlayerTurnEvent {
+                player: PlayerRef::AnyOpponent,
+                event: TurnEventKind::CardDrawn,
+                filter: None,
+                min_count: u16::try_from(n.max(1)).unwrap_or(1),
+            });
+        }
+        ts.restore(dcp);
+    }
+    // `exactly <N> <flt> is/are attacking` (`Pitfall Trap`)
+    {
+        let ecp = ts.checkpoint();
+        if ts.eat_word("exactly")
+            && let Some(n) = ts.next_number(false)
+            && let Ok(mut flt) = try_parse(ts, parse_object_filter)
+            && (ts.eat_phrase(&["is", "attacking"]) || ts.eat_phrase(&["are", "attacking"]))
+        {
+            flt.combat = Some(crate::ast::CombatState::Attacking);
+            return Ok(ConditionExpr::Compare {
+                lhs: Box::new(crate::v2::ir::ValueExpr::Count(Box::new(flt))),
+                op: CompareOp::Eq,
+                rhs: Box::new(crate::v2::ir::ValueExpr::Const(n)),
+            });
+        }
+        ts.restore(ecp);
+    }
+    // `it shares a color / creature type with <flt>` (`Jaded Response`)
+    {
+        let scp = ts.checkpoint();
+        if (ts.eat_word("it") || ts.eat_tilde()) && ts.eat_phrase(&["shares", "a"]) {
+            let kind = if ts.eat_word("color") {
+                Some(crate::v2::ir::SharedProperty::Color)
+            } else if ts.eat_phrase(&["creature", "type"]) {
+                Some(crate::v2::ir::SharedProperty::CreatureType)
+            } else if ts.eat_phrase(&["card", "type"]) {
+                Some(crate::v2::ir::SharedProperty::CardType)
+            } else {
+                None
+            };
+            if let Some(kind) = kind
+                && ts.eat_word("with")
+                && let Ok(other) = try_parse(ts, parse_subject_ref)
+            {
+                return Ok(ConditionExpr::SharesTypeWith {
+                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                    other: Box::new(other),
+                    kind,
+                });
+            }
+        }
+        ts.restore(scp);
+    }
+    // `~ is the only <flt> in <zone>` (`Nether Spirit`)
+    {
+        let ncp = ts.checkpoint();
+        if (ts.eat_tilde() || ts.eat_word("it"))
+            && ts.eat_phrase(&["is", "the", "only"])
+            && let Ok(mut flt) = try_parse(ts, parse_object_filter)
+        {
+            if flt.zones.is_empty()
+                && ts.eat_word("in")
+                && let Ok(zref) = try_parse(ts, parse_zone_ref)
+            {
+                flt.zones.push(zref);
+            }
+            if !flt.zones.is_empty() {
+                return Ok(ConditionExpr::Compare {
+                    lhs: Box::new(crate::v2::ir::ValueExpr::Count(Box::new(flt))),
+                    op: CompareOp::Eq,
+                    rhs: Box::new(crate::v2::ir::ValueExpr::Const(1)),
+                });
+            }
+        }
+        ts.restore(ncp);
+    }
+
+    if ts.eat_phrase(&[
+        "a",
+        "permanent",
+        "left",
+        "the",
+        "battlefield",
+        "under",
+        "your",
+        "control",
+        "this",
+        "turn",
+    ]) || ts.eat_phrase(&[
+        "a",
+        "permanent",
+        "you",
+        "controlled",
+        "left",
+        "the",
+        "battlefield",
+        "this",
+        "turn",
+    ]) {
+        return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
+    }
+
     if ts.eat_phrase(&["a", "creature", "died", "this", "turn"])
         || ts.eat_phrase(&[
             "a", "creature", "died", "under", "your", "control", "this", "turn",
