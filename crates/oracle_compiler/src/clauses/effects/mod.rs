@@ -3510,9 +3510,9 @@ pub fn parse_atomic_effect(
         ]);
     }
 
-    // Compound ", then " split (outside quotes), supporting 3-step "<subj> <v1>, <v2>, then <v3>"
+    // Compound ", then " split (outside quotes and villainous-choice frames), supporting 3-step "<subj> <v1>, <v2>, then <v3>"
     // with shared-subject carry-forward BEFORE bare 3rd-person fallback so player refs are never lost.
-    if low.contains(", then ") && !s.contains('"') {
+    if low.contains(", then ") && !s.contains('"') && !low.contains("villainous choice") {
         let comma_parts = split_top_level(s, ", ");
         if comma_parts.len() >= 3
             && comma_parts.len() <= 4
@@ -3799,7 +3799,7 @@ pub fn parse_atomic_effect(
         return Ok(pt_ins);
     }
 
-    if let Some(ab_ins) = try_parse_modify_abilities(s_nodur, &dur, vocab) {
+    if let Some(ab_ins) = try_parse_modify_abilities(s_nodur, &dur_perm, vocab) {
         return Ok(ab_ins);
     }
 
@@ -4130,7 +4130,7 @@ pub fn parse_atomic_effect(
             duration: DurationAst::UntilEndOfTurn,
         });
     }
-    if low.contains("additional combat phase") {
+    if is_standalone_additional_combat_clause(&low) {
         return Ok(vec![InstructionAst::AdditionalCombat(s.to_string())]);
     }
     if let Some(who_raw) = low
@@ -4326,13 +4326,25 @@ pub fn parse_atomic_effect(
     }
 
     // Compound ", and " split (outside quotes) BEFORE plain " and " so trailing commas never break the left half!
-    if low.contains(", and ") && !s.contains('"') {
+    if low.contains(", and ") && !s.contains('"') && !low.contains("villainous choice") {
         let parts = split_top_level(s, ", and ");
         if parts.len() >= 2 {
+            let lead_subj = extract_leading_subject_prefix(parts[0].trim());
             let mut seq = Vec::new();
             let mut ok = true;
-            for p in &parts {
-                match parse_atomic_effect(p, vocab) {
+            for (idx_p, p) in parts.iter().enumerate() {
+                let pt = p.trim();
+                let parsed = if idx_p > 0
+                    && let Some(subj) = lead_subj
+                    && !subj.eq_ignore_ascii_case("you")
+                    && starts_with_predicate_verb(pt)
+                {
+                    parse_atomic_effect(&format!("{subj} {pt}"), vocab)
+                        .or_else(|_| parse_atomic_effect(pt, vocab))
+                } else {
+                    parse_atomic_effect(pt, vocab)
+                };
+                match parsed {
                     Ok(sub) => seq.extend(sub),
                     Err(_) => {
                         ok = false;
@@ -4347,7 +4359,7 @@ pub fn parse_atomic_effect(
     }
 
     // Compound " and " split (quote-aware via split_top_level, scanning split points with shared-subject carry-forward!)
-    if low.contains(" and ") {
+    if low.contains(" and ") && !low.contains("villainous choice") {
         let and_parts = split_top_level(s, " and ");
         if and_parts.len() >= 2 {
             for split_idx in 1..and_parts.len() {
@@ -4357,6 +4369,93 @@ pub fn parse_atomic_effect(
                 let right_s = right_owned.trim();
                 let llow = left_s.to_ascii_lowercase();
                 let rlow = right_s.to_ascii_lowercase();
+                let right_is_predicate = [
+                    "deals ",
+                    "deal ",
+                    "gets ",
+                    "get ",
+                    "gains ",
+                    "gain ",
+                    "loses ",
+                    "lose ",
+                    "can ",
+                    "can't ",
+                    "has ",
+                    "have ",
+                    "becomes ",
+                    "become ",
+                    "doesn't ",
+                    "don't ",
+                    "attacks ",
+                    "attack ",
+                    "blocks ",
+                    "block ",
+                    "discards ",
+                    "discard ",
+                    "reveals ",
+                    "reveal ",
+                    "exiles ",
+                    "exile ",
+                    "sacrifices ",
+                    "sacrifice ",
+                    "puts ",
+                    "put ",
+                    "returns ",
+                    "return ",
+                    "must ",
+                    "draws ",
+                    "draw ",
+                    "taps ",
+                    "tap ",
+                    "untaps ",
+                    "untap ",
+                    "creates ",
+                    "create ",
+                    "searches ",
+                    "search ",
+                    "shuffles",
+                    "shuffle",
+                    "mills ",
+                    "mill ",
+                    "adds ",
+                    "add ",
+                    "chooses ",
+                    "choose ",
+                    "copies ",
+                    "copy ",
+                    "plays ",
+                    "play ",
+                    "casts ",
+                    "cast ",
+                    "scries ",
+                    "scry ",
+                    "surveils ",
+                    "surveil ",
+                    "investigates",
+                    "investigate",
+                    "pays ",
+                    "pay ",
+                    "is ",
+                    "are ",
+                    "isn't ",
+                    "aren't ",
+                ]
+                .iter()
+                .any(|p| rlow.starts_with(p));
+                // Carry forward an explicit non-"you" leading subject BEFORE trying bare
+                // `parse_atomic_effect(right_s)`, otherwise player verbs like "draws a card" or
+                // "lose 4 life" silently default to PlayerRefAst::You!
+                if right_is_predicate
+                    && let Some(subj_prefix) = extract_leading_subject_prefix(left_s)
+                    && !subj_prefix.eq_ignore_ascii_case("you")
+                    && let (Ok(mut l), Ok(r)) = (
+                        parse_atomic_effect(left_s, vocab),
+                        parse_atomic_effect(&format!("{subj_prefix} {right_s}"), vocab),
+                    )
+                {
+                    l.extend(r);
+                    return Ok(l);
+                }
                 let right_starts_verb = [
                     "you ",
                     "put ",
@@ -4425,71 +4524,6 @@ pub fn parse_atomic_effect(
                     l.extend(r);
                     return Ok(l);
                 }
-                let right_is_predicate = [
-                    "deals ",
-                    "deal ",
-                    "gets ",
-                    "get ",
-                    "gains ",
-                    "gain ",
-                    "loses ",
-                    "lose ",
-                    "can ",
-                    "can't ",
-                    "has ",
-                    "have ",
-                    "becomes ",
-                    "become ",
-                    "doesn't ",
-                    "don't ",
-                    "attacks ",
-                    "attack ",
-                    "blocks ",
-                    "block ",
-                    "discards ",
-                    "discard ",
-                    "reveals ",
-                    "reveal ",
-                    "exiles ",
-                    "exile ",
-                    "sacrifices ",
-                    "sacrifice ",
-                    "puts ",
-                    "put ",
-                    "returns ",
-                    "return ",
-                    "must ",
-                    "draws ",
-                    "draw ",
-                    "taps ",
-                    "tap ",
-                    "untaps ",
-                    "untap ",
-                    "creates ",
-                    "create ",
-                    "searches ",
-                    "search ",
-                    "shuffles",
-                    "shuffle",
-                    "mills ",
-                    "mill ",
-                    "adds ",
-                    "add ",
-                    "chooses ",
-                    "choose ",
-                    "copies ",
-                    "copy ",
-                    "plays ",
-                    "play ",
-                    "casts ",
-                    "cast ",
-                    "is ",
-                    "are ",
-                    "isn't ",
-                    "aren't ",
-                ]
-                .iter()
-                .any(|p| rlow.starts_with(p));
                 if right_is_predicate
                     && let Some(subj_prefix) = extract_leading_subject_prefix(left_s)
                     && let (Ok(mut l), Ok(r)) = (
@@ -4608,6 +4642,7 @@ pub fn parse_atomic_effect(
 
     // Top-level ", then " sequence splitting outside quotes (with shared-subject carry-forward)
     if s.contains(", then ")
+        && !low.contains("villainous choice")
         && !(low.starts_with("if ")
             || low.starts_with("when ")
             || low.starts_with("whenever ")
@@ -5557,11 +5592,17 @@ pub fn parse_atomic_effect(
         && let Some((subj_raw, cond_raw)) = after.split_once(" if it has ")
         && let Ok(subject) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        let status = cond_raw
+        let status = match cond_raw
             .trim()
             .strip_suffix(" in its mana cost")
             .unwrap_or(cond_raw.trim())
-            .replace(' ', "_");
+        {
+            "a mana ability" => "has_mana_ability".to_string(),
+            "cycling" => "cycling".to_string(),
+            "flash" => "flash".to_string(),
+            "flying" => "flying".to_string(),
+            other => other.to_string(),
+        };
         return ok1(ins_if(
             cond_status(subject.clone(), status),
             vec![ins_opt1(InstructionAst::RevealByPlayer {
@@ -5903,6 +5944,36 @@ fn split_leading_player_verb<'a>(
         }
     }
     None
+}
+
+/// True when a sentence is a standalone additional-combat clause (not a compound sentence
+/// carrying an `if` condition, an `untap` action, or a chained `, then ` / ` and ` action).
+fn is_standalone_additional_combat_clause(low: &str) -> bool {
+    if !low.contains("additional combat phase") {
+        return false;
+    }
+    if low.starts_with("if ")
+        || low.starts_with("untap ")
+        || low.contains(" if ")
+        || low.contains(", then ")
+        || low.contains(" untap ")
+        || low.contains(", and ")
+    {
+        return false;
+    }
+    if low.contains(" and ")
+        && !low.contains("and after this")
+        && !low.contains("and an additional main phase")
+        && !low.contains("followed by an additional")
+    {
+        return false;
+    }
+    low.contains("there is an additional combat phase")
+        || low.contains("there's an additional combat phase")
+        || low.contains("get an additional combat phase")
+        || low.contains("gets an additional combat phase")
+        || low.contains("take an additional combat phase")
+        || low.contains("takes an additional combat phase")
 }
 
 /// Extract the leading subject phrase from a `<subj> <verb> ...` clause for shared-subject carry-forward.

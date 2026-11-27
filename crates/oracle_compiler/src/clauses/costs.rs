@@ -881,9 +881,19 @@ pub(crate) fn peel_leading_count<'a>(s: &'a str, vocab: &Vocabulary) -> (ValueEx
         s,
         &["another ", "an additional ", "a number of ", "number of "],
     )
-    .unwrap_or(s);
+    .unwrap_or(s)
+    .trim();
     if let Some(rest) = s.strip_prefix("that many ") {
         return (ValueExprAst::PriorResult, rest.trim());
+    }
+    if s == "a" || s == "an" {
+        return (ValueExprAst::Const(1), "");
+    }
+    if s == "x" {
+        return (ValueExprAst::ChosenX, "");
+    }
+    if let Some(n) = parse_number_word(s) {
+        return (ValueExprAst::Const(n), "");
     }
     if let Some((first, rest)) = s.split_once(' ') {
         if first == "x" {

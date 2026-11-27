@@ -1441,7 +1441,6 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         "you're attacking two or more opponents",
         "at least one creature is blocking ~",
         "ten or more lands are on the battlefield",
-        "there are twenty-five or more loyalty counters among jaces you control",
         "mana from a treasure was spent to cast it or activate it",
         "two or more equipment are attached to it",
         "an enchantment was put into your graveyard from the battlefield this turn",
@@ -3873,14 +3872,11 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             | "they guessed right"
             | "that player pays only {1}"
             | "that library contains exactly the chosen number of cards with the chosen name"
-            | "you've cast a spell named peer through depths and a spell named reach through mists this turn"
             | "you've surveilled this turn"
             | "you win the bidding"
             | "no creature got votes"
             | "you do and your opponent guessed wrong"
             | "you are one of those players"
-            | "each opponent chose snitch"
-            | "each opponent chose silence"
             | "none of those creatures attacked you"
             | "they guessed wrong"
             | "the exploited creature had power 3 or greater"
@@ -4093,10 +4089,37 @@ fn parse_typed_status_and_event_condition(low: &str, vocab: &Vocabulary) -> Opti
             parse_subject_or_target(other_raw.trim(), vocab),
         )
     {
+        let property = match prop_raw.trim() {
+            "card type" => "card_type",
+            "permanent type" => "permanent_type",
+            "creature type" => "creature_type",
+            "land type" => "land_type",
+            "color" => "color",
+            "name" => "name",
+            "mana value" => "mana_value",
+            other => other,
+        };
         return Some(ConditionAst::SharesPropertyWith {
             subject: Box::new(subj),
             other: Box::new(other),
-            property: prop_raw.trim().replace(' ', "_"),
+            property: property.to_string(),
+        });
+    }
+    // Compositional "<player> chose <named choice>" (e.g. secret/council choices)
+    if (low.starts_with("each opponent chose ") || low.starts_with("each player chose "))
+        && low.split_whitespace().count() <= 6
+    {
+        return Some(ConditionAst::EventOccurredThisTurn {
+            event: low.to_string(),
+        });
+    }
+    // Compositional "you've cast a spell named <A> and a spell named <B> this turn"
+    if let Some(after) = low.strip_prefix("you've cast a spell named ")
+        && after.contains(" and a spell named ")
+        && after.ends_with(" this turn")
+    {
+        return Some(ConditionAst::EventOccurredThisTurn {
+            event: low.to_string(),
         });
     }
     if let Some(after) = low.strip_prefix("you have ")

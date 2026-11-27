@@ -1928,19 +1928,37 @@ pub fn parse_static_or_replacement(
                 };
             if let Some(is_less) = less {
                 let raw_left = s[..idx].trim();
-                let (subj_part, _target_clause) = match raw_left.split_once(" that target ") {
+                let (subj_part, target_clause) = match raw_left.split_once(" that target ") {
                     Some((l, t)) => (l.trim(), Some(t.trim())),
                     None => (raw_left, None),
                 };
+                let sp_low = subj_part.to_ascii_lowercase();
+                let cast_outside_hand =
+                    sp_low.contains(" you cast from anywhere other than your hand");
+                let cast_not_owned = sp_low.contains(" you cast but don't own");
+                let cast_by_opps =
+                    sp_low.contains(" your opponents cast") || sp_low.contains(" opponents cast");
+                let cast_by_opp = sp_low.contains(" an opponent casts");
+                let cast_by_ench = sp_low.contains(" enchanted player casts");
+                let cast_by_you =
+                    !cast_outside_hand && !cast_not_owned && sp_low.contains(" you cast");
                 let subj_raw = subj_part
                     .replace(" you cast from anywhere other than your hand", "")
                     .replace(" you cast but don't own", "")
                     .replace(" your opponents cast", "")
                     .replace(" opponents cast", "")
+                    .replace(" an opponent casts", "")
                     .replace(" enchanted player casts", "")
                     .replace(" you cast", "")
                     .replace(" players cast", "");
                 let subj_trimmed = subj_raw.trim().trim_end_matches(" each turn").trim();
+                let nth_spell = if subj_trimmed.to_ascii_lowercase().starts_with("the first ") {
+                    Some(1u8)
+                } else if subj_trimmed.to_ascii_lowercase().starts_with("the second ") {
+                    Some(2u8)
+                } else {
+                    None
+                };
                 let subj_clean = strip_prefix_any(
                     &subj_trimmed,
                     &[
@@ -1953,14 +1971,51 @@ pub fn parse_static_or_replacement(
                     ],
                 )
                 .unwrap_or(subj_trimmed);
-                let subj_opt = if subj_clean == "~" {
-                    Some(SubjectRefAst::SelfObject)
-                } else if subj_clean.eq_ignore_ascii_case("it")
-                    || subj_clean.eq_ignore_ascii_case("it also")
-                {
-                    Some(anaphora("it"))
+                let parsed_target_ok = match target_clause {
+                    Some(t) => parse_subject_or_target(t, vocab).ok().map(Some),
+                    None => Some(None),
+                };
+                let subj_opt = if let Some(parsed_target) = parsed_target_ok {
+                    if subj_clean == "~" {
+                        Some(SubjectRefAst::SelfObject)
+                    } else if subj_clean.eq_ignore_ascii_case("it")
+                        || subj_clean.eq_ignore_ascii_case("it also")
+                    {
+                        Some(anaphora("it"))
+                    } else {
+                        parse_object_filter(subj_clean, vocab).ok().map(|mut f| {
+                            if f.controller.is_none() {
+                                if cast_by_you || cast_outside_hand || cast_not_owned {
+                                    f.controller = Some(ControllerRelation::You);
+                                } else if cast_by_opps {
+                                    f.controller = Some(ControllerRelation::Opponents);
+                                } else if cast_by_opp {
+                                    f.controller = Some(ControllerRelation::Opponent);
+                                } else if cast_by_ench {
+                                    f.controller = Some(ControllerRelation::ThatPlayer);
+                                }
+                            }
+                            if cast_not_owned {
+                                f.predicates.push(FilterPredicateAst::NotOwnedByController);
+                            }
+                            if cast_outside_hand {
+                                f.predicates.push(FilterPredicateAst::StateQualification(
+                                    "cast from outside hand".to_string(),
+                                ));
+                            }
+                            if let Some(n) = nth_spell {
+                                f.predicates
+                                    .push(FilterPredicateAst::NthSpellCastThisTurn(n));
+                            }
+                            if let Some(t_subj) = parsed_target {
+                                f.predicates
+                                    .push(FilterPredicateAst::TargetsSubject(Box::new(t_subj)));
+                            }
+                            grp(f)
+                        })
+                    }
                 } else {
-                    parse_object_filter(subj_clean, vocab).ok().map(grp)
+                    None
                 };
                 let per_scale_opt = match fe_opt {
                     Some("basic land type among lands you control") => {
@@ -1972,6 +2027,7 @@ pub fn parse_static_or_replacement(
                         } else {
                             parse_for_each_value_expr(fe, vocab)
                                 .ok()
+                                .filter(|v| !matches!(v, ValueExprAst::PriorResult))
                                 .map(|val| (None, Some(Box::new(val))))
                         }
                     }

@@ -5,9 +5,11 @@
 //! decodes their escape-hatch fields cleanly through `typed_ir`.
 
 use spellwake_oracle_compiler::ast::{
-    AbilityAst, CardAst, CardTypeMask, ColorMask, ControllerRelation, DurationAst,
-    FilterPredicateAst, InstructionAst, InteractiveChoiceKind, PlayerRefAst, ReplacementEffectAst,
-    Rounding, StatKind, StaticAbilityAst, SubjectRefAst, TokenSpecAst, TurnStepAst, ValueExprAst,
+    AbilityAst, CardAst, CardTypeMask, ColorMask, CompareOp, ConditionAst, ControllerRelation,
+    DurationAst, FilterPredicateAst, InstructionAst, InteractiveChoiceKind, ObjectFilterAst,
+    ObjectFilterFlags, PlayerRefAst, PriorActionRefKind, ReplacementEffectAst, Rounding,
+    StatBoundAst, StatKind, StaticAbilityAst, SubjectRefAst, TokenSpecAst, TriggerEventAst,
+    TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use spellwake_oracle_compiler::audit::audit_card;
 use spellwake_oracle_compiler::typed_ir::{
@@ -197,7 +199,29 @@ fn custom_cards_compositional_filters_and_multi_zones() {
         "Exile all tapped Vampires. Each player creates a 0/0 black and white Spirit creature token and puts a number of +1/+1 counters on it equal to the total power of creatures they controlled that were exiled this way.",
         &vocab,
     );
-    assert!(c6.faces[0].spell_effects.len() >= 2);
+    assert_eq!(c6.faces[0].spell_effects.len(), 3);
+    assert!(matches!(
+        &c6.faces[0].spell_effects[0],
+        InstructionAst::Exile { subject, .. }
+            if matches!(subject.as_ref(), SubjectRefAst::All(f)
+                if f.tapped == Some(true) && f.subtypes.iter().any(|s| s == "Vampire"))
+    ));
+    assert!(matches!(
+        &c6.faces[0].spell_effects[1],
+        InstructionAst::CreateToken {
+            controller: PlayerRefAst::EachPlayer,
+            token: TokenSpecAst::Creature { power, toughness, .. },
+            ..
+        } if power == "0" && toughness == "0"
+    ));
+    assert!(matches!(
+        &c6.faces[0].spell_effects[2],
+        InstructionAst::PutCounters { counter_kind, count, .. }
+            if counter_kind == "+1/+1"
+                && matches!(count.as_ref(), ValueExprAst::AggregateStat { stat: StatKind::Power, filter, .. }
+                    if filter.controller == Some(ControllerRelation::ThatPlayer)
+                        && filter.predicates.iter().any(|p| matches!(p, FilterPredicateAst::AffectedByPriorAction(PriorActionRefKind::ExiledThisWay))))
+    ));
 
     // Card 7: Novel `except` exclusion on ReturnZone
     let c7 = compile_custom(
@@ -224,7 +248,7 @@ fn custom_cards_compositional_filters_and_multi_zones() {
     assert!(dest7.modifiers.tapped);
     assert_eq!(dest7.owner, ZoneOwnerAst::TheirOwners);
 
-    // Card 8: Novel `with base power and toughness P/T` + `with power or toughness N or less`
+    // Card 8: Novel `with power or toughness N or less` (must preserve BOTH power and toughness via AnyOf)
     let c8 = compile_custom(
         "Scalewright's Verdict",
         "Sorcery",
@@ -232,6 +256,45 @@ fn custom_cards_compositional_filters_and_multi_zones() {
         &vocab,
     );
     assert_eq!(c8.faces[0].spell_effects.len(), 2);
+    match &c8.faces[0].spell_effects[0] {
+        InstructionAst::Exile { subject, .. } => match subject.as_ref() {
+            SubjectRefAst::All(flt) => {
+                assert_eq!(flt.any_types, CardTypeMask::CREATURE);
+                let any_of = flt
+                    .predicates
+                    .iter()
+                    .find_map(|p| match p {
+                        FilterPredicateAst::AnyOf(branches) => Some(branches),
+                        _ => None,
+                    })
+                    .expect("power or toughness must emit AnyOf([Power, Toughness])");
+                assert_eq!(any_of.len(), 2);
+                assert!(any_of.iter().any(|b| {
+                    matches!(
+                        b.stat_bounds.as_slice(),
+                        [StatBoundAst { stat: StatKind::Power, op: CompareOp::Le, value }]
+                            if matches!(value.as_ref(), ValueExprAst::Const(5))
+                    )
+                }));
+                assert!(any_of.iter().any(|b| {
+                    matches!(
+                        b.stat_bounds.as_slice(),
+                        [StatBoundAst { stat: StatKind::Toughness, op: CompareOp::Le, value }]
+                            if matches!(value.as_ref(), ValueExprAst::Const(5))
+                    )
+                }));
+            }
+            other => panic!("expected All(creatures), got {other:?}"),
+        },
+        other => panic!("expected Exile, got {other:?}"),
+    }
+    assert!(matches!(
+        &c8.faces[0].spell_effects[1],
+        InstructionAst::Draw {
+            player: PlayerRefAst::You,
+            ..
+        }
+    ));
 
     // Card 9: Novel `that share a creature type with` + `from your library`
     let c9 = compile_custom(
@@ -286,7 +349,20 @@ fn custom_cards_triggers_replacements_and_durations() {
         "This turn and next turn, creatures can't attack, and players and permanents can't be the targets of spells or activated abilities.",
         &vocab,
     );
-    assert!(!c12.faces[0].spell_effects.is_empty());
+    assert_eq!(c12.faces[0].spell_effects.len(), 2);
+    assert!(c12.faces[0].spell_effects.iter().all(|ins| matches!(
+        ins,
+        InstructionAst::ScopedDuration {
+            duration: DurationAst::UntilEndOfNextTurn,
+            ..
+        } | InstructionAst::CombatRuleMod {
+            duration: DurationAst::UntilEndOfNextTurn,
+            ..
+        } | InstructionAst::TemporaryStatic {
+            duration: DurationAst::UntilEndOfNextTurn,
+            ..
+        }
+    )));
 
     // Card 13: Novel `for each spell you've cast this turn other than the first`
     let c13 = compile_custom(
@@ -298,11 +374,20 @@ fn custom_cards_triggers_replacements_and_durations() {
     let AbilityAst::Triggered { body, .. } = &c13.faces[0].abilities[0] else {
         panic!("expected ETB trigger");
     };
-    assert!(body.len() >= 2);
+    assert_eq!(body.len(), 2);
+    assert!(matches!(
+        &body[0],
+        InstructionAst::CreateToken {
+            controller: PlayerRefAst::You,
+            token: TokenSpecAst::Creature { power, toughness, keywords, .. },
+            ..
+        } if power == "1" && toughness == "1" && keywords.iter().any(|k| k == "flying")
+    ));
     assert!(matches!(
         &body[1],
-        InstructionAst::PutCounters { count, .. }
-            if matches!(count.as_ref(), ValueExprAst::Mul(_, rhs) if matches!(rhs.as_ref(), ValueExprAst::Sub(_, _)))
+        InstructionAst::PutCounters { counter_kind, count, .. }
+            if counter_kind == "+1/+1"
+                && matches!(count.as_ref(), ValueExprAst::Mul(_, rhs) if matches!(rhs.as_ref(), ValueExprAst::Sub(_, _)))
     ));
 
     // Card 14: Novel `for each mana from a Shrine that was spent to cast ~`
@@ -346,8 +431,25 @@ fn custom_cards_triggers_replacements_and_durations() {
         &vocab,
     );
     assert_eq!(c16.faces[0].keywords.len(), 2);
-    assert!(!c16.faces[0].statics.is_empty());
-    assert!(!c16.faces[0].replacements.is_empty());
+    assert_eq!(c16.faces[0].statics.len(), 1);
+    assert!(matches!(
+        &c16.faces[0].statics[0],
+        StaticAbilityAst::ContinuousModifyPT {
+            dx,
+            dy,
+            grant_keywords,
+            condition: Some(_),
+            ..
+        } if dx == "+2" && dy == "+2" && grant_keywords == &vec!["lifelink".to_string()]
+    ));
+    assert_eq!(c16.faces[0].replacements.len(), 1);
+    assert!(matches!(
+        &c16.faces[0].replacements[0],
+        ReplacementEffectAst::EventInstead {
+            instead_body: Some(body),
+            ..
+        } if matches!(body.as_slice(), [InstructionAst::Exile { .. }])
+    ));
 
     // Card 17: Novel `under the control of that creature's owner` delayed death trigger
     let c17 = compile_custom(
@@ -357,6 +459,11 @@ fn custom_cards_triggers_replacements_and_durations() {
         &vocab,
     );
     assert_eq!(c17.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &c17.faces[0].spell_effects[1],
+        InstructionAst::DelayedEventTrigger { body, .. }
+            if matches!(body.as_slice(), [InstructionAst::ReturnZone { to, .. }] if to.contains("battlefield"))
+    ));
 
     // Card 18: Novel `mana cost contains {R}` condition
     let c18 = compile_custom(
@@ -488,9 +595,21 @@ fn custom_cards_choices_modals_piles_and_mana_riders() {
     assert!(
         body.iter().any(|i| matches!(
             i,
-            InstructionAst::ManaSpendRider { .. } | InstructionAst::TemporaryTrigger { .. }
+            InstructionAst::TemporaryTrigger {
+                trigger,
+                body: rider_body,
+                duration: DurationAst::UntilEndOfTurn,
+            } if matches!(
+                trigger.events.as_slice(),
+                [TriggerEventAst::SpellCast { caster: PlayerRefAst::You, spell: Some(flt), .. }]
+                    if flt.subtypes.iter().any(|s| s == "Dragon")
+            ) && matches!(
+                rider_body.as_slice(),
+                [InstructionAst::PutCounters { count, .. }]
+                    if matches!(count.as_ref(), ValueExprAst::Const(2))
+            )
         )),
-        "expected ManaSpendRider or TemporaryTrigger in {body:?}"
+        "expected Dragon SpellCast TemporaryTrigger with 2 counters in {body:?}"
     );
 
     // Card 26: Novel keyword-choice grant (`gains your choice of ... until end of turn`)
@@ -500,16 +619,26 @@ fn custom_cards_choices_modals_piles_and_mana_riders() {
         "Target creature you control gains your choice of flying, deathtouch, or hexproof until end of turn.",
         &vocab,
     );
-    assert!(
-        matches!(
-            c26.faces[0].spell_effects.first(),
-            Some(InstructionAst::GrantKeywordChoice { choices, duration: DurationAst::UntilEndOfTurn, .. })
-                if choices.len() == 3
-        ) || matches!(
-            c26.faces[0].spell_effects.first(),
-            Some(InstructionAst::Choice(branches)) if branches.len() == 3
-        )
-    );
+    match c26.faces[0].spell_effects.first() {
+        Some(InstructionAst::Choice(branches)) => {
+            assert_eq!(branches.len(), 3);
+            let granted: Vec<&str> = branches
+                .iter()
+                .map(|br| match br.as_slice() {
+                    [
+                        InstructionAst::GrantKeywords {
+                            keywords,
+                            duration: DurationAst::UntilEndOfTurn,
+                            ..
+                        },
+                    ] if keywords.len() == 1 => keywords[0].as_str(),
+                    other => panic!("unexpected choice branch: {other:?}"),
+                })
+                .collect();
+            assert_eq!(granted, vec!["flying", "deathtouch", "hexproof"]);
+        }
+        other => panic!("expected 3-branch Choice(GrantKeywords), got {other:?}"),
+    }
 
     // Card 27: Novel divided damage with explicit divider (`divided as target opponent chooses`)
     let c27 = compile_custom(
@@ -580,7 +709,29 @@ fn custom_cards_compound_actions_and_typed_ir_roundtrip() {
         "You get {E}{E}{E}. Each player may exile their hand and draw a number of cards equal to the amount of {E} paid this way.",
         &vocab,
     );
-    assert!(c31.faces[0].spell_effects.len() >= 2);
+    assert!(matches!(
+        c31.faces[0].spell_effects.first(),
+        Some(InstructionAst::GainPlayerCounters {
+            player: PlayerRefAst::You,
+            count,
+            ..
+        }) if matches!(count.as_ref(), ValueExprAst::Const(3))
+    ));
+    assert!(
+        c31.faces[0].spell_effects.len() >= 2
+            && matches!(
+                &c31.faces[0].spell_effects[1],
+                InstructionAst::OptionalPlayer {
+                    player: PlayerRefAst::EachPlayer,
+                    ..
+                } | InstructionAst::ForEachPlayer {
+                    player: PlayerRefAst::EachPlayer,
+                    ..
+                }
+            ),
+        "expected EachPlayer optional/loop in {:?}",
+        c31.faces[0].spell_effects
+    );
 
     // Card 32: Novel `Each player discards their hand and returns to their hand each card they exiled this way`
     let c32 = compile_custom(
@@ -895,20 +1046,43 @@ fn custom_cards_compound_actions_and_typed_ir_roundtrip() {
         "Exile all enchantments from the battlefield, all instant cards from all graveyards, and all artifact cards from all hands.",
         &vocab,
     );
-    assert!(
-        c48.faces[0].spell_effects.iter().any(|ins| matches!(
-            ins,
-            InstructionAst::Exile { subject, .. }
-                if matches!(subject.as_ref(), SubjectRefAst::Compound(items) if items.len() == 3)
-        )) || c48.faces[0]
-            .spell_effects
-            .iter()
-            .filter(|ins| matches!(ins, InstructionAst::Exile { .. }))
-            .count()
-            >= 1,
-        "unexpected c48 AST: {:?}",
+    let exile_subjects: Vec<&ObjectFilterAst> = c48.faces[0]
+        .spell_effects
+        .iter()
+        .flat_map(|ins| match ins {
+            InstructionAst::Exile { subject, .. } => match subject.as_ref() {
+                SubjectRefAst::Compound(items) => items
+                    .iter()
+                    .filter_map(|s| match s {
+                        SubjectRefAst::All(f) | SubjectRefAst::Group(f) => Some(f.as_ref()),
+                        _ => None,
+                    })
+                    .collect(),
+                SubjectRefAst::All(f) | SubjectRefAst::Group(f) => vec![f.as_ref()],
+                _ => vec![],
+            },
+            _ => vec![],
+        })
+        .collect();
+    assert_eq!(
+        exile_subjects.len(),
+        3,
+        "expected all 3 exiled zone groups in {:?}",
         c48.faces[0].spell_effects
     );
+    assert!(exile_subjects.iter().any(|f| {
+        f.any_types == CardTypeMask::ENCHANTMENT && f.zone == Some(ZoneFilter::Battlefield)
+    }));
+    assert!(exile_subjects.iter().any(|f| {
+        f.any_types == CardTypeMask::INSTANT && f.zone == Some(ZoneFilter::AllGraveyards)
+    }));
+    assert!(exile_subjects.iter().any(|f| {
+        f.any_types == CardTypeMask::ARTIFACT
+            && matches!(
+                f.zone,
+                Some(ZoneFilter::EachPlayerHand | ZoneFilter::AnyHand)
+            )
+    }));
 
     // Card 49: Novel PlayerDealtDamageBy sweep with Dragon subtype and discard action
     let c49 = compile_custom(
@@ -934,16 +1108,14 @@ fn custom_cards_compound_actions_and_typed_ir_roundtrip() {
     assert!(
         matches!(
             &c50.faces[0].spell_effects[0],
-            InstructionAst::CombatRuleMod {
-                rule,
+            InstructionAst::TemporaryStatic {
+                static_ability,
                 duration: DurationAst::ForAsLongAs(_),
-                ..
-            } if rule == "goaded"
-        ) || matches!(
-            &c50.faces[0].spell_effects[0],
-            InstructionAst::ForAsLongAs { .. }
-                | InstructionAst::TemporaryStatic { .. }
-                | InstructionAst::CombatRuleMod { .. }
+            } if matches!(
+                static_ability.as_ref(),
+                StaticAbilityAst::RuleOrCombatRestriction { rule, .. }
+                    if rule == "permanents_are_goaded"
+            )
         ),
         "unexpected c50[0]: {:?}",
         c50.faces[0].spell_effects[0]
@@ -955,4 +1127,785 @@ fn custom_cards_compound_actions_and_typed_ir_roundtrip() {
             ..
         }
     ));
+}
+
+/// 5. All 20 adversarial novel custom cards verifying zero silent mis-parses across every
+///    confirmed parser bug class, plus hardened auditor self-tests.
+#[test]
+fn adversarial_20_custom_cards_deep_semantic_assertions() {
+    let vocab = custom_vocab();
+
+    // 1. Aether Tithe Collector: static cost tax on opponent noncreature spells + opponent cast trigger
+    let c1 = compile_custom(
+        "Aether Tithe Collector",
+        "Creature — Human Advisor",
+        "Noncreature spells your opponents cast cost {1} more to cast.\nWhenever an opponent casts a spell from anywhere other than their hand, you draw a card and create a Treasure token.",
+        &vocab,
+    );
+    assert_eq!(c1.faces[0].statics.len(), 1);
+    match &c1.faces[0].statics[0] {
+        StaticAbilityAst::CostModifier {
+            subject,
+            delta,
+            less,
+            ..
+        } => {
+            assert_eq!(delta, "{1}");
+            assert!(!less);
+            match subject.as_ref() {
+                SubjectRefAst::Group(flt) => {
+                    assert_eq!(flt.forbidden_types, CardTypeMask::CREATURE);
+                    assert_eq!(flt.controller, Some(ControllerRelation::Opponents));
+                }
+                other => panic!("expected Group(noncreature opp spells), got {other:?}"),
+            }
+        }
+        other => panic!("expected CostModifier, got {other:?}"),
+    }
+    let AbilityAst::Triggered { trigger, body, .. } = &c1.faces[0].abilities[0] else {
+        panic!("expected triggered ability");
+    };
+    assert!(
+        matches!(
+            trigger.events.as_slice(),
+            [TriggerEventAst::CastFromOutsideHand {
+                player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent
+            }] | [TriggerEventAst::KeywordActionPerformed {
+                player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
+                ..
+            }]
+        ),
+        "opponent trigger must NOT attribute actor to You: {:?}",
+        trigger.events
+    );
+    assert_eq!(body.len(), 2);
+
+    // 2. Chronosiphon Field: exile with time counters + unqualified `gains suspend` (Permanent!)
+    let c2 = compile_custom(
+        "Chronosiphon Field",
+        "Sorcery",
+        "Exile target creature with three time counters on it. If it doesn't have suspend, it gains suspend.",
+        &vocab,
+    );
+    assert_eq!(c2.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &c2.faces[0].spell_effects[0],
+        InstructionAst::ExileWithCounters { counter_kind, count, .. }
+            if counter_kind == "time" && matches!(count.as_ref(), ValueExprAst::Const(3))
+    ));
+    assert!(matches!(
+        &c2.faces[0].spell_effects[1],
+        InstructionAst::IfCondition { then_body, .. }
+            if matches!(
+                then_body.as_slice(),
+                [InstructionAst::GrantKeywords {
+                    keywords,
+                    duration: DurationAst::Permanent,
+                    ..
+                }] if keywords == &vec!["suspend".to_string()]
+            )
+    ));
+
+    // 3. Council of Shattered Crowns: VillainousChoice keeping `, then ...` inside Option 2
+    let c3 = compile_custom(
+        "Council of Shattered Crowns",
+        "Sorcery",
+        "Each opponent faces a villainous choice — That player loses 4 life, or you draw two cards, then discard a card.",
+        &vocab,
+    );
+    assert_eq!(
+        c3.faces[0].spell_effects.len(),
+        1,
+        "VillainousChoice must NOT leak `, then discard a card` outside Option 2: {:?}",
+        c3.faces[0].spell_effects
+    );
+    match &c3.faces[0].spell_effects[0] {
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::VillainousChoice {
+            chooser: PlayerRefAst::EachOpponent,
+            options,
+        }) => {
+            assert_eq!(options.len(), 2);
+            assert!(matches!(
+                options[0].as_slice(),
+                [InstructionAst::ChangeLife {
+                    player: PlayerRefAst::ThatPlayer,
+                    gain: false,
+                    ..
+                }]
+            ));
+            assert_eq!(options[1].len(), 2);
+            assert!(matches!(
+                &options[1][0],
+                InstructionAst::Draw {
+                    player: PlayerRefAst::You,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                &options[1][1],
+                InstructionAst::Discard {
+                    player: PlayerRefAst::You,
+                    ..
+                }
+            ));
+        }
+        other => panic!("expected VillainousChoice, got {other:?}"),
+    }
+
+    // 4. Cartographer's Balance: player-subject propagation across `and` (`EachPlayer` / `ThatPlayer`, never `You`)
+    let c4 = compile_custom(
+        "Cartographer's Balance",
+        "Sorcery",
+        "Each player creates a Treasure token and draws a card.",
+        &vocab,
+    );
+    assert_eq!(c4.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &c4.faces[0].spell_effects[0],
+        InstructionAst::CreateToken {
+            controller: PlayerRefAst::EachPlayer,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &c4.faces[0].spell_effects[1],
+        InstructionAst::Draw {
+            player: PlayerRefAst::EachPlayer,
+            ..
+        }
+    ));
+
+    // 5. Soulforged Crucible: `artifact creature` (AND via TypesMatchAll) vs `artifact or creature` (OR)
+    let c5 = compile_custom(
+        "Soulforged Crucible",
+        "Artifact",
+        "{2}, {T}: Destroy target artifact creature.\n{3}, {T}: Exile target artifact or creature.",
+        &vocab,
+    );
+    let AbilityAst::Activated { body: b5a, .. } = &c5.faces[0].abilities[0] else {
+        panic!("expected first activated ability");
+    };
+    let AbilityAst::Activated { body: b5b, .. } = &c5.faces[0].abilities[1] else {
+        panic!("expected second activated ability");
+    };
+    match &b5a[0] {
+        InstructionAst::Destroy { subject, .. } => match subject.as_ref() {
+            SubjectRefAst::TargetObject { filter, .. } => {
+                assert_eq!(
+                    filter.any_types,
+                    CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)
+                );
+                assert!(
+                    filter
+                        .predicates
+                        .contains(&FilterPredicateAst::TypesMatchAll),
+                    "`artifact creature` must carry FilterPredicateAst::TypesMatchAll: {filter:?}"
+                );
+            }
+            other => panic!("expected TargetObject, got {other:?}"),
+        },
+        other => panic!("expected Destroy, got {other:?}"),
+    }
+    match &b5b[0] {
+        InstructionAst::Exile { subject, .. } => match subject.as_ref() {
+            SubjectRefAst::TargetObject { filter, .. } => {
+                assert_eq!(
+                    filter.any_types,
+                    CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)
+                );
+                assert!(
+                    !filter
+                        .predicates
+                        .contains(&FilterPredicateAst::TypesMatchAll),
+                    "`artifact or creature` must NOT carry TypesMatchAll: {filter:?}"
+                );
+            }
+            other => panic!("expected TargetObject, got {other:?}"),
+        },
+        other => panic!("expected Exile, got {other:?}"),
+    }
+
+    // 6. Arcane Tax Collector: static CostModifier preserving `you cast` + scaling with EventCountThisTurn (zero PriorResult!)
+    let c6 = compile_custom(
+        "Arcane Tax Collector",
+        "Creature — Wizard",
+        "Instant and sorcery spells you cast cost {1} less to cast for each spell you've cast this turn.",
+        &vocab,
+    );
+    assert_eq!(c6.faces[0].statics.len(), 1);
+    match &c6.faces[0].statics[0] {
+        StaticAbilityAst::CostModifier {
+            subject,
+            delta,
+            less,
+            per,
+            scale_expr,
+            ..
+        } => {
+            assert_eq!(delta, "{1}");
+            assert!(*less);
+            match subject.as_ref() {
+                SubjectRefAst::Group(flt) => {
+                    assert_eq!(
+                        flt.any_types,
+                        CardTypeMask::INSTANT.union(CardTypeMask::SORCERY)
+                    );
+                    assert_eq!(flt.controller, Some(ControllerRelation::You));
+                }
+                other => panic!("expected typed Group filter, got {other:?}"),
+            }
+            assert!(
+                !matches!(scale_expr.as_deref(), Some(ValueExprAst::PriorResult)),
+                "static CostModifier scale must NEVER be PriorResult: {scale_expr:?}"
+            );
+            assert!(
+                matches!(
+                    scale_expr.as_deref(),
+                    Some(ValueExprAst::EventCountThisTurn {
+                        player: Some(PlayerRefAst::You),
+                        ..
+                    })
+                ) || matches!(per.as_deref(), Some(f) if f.any_spell),
+                "expected EventCountThisTurn or typed spell per-filter, got per={per:?} scale={scale_expr:?}"
+            );
+        }
+        other => panic!("expected CostModifier, got {other:?}"),
+    }
+
+    // 7. The Fall of Spirehold: Saga with multi-line reminder text, `power or toughness`, and `with a finality counter on it`
+    let c7 = compile_custom(
+        "The Fall of Spirehold",
+        "Enchantment — Saga",
+        "(As this Saga enters and after your draw step,\nadd a lore counter. Sacrifice after III.)\nI — Destroy all creatures with power or toughness 3 or less.\nII — Each player discards a card and loses 2 life.\nIII — Return target creature card from your graveyard to the battlefield with a finality counter on it.",
+        &vocab,
+    );
+    assert_eq!(c7.faces[0].abilities.len(), 3);
+    let AbilityAst::SagaChapter { body: ch1, .. } = &c7.faces[0].abilities[0] else {
+        panic!("expected chapter I");
+    };
+    assert!(matches!(
+        &ch1[0],
+        InstructionAst::Destroy { subject, .. }
+            if matches!(subject.as_ref(), SubjectRefAst::All(f)
+                if f.predicates.iter().any(|p| matches!(p, FilterPredicateAst::AnyOf(b) if b.len() == 2)))
+    ));
+    let AbilityAst::SagaChapter { body: ch2, .. } = &c7.faces[0].abilities[1] else {
+        panic!("expected chapter II");
+    };
+    assert_eq!(ch2.len(), 2);
+    assert!(matches!(
+        &ch2[1],
+        InstructionAst::ChangeLife {
+            player: PlayerRefAst::EachPlayer,
+            gain: false,
+            ..
+        }
+    ));
+    let AbilityAst::SagaChapter { body: ch3, .. } = &c7.faces[0].abilities[2] else {
+        panic!("expected chapter III");
+    };
+    assert!(matches!(
+        &ch3[0],
+        InstructionAst::ReturnZone {
+            with_counter: Some(ck),
+            ..
+        } if ck == "finality"
+    ));
+
+    // 8. Aegis of Reflected Fury: explicit `until end of turn` vs unqualified permanent keyword grant
+    let c8 = compile_custom(
+        "Aegis of Reflected Fury",
+        "Instant",
+        "Target creature gets +2/+0 and gains first strike until end of turn. Another target creature gains vigilance.",
+        &vocab,
+    );
+    assert_eq!(c8.faces[0].spell_effects.len(), 3);
+    assert!(matches!(
+        &c8.faces[0].spell_effects[1],
+        InstructionAst::GrantKeywords {
+            keywords,
+            duration: DurationAst::UntilEndOfTurn,
+            ..
+        } if keywords == &vec!["first strike".to_string()]
+    ));
+    assert!(matches!(
+        &c8.faces[0].spell_effects[2],
+        InstructionAst::GrantKeywords {
+            keywords,
+            duration: DurationAst::Permanent,
+            ..
+        } if keywords == &vec!["vigilance".to_string()]
+    ));
+
+    // 9. High Court Referendum: VillainousChoice with `They discard ... and lose 4 life` (ThatPlayer!)
+    let c9 = compile_custom(
+        "High Court Referendum",
+        "Sorcery",
+        "Each opponent faces a villainous choice — They discard two cards and lose 4 life, or you scry 2, then draw two cards.",
+        &vocab,
+    );
+    assert_eq!(c9.faces[0].spell_effects.len(), 1);
+    match &c9.faces[0].spell_effects[0] {
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::VillainousChoice {
+            chooser: PlayerRefAst::EachOpponent,
+            options,
+        }) => {
+            assert_eq!(options.len(), 2);
+            assert_eq!(options[0].len(), 2);
+            assert!(matches!(
+                &options[0][0],
+                InstructionAst::Discard {
+                    player: PlayerRefAst::ThatPlayer,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                &options[0][1],
+                InstructionAst::ChangeLife {
+                    player: PlayerRefAst::ThatPlayer,
+                    gain: false,
+                    ..
+                }
+            ));
+            assert_eq!(options[1].len(), 2);
+            assert!(matches!(&options[1][0], InstructionAst::Scry { .. }));
+            assert!(matches!(&options[1][1], InstructionAst::Draw { .. }));
+        }
+        other => panic!("expected VillainousChoice, got {other:?}"),
+    }
+
+    // 10. Architect of Ruin: multi-clause put/return MUST NOT greedily swallow intermediate destination into `from_zone`
+    let c10 = compile_custom(
+        "Architect of Ruin",
+        "Sorcery",
+        "Put a creature card from your graveyard onto the battlefield, then put a card from your hand into your graveyard.",
+        &vocab,
+    );
+    assert_eq!(c10.faces[0].spell_effects.len(), 2);
+    for ins in &c10.faces[0].spell_effects {
+        if let InstructionAst::ReturnZone { from_zone, .. } = ins {
+            assert!(
+                from_zone.as_deref().is_none_or(|fz| !fz.contains("onto")),
+                "greedy from_zone leaked destination: {from_zone:?}"
+            );
+        }
+    }
+
+    // 11. Blade of the Fractured Sun: conditional untap + additional combat MUST NOT be swallowed into single AdditionalCombat
+    let c11 = compile_custom(
+        "Blade of the Fractured Sun",
+        "Artifact — Equipment",
+        "Equipped creature gets +2/+2.\nWhenever equipped creature attacks, if it's the first combat phase of the turn, untap all creatures that attacked this turn and there is an additional combat phase after this phase.",
+        &vocab,
+    );
+    let AbilityAst::Triggered { trigger, body, .. } = &c11.faces[0].abilities[0] else {
+        panic!("expected attack trigger");
+    };
+    assert!(trigger.intervening_if.is_some());
+    assert_eq!(
+        body.len(),
+        2,
+        "must preserve BOTH Untap and AdditionalCombat: {body:?}"
+    );
+    assert!(matches!(&body[0], InstructionAst::UntapPermanent { .. }));
+    assert!(matches!(&body[1], InstructionAst::AdditionalCombat(_)));
+
+    // 12. Searing Convergence: `differently named` -> DIFFERENT_NAMES + `power or toughness` -> AnyOf
+    let c12 = compile_custom(
+        "Searing Convergence",
+        "Sorcery",
+        "Exile up to two target differently named creatures with power or toughness 4 or less.",
+        &vocab,
+    );
+    assert_eq!(c12.faces[0].spell_effects.len(), 1);
+    match &c12.faces[0].spell_effects[0] {
+        InstructionAst::Exile { subject, .. } => match subject.as_ref() {
+            SubjectRefAst::TargetObject { filter, .. } => {
+                assert_ne!(
+                    filter.flags.0 & ObjectFilterFlags::DIFFERENT_NAMES.0,
+                    0,
+                    "differently named must set DIFFERENT_NAMES"
+                );
+                assert!(
+                    filter
+                        .predicates
+                        .iter()
+                        .any(|p| matches!(p, FilterPredicateAst::AnyOf(b) if b.len() == 2)),
+                    "power or toughness must emit AnyOf"
+                );
+            }
+            other => panic!("expected TargetObject, got {other:?}"),
+        },
+        other => panic!("expected Exile, got {other:?}"),
+    }
+
+    // 13. Echoes of the Blind Eternities: exile + unqualified `gains suspend` (Permanent)
+    let c13 = compile_custom(
+        "Echoes of the Blind Eternities",
+        "Instant",
+        "Exile target spell with two time counters on it. It gains suspend.",
+        &vocab,
+    );
+    assert_eq!(c13.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &c13.faces[0].spell_effects[1],
+        InstructionAst::GrantKeywords {
+            keywords,
+            duration: DurationAst::Permanent,
+            ..
+        } if keywords == &vec!["suspend".to_string()]
+    ));
+
+    // 14. Obelisk of Narrow Paths: first opponent spell cost tax + opponent trigger actor check
+    let c14 = compile_custom(
+        "Obelisk of Narrow Paths",
+        "Artifact",
+        "The first spell an opponent casts each turn costs {2} more to cast.\nWhenever an opponent casts a spell from anywhere other than their hand, each opponent loses 2 life.",
+        &vocab,
+    );
+    assert_eq!(c14.faces[0].statics.len(), 1);
+    match &c14.faces[0].statics[0] {
+        StaticAbilityAst::CostModifier {
+            subject,
+            delta,
+            less,
+            ..
+        } => {
+            assert_eq!(delta, "{2}");
+            assert!(!less);
+            match subject.as_ref() {
+                SubjectRefAst::Group(flt) => {
+                    assert_eq!(flt.controller, Some(ControllerRelation::Opponent));
+                    assert!(
+                        flt.predicates
+                            .contains(&FilterPredicateAst::NthSpellCastThisTurn(1)),
+                        "must preserve first spell qualifier: {flt:?}"
+                    );
+                }
+                other => panic!("expected Group, got {other:?}"),
+            }
+        }
+        other => panic!("expected CostModifier, got {other:?}"),
+    }
+
+    // 15. Crystalline Nexus: `Move a counter` MUST NOT store `counter_kind: "a"`
+    let c15 = compile_custom(
+        "Crystalline Nexus",
+        "Artifact",
+        "{1}, {T}: Move a counter from target permanent you control onto another target permanent.\n{2}, {T}: Move two +1/+1 counters from target creature you control onto another target creature.",
+        &vocab,
+    );
+    let AbilityAst::Activated { body: b15a, .. } = &c15.faces[0].abilities[0] else {
+        panic!("expected first activated ability");
+    };
+    assert!(matches!(
+        &b15a[0],
+        InstructionAst::MoveCounters { counter_kind, count, .. }
+            if counter_kind == "any" && matches!(count.as_deref(), Some(ValueExprAst::Const(1)))
+    ));
+    let AbilityAst::Activated { body: b15b, .. } = &c15.faces[0].abilities[1] else {
+        panic!("expected second activated ability");
+    };
+    assert!(matches!(
+        &b15b[0],
+        InstructionAst::MoveCounters { counter_kind, count, .. }
+            if counter_kind == "+1/+1" && matches!(count.as_deref(), Some(ValueExprAst::Const(2)))
+    ));
+
+    // 16. Temporal Excavation: artifact creature (AND) + with_counter("finality") + permanent haste
+    let c16 = compile_custom(
+        "Temporal Excavation",
+        "Sorcery",
+        "Return target artifact creature card with mana value 4 or less from your graveyard to the battlefield with a finality counter on it. It gains haste.",
+        &vocab,
+    );
+    assert_eq!(c16.faces[0].spell_effects.len(), 2);
+    match &c16.faces[0].spell_effects[0] {
+        InstructionAst::ReturnZone {
+            subject,
+            with_counter,
+            ..
+        } => {
+            assert_eq!(with_counter.as_deref(), Some("finality"));
+            match subject.as_ref() {
+                SubjectRefAst::TargetObject { filter, .. } => {
+                    assert_eq!(
+                        filter.any_types,
+                        CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)
+                    );
+                    assert!(
+                        filter
+                            .predicates
+                            .contains(&FilterPredicateAst::TypesMatchAll)
+                    );
+                }
+                other => panic!("expected TargetObject, got {other:?}"),
+            }
+        }
+        other => panic!("expected ReturnZone, got {other:?}"),
+    }
+    assert!(matches!(
+        &c16.faces[0].spell_effects[1],
+        InstructionAst::GrantKeywords {
+            keywords,
+            duration: DurationAst::Permanent,
+            ..
+        } if keywords == &vec!["haste".to_string()]
+    ));
+
+    // 17. Flux Harvester: opponent sacrifice trigger + differently named artifact cost
+    let c17 = compile_custom(
+        "Flux Harvester",
+        "Artifact",
+        "Whenever an opponent sacrifices a creature, create a Treasure token and you gain 1 life.\nSacrifice two differently named artifacts: Draw two cards.",
+        &vocab,
+    );
+    let AbilityAst::Triggered { trigger, body, .. } = &c17.faces[0].abilities[0] else {
+        panic!("expected trigger");
+    };
+    assert!(matches!(
+        trigger.events.as_slice(),
+        [TriggerEventAst::PermanentSacrificed {
+            player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
+            ..
+        }]
+    ));
+    assert_eq!(body.len(), 2);
+    let AbilityAst::Activated { cost, .. } = &c17.faces[0].abilities[1] else {
+        panic!("expected activated ability");
+    };
+    assert!(
+        matches!(
+            cost.as_slice(),
+            [spellwake_oracle_compiler::ast::CostAtomAst::Sacrifice { filter, .. }]
+                if (filter.flags.0 & ObjectFilterFlags::DIFFERENT_NAMES.0) != 0
+        ),
+        "expected DIFFERENT_NAMES on sacrifice cost: {cost:?}"
+    );
+
+    // 18. Chains of Borrowed Loyalty: power or toughness 4 or less + permanent control + permanent haste
+    let c18 = compile_custom(
+        "Chains of Borrowed Loyalty",
+        "Sorcery",
+        "Gain control of target creature with power or toughness 4 or less. It gains haste.",
+        &vocab,
+    );
+    assert_eq!(c18.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &c18.faces[0].spell_effects[0],
+        InstructionAst::GainControl {
+            controller: PlayerRefAst::You,
+            duration: DurationAst::Permanent,
+            subject,
+        } if matches!(subject.as_ref(), SubjectRefAst::TargetObject { filter, .. }
+            if filter.predicates.iter().any(|p| matches!(p, FilterPredicateAst::AnyOf(b) if b.len() == 2)))
+    ));
+    assert!(matches!(
+        &c18.faces[0].spell_effects[1],
+        InstructionAst::GrantKeywords {
+            keywords,
+            duration: DurationAst::Permanent,
+            ..
+        } if keywords == &vec!["haste".to_string()]
+    ));
+
+    // 19. Warlord's Reckoning: leading `If <cond>, untap ... and there is an additional combat phase`
+    let c19 = compile_custom(
+        "Warlord's Reckoning",
+        "Sorcery",
+        "If it's the first combat phase of the turn, untap all creatures that attacked this turn and there is an additional combat phase after this phase.",
+        &vocab,
+    );
+    assert_eq!(c19.faces[0].spell_effects.len(), 1);
+    match &c19.faces[0].spell_effects[0] {
+        InstructionAst::IfCondition {
+            condition,
+            then_body,
+        } => {
+            assert!(!matches!(condition.as_ref(), ConditionAst::WasKicked));
+            assert_eq!(then_body.len(), 2);
+            assert!(matches!(
+                &then_body[0],
+                InstructionAst::UntapPermanent { .. }
+            ));
+            assert!(matches!(&then_body[1], InstructionAst::AdditionalCombat(_)));
+        }
+        other => panic!("expected IfCondition([Untap, AdditionalCombat]), got {other:?}"),
+    }
+
+    // 20. Kaelen, Riftbound Tactician: Planeswalker combining EachPlayer propagation + Move a counter + Emblem
+    let c20 = compile_custom(
+        "Kaelen, Riftbound Tactician",
+        "Legendary Planeswalker — Kaelen",
+        "+1: Each player creates a 1/1 white Soldier creature token and draws a card.\n-2: Move a counter from target permanent onto another target permanent.\n-6: You get an emblem with \"Noncreature spells you cast cost {1} less to cast.\"",
+        &vocab,
+    );
+    assert_eq!(c20.faces[0].abilities.len(), 3);
+    let AbilityAst::Loyalty { body: l1, .. } = &c20.faces[0].abilities[0] else {
+        panic!("expected +1");
+    };
+    assert_eq!(l1.len(), 2);
+    assert!(matches!(
+        &l1[1],
+        InstructionAst::Draw {
+            player: PlayerRefAst::EachPlayer,
+            ..
+        }
+    ));
+    let AbilityAst::Loyalty { body: l2, .. } = &c20.faces[0].abilities[1] else {
+        panic!("expected -2");
+    };
+    assert!(matches!(
+        &l2[0],
+        InstructionAst::MoveCounters { counter_kind, .. } if counter_kind == "any"
+    ));
+    let AbilityAst::Loyalty { body: l3, .. } = &c20.faces[0].abilities[2] else {
+        panic!("expected -6");
+    };
+    assert!(matches!(
+        &l3[0],
+        InstructionAst::CreateEmblemFor { compiled: Some(face), .. }
+            if matches!(
+                face.statics.as_slice(),
+                [StaticAbilityAst::CostModifier { subject, less: true, .. }]
+                    if matches!(subject.as_ref(), SubjectRefAst::Group(f) if f.controller == Some(ControllerRelation::You))
+            )
+    ));
+}
+
+/// 6. Verify hardened `audit_card` rejects space-stripped prose laundering, PriorResult in
+///    statics, malformed counter_kind/with_counter, greedy from_zone, and all raw escape hatches.
+#[test]
+fn hardened_audit_catches_structural_and_opaque_escapes() {
+    use spellwake_oracle_compiler::ast::FaceAst;
+
+    let input = CardInput {
+        oracle_id: "audit-hardening-test",
+        name: "Synthetic Audit Probe",
+        layout: "normal",
+        faces: vec![FaceInput {
+            name: "Synthetic Audit Probe",
+            type_line: "Artifact",
+            oracle_text: "Spells you cast cost {1} less to cast.",
+        }],
+    };
+    let ast = CardAst {
+        oracle_id: "audit-hardening-test".to_string(),
+        name: "Synthetic Audit Probe".to_string(),
+        layout: "normal".to_string(),
+        strictly_compiled: true,
+        uses_tabletop_honor_system: false,
+        faces: vec![FaceAst {
+            name: "Synthetic Audit Probe".to_string(),
+            type_line: "Artifact".to_string(),
+            statics: vec![
+                StaticAbilityAst::CostModifier {
+                    subject: Box::new(SubjectRefAst::Anaphora(
+                        "noncreature spells your opponents cast".to_string(),
+                    )),
+                    delta: "{1}".to_string(),
+                    less: true,
+                    next_only: false,
+                    per: None,
+                    scale_expr: Some(Box::new(ValueExprAst::PriorResult)),
+                    condition: None,
+                },
+                StaticAbilityAst::LookOrRevealRule {
+                    rule: "PlayWithHandRevealed".to_string(),
+                    filter: None,
+                    follow_up: Vec::new(),
+                    condition: None,
+                },
+            ],
+            spell_effects: vec![
+                InstructionAst::MoveCounters {
+                    from: Box::new(SubjectRefAst::SelfObject),
+                    to: Box::new(SubjectRefAst::SelfObject),
+                    counter_kind: "a".to_string(),
+                    all: false,
+                    any_number: false,
+                    count: Some(Box::new(ValueExprAst::Const(1))),
+                },
+                InstructionAst::ReturnZone {
+                    subject: Box::new(SubjectRefAst::SelfObject),
+                    from_zone: Some(
+                        "your graveyard onto the battlefield, then put a card from your hand"
+                            .to_string(),
+                    ),
+                    to: "your graveyard".to_string(),
+                    tapped: false,
+                    transformed: false,
+                    with_counter: Some("a finality".to_string()),
+                    attached_to: None,
+                    random: false,
+                    except: None,
+                    count: None,
+                    up_to: false,
+                    any_number: false,
+                    actor: None,
+                },
+                InstructionAst::AbilityRestriction {
+                    restriction: "YouHaveNoMaxHandSize".to_string(),
+                    condition: None,
+                },
+                InstructionAst::CombatRuleMod {
+                    subject: Box::new(SubjectRefAst::SelfObject),
+                    rule: "cant_block".to_string(),
+                    duration: DurationAst::UntilEndOfTurn,
+                },
+                InstructionAst::AdditionalCombat("additional combat phase".to_string()),
+                InstructionAst::ChooseOption("a color".to_string()),
+            ],
+            ..FaceAst::default()
+        }],
+    };
+
+    let report = audit_card(&input, &ast, CompileOptions::default());
+    let crit_codes: Vec<&str> = report
+        .critical_defects
+        .iter()
+        .map(|f| f.code.as_str())
+        .collect();
+    let opaque_codes: Vec<&str> = report
+        .opaque_strings
+        .iter()
+        .map(|f| f.code.as_str())
+        .collect();
+
+    assert!(
+        crit_codes.contains(&"prior_result_in_static"),
+        "must flag PriorResult in static: {crit_codes:?}"
+    );
+    assert!(
+        crit_codes.contains(&"malformed_counter_kind"),
+        "must flag malformed counter_kind/with_counter: {crit_codes:?}"
+    );
+    assert!(
+        crit_codes.contains(&"greedy_from_zone"),
+        "must flag greedy from_zone: {crit_codes:?}"
+    );
+    assert!(
+        opaque_codes.contains(&"opaque:Anaphora_prose"),
+        "must flag non-allowlisted multi-word Anaphora: {opaque_codes:?}"
+    );
+    assert!(
+        opaque_codes.contains(&"opaque:LookOrRevealRule"),
+        "must flag LookOrRevealRule even without spaces: {opaque_codes:?}"
+    );
+    assert!(
+        opaque_codes.contains(&"opaque:AbilityRestriction_prose"),
+        "must flag space-stripped prose AbilityRestriction: {opaque_codes:?}"
+    );
+    assert!(
+        opaque_codes.contains(&"opaque:CombatRuleMod"),
+        "must flag CombatRuleMod: {opaque_codes:?}"
+    );
+    assert!(
+        opaque_codes.contains(&"opaque:AdditionalCombat"),
+        "must flag AdditionalCombat: {opaque_codes:?}"
+    );
+    assert!(
+        opaque_codes.contains(&"opaque:ChooseOption"),
+        "must flag ChooseOption: {opaque_codes:?}"
+    );
 }

@@ -553,10 +553,15 @@ pub(super) fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<Instru
             });
         }
         let (cnt, kind) = peel_leading_count(left, vocab);
+        let counter_kind = if kind.is_empty() {
+            "any".to_string()
+        } else {
+            kind.to_string()
+        };
         return Some(InstructionAst::MoveCounters {
             from: Box::new(from),
             to: Box::new(to),
-            counter_kind: kind.to_string(),
+            counter_kind,
             all: false,
             any_number: false,
             count: Some(Box::new(cnt)),

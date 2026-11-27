@@ -783,7 +783,13 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
             core_noatt.rsplit_once(" with ")
             && let Some(kind) = strip_suffix_any(&after_w, &[" counter on it", " counters on it"])
         {
-            (before, Some(kind.trim().to_string()))
+            let kind_clean = strip_prefix_any(kind.trim(), &["a ", "an ", "one "])
+                .unwrap_or(kind.trim())
+                .trim();
+            (
+                before,
+                (!kind_clean.is_empty()).then(|| kind_clean.to_string()),
+            )
         } else {
             (core_noatt, None)
         };
@@ -1174,8 +1180,11 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                 {
                     let obj_clean = obj_raw.trim();
                     // Multi-zone source ("put <subj> from <z1> (and|or) from <z2> onto/into <dest>")
+                    // Guard strictly so intermediate destinations/clauses ("from gy onto bf, then put ... from hand")
+                    // are NEVER swallowed into `from_zone`.
                     if let Some((subj_part, from_zones)) = obj_clean.split_once(" from ")
                         && from_zones.contains(" from ")
+                        && is_clean_multi_zone_source(from_zones)
                         && let Ok(subj) = parse_subject_or_target(subj_part.trim(), vocab)
                     {
                         return Some(InstructionAst::ReturnZone {
@@ -1699,6 +1708,61 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
     Some(match leading_subject_player {
         Some(subj_p) => ins_fe_subj(subj_p, vec![wrapped]),
         None => wrapped,
+    })
+}
+
+/// Verify that a multi-zone `from <z1> (and|or) from <z2>` tail contains only clean zone
+/// phrases and never swallows an intermediate destination or chained instruction clause.
+fn is_clean_multi_zone_source(from_zones: &str) -> bool {
+    let low = from_zones.to_ascii_lowercase();
+    for bad in [
+        ", put ",
+        " onto ",
+        " into ",
+        " under ",
+        " then ",
+        " to the ",
+        " to your ",
+        " to its ",
+        " tapped",
+        "exile it",
+        "return ",
+    ] {
+        if low.contains(bad) {
+            return false;
+        }
+    }
+    let norm = low
+        .replace(" and/or from ", " | ")
+        .replace(" and from ", " | ")
+        .replace(" or from ", " | ")
+        .replace(", from ", " | ");
+    let parts: Vec<&str> = norm.split(" | ").map(str::trim).collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    parts.iter().all(|part| {
+        !part.is_empty()
+            && matches!(
+                *part,
+                "exile"
+                    | "your graveyard"
+                    | "a graveyard"
+                    | "any graveyard"
+                    | "graveyards"
+                    | "all graveyards"
+                    | "that player's graveyard"
+                    | "its owner's graveyard"
+                    | "your hand"
+                    | "their hand"
+                    | "that player's hand"
+                    | "the command zone"
+                    | "your library"
+                    | "their library"
+                    | "that player's library"
+                    | "the battlefield"
+                    | "outside the game"
+            )
     })
 }
 

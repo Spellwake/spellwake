@@ -409,6 +409,13 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         // Try trailing stat bound BEFORE CTRL_SUFFIXES so "creature you control with toughness less than
         // the number of basic land types among lands you control" doesn't strip "you control" off the RHS!
         if s.contains(" with ")
+            && let Some((prefix, pred)) = peel_power_or_toughness_bound(&s, vocab)
+        {
+            flt.predicates.push(pred);
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if s.contains(" with ")
             && let Some((prefix, bounds)) = peel_stat_range_list(&s)
         {
             flt.stat_bounds.extend(bounds);
@@ -1071,8 +1078,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
 
-        // Compositional prior-action relative clauses:
-        // " [that (was|were) |they |you |that player ](exiled|discarded|sacrificed|destroyed|revealed|returned|tapped|milled|created|goaded|dealt damage|put into a graveyard|put into your graveyard|put onto the battlefield) this way"
+        // Compositional prior-action relative clauses ("that were exiled this way",
+        // "they sacrificed this way", "put into your graveyard this way", etc.).
         if let Some(before_tw) = s.strip_suffix(" this way")
             && !before_tw.trim().is_empty()
         {
@@ -1543,60 +1550,190 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
 
-        // Trailing "whose controller controls <filter>" / "whose power and toughness aren't equal" / "whose controller has <cond>"
-        if let Some((left, right)) = s.split_once(" whose controller controls ")
+        // Lossless typed predicates for relational/controller/color/cost suffixes (no silent erasure).
+        if let Some(left) = s.strip_suffix(" they controlled that were exiled this way")
             && !left.trim().is_empty()
-            && parse_object_filter(right.trim(), vocab).is_ok()
         {
+            flt.controller = Some(ControllerRelation::ThatPlayer);
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::ExiledThisWay,
+                ));
             s = left.trim().to_string();
             continue;
         }
-        if let Some((left, right)) = s.split_once(" whose controller has ")
+        if let Some(left) = s.strip_suffix(" that were exiled this way")
             && !left.trim().is_empty()
-            && !right.trim().is_empty()
         {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::ExiledThisWay,
+                ));
             s = left.trim().to_string();
             continue;
         }
-        if let Some(left) = strip_suffix_any(&s, &[" whose power and toughness aren't equal", " whose coin comes up tails", " that was activated this turn", " that were exiled this way", " that were put there from libraries this turn", " that's enchanted by an aura you control", " that's exactly two colors", " that's exactly three colors", " with exactly two colors", " with exactly three colors", " with power of the chosen quality", " with mana value of the chosen quality", " with mana value of that quality", " with the most votes or tied for most votes", " with the most life among your opponents", " that's exactly those colors", " of that color", " from among them", " from among the revealed cards", " from among the exiled cards", " you already control", " they controlled that were exiled this way", " that player milled this way", " that player controls", " they control", " ~ targets", " that entered since your last turn ended", " attacking the same player or planeswalker", " that was blocked by one of those creatures this turn", " that attacked", " of that type"])
-            .or_else(|| {
-                s.strip_suffix(" not declared as an attacking or blocking creature this combat")
-            })
-            .or_else(|| s.strip_suffix(" with {x} in their mana cost"))
-            .or_else(|| s.strip_suffix(" that doesn't have cumulative upkeep"))
-            .or_else(|| s.strip_suffix(" named eye of vecna and hand of vecna"))
-            .or_else(|| s.strip_suffix(" that aren't on the battlefield"))
-            .or_else(|| s.strip_suffix(" that isn't on the battlefield"))
-            .or_else(|| s.strip_suffix(" you own but don't control"))
-            .or_else(|| s.strip_suffix(" with mana abilities"))
-            .or_else(|| s.strip_suffix(" with the chosen ability"))
-            .or_else(|| {
-                s.strip_suffix(
-                    " controlled by a player who was dealt combat damage by three or more pirates this turn",
-                )
-            })
+        if let Some(left) = s
+            .strip_suffix(" that player controls")
+            .or_else(|| s.strip_suffix(" they control"))
             && !left.trim().is_empty()
         {
+            flt.controller = Some(ControllerRelation::ThatPlayer);
             s = left.trim().to_string();
             continue;
         }
-        // General "<filter> that targets <filter>" / "with the same <stat> as <subj>"
+        if let Some(left) = s.strip_suffix(" you already control")
+            && !left.trim().is_empty()
+        {
+            flt.controller = Some(ControllerRelation::You);
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" you own but don't control")
+            && !left.trim().is_empty()
+        {
+            flt.owner = Some(ControllerRelation::OwnerYou);
+            flt.controller = Some(ControllerRelation::NotYou);
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" that was activated this turn")
+            && !left.trim().is_empty()
+        {
+            flt.predicates.push(FilterPredicateAst::ActivatedThisTurn);
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" with {x} in their mana cost")
+            && !left.trim().is_empty()
+        {
+            flt.predicates
+                .push(FilterPredicateAst::HasManaSymbolInCost("{X}".to_string()));
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" with mana abilities")
+            && !left.trim().is_empty()
+        {
+            flt.predicates.push(FilterPredicateAst::HasAbilityKind {
+                kind: "mana".to_string(),
+                negated: false,
+            });
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s
+            .strip_suffix(" that's exactly two colors")
+            .or_else(|| s.strip_suffix(" with exactly two colors"))
+            && !left.trim().is_empty()
+        {
+            flt.predicates.push(FilterPredicateAst::ColorCountCompare {
+                op: CompareOp::Eq,
+                expr: vconst(2),
+            });
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s
+            .strip_suffix(" that's exactly three colors")
+            .or_else(|| s.strip_suffix(" with exactly three colors"))
+            && !left.trim().is_empty()
+        {
+            flt.predicates.push(FilterPredicateAst::ColorCountCompare {
+                op: CompareOp::Eq,
+                expr: vconst(3),
+            });
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s
+            .strip_suffix(" from among them")
+            .or_else(|| s.strip_suffix(" from among the revealed cards"))
+            .or_else(|| s.strip_suffix(" from among the exiled cards"))
+            && !left.trim().is_empty()
+        {
+            let kind = if s.ends_with("from among the revealed cards") {
+                "from_among_revealed"
+            } else if s.ends_with("from among the exiled cards") {
+                "from_among_exiled"
+            } else {
+                "from_among_those"
+            };
+            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+                kind: kind.to_string(),
+            });
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" that attacked")
+            && !left.trim().is_empty()
+        {
+            flt.flags = flt.flags.union(ObjectFilterFlags::ATTACKED_THIS_TURN);
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" of that color")
+            && !left.trim().is_empty()
+        {
+            flt.flags = flt.flags.union(ObjectFilterFlags::MATCHES_CHOSEN_COLOR);
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" of that type")
+            && !left.trim().is_empty()
+        {
+            flt.flags = flt.flags.union(ObjectFilterFlags::MATCHES_CHOSEN_TYPE);
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s.strip_suffix(" ~ targets")
+            && !left.trim().is_empty()
+        {
+            flt.predicates
+                .push(FilterPredicateAst::TargetsSubject(self_obj()));
+            s = left.trim().to_string();
+            continue;
+        }
+        // General "<filter> that targets <subj>" / "with the same <stat> as <subj>" (strictly typed)
         if s.len() <= 140 {
-            for rel_pat in [
-                " that targets ",
-                " with the same mana value as ",
-                " with the same name as ",
-                " with the same power as ",
-                " with the same toughness as ",
-                " with the same color as ",
+            if let Some((left, right)) = s.split_once(" that targets ")
+                && !left.trim().is_empty()
+                && let Ok(ref_subj) = parse_subject_or_target(right.trim(), vocab)
+            {
+                flt.predicates
+                    .push(FilterPredicateAst::TargetsSubject(Box::new(ref_subj)));
+                s = left.trim().to_string();
+                continue;
+            }
+            if let Some((left, right)) = s.split_once(" with the same name as ")
+                && !left.trim().is_empty()
+                && let Ok(ref_subj) = parse_subject_or_target(right.trim(), vocab)
+            {
+                flt.named = Some(NameFilterAst::SameAs(Box::new(ref_subj)));
+                s = left.trim().to_string();
+                continue;
+            }
+            for (rel_pat, prop) in [
+                (" with the same mana value as ", "mana_value"),
+                (" with the same power as ", "power"),
+                (" with the same toughness as ", "toughness"),
+                (" with the same color as ", "color"),
             ] {
                 if let Some((left, right)) = s.split_once(rel_pat)
                     && !left.trim().is_empty()
-                    && parse_subject_or_target(right.trim(), vocab).is_ok()
+                    && let Ok(ref_subj) = parse_subject_or_target(right.trim(), vocab)
                 {
+                    flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
+                        property: prop.to_string(),
+                        reference: Box::new(ref_subj),
+                        negated: false,
+                    });
                     s = left.trim().to_string();
-                    continue;
+                    changed = true;
+                    break;
                 }
+            }
+            if changed {
+                continue;
             }
         }
         // General "that shares a <card/permanent/creature/land> type with <subj>"
@@ -1676,9 +1813,36 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
 
+        // Trailing compound literal name predicate: "<filter> named <NameA> and <NameB>"
+        if let Some((prefix, name_part)) = s.rsplit_once(" named ")
+            && !prefix.trim().is_empty()
+            && !prefix.trim().ends_with("differently")
+            && let Some((name_a, name_b)) = name_part.split_once(" and ")
+            && !name_a.trim().is_empty()
+            && !name_b.trim().is_empty()
+            && !name_a.starts_with("the chosen")
+            && !name_a.starts_with("a card")
+            && !name_b.starts_with("a ")
+            && !name_b.starts_with("an ")
+            && name_a.split_whitespace().count() <= 4
+            && name_b.split_whitespace().count() <= 4
+        {
+            let fa = ObjectFilterAst {
+                named: Some(NameFilterAst::Exact(name_a.trim().to_string())),
+                ..Default::default()
+            };
+            let fb = ObjectFilterAst {
+                named: Some(NameFilterAst::Exact(name_b.trim().to_string())),
+                ..Default::default()
+            };
+            flt.predicates.push(FilterPredicateAst::AnyOf(vec![fa, fb]));
+            s = prefix.trim().to_string();
+            continue;
+        }
         // Trailing literal name predicate: "<filter> named <CardName>"
         if let Some((prefix, name_part)) = s.rsplit_once(" named ")
             && !prefix.trim().is_empty()
+            && !prefix.trim().ends_with("differently")
             && !name_part.trim().is_empty()
             && !name_part.contains(" and ")
             && !name_part.contains(" or ")
@@ -2066,10 +2230,14 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         s = format!("{left} {right}");
     }
 
-    // Strip leading article
-    let core = strip_prefix_any(&s, &["a ", "an ", "the "])
+    // Strip leading article and "differently named" modifier
+    let mut core = strip_prefix_any(&s, &["a ", "an ", "the "])
         .unwrap_or(&s)
         .trim();
+    if let Some(rest) = core.strip_prefix("differently named ") {
+        flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_NAMES);
+        core = rest.trim();
+    }
 
     let tokens: Vec<&str> = core
         .split_whitespace()
@@ -2089,13 +2257,25 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
     let mut saw_or_between_subtypes = false;
     let mut saw_subtype = false;
     let mut pending_or_after_subtype = false;
+    let mut saw_or_between_types = false;
+    let mut saw_card_type = false;
+    let mut pending_or_after_type = false;
+    let mut card_type_count = 0usize;
     let mut i = 0;
     while i < tokens.len() {
         let tok = tokens[i];
         match tok {
+            "differently" if tokens.get(i + 1) == Some(&"named") => {
+                flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_NAMES);
+                i += 2;
+                continue;
+            }
             "or" | "and/or" => {
                 if saw_subtype {
                     pending_or_after_subtype = true;
+                }
+                if saw_card_type {
+                    pending_or_after_type = true;
                 }
             }
             "and" => {
@@ -2109,6 +2289,9 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                     .is_some_and(|next| matches!(*next, "a" | "an" | "another"));
                 if saw_subtype && !next_is_indef {
                     pending_or_after_subtype = true;
+                }
+                if saw_card_type && !next_is_indef {
+                    pending_or_after_type = true;
                 }
             }
             "of" | "the" | "a" | "an" => {}
@@ -2227,6 +2410,12 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 } else if let Some(st) = lookup_supertype(tok) {
                     flt.required_supertypes = flt.required_supertypes.union(st);
                 } else if let Some(ct) = lookup_card_type(tok) {
+                    if pending_or_after_type {
+                        saw_or_between_types = true;
+                        pending_or_after_type = false;
+                    }
+                    saw_card_type = true;
+                    card_type_count += 1;
                     flt.any_types = flt.any_types.union(ct);
                 } else if let Some(rest) = tok.strip_prefix("non-") {
                     if let Some(sub) = vocab.lookup_subtype(rest) {
@@ -2256,6 +2445,9 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
 
     if saw_or_between_subtypes && flt.subtypes.len() >= 2 {
         flt.predicates.push(FilterPredicateAst::SubtypesMatchAny);
+    }
+    if card_type_count >= 2 && !saw_or_between_types {
+        flt.predicates.push(FilterPredicateAst::TypesMatchAll);
     }
     if !unknown.is_empty() {
         return Err(format!("unknown_filter_tokens:{}", unknown.join(" ")));
@@ -2311,6 +2503,64 @@ fn peel_stat_range_list(s: &str) -> Option<(&str, [StatBoundAst; 2])> {
     ))
 }
 
+fn peel_power_or_toughness_bound<'a>(
+    s: &'a str,
+    vocab: &Vocabulary,
+) -> Option<(&'a str, FilterPredicateAst)> {
+    let (idx, tail) = if let Some(i) = s.rfind(" each with ") {
+        (i, &s[i + 11..])
+    } else if let Some(i) = s.rfind(" that each have ") {
+        (i, &s[i + 16..])
+    } else {
+        let i = s.rfind(" with ")?;
+        (i, &s[i + 6..])
+    };
+    let rest = strip_prefix_any(&tail, &["base power or toughness ", "power or toughness "])?;
+    let (val_tok, op) = if let Some(v) = rest.strip_suffix(" or less") {
+        (v.trim(), CompareOp::Le)
+    } else if let Some(v) = rest.strip_suffix(" or greater") {
+        (v.trim(), CompareOp::Ge)
+    } else if let Some(v) =
+        strip_prefix_any(&rest, &["less than or equal to ", "equal to or less than "])
+    {
+        (v.trim(), CompareOp::Le)
+    } else if let Some(v) = strip_prefix_any(
+        &rest,
+        &["greater than or equal to ", "equal to or greater than "],
+    ) {
+        (v.trim(), CompareOp::Ge)
+    } else if let Some(v) = rest.strip_prefix("less than ") {
+        (v.trim(), CompareOp::Lt)
+    } else if let Some(v) = rest.strip_prefix("greater than ") {
+        (v.trim(), CompareOp::Gt)
+    } else if let Some(v) = rest.strip_prefix("equal to ") {
+        (v.trim(), CompareOp::Eq)
+    } else {
+        (rest.trim(), CompareOp::Eq)
+    };
+    let value = parse_value_expr(val_tok, vocab).ok()?;
+    let power_branch = ObjectFilterAst {
+        stat_bounds: vec![StatBoundAst {
+            stat: StatKind::Power,
+            op,
+            value: Box::new(value.clone()),
+        }],
+        ..Default::default()
+    };
+    let toughness_branch = ObjectFilterAst {
+        stat_bounds: vec![StatBoundAst {
+            stat: StatKind::Toughness,
+            op,
+            value: Box::new(value),
+        }],
+        ..Default::default()
+    };
+    Some((
+        &s[..idx],
+        FilterPredicateAst::AnyOf(vec![power_branch, toughness_branch]),
+    ))
+}
+
 fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatBoundAst)> {
     let (idx, tail) = if let Some(i) = s.rfind(" each with ") {
         (i, &s[i + 11..])
@@ -2320,31 +2570,23 @@ fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatB
         let i = s.rfind(" with ")?;
         (i, &s[i + 6..])
     };
-    let (stat, rest) = if let Some(r) = strip_prefix_any(
-        &tail,
-        &[
-            "base power or toughness ",
-            "power or toughness ",
-            "base power ",
-            "total power ",
-            "power ",
-        ],
-    ) {
-        (StatKind::Power, r)
-    } else if let Some(r) = strip_prefix_any(
-        &tail,
-        &["base toughness ", "total toughness ", "toughness "],
-    ) {
-        (StatKind::Toughness, r)
-    } else if let Some(r) = strip_prefix_any(
-        &tail,
-        &["total mana value ", "mana value ", "converted mana cost "],
-    ) {
-        (StatKind::ManaValue, r)
-    } else {
-        let r = tail.strip_prefix("loyalty ")?;
-        (StatKind::Loyalty, r)
-    };
+    let (stat, rest) =
+        if let Some(r) = strip_prefix_any(&tail, &["base power ", "total power ", "power "]) {
+            (StatKind::Power, r)
+        } else if let Some(r) = strip_prefix_any(
+            &tail,
+            &["base toughness ", "total toughness ", "toughness "],
+        ) {
+            (StatKind::Toughness, r)
+        } else if let Some(r) = strip_prefix_any(
+            &tail,
+            &["total mana value ", "mana value ", "converted mana cost "],
+        ) {
+            (StatKind::ManaValue, r)
+        } else {
+            let r = tail.strip_prefix("loyalty ")?;
+            (StatKind::Loyalty, r)
+        };
 
     let (val_tok, op) = if let Some(v) = rest.strip_suffix(" or less") {
         (v.trim(), CompareOp::Le)
