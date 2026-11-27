@@ -1707,6 +1707,130 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         ts.restore(cp);
     }
 
+    // `you've lost life this turn` (`Essence Channeler`), `<N> or more creatures attacked this turn` (`Case of the Gateway Express`), `~ attacked this turn` (`The Lunar Whale`)
+    if ts.eat_phrase(&["you've", "lost", "life", "this", "turn"])
+        || ts.eat_phrase(&["you", "lost", "life", "this", "turn"])
+    {
+        return Ok(ConditionExpr::PlayerCheck {
+            player: PlayerRef::You,
+            kind: PlayerConditionKind::LostLifeThisTurn,
+        });
+    }
+    {
+        let acp = ts.checkpoint();
+        if let Some(n) = ts.next_number(false)
+            && ts.eat_phrase(&["or", "more", "creatures", "attacked", "this", "turn"])
+        {
+            return Ok(ConditionExpr::PlayerCheck {
+                player: PlayerRef::You,
+                kind: PlayerConditionKind::AttackedWithCount {
+                    min_count: u16::try_from(n.max(1)).unwrap_or(1),
+                },
+            });
+        }
+        ts.restore(acp);
+    }
+    {
+        let lcp = ts.checkpoint();
+        if ts.eat_tilde() && ts.eat_phrase(&["attacked", "this", "turn"]) {
+            return Ok(ConditionExpr::SubjectCheck {
+                subject: Box::new(SubjectRef::SelfObject),
+                kind: SubjectConditionKind::AttackedThisCombat { or_blocked: false },
+            });
+        }
+        ts.restore(lcp);
+    }
+    // `evidence was collected` (`Deadly Cover-Up`, `Crimestopper Sprite`, `Behind the Mask`)
+    if ts.eat_phrase(&["evidence", "was", "collected"]) {
+        return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
+    }
+    // `you revealed a <flt> or controlled/chose a <flt> as you cast ~` (DTK/AFR Dragon reveal spells)
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "revealed"])
+            && try_parse(ts, parse_object_filter).is_ok()
+            && (ts.eat_phrase(&["or", "controlled"]) || ts.eat_phrase(&["or", "chose"]))
+            && try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_phrase(&["as", "you", "cast"])
+            && ts.eat_tilde()
+        {
+            return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
+        }
+        ts.restore(dcp);
+    }
+    // `one or more cards were put into exile this turn` / `one or more of them entered from exile/a graveyard or was cast from exile/a graveyard`
+    if ts.eat_phrase(&[
+        "one", "or", "more", "cards", "were", "put", "into", "exile", "this", "turn",
+    ]) || ts.eat_phrase(&[
+        "one", "or", "more", "of", "them", "entered", "from", "exile", "or", "was", "cast", "from",
+        "exile",
+    ]) || ts.eat_phrase(&[
+        "one",
+        "or",
+        "more",
+        "of",
+        "them",
+        "entered",
+        "from",
+        "a",
+        "graveyard",
+        "or",
+        "was",
+        "cast",
+        "from",
+        "a",
+        "graveyard",
+    ]) {
+        return Ok(ConditionExpr::EventCheck(EventCheckKind::PriorObjectEvent(
+            PriorActionKind::ExiledThisWay,
+        )));
+    }
+    // `the top card of your library is <color/flt>` (`Vampire Nocturnus`, `Skill Borrower`)
+    {
+        let tcp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "top", "card", "of"])
+            && let Ok(zone) = try_parse(ts, parse_zone_ref)
+            && ts.eat_word("is")
+        {
+            let _ = ts.eat_word("a") || ts.eat_word("an");
+            if let Ok(flt) = try_parse(ts, parse_object_filter) {
+                return Ok(ConditionExpr::ZoneHasCount {
+                    filter: Box::new(flt),
+                    zone,
+                    min_count: 1,
+                });
+            }
+            if let Some(w) = ts.peek_word()
+                && let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase())
+            {
+                ts.next_word();
+                return Ok(ConditionExpr::ZoneHasCount {
+                    filter: Box::new(crate::v2::ir::ObjectFilter {
+                        any_colors: c,
+                        ..Default::default()
+                    }),
+                    zone,
+                    min_count: 1,
+                });
+            }
+        }
+        ts.restore(tcp);
+    }
+    // `~ is still on the battlefield` (`Shirei, Shizo's Caretaker`)
+    {
+        let scp = ts.checkpoint();
+        if ts.eat_tilde() && ts.eat_phrase(&["is", "still", "on", "the", "battlefield"]) {
+            return Ok(ConditionExpr::SubjectMatches {
+                subject: Box::new(SubjectRef::SelfObject),
+                filter: Box::new(crate::v2::ir::ObjectFilter {
+                    any_permanent: true,
+                    ..Default::default()
+                }),
+            });
+        }
+        ts.restore(scp);
+    }
+
     // `its mana cost contains {R}`
     if ts.eat_phrase(&["its", "mana", "cost", "contains"]) {
         let sym = ts

@@ -718,8 +718,29 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         ts.restore(diff_cp);
     }
 
-    // `the number of ...`
-    if ts.eat_phrase(&["the", "number", "of"]) {
+    if ts.eat_phrase(&["that", "amount"]) {
+        return Ok(ValueExpr::PriorActionCount(
+            PriorActionKind::DealtDamageThisWay,
+        ));
+    }
+    if ts.eat_phrase(&["the", "creature's", "power"]) {
+        return Ok(ValueExpr::ObjectStat {
+            subject: Box::new(SubjectRef::Anaphora(
+                crate::v2::ir::AnaphoraRef::ThatCreature,
+            )),
+            stat: StatKind::Power,
+        });
+    }
+    if ts.eat_phrase(&["the", "creature's", "toughness"]) {
+        return Ok(ValueExpr::ObjectStat {
+            subject: Box::new(SubjectRef::Anaphora(
+                crate::v2::ir::AnaphoraRef::ThatCreature,
+            )),
+            stat: StatKind::Toughness,
+        });
+    }
+    // `[the total | the] number of ...` (`Crackling Drake`, `Beacon Bolt`, `Multani, Maro-Sorcerer`, etc.)
+    if ts.eat_phrase(&["the", "total", "number", "of"]) || ts.eat_phrase(&["the", "number", "of"]) {
         if ts.eat_phrase(&["permanents", "you've", "sacrificed", "this", "turn"])
             || ts.eat_phrase(&["permanents", "you", "sacrificed", "this", "turn"])
         {

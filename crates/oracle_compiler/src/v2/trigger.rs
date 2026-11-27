@@ -249,6 +249,10 @@ pub fn parse_step_with_owner(ts: &mut TokenStream<'_>) -> PResult<(TurnStepAst, 
     let _ = ts.eat_phrase(&["each", "of"]);
     let owner = if ts.eat_phrase(&["your", "next"]) {
         StepOwner::YourNext
+    } else if ts.eat_phrase(&["their", "next"]) {
+        StepOwner::ThatPlayer
+    } else if ts.eat_phrase(&["this", "turn's", "next"]) {
+        StepOwner::Next
     } else if ts.eat_phrase(&["the", "next", "turn's"]) {
         StepOwner::NextTurn
     } else if ts.eat_phrase(&["the", "next"]) {
@@ -293,6 +297,8 @@ pub fn parse_step_with_owner(ts: &mut TokenStream<'_>) -> PResult<(TurnStepAst, 
         TurnStepAst::CleanupStep
     } else if ts.eat_phrase(&["main", "phase"]) || ts.eat_phrase(&["main", "phases"]) {
         TurnStepAst::MainPhase
+    } else if ts.eat_phrase(&["end", "of", "combat"]) {
+        TurnStepAst::EndOfCombat
     } else if ts.eat_word("combat") {
         TurnStepAst::BeginningOfCombat
     } else {
@@ -390,7 +396,9 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     || ts.eat_phrase(&["your", "first"])
                     || ts.eat_phrase(&["their", "first"])
                     || ts.eat_phrase(&["your", "second"])
-                    || ts.eat_phrase(&["their", "second"]);
+                    || ts.eat_phrase(&["their", "second"])
+                    || ts.eat_phrase(&["your", "third"])
+                    || ts.eat_phrase(&["their", "third"]);
                 let spell = opt(ts, parse_object_filter);
                 let from_outside_hand = spell.as_ref().is_some_and(|s| {
                     s.predicates
@@ -1304,6 +1312,8 @@ fn parse_subject_trigger_verb(
         {
             from = Some(z.zone);
         }
+        let _ = ts.eat_phrase(&["during", "the", "declare", "attackers", "step"])
+            || ts.eat_phrase(&["during", "combat"]);
         return Ok(TriggerEvent::ZoneChange {
             from,
             to: Some(ZoneKind::Battlefield),

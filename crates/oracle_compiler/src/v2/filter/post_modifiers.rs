@@ -272,9 +272,23 @@ pub(super) fn parse_filter_post_modifiers(
             flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
             continue;
         }
-        if ts.eat_word("named") && ts.eat_tilde() {
-            flt.predicates.push(FilterPredicate::NamedSelf);
-            continue;
+        if ts
+            .peek_word()
+            .is_some_and(|w| w.eq_ignore_ascii_case("named"))
+        {
+            let ncp = ts.checkpoint();
+            ts.eat_word("named");
+            if ts.eat_tilde() {
+                flt.predicates.push(FilterPredicate::NamedSelf);
+                continue;
+            }
+            if let Some(names) = parse_proper_card_names(ts) {
+                for name in names {
+                    flt.predicates.push(FilterPredicate::Named(name));
+                }
+                continue;
+            }
+            ts.restore(ncp);
         }
         if ts.eat_phrase(&["dealt", "damage", "this", "way"]) {
             flt.predicates.push(FilterPredicate::AffectedByPriorAction(
@@ -880,6 +894,8 @@ pub(super) fn parse_filter_post_modifiers(
                 let _ = ts.eat_word("a") || ts.eat_word("an");
                 let mut subs = Vec::new();
                 let mut ctypes = Vec::new();
+                let mut added_colors = ColorMask::EMPTY;
+                let mut added_supers = SupertypeMask::EMPTY;
                 let mut saw_or = false;
                 while let Some(w) = ts.peek_word() {
                     let low = w.to_ascii_lowercase();
@@ -891,24 +907,44 @@ pub(super) fn parse_filter_post_modifiers(
                         ctypes.push(ct);
                     } else if let Some(st) = lookup_supertype(&low) {
                         ts.next_word();
-                        flt.required_supertypes = flt.required_supertypes.union(st);
+                        added_supers = added_supers.union(st);
                     } else if let Some(col) = lookup_color(&low) {
                         ts.next_word();
-                        flt.any_colors = flt.any_colors.union(col);
+                        added_colors = added_colors.union(col);
                     } else {
                         break;
                     }
-                    let _ = ts.eat_comma();
+                    let sep_cp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
                     if ts.eat_word("or") || ts.eat_word("and/or") {
                         let _ = ts.eat_word("a") || ts.eat_word("an");
                         saw_or = true;
+                        continue;
                     }
+                    if had_comma
+                        && ts.peek_word().is_some_and(|nw| {
+                            let nl = nw.to_ascii_lowercase();
+                            lookup_color(&nl).is_some()
+                                || lookup_card_type(&nl).is_some()
+                                || ts.vocab.lookup_subtype(&nl).is_some()
+                        })
+                    {
+                        continue;
+                    }
+                    ts.restore(sep_cp);
+                    break;
                 }
-                if !subs.is_empty() || !ctypes.is_empty() {
+                if !subs.is_empty()
+                    || !ctypes.is_empty()
+                    || !added_colors.is_empty()
+                    || !added_supers.is_empty()
+                {
                     if saw_or && subs.len() >= 2 {
                         flt.subtypes_match_any = true;
                     }
                     flt.subtypes.extend(subs);
+                    flt.any_colors = flt.any_colors.union(added_colors);
+                    flt.required_supertypes = flt.required_supertypes.union(added_supers);
                     for ct in ctypes {
                         if saw_or {
                             flt.any_types = flt.any_types.union(ct);
@@ -1359,6 +1395,12 @@ pub(super) fn parse_filter_post_modifiers(
             flt.combat = Some(crate::ast::CombatState::Attacking);
             continue;
         }
+        if ts.eat_phrase(&["it", "devoured"]) {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::SacrificedThisWay,
+            ));
+            continue;
+        }
         if ts.eat_phrase(&["chosen", "at", "random"]) {
             flt.flags = flt.flags.union(FilterFlags::AT_RANDOM);
             continue;
@@ -1414,6 +1456,101 @@ pub(super) fn parse_filter_post_modifiers(
         break;
     }
     Ok(())
+}
+
+fn parse_proper_card_names(ts: &mut TokenStream<'_>) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    let first = parse_one_proper_card_name(ts)?;
+    names.push(first);
+    loop {
+        let cp = ts.checkpoint();
+        if (ts.eat_word("or") || ts.eat_word("and"))
+            && let Some(next) = parse_one_proper_card_name(ts)
+        {
+            names.push(next);
+            continue;
+        }
+        ts.restore(cp);
+        break;
+    }
+    Some(names)
+}
+
+fn parse_one_proper_card_name(ts: &mut TokenStream<'_>) -> Option<String> {
+    let start_cp = ts.checkpoint();
+    let mut parts: Vec<String> = Vec::new();
+    let mut saw_title_comma = false;
+    while parts.len() < 8 {
+        if let Some(w) = ts.peek_word() {
+            let starts_upper = w.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+            if starts_upper {
+                parts.push(w.to_string());
+                ts.next_word();
+                continue;
+            }
+            // Lowercase connector inside a proper card name (`of`, `the`, `in`, `to`, `from`, `at`, `on`, `for`, `a`, `an`, `by`, `with`)
+            // ONLY when followed by a capitalized word!
+            if !parts.is_empty()
+                && matches!(
+                    w,
+                    "of" | "the" | "in" | "to" | "from" | "at" | "on" | "for" | "a" | "an" | "by"
+                )
+                && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if nw.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+                })
+            {
+                parts.push(w.to_string());
+                ts.next_word();
+                continue;
+            }
+            break;
+        }
+        // Possessive `'s` after a proper name (e.g. `Nissa's Chosen` tokenized as `Nissa` + `'s` + `Chosen`)
+        if !parts.is_empty() && ts.eat_word("'s") {
+            if let Some(last) = parts.last_mut() {
+                last.push_str("'s");
+            }
+            continue;
+        }
+        // Legendary title comma (e.g. `Vraska, Scheming Gorgon`, `Nicol Bolas, the Deceiver`):
+        // ONLY consume comma if we haven't already seen a title comma AND next token is a capitalized word
+        // (or `the <Capitalized>`) that is NOT a sentence/clause starter verb!
+        if !parts.is_empty() && !saw_title_comma {
+            let ccp = ts.checkpoint();
+            if ts.eat_comma() {
+                let next_is_title = ts.peek_word().is_some_and(|nw| {
+                    let is_upper = nw.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+                    let is_clause_verb = matches!(
+                        nw,
+                        "Put" | "Reveal" | "Exile" | "Draw" | "If" | "Then" | "Shuffle"
+                            | "Sacrifice" | "Target" | "Destroy" | "Return" | "You" | "Each"
+                            | "When" | "Whenever" | "At" | "Create" | "Choose" | "Discard"
+                            | "Counter" | "Tap" | "Untap"
+                    );
+                    (is_upper && !is_clause_verb)
+                        || (nw == "the"
+                            && ts.peek_n(1).is_some_and(|t| {
+                                matches!(t.kind, TokenKind::Word(w2) if w2.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+                            }))
+                });
+                if next_is_title {
+                    saw_title_comma = true;
+                    if let Some(last) = parts.last_mut() {
+                        last.push(',');
+                    }
+                    continue;
+                }
+            }
+            ts.restore(ccp);
+        }
+        break;
+    }
+    if parts.is_empty() {
+        ts.restore(start_cp);
+        None
+    } else {
+        Some(parts.join(" "))
+    }
 }
 
 fn parse_single_stat_kind(ts: &mut TokenStream<'_>) -> Option<StatKind> {

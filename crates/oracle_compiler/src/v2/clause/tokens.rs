@@ -58,6 +58,18 @@ pub(crate) fn parse_token_creation(
     } else {
         parse_value_expr(ts)?
     };
+    if ts.eat_phrase(&["of", "those", "tokens"]) || ts.eat_phrase(&["of", "that", "token"]) {
+        return Ok((
+            count,
+            TokenSpec::CopyOf {
+                source: Box::new(crate::v2::ir::SubjectRef::Anaphora(
+                    crate::v2::ir::AnaphoraRef::ThatToken,
+                )),
+                exceptions: Vec::new(),
+            },
+            EntryModifiers::default(),
+        ));
+    }
     let leading_tapped_and_attacking = ts.eat_phrase(&["tapped", "and", "attacking"]);
     let leading_tapped = leading_tapped_and_attacking || ts.eat_word("tapped");
 
@@ -518,6 +530,17 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                     break;
                 }
             }
+            let mut inline_kws = None;
+            {
+                let wcp = ts.checkpoint();
+                if ts.eat_word("with")
+                    && let Ok((kws, _)) = crate::v2::parser::try_parse(ts, parse_keyword_list)
+                {
+                    inline_kws = Some(kws);
+                } else {
+                    ts.restore(wcp);
+                }
+            }
             let keep_existing_types = ts
                 .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
@@ -533,6 +556,9 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                     types,
                     keep_existing_types,
                 });
+                if let Some(kws) = inline_kws {
+                    exceptions.push(CopyException::AddKeywords(kws));
+                }
             } else if !colors.is_empty() {
                 exceptions.push(CopyException::SetColor(colors));
             } else if !supertypes.is_empty() {

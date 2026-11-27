@@ -1256,9 +1256,11 @@ fn parse_zone_verb_frame_inner(
         return Ok((out, ()));
     }
 
-    // 15. `move(s) <cnt> [<kind>] counter(s) from <src> onto/to <dst>` (NEVER stores `"a"`!)
+    // 15. `move(s) [any number of | <cnt>] [<kind>] counter(s) from <src> onto/to <dst>` (NEVER stores `"a"`!)
     if ts.eat_word("move") || ts.eat_word("moves") {
-        let count = if ts.eat_word("a") || ts.eat_word("an") {
+        let count = if ts.eat_phrase(&["any", "number", "of"]) {
+            ValueExpr::Const(0)
+        } else if ts.eat_word("a") || ts.eat_word("an") {
             ValueExpr::Const(1)
         } else {
             parse_value_expr(ts)?
@@ -1543,12 +1545,44 @@ fn parse_zone_verb_frame_inner(
         let exact = !any_number && !up_to && ts.eat_word("exactly");
         let count = if any_number {
             ValueExpr::Const(0)
-        } else if ts.eat_word("a") || ts.eat_word("an") {
+        } else if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
             ValueExpr::Const(1)
         } else {
             try_parse(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1))
         };
-        let flt = parse_object_filter(ts)?;
+        let first_flt = parse_object_filter(ts)?;
+        let mut flts = vec![first_flt];
+        loop {
+            let fcp = ts.checkpoint();
+            let had_comma = ts.eat_comma();
+            let had_conj = ts.eat_word("and/or") || ts.eat_word("or") || ts.eat_word("and");
+            if (had_comma || had_conj)
+                && !ts.peek_phrase(&["put", "it"])
+                && !ts.peek_phrase(&["put", "them"])
+                && !ts.peek_phrase(&["put", "that"])
+                && !ts.peek_phrase(&["put", "those"])
+                && !ts.peek_word().is_some_and(|w| {
+                    matches!(
+                        w.to_ascii_lowercase().as_str(),
+                        "reveal" | "shuffle" | "exile" | "cast" | "play" | "then"
+                    )
+                })
+                && let Ok(next_flt) = try_parse(ts, parse_object_filter)
+            {
+                flts.push(next_flt);
+                continue;
+            }
+            ts.restore(fcp);
+            break;
+        }
+        let flt = if flts.len() == 1 {
+            flts.remove(0)
+        } else {
+            ObjectFilter {
+                predicates: vec![crate::v2::ir::FilterPredicate::AnyOf(flts)],
+                ..Default::default()
+            }
+        };
         return Ok((
             vec![Effect::ZoneOp {
                 actor,

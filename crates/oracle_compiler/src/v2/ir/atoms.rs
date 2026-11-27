@@ -605,6 +605,7 @@ pub enum FilterPredicate {
     InChosenPile,
     DrawnThisTurn,
     NamedSelf,
+    Named(String),
     DealtDamageBySelfThisTurn,
     KickedWith(ManaCost),
     GreatestStat {
