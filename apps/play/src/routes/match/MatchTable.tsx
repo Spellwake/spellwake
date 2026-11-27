@@ -25,10 +25,10 @@ import {
   type Placement,
   type TableView,
 } from "../../match/table-model";
+import { SPELLWAKE_CARD_BACK_URL } from "../../cosmetics/card-backs";
+import { useCardBackUrl } from "../../cosmetics/use-card-back-url";
 import type { CardMark } from "./combat";
 import * as s from "./match-table.css";
-
-const SLEEVE = `${import.meta.env.BASE_URL}cards/spellwake-sleeve-midnight.svg`;
 
 export const cardName = (object: PlayerObject | null): string =>
   object?.identity.kind === "known"
@@ -138,6 +138,7 @@ export function MatchTable({
   const [stage, setStage] = useState({ width: 0, height: 0 });
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const reduced = Boolean(useReducedMotion());
+  const sleeveUrl = useCardBackUrl();
 
   const handleProject = useCallback(
     (next: ReadonlyMap<string, ProjectedCardRect>) => {
@@ -164,7 +165,8 @@ export function MatchTable({
     if (!canvas) return;
     const controller = new AbortController();
     const handle = mountLiveMatchScene(canvas, {
-      sleeveUrl: SLEEVE,
+      sleeveUrl,
+      sleeveFallbackUrl: SPELLWAKE_CARD_BACK_URL,
       onProject: handleProject,
       signal: controller.signal,
     });
@@ -174,7 +176,7 @@ export function MatchTable({
       handle.dispose();
       if (sceneRef.current === handle) sceneRef.current = null;
     };
-  }, [handleProject]);
+  }, [handleProject, sleeveUrl]);
 
   const layout = useMemo(
     () =>
@@ -234,7 +236,7 @@ export function MatchTable({
       hoveredKey,
       reducedMotion: reduced,
     });
-  }, [stage, layout.tilted, sceneCards, hoveredKey, reduced]);
+  }, [stage, layout.tilted, sceneCards, hoveredKey, reduced, sleeveUrl]);
 
   const viewerSeat = snapshot.viewerSeatId;
 

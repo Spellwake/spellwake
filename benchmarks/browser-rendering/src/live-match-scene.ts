@@ -81,8 +81,10 @@ export type ProjectedCardRect = {
 };
 
 export type LiveMatchSceneOptions = {
-  /** Publication-cleared sleeve SVG URL (e.g. `${BASE_URL}cards/spellwake-sleeve-midnight.svg`). */
+  /** Sleeve image URL. Remote textures must allow cross-origin access. */
   sleeveUrl: string;
+  /** Use this texture if the selected sleeve cannot be loaded. */
+  sleeveFallbackUrl?: string;
   /** Emitted whenever rendered 3D card screen projections change. */
   onProject?: (rects: ReadonlyMap<string, ProjectedCardRect>) => void;
   /** Optional abort signal bound to host lifecycle. */
@@ -478,7 +480,7 @@ export function mountLiveMatchScene(
     }),
   );
 
-  // Load the publication-cleared Spellwake sleeve SVG asynchronously.
+  // Load the selected sleeve asynchronously.
   let dirty = true;
   let rafId = 0;
   let lastTick = 0;
@@ -503,7 +505,7 @@ export function mountLiveMatchScene(
     rafId = requestAnimationFrame(renderFrame);
   }
 
-  // Rasterize the publication-cleared vector sleeve onto a crisp HiDPI canvas texture
+  // Rasterize the sleeve onto a HiDPI canvas texture
   // so WebGL2 mipmaps and anisotropic filtering work deterministically across browsers.
   const sleeveImg = new Image();
   sleeveImg.crossOrigin = "anonymous";
@@ -524,15 +526,26 @@ export function mountLiveMatchScene(
     sleeveBackMat.needsUpdate = true;
     scheduleRender();
   };
+  let sleeveUrl = options.sleeveUrl;
   sleeveImg.onerror = () => {
+    if (lifetime.disposed) return;
+    if (options.sleeveFallbackUrl && options.sleeveFallbackUrl !== sleeveUrl) {
+      console.warn(
+        "Unable to load sleeve texture, using default sleeve",
+        sleeveUrl,
+      );
+      sleeveUrl = options.sleeveFallbackUrl;
+      sleeveImg.src = sleeveUrl;
+      return;
+    }
     if (!lifetime.disposed) {
       console.warn(
         "Unable to load sleeve texture, using solid fallback",
-        options.sleeveUrl,
+        sleeveUrl,
       );
     }
   };
-  sleeveImg.src = options.sleeveUrl;
+  sleeveImg.src = sleeveUrl;
 
   function fallbackTextureFor(fallback: LiveCardFallback): THREE.Texture {
     const cacheKey = `${fallback.name}|${fallback.typeLine ?? ""}|${fallback.stats ?? ""}`;

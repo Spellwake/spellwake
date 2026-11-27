@@ -3,9 +3,6 @@ import { z } from "zod";
 import { packStill } from "@spellwake/booster-pack";
 import { packPrint } from "./pack-palette";
 
-/** The Spellwake card back, drawn in SVG, for cards dealt face down. */
-export const CARD_BACK = `${import.meta.env.BASE_URL}cards/spellwake-sleeve-midnight.svg`;
-
 /**
  * The official artwork a wrapper may carry, and the 3D stills of sealed
  * packs. Set symbols are Scryfall's copies of the official symbols,

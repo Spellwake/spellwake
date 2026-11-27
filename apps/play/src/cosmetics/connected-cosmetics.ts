@@ -17,9 +17,15 @@ import {
   type SourceGap,
 } from "../decks/deck-sources";
 import { openNativeCheckout } from "../lib/checkout";
+import {
+  MAGIC_CARD_BACK_ID,
+  MAGIC_CARD_BACK_URL,
+  SPELLWAKE_CARD_BACK_URL,
+} from "./card-backs";
 import type {
   AppearanceOptions,
   CheckoutNotice,
+  CosmeticItem,
   CosmeticKind,
   CosmeticsSource,
   DefaultSelection,
@@ -32,7 +38,8 @@ import type {
  * only compose the existing reads and journaled commands. What the account's
  * catalogue does not carry is left out, never invented:
  *
- * - Artwork: the catalogue names each item and its kind, with no picture.
+ * - Artwork: built-in backs have known artwork. Other picker choices use the
+ *   catalogue name and kind.
  * - Prices: the catalogue lists none. The price is shown by hosted checkout,
  *   before anything is paid.
  * - Pets: the account has four appearance slots and none for a pet.
@@ -49,6 +56,41 @@ const SAVE_UNCONFIRMED = "Couldn’t confirm defaults.";
 const SAVE_ATTEMPTS = 3;
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** Attach art to the two built-in backs in the existing catalogue. */
+function builtInBacks(
+  items: readonly CosmeticSummary[],
+): ReadonlyMap<string, CosmeticItem> {
+  const backs = new Map<string, CosmeticItem>();
+  const starter = items.find(
+    (item) =>
+      item.kind === "back" && item.isFree && item.id !== MAGIC_CARD_BACK_ID,
+  );
+  if (starter)
+    backs.set(starter.id, {
+      id: starter.id,
+      kind: "back",
+      name: "Spellwake",
+      look: { imageUrl: SPELLWAKE_CARD_BACK_URL },
+    });
+  backs.set(MAGIC_CARD_BACK_ID, {
+    id: MAGIC_CARD_BACK_ID,
+    kind: "back",
+    name: "Magic",
+    look: { imageUrl: MAGIC_CARD_BACK_URL },
+  });
+  return backs;
+}
+
+/** Build the appearance picker from owned catalogue entries. */
+function ownedAppearances(items: readonly CosmeticSummary[]): CosmeticItem[] {
+  const backs = builtInBacks(items);
+  return items
+    .filter((item) => item.isOwned)
+    .map(
+      ({ id, name, kind }) => backs.get(id) ?? { id, name, kind, look: null },
+    );
+}
 
 function useAccountGap(): SourceGap | null {
   const { state } = useAccount();
@@ -121,9 +163,7 @@ export function useConnectedAppearanceOptions(): AppearanceOptions {
       optional: ["playmat"],
       items: {
         state: catalogue.state,
-        items: catalogue.items
-          .filter((item) => item.isOwned)
-          .map(({ id, name, kind }) => ({ id, name, kind, look: null })),
+        items: ownedAppearances(catalogue.items),
       },
     }),
     [catalogue.state, catalogue.items],
@@ -145,9 +185,7 @@ export function useConnectedDefaultSettings(): DefaultSettingsSource {
     optional: ["playmat"],
     options: {
       state: catalogue.state,
-      items: catalogue.items
-        .filter((item) => item.isOwned)
-        .map(({ id, name, kind }) => ({ id, name, kind, look: null })),
+      items: ownedAppearances(catalogue.items),
     },
     saved: selectionOf(current),
     save: async (selection: DefaultSelection): Promise<Outcome> => {
@@ -410,14 +448,18 @@ export function useConnectedCosmetics(): CosmeticsSource {
     [richQuery.data],
   );
   const items = useMemo((): ShopItem[] => {
+    const backs = builtInBacks(catalogue.items);
     const base: ShopItem[] = catalogue.items.map(
       ({ id, name, kind, isOwned, isFree }): ShopItem => {
         const rich = richById.get(id);
+        const back = backs.get(id);
         return {
           id,
-          name: rich?.name || name,
+          name: back?.name ?? (rich?.name || name),
           kind,
-          look: rich?.previewUrl ? { imageUrl: rich.previewUrl } : null,
+          look:
+            back?.look ??
+            (rich?.previewUrl ? { imageUrl: rich.previewUrl } : null),
           isOwned: rich ? rich.owned : isOwned,
           isSold: rich
             ? rich.priceCents !== null && rich.priceCents > 0

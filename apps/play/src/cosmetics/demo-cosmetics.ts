@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { succeeded } from "../decks/deck-sources";
+import { MAGIC_CARD_BACK_URL, SPELLWAKE_CARD_BACK_URL } from "./card-backs";
 import {
   COSMETIC_KINDS,
   type AppearanceOptions,
@@ -96,12 +97,12 @@ const ITEMS: readonly ShopItem[] = [
     sky("#7a4a9c", "#3c2a66", "#16122e", "#ff9e7a77"),
     "$2.99",
   ),
-  item(
-    "back",
-    "Classic",
-    sky("#21416e", "#142b52", "#0a1730", "#4f7fc455"),
-    null,
-  ),
+  // Preserve the saved ID for the original preview back.
+  {
+    ...item("back", "Classic", { imageUrl: SPELLWAKE_CARD_BACK_URL }, null),
+    name: "Spellwake",
+  },
+  item("back", "Magic", { imageUrl: MAGIC_CARD_BACK_URL }, null),
   item(
     "back",
     "Moon",
@@ -160,6 +161,11 @@ const defaultsAtom = atomWithStorage<DefaultSelection>(
   "spellwake:cosmetics:demo:defaults:v1",
   FIRST_DEFAULTS,
 );
+
+/** Read the preview's saved appearance without loading its cosmetic shop. */
+export function useDemoDefaults(): DefaultSelection {
+  return useAtomValue(defaultsAtom);
+}
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
 
