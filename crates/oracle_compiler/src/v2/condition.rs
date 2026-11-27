@@ -785,6 +785,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                         min_count: 1,
                     })));
                 }
+                let _ = ts.eat_phrase(&["at", "least"]) || ts.eat_word("exactly");
                 let (min_count, is_fewer) = if let Some(n) = ts.next_number(false) {
                     let fewer = ts.eat_phrase(&["or", "fewer"]);
                     if !fewer {
@@ -795,19 +796,56 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                     let _ = ts.eat_word("a") || ts.eat_word("an");
                     (1, false)
                 };
-                let filter = parse_object_filter(ts)?;
-                if is_fewer {
-                    return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Controls {
+                let filter = match try_parse(ts, parse_object_filter) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        if !is_fewer
+                            && min_count == 1
+                            && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                        {
+                            return Ok(ConditionExpr::ControlsSubject {
+                                player,
+                                subject: Box::new(subj),
+                            });
+                        }
+                        return Err(e);
+                    }
+                };
+                let first_cond = if is_fewer {
+                    ConditionExpr::Not(Box::new(ConditionExpr::Controls {
                         player,
                         filter: Box::new(filter),
                         min_count: min_count.saturating_add(1),
-                    })));
+                    }))
+                } else {
+                    ConditionExpr::Controls {
+                        player,
+                        filter: Box::new(filter),
+                        min_count,
+                    }
+                };
+                // Support `you control <flt1> and <flt2>` (`Okiba Salvage`, `Of One Mind`, `Raka Sanctuary`, `When We Were Young`)
+                let acp = ts.checkpoint();
+                if ts.eat_word("and") {
+                    let min2 = if let Some(n2) = ts.next_number(false) {
+                        let _ = ts.eat_phrase(&["or", "more"]);
+                        u16::try_from(n2.max(1)).unwrap_or(1)
+                    } else {
+                        1
+                    };
+                    if let Ok(flt2) = try_parse(ts, parse_object_filter) {
+                        return Ok(ConditionExpr::And(
+                            Box::new(first_cond),
+                            Box::new(ConditionExpr::Controls {
+                                player,
+                                filter: Box::new(flt2),
+                                min_count: min2,
+                            }),
+                        ));
+                    }
                 }
-                return Ok(ConditionExpr::Controls {
-                    player,
-                    filter: Box::new(filter),
-                    min_count,
-                });
+                ts.restore(acp);
+                return Ok(first_cond);
             }
             if ts.eat_word("has") || ts.eat_word("have") {
                 if ts.eat_phrase(&["more", "life", "than"])
@@ -847,6 +885,26 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                     } else {
                         CompareOp::Eq
                     };
+                    if ts.eat_phrase(&["cards", "in", "their", "graveyard"])
+                        || ts.eat_phrase(&["cards", "in", "your", "graveyard"])
+                        || ts.eat_phrase(&["card", "in", "their", "graveyard"])
+                    {
+                        return Ok(ConditionExpr::ZoneHasCount {
+                            filter: Box::new(crate::v2::ir::ObjectFilter {
+                                any_card: true,
+                                ..Default::default()
+                            }),
+                            zone: crate::v2::ir::ZoneRef {
+                                zone: crate::v2::ir::ZoneKind::Graveyard,
+                                owner: if player == PlayerRef::You {
+                                    crate::v2::ir::ZoneOwner::You
+                                } else {
+                                    crate::v2::ir::ZoneOwner::ThatPlayer
+                                },
+                            },
+                            min_count: u16::try_from(n.max(1)).unwrap_or(1),
+                        });
+                    }
                     if ts.eat_phrase(&["cards", "in", "hand"])
                         || ts.eat_phrase(&["card", "in", "hand"])
                         || ts.eat_phrase(&["cards", "in", "their", "hand"])
@@ -909,15 +967,130 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                 })));
             }
             if ts.eat_phrase(&["has", "cast"]) || ts.eat_word("cast") {
+                let min_count = if let Some(n) = ts.next_number(false) {
+                    let _ = ts.eat_phrase(&["or", "more"]);
+                    u16::try_from(n.max(1)).unwrap_or(1)
+                } else {
+                    1
+                };
                 let filter = opt(ts, parse_object_filter).map(Box::new);
                 if ts.eat_phrase(&["this", "turn"]) {
                     return Ok(ConditionExpr::PlayerTurnEvent {
                         player,
                         event: TurnEventKind::SpellCast,
                         filter,
-                        min_count: 1,
+                        min_count,
                     });
                 }
+            }
+            if ts.eat_phrase(&["attacked", "with", "creatures", "with", "total", "power"])
+                && let Some(n) = ts.next_number(false)
+                && (ts.eat_phrase(&["or", "greater"]) || ts.eat_phrase(&["or", "more"]))
+            {
+                let _ = ts.eat_phrase(&["this", "combat"]) || ts.eat_phrase(&["this", "turn"]);
+                return Ok(ConditionExpr::AttackedWithTotalPower {
+                    player,
+                    min_power: n,
+                });
+            }
+            if ts.eat_phrase(&["gained", "or", "lost", "life", "this", "turn"]) {
+                return Ok(ConditionExpr::Or(
+                    Box::new(ConditionExpr::PlayerTurnEvent {
+                        player,
+                        event: TurnEventKind::LifeGained,
+                        filter: None,
+                        min_count: 1,
+                    }),
+                    Box::new(ConditionExpr::PlayerTurnEvent {
+                        player,
+                        event: TurnEventKind::LifeLost,
+                        filter: None,
+                        min_count: 1,
+                    }),
+                ));
+            }
+            if ts.eat_phrase(&["lost", "life", "last", "turn"]) {
+                return Ok(ConditionExpr::LostLifeLastTurn(player));
+            }
+            if ts.eat_phrase(&["didn't", "cast", "a", "spell", "this", "turn"]) {
+                return Ok(ConditionExpr::Not(Box::new(
+                    ConditionExpr::PlayerTurnEvent {
+                        player,
+                        event: TurnEventKind::SpellCast,
+                        filter: None,
+                        min_count: 1,
+                    },
+                )));
+            }
+            if ts.eat_phrase(&["didn't", "cast", "it", "from", "your", "hand"])
+                || ts.eat_phrase(&["didn't", "cast", "it", "from", "their", "hand"])
+            {
+                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::WasCastFromHand)));
+            }
+            if ts.eat_word("controlled")
+                && let Ok(subj) = try_parse(ts, parse_subject_ref)
+            {
+                return Ok(ConditionExpr::SubjectMatches {
+                    subject: Box::new(subj),
+                    filter: Box::new(crate::v2::ir::ObjectFilter {
+                        controller: Some(crate::ast::ControllerRelation::You),
+                        ..Default::default()
+                    }),
+                });
+            }
+            if ts.eat_phrase(&["attacked", "with"])
+                && let Some(n) = ts.next_number(false)
+            {
+                let _ = ts.eat_phrase(&["or", "more"]);
+                if (ts.eat_word("creatures") || ts.eat_word("creature"))
+                    && ts.eat_phrase(&["this", "turn"])
+                {
+                    return Ok(ConditionExpr::AttackedWithCount {
+                        player,
+                        min_count: u16::try_from(n.max(1)).unwrap_or(1),
+                    });
+                }
+            }
+            if ts.eat_phrase(&["was", "dealt"]) || ts.eat_phrase(&["were", "dealt"]) {
+                let combat_only = ts.eat_word("combat");
+                let _ = ts.eat_word("noncombat");
+                if ts.eat_word("damage") {
+                    if ts.eat_word("by") {
+                        let _ = opt(ts, parse_subject_ref);
+                    }
+                    if ts.eat_phrase(&["this", "turn"]) {
+                        return Ok(ConditionExpr::PlayerDealtDamageThisTurn {
+                            player,
+                            combat_only,
+                        });
+                    }
+                }
+            }
+            if ts.eat_word("revealed")
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+                && ts.eat_phrase(&["this", "way"])
+            {
+                return Ok(ConditionExpr::RevealedThisWay(Box::new(flt)));
+            }
+            if ts.eat_word("had")
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+                && (ts.eat_phrase(&[
+                    "enter",
+                    "the",
+                    "battlefield",
+                    "under",
+                    "your",
+                    "control",
+                    "this",
+                    "turn",
+                ]) || ts.eat_phrase(&["enter", "under", "your", "control", "this", "turn"])
+                    || ts.eat_phrase(&["enter", "the", "battlefield", "this", "turn"]))
+            {
+                return Ok(ConditionExpr::PermanentEnteredThisTurn {
+                    filter: Box::new(flt),
+                    controller: player,
+                    min_count: 1,
+                });
             }
             if ts.eat_word("gained") || ts.eat_phrase(&["has", "gained"]) {
                 let min_count = ts
@@ -1019,17 +1192,384 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         ts.restore(dcp);
     }
 
-    // `you've cast <flt> this turn`
-    if ts.eat_phrase(&["you've", "cast"]) {
-        let filter = opt(ts, parse_object_filter).map(Box::new);
-        if ts.eat_phrase(&["this", "turn"]) {
-            return Ok(ConditionExpr::PlayerTurnEvent {
-                player: PlayerRef::You,
-                event: TurnEventKind::SpellCast,
-                filter,
+    // `<subj> is in the command zone or on the battlefield` (`Inalla`, `Edgar Markov`, `The Ur-Dragon`, Eminence cycle)
+    {
+        let ecp = ts.checkpoint();
+        if let Ok(subj) = try_parse(ts, parse_subject_ref)
+            && ts.eat_phrase(&[
+                "is",
+                "in",
+                "the",
+                "command",
+                "zone",
+                "or",
+                "on",
+                "the",
+                "battlefield",
+            ])
+        {
+            return Ok(ConditionExpr::InCommandZoneOrBattlefield(Box::new(subj)));
+        }
+        ts.restore(ecp);
+    }
+    // `it isn't a mana ability` (`Harsh Mentor` + 7+ cards)
+    if ts.eat_phrase(&["it", "isn't", "a", "mana", "ability"]) {
+        return Ok(ConditionExpr::IsNotManaAbility);
+    }
+    // `there are no <flt> [on the battlefield | in <zone>]` (`Spirit Mirror` + 10+ cards)
+    {
+        let ncp = ts.checkpoint();
+        if ts.eat_phrase(&["there", "are", "no"])
+            && let Ok(mut flt) = try_parse(ts, parse_object_filter)
+        {
+            let zone = flt.zones.pop().unwrap_or(crate::v2::ir::ZoneRef {
+                zone: crate::v2::ir::ZoneKind::Battlefield,
+                owner: crate::v2::ir::ZoneOwner::Default,
+            });
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::ZoneHasCount {
+                filter: Box::new(flt),
+                zone,
+                min_count: 1,
+            })));
+        }
+        ts.restore(ncp);
+    }
+    // `two or more <flt> are tied for greatest/least <stat>` (`Desecrator Hag`, `Drop of Honey`, `Purging Scythe`)
+    {
+        let tcp = ts.checkpoint();
+        if ts.eat_phrase(&["two", "or", "more"])
+            && try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_phrase(&["are", "tied", "for"])
+        {
+            let _ = ts.eat_word("the");
+            let greatest = if ts.eat_word("greatest") || ts.eat_word("highest") {
+                Some(true)
+            } else if ts.eat_word("least") || ts.eat_word("lowest") {
+                Some(false)
+            } else {
+                None
+            };
+            let stat = if ts.eat_word("power") {
+                Some(crate::ast::StatKind::Power)
+            } else if ts.eat_word("toughness") {
+                Some(crate::ast::StatKind::Toughness)
+            } else if ts.eat_phrase(&["mana", "value"]) {
+                Some(crate::ast::StatKind::ManaValue)
+            } else {
+                None
+            };
+            if let (Some(greatest), Some(stat)) = (greatest, stat) {
+                return Ok(ConditionExpr::TiedForExtremeStat { stat, greatest });
+            }
+        }
+        ts.restore(tcp);
+    }
+    // `<flt> is/are put into a graveyard this way` (`Come Back Wrong` + 8+ cards)
+    {
+        let gcp = ts.checkpoint();
+        if let Ok(flt) = try_parse(ts, parse_object_filter)
+            && (ts.eat_phrase(&["is", "put", "into", "a", "graveyard", "this", "way"])
+                || ts.eat_phrase(&["are", "put", "into", "a", "graveyard", "this", "way"])
+                || ts.eat_phrase(&["is", "put", "into", "your", "graveyard", "this", "way"]))
+        {
+            return Ok(ConditionExpr::PriorActionMatched {
+                action: PriorActionKind::MilledThisWay,
+                filter: Box::new(flt),
+            });
+        }
+        ts.restore(gcp);
+    }
+    // `no opponent controls <flt>` (`Kavu Runner`, `Vexing Beetle`)
+    {
+        let ncp = ts.checkpoint();
+        if ts.eat_phrase(&["no", "opponent", "controls"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+        {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Controls {
+                player: PlayerRef::AnyOpponent,
+                filter: Box::new(flt),
+                min_count: 1,
+            })));
+        }
+        ts.restore(ncp);
+    }
+    // `a library has <N> or fewer cards in it` (`Isleback Spawn`)
+    {
+        let lcp = ts.checkpoint();
+        if ts.eat_phrase(&["a", "library", "has"])
+            && let Some(n) = ts.next_number(false)
+            && ts.eat_phrase(&["or", "fewer", "cards", "in", "it"])
+        {
+            return Ok(ConditionExpr::LibraryCardsCompare {
+                op: CompareOp::Le,
+                count: u16::try_from(n.max(0)).unwrap_or(0),
+            });
+        }
+        ts.restore(lcp);
+    }
+    // `<subj> had counters on it` / `<subj> has [a|an|<kind>] counters on it` / `<subj> doesn't have a <kind> counter on it`
+    // / `<subj> has the chosen name` / `<subj> dealt [combat] damage [to <tgt>] this turn` / `<subj> hasn't/haven't dealt [combat] damage yet`
+    // / `<subj> attacked [or blocked] this combat` / `<subj> didn't enter the battlefield this turn` / `<subj> isn't prepared` / `<subj> was[n't] cast`
+    {
+        let scp = ts.checkpoint();
+        if let Ok(subj) = try_parse(ts, parse_subject_ref) {
+            if ts.eat_phrase(&["had", "counters", "on", "it"])
+                || ts.eat_phrase(&["had", "counters", "on", "them"])
+            {
+                return Ok(ConditionExpr::HadCountersOnIt(Box::new(subj)));
+            }
+            if ts.eat_phrase(&["has", "counters", "on", "it"])
+                || ts.eat_phrase(&["have", "counters", "on", "them"])
+            {
+                return Ok(ConditionExpr::SubjectHasCounters {
+                    subject: Box::new(subj),
+                    kind: None,
+                });
+            }
+            {
+                let hcp = ts.checkpoint();
+                if (ts.eat_word("has") || ts.eat_word("have"))
+                    && {
+                        let _ = ts.eat_word("a") || ts.eat_word("an");
+                        true
+                    }
+                    && let Ok(ck) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counter") || ts.eat_word("counters"))
+                    && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+                {
+                    return Ok(ConditionExpr::SubjectHasCounters {
+                        subject: Box::new(subj),
+                        kind: Some(ck),
+                    });
+                }
+                ts.restore(hcp);
+            }
+            {
+                let ncp = ts.checkpoint();
+                if (ts.eat_phrase(&["doesn't", "have"]) || ts.eat_phrase(&["don't", "have"]))
+                    && {
+                        let _ = ts.eat_word("a") || ts.eat_word("an");
+                        true
+                    }
+                    && let Ok(ck) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counter") || ts.eat_word("counters"))
+                    && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+                {
+                    return Ok(ConditionExpr::Not(Box::new(
+                        ConditionExpr::SubjectHasCounters {
+                            subject: Box::new(subj),
+                            kind: Some(ck),
+                        },
+                    )));
+                }
+                ts.restore(ncp);
+            }
+            if ts.eat_phrase(&["has", "the", "chosen", "name"]) {
+                return Ok(ConditionExpr::HasChosenName(Box::new(subj)));
+            }
+            if ts.eat_phrase(&["was", "cast"])
+                && !ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("from")
+                        || w.eq_ignore_ascii_case("for")
+                        || w.eq_ignore_ascii_case("using")
+                })
+            {
+                return Ok(ConditionExpr::SubjectWasCast(Box::new(subj)));
+            }
+            if ts.eat_phrase(&["wasn't", "cast"]) {
+                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectWasCast(
+                    Box::new(subj),
+                ))));
+            }
+            if ts.eat_phrase(&["isn't", "prepared"]) {
+                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectState {
+                    subject: Box::new(subj),
+                    state: ObjectStateKind::Modified,
+                })));
+            }
+            if ts.eat_phrase(&["didn't", "enter", "the", "battlefield", "this", "turn"])
+                || ts.eat_phrase(&["didn't", "enter", "this", "turn"])
+            {
+                return Ok(ConditionExpr::Not(Box::new(
+                    ConditionExpr::EnteredThisTurn(Box::new(subj)),
+                )));
+            }
+            if ts.eat_phrase(&["attacked", "or", "blocked", "this", "combat"]) {
+                return Ok(ConditionExpr::SubjectAttackedThisCombat {
+                    subject: Box::new(subj),
+                    or_blocked: true,
+                });
+            }
+            if ts.eat_phrase(&["attacked", "this", "combat"]) {
+                return Ok(ConditionExpr::SubjectAttackedThisCombat {
+                    subject: Box::new(subj),
+                    or_blocked: false,
+                });
+            }
+            if ts.eat_phrase(&["hasn't", "dealt", "combat", "damage", "yet"])
+                || ts.eat_phrase(&["haven't", "dealt", "combat", "damage", "yet"])
+            {
+                return Ok(ConditionExpr::SubjectHasntDealtDamageYet {
+                    subject: Box::new(subj),
+                    combat_only: true,
+                });
+            }
+            if ts.eat_phrase(&["hasn't", "dealt", "damage", "yet"])
+                || ts.eat_phrase(&["haven't", "dealt", "damage", "yet"])
+            {
+                return Ok(ConditionExpr::SubjectHasntDealtDamageYet {
+                    subject: Box::new(subj),
+                    combat_only: false,
+                });
+            }
+            if ts.eat_word("dealt") {
+                let combat_only = ts.eat_word("combat");
+                if ts.eat_word("damage") {
+                    if ts.eat_word("to") {
+                        let _ = opt(ts, parse_subject_ref);
+                    }
+                    if ts.eat_phrase(&["this", "turn"]) {
+                        return Ok(ConditionExpr::SubjectDealtDamageThisTurn {
+                            subject: Box::new(subj),
+                            combat_only,
+                        });
+                    }
+                }
+            }
+        }
+        ts.restore(scp);
+    }
+
+    // `you've committed a crime this turn` / `you've discarded a card this turn` / `there are N colors among <flt>` / `there are N or more permanent types among cards in <zone>` / `~ or another <flt> entered ...`
+    if ts.eat_phrase(&["you've", "committed", "a", "crime", "this", "turn"]) {
+        return Ok(ConditionExpr::CommittedCrimeThisTurn(PlayerRef::You));
+    }
+    if ts.eat_phrase(&["you've", "discarded", "a", "card", "this", "turn"])
+        || ts.eat_phrase(&[
+            "you've",
+            "discarded",
+            "one",
+            "or",
+            "more",
+            "cards",
+            "this",
+            "turn",
+        ])
+    {
+        return Ok(ConditionExpr::PlayerTurnEvent {
+            player: PlayerRef::You,
+            event: TurnEventKind::CardDiscarded,
+            filter: None,
+            min_count: 1,
+        });
+    }
+    {
+        let tcp = ts.checkpoint();
+        if ts.eat_phrase(&["there", "are"])
+            && let Some(n) = ts.next_number(false)
+        {
+            let _ = ts.eat_phrase(&["or", "more"]);
+            if ts.eat_phrase(&["colors", "among"])
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+            {
+                return Ok(ConditionExpr::ColorsAmongCount {
+                    filter: Box::new(flt),
+                    min_count: u8::try_from(n.max(1)).unwrap_or(5),
+                });
+            }
+            if ts.eat_phrase(&["permanent", "types", "among", "cards", "in"])
+                && let Ok(zone) = try_parse(ts, parse_zone_ref)
+            {
+                return Ok(ConditionExpr::DistinctPermanentTypesInZone {
+                    zone,
+                    min_count: u8::try_from(n.max(1)).unwrap_or(4),
+                });
+            }
+        }
+        ts.restore(tcp);
+    }
+    {
+        let ecp = ts.checkpoint();
+        if ts.eat_tilde()
+            && ts.eat_word("or")
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && (ts.eat_phrase(&[
+                "entered",
+                "the",
+                "battlefield",
+                "under",
+                "your",
+                "control",
+                "this",
+                "turn",
+            ]) || ts.eat_phrase(&["entered", "under", "your", "control", "this", "turn"])
+                || ts.eat_phrase(&["entered", "the", "battlefield", "this", "turn"]))
+        {
+            return Ok(ConditionExpr::PermanentEnteredThisTurn {
+                filter: Box::new(flt),
+                controller: PlayerRef::You,
                 min_count: 1,
             });
         }
+        ts.restore(ecp);
+    }
+    if ts.eat_phrase(&["a", "creature", "is", "attacking", "you"]) {
+        return Ok(ConditionExpr::CreatureAttackingYou);
+    }
+    {
+        let lcp = ts.checkpoint();
+        if (ts.eat_word("a") || ts.eat_word("an"))
+            && try_parse(ts, parse_object_filter).is_ok()
+            && (ts.eat_phrase(&[
+                "left",
+                "the",
+                "battlefield",
+                "under",
+                "your",
+                "control",
+                "this",
+                "turn",
+            ]) || ts.eat_phrase(&["left", "the", "battlefield", "this", "turn"]))
+        {
+            return Ok(ConditionExpr::PermanentLeftThisTurn);
+        }
+        ts.restore(lcp);
+    }
+    {
+        let scp = ts.checkpoint();
+        if ts.eat_phrase(&["you've", "sacrificed"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["this", "turn"])
+        {
+            return Ok(ConditionExpr::SacrificedPermanentThisTurn {
+                player: PlayerRef::You,
+                filter: Box::new(flt),
+            });
+        }
+        ts.restore(scp);
+    }
+
+    // `you've cast [<N> or more] <flt> this turn`
+    {
+        let ccp = ts.checkpoint();
+        if ts.eat_phrase(&["you've", "cast"]) {
+            let min_count = if let Some(n) = ts.next_number(false) {
+                let _ = ts.eat_phrase(&["or", "more"]);
+                u16::try_from(n.max(1)).unwrap_or(1)
+            } else {
+                1
+            };
+            let filter = opt(ts, parse_object_filter).map(Box::new);
+            if ts.eat_phrase(&["this", "turn"]) {
+                return Ok(ConditionExpr::PlayerTurnEvent {
+                    player: PlayerRef::You,
+                    event: TurnEventKind::SpellCast,
+                    filter,
+                    min_count,
+                });
+            }
+        }
+        ts.restore(ccp);
     }
 
     // General numeric value comparison (`<val1> is greater than / less than / less than or equal to / equal to <val2>`)

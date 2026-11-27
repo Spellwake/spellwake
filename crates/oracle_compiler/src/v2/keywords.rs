@@ -562,7 +562,7 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             ts.next_word();
             colors = colors.union(c);
             let _ = ts.eat_comma();
-            if ts.eat_phrase(&["and", "from"]) || ts.eat_word("and") {
+            if ts.eat_phrase(&["and", "from"]) || ts.eat_word("from") || ts.eat_word("and") {
                 continue;
             }
             break;
@@ -573,7 +573,30 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
         return Some(KeywordParam::Color(colors));
     }
     ts.restore(cp);
-    opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
+    let first = opt(ts, parse_object_filter)?;
+    let mut filters = vec![first];
+    loop {
+        let fcp = ts.checkpoint();
+        let _ = ts.eat_comma();
+        if (ts.eat_phrase(&["and", "from"]) || ts.eat_word("from"))
+            && let Ok(next_f) = try_parse(ts, parse_object_filter)
+        {
+            filters.push(next_f);
+            continue;
+        }
+        ts.restore(fcp);
+        break;
+    }
+    if filters.len() == 1 {
+        Some(KeywordParam::Filter(Box::new(filters.remove(0))))
+    } else {
+        Some(KeywordParam::Filter(Box::new(
+            crate::v2::ir::ObjectFilter {
+                predicates: vec![crate::v2::ir::FilterPredicate::AnyOf(filters)],
+                ..Default::default()
+            },
+        )))
+    }
 }
 
 /// Parse a comma/semicolon/`and`/`or`-separated list of keywords (`flying, deathtouch, or hexproof`).

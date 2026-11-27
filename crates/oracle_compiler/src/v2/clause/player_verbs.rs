@@ -25,6 +25,91 @@ pub(super) fn parse_player_verb_frame(
     actor: PlayerRef,
 ) -> PResult<(Vec<Effect>, ())> {
     // 1. `Add <mana> [for each <expr>]` (exact, choice `{W} or {U}` / `{B}, {R}, or {G}`, any color, chosen color)
+    if ts.eat_word("double") || ts.eat_word("doubles") {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "power", "and", "toughness", "of"])
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::DoubleStat {
+                        power: true,
+                        toughness: true,
+                    },
+                    duration,
+                }],
+                (),
+            ));
+        }
+        ts.restore(dcp);
+        if ts.eat_phrase(&["the", "power", "of"])
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::DoubleStat {
+                        power: true,
+                        toughness: false,
+                    },
+                    duration,
+                }],
+                (),
+            ));
+        }
+        ts.restore(dcp);
+        if ts.eat_phrase(&["the", "toughness", "of"])
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::DoubleStat {
+                        power: false,
+                        toughness: true,
+                    },
+                    duration,
+                }],
+                (),
+            ));
+        }
+        ts.restore(dcp);
+        if ts.eat_phrase(&["the", "number", "of"]) {
+            let kind = if ts.eat_phrase(&["each", "kind", "of", "counter", "on"])
+                || ts.eat_phrase(&["each", "kind", "of", "counters", "on"])
+            {
+                Some(None)
+            } else if let Ok(k) = try_parse(ts, parse_counter_kind)
+                && (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_word("on")
+            {
+                Some(Some(k))
+            } else if (ts.eat_word("counters") || ts.eat_word("counter")) && ts.eat_word("on") {
+                Some(None)
+            } else {
+                None
+            };
+            if let Some(kind) = kind
+                && let Ok(subject) = try_parse(ts, parse_subject_ref)
+            {
+                return Ok((
+                    vec![Effect::MutateObject {
+                        subject,
+                        mutation: ObjectMutation::DoubleCounters { kind },
+                        duration: Duration::Instant,
+                    }],
+                    (),
+                ));
+            }
+        }
+        ts.restore(dcp);
+        return Err(ts.err("expected `the power/toughness/number of counters` after `double`"));
+    }
+
     if ts.eat_word("add") || ts.eat_word("adds") {
         let base = parse_mana_addition(ts)?;
         let spec = if let Some(scale) = opt(ts, parse_for_each_expr) {
@@ -74,6 +159,34 @@ pub(super) fn parse_player_verb_frame(
                 }],
                 (),
             ));
+        }
+        // `an amount of {E} equal to <val>` (`Peema Aether-Seer`, `Robobrain War Mind`, `Electrosiphon`)
+        {
+            let ecp = ts.checkpoint();
+            if ts.eat_phrase(&["an", "amount", "of"])
+                && matches!(
+                    ts.peek().map(|t| &t.kind),
+                    Some(TokenKind::Mana(ManaSymbol::Energy))
+                )
+            {
+                ts.next_tok();
+                if ts.eat_phrase(&["equal", "to"])
+                    && let Ok(count) = try_parse(ts, parse_value_expr)
+                {
+                    return Ok((
+                        vec![Effect::MutatePlayer {
+                            player: actor,
+                            mutation: PlayerMutation::GainCounters {
+                                kind: CounterKind::Energy,
+                                count,
+                            },
+                            duration: Duration::Instant,
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(ecp);
         }
         // Energy symbols `{E}{E}{E}`
         let mut energy_count = 0i32;
@@ -556,19 +669,65 @@ pub(super) fn parse_player_verb_frame(
         return Err(ts.err("expected die specification after `roll`"));
     }
 
-    // 3f. `copy(ies) <subj> [for each <expr>]` (`Copy target instant or sorcery spell`, `copy it for each time ...`)
+    // 3f. `copy(ies) <subj> [for each <expr>] [, except ...]` (`Copy target instant or sorcery spell`, `Donal`, `Tawnos`, `Fork`, `The Sixth Doctor`)
     if ts.eat_word("copy") || ts.eat_word("copies") {
         let subject = parse_subject_ref(ts)?;
         let count = opt(ts, parse_for_each_expr).unwrap_or(ValueExpr::Const(1));
+        let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
         return Ok((
             vec![Effect::CopyObject {
                 actor,
                 subject,
                 count,
                 modifiers: EntryModifiers::default(),
+                exceptions,
             }],
             (),
         ));
+    }
+
+    // 3f3. `change the text of <subj> by replacing all instances of [one color word / one basic land type / one creature type] with another [of your choice] [dur]` (`Sleight of Mind`, `New Blood`, `Magical Hack`, `Mind Bend`, 13+ cards)
+    if ts.eat_phrase(&["change", "the", "text", "of"])
+        || ts.eat_phrase(&["changes", "the", "text", "of"])
+    {
+        let subject = parse_subject_ref(ts)?;
+        if ts.eat_phrase(&["by", "replacing", "all", "instances", "of"]) {
+            let kind = if ts.eat_phrase(&["one", "color", "word", "with", "another"])
+                || ts.eat_phrase(&[
+                    "one", "color", "word", "with", "another", "or", "one", "basic", "land",
+                    "type", "with", "another",
+                ]) {
+                CharacteristicKind::Color
+            } else if ts.eat_phrase(&["one", "basic", "land", "type", "with", "another"]) {
+                CharacteristicKind::BasicLandType
+            } else if ts.eat_phrase(&["one", "creature", "type", "with", "another"])
+                || ts.eat_phrase(&["one", "creature", "type", "with"])
+            {
+                let _ = opt(ts, |t| {
+                    if let Some(w) = t.peek_word()
+                        && t.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some()
+                    {
+                        t.next_word();
+                        Ok(())
+                    } else {
+                        Err(t.err("not subtype"))
+                    }
+                });
+                CharacteristicKind::CreatureType
+            } else {
+                return Err(ts.err("expected text-change characteristic kind"));
+            };
+            let _ = ts.eat_phrase(&["of", "your", "choice"]);
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::ChangeText(kind),
+                    duration,
+                }],
+                (),
+            ));
+        }
     }
 
     // 3f2. `change(s) the target of <subj> [to <new_tgt>]` (`Muck Drubb`, `Willbender`, `Ricochet Trap`, `Untimely Malfunction`)
@@ -670,6 +829,26 @@ pub(super) fn parse_player_verb_frame(
             Cost::PayAnyAmountMana
         } else if ts.eat_phrase(&["any", "amount", "of", "life"]) {
             Cost::PayAnyAmountLife
+        } else if ts.eat_phrase(&["an", "amount", "of"])
+            && matches!(
+                ts.peek().map(|t| &t.kind),
+                Some(TokenKind::Mana(ManaSymbol::Energy))
+            )
+        {
+            ts.next_tok();
+            if !ts.eat_phrase(&["equal", "to"]) {
+                return Err(ts.err("expected `equal to` after `an amount of {E}`"));
+            }
+            let amt = parse_value_expr(ts)?;
+            Cost::PayEnergy(amt)
+        } else if ts.eat_phrase(&["one", "or", "more"])
+            && matches!(
+                ts.peek().map(|t| &t.kind),
+                Some(TokenKind::Mana(ManaSymbol::Energy))
+            )
+        {
+            ts.next_tok();
+            Cost::PayEnergy(ValueExpr::Var(crate::v2::ir::VarName::X))
         } else if let Some(mc) = ts.eat_mana_cost() {
             Cost::Mana(mc)
         } else {
@@ -842,7 +1021,7 @@ pub(super) fn parse_player_verb_frame(
         {
             parse_value_expr(ts)?
         } else {
-            let base = if ts.eat_word("a") {
+            let base = if ts.eat_word("a") || ts.eat_word("an") {
                 ValueExpr::Const(1)
             } else {
                 parse_value_expr(ts)?
@@ -1251,12 +1430,13 @@ pub(super) fn parse_player_verb_frame(
             }
             let zref = parse_zone_ref(ts)?;
             let face_down = ts.eat_phrase(&["face", "down"]);
+            let counters = parse_exile_with_counters(ts);
             return Ok((
                 vec![Effect::ZoneOp {
                     actor,
                     op: ZoneOpKind::Exile {
                         face_down,
-                        counters: None,
+                        counters,
                     },
                     subject: SubjectRef::Group(Box::new(ObjectFilter {
                         any_card: true,
@@ -1309,37 +1489,8 @@ pub(super) fn parse_player_verb_frame(
             from.push(parse_zone_ref(ts)?);
         }
         let face_down = ts.eat_phrase(&["face", "down"]);
-        // Optional `with <N> <kind> counters on it` / `with a number of <kind> counters on it equal to <val>`
-        let counters = if ts
-            .peek_word()
-            .is_some_and(|w| w.eq_ignore_ascii_case("with"))
-        {
-            let wcp = ts.checkpoint();
-            ts.eat_word("with");
-            if ts.eat_phrase(&["a", "number", "of"]) {
-                let ck = parse_counter_kind(ts)?;
-                if (ts.eat_word("counters") || ts.eat_word("counter"))
-                    && ts.eat_phrase(&["on", "it", "equal", "to"])
-                {
-                    let val = parse_value_expr(ts)?;
-                    Some((ck, val))
-                } else {
-                    ts.restore(wcp);
-                    None
-                }
-            } else if let Ok(val) = try_parse(ts, parse_value_expr)
-                && let Ok(ck) = try_parse(ts, parse_counter_kind)
-                && (ts.eat_word("counters") || ts.eat_word("counter"))
-            {
-                let _ = ts.eat_phrase(&["on", "it"]);
-                Some((ck, val))
-            } else {
-                ts.restore(wcp);
-                None
-            }
-        } else {
-            None
-        };
+        // Optional `with a/an/<N> <kind> counter(s) on it` / `with a number of <kind> counters on it equal to <val>`
+        let counters = parse_exile_with_counters(ts);
         let ex_dur = parse_trailing_duration(ts);
         let _ = ts.eat_phrase(&[
             "instead",
@@ -1505,8 +1656,29 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 14. `put(s) ...` (BOTH `put <cnt> <kind> counter(s) on <subj>` AND `put <subj> into/onto/on <dest>`)
+    // 14. `put(s) ...` (BOTH `put <cnt> <kind> counter(s) on <subj>` AND `put a <kind> sticker on <subj>` AND `put <subj> into/onto/on <dest>`)
     if ts.eat_word("put") || ts.eat_word("puts") {
+        // 14a0. `put a [name|ability|art] sticker on <subj>` (`Sword-Swallowing Seraph` + 7+ Unfinity cards)
+        {
+            let scp = ts.checkpoint();
+            if (ts.eat_word("a") || ts.eat_word("an"))
+                && (ts.eat_phrase(&["name", "sticker", "on"])
+                    || ts.eat_phrase(&["ability", "sticker", "on"])
+                    || ts.eat_phrase(&["art", "sticker", "on"])
+                    || ts.eat_phrase(&["sticker", "on"]))
+                && let Ok(subject) = try_parse(ts, parse_subject_ref)
+            {
+                return Ok((
+                    vec![Effect::MutateObject {
+                        subject,
+                        mutation: ObjectMutation::PutSticker,
+                        duration: Duration::Permanent,
+                    }],
+                    (),
+                ));
+            }
+            ts.restore(scp);
+        }
         // 14a. `put a number of <kind> counters on <subj> equal to <val>`
         {
             let cp = ts.checkpoint();
@@ -1964,18 +2136,40 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 18. `search your library [and/or graveyard] for [any number of | up to | exactly] <N|X> <flt>`
+    // 18. `search <zone> [, <zone>, and/or <zone>] for [all | any number of | up to | exactly] <N|X> <flt>`
     if ts.eat_word("search") || ts.eat_word("searches") {
         let mut libs = vec![parse_zone_ref(ts)?];
-        if (ts.eat_word("and/or") || ts.eat_word("and") || ts.eat_word("or"))
-            && let Ok(z2) = try_parse(ts, parse_zone_ref)
-        {
-            libs.push(z2);
+        loop {
+            let zcp = ts.checkpoint();
+            let had_comma = ts.eat_comma();
+            let had_conj = ts.eat_word("and/or") || ts.eat_word("and") || ts.eat_word("or");
+            if (had_comma || had_conj)
+                && let Ok(z2) = try_parse(ts, parse_zone_ref)
+            {
+                libs.push(z2);
+                continue;
+            }
+            if (had_comma || had_conj)
+                && let Some(wk) = ts.peek_word().map(|w| w.to_ascii_lowercase())
+                && matches!(wk.as_str(), "hand" | "graveyard" | "library")
+            {
+                ts.next_word();
+                let zone = match wk.as_str() {
+                    "hand" => ZoneKind::Hand,
+                    "graveyard" => ZoneKind::Graveyard,
+                    _ => ZoneKind::Library,
+                };
+                let owner = libs.first().map_or(ZoneOwner::Default, |z| z.owner);
+                libs.push(ZoneRef { zone, owner });
+                continue;
+            }
+            ts.restore(zcp);
+            break;
         }
         if !ts.eat_word("for") {
             return Err(ts.err("expected `for` in search library"));
         }
-        let any_number = ts.eat_phrase(&["any", "number", "of"]);
+        let any_number = ts.eat_phrase(&["any", "number", "of"]) || ts.eat_word("all");
         let up_to = !any_number && ts.eat_phrase(&["up", "to"]);
         let exact = !any_number && !up_to && ts.eat_word("exactly");
         let count = if any_number {
@@ -2009,8 +2203,51 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 19. `reveal(s) [cards from the top of <lib> until ... | the top <N> cards of <lib> | <subj>]` / `look(s) at ...`
+    // 19. `reveal(s) ...`
     if ts.eat_word("reveal") || ts.eat_word("reveals") {
+        // `reveal(s) [a number of cards | <val> cards] from their/your hand [equal to <val>]` (`Acquisitions Expert`, `Taster of Wares`)
+        {
+            let hcp = ts.checkpoint();
+            let mut deferred = false;
+            let cnt_opt = if ts.eat_phrase(&["a", "number", "of", "cards"]) {
+                deferred = true;
+                Some(ValueExpr::Const(1))
+            } else if let Ok(v) = try_parse(ts, parse_value_expr)
+                && (ts.eat_word("cards") || ts.eat_word("card"))
+            {
+                Some(v)
+            } else {
+                None
+            };
+            if let Some(cnt) = cnt_opt
+                && ts.eat_word("from")
+                && let Ok(zref) = try_parse(ts, parse_zone_ref)
+            {
+                let final_cnt = if deferred && ts.eat_phrase(&["equal", "to"]) {
+                    parse_value_expr(ts)?
+                } else {
+                    cnt
+                };
+                return Ok((
+                    vec![Effect::ZoneOp {
+                        actor,
+                        op: ZoneOpKind::Reveal,
+                        subject: SubjectRef::Player(actor),
+                        from: vec![zref],
+                        to: None,
+                        modifiers: EntryModifiers::default(),
+                        except: None,
+                        count: Some(CountSpec {
+                            count: final_cnt,
+                            up_to: false,
+                            any_number: false,
+                        }),
+                    }],
+                    (),
+                ));
+            }
+            ts.restore(hcp);
+        }
         {
             let rcp = ts.checkpoint();
             if ts.eat_phrase(&["cards", "from", "the", "top", "of"])
@@ -2050,10 +2287,14 @@ pub(super) fn parse_player_verb_frame(
                 }
                 n
             };
-            if !ts.eat_word("of") {
-                return Err(ts.err("expected `of` after `reveal the top card(s)`"));
-            }
-            let zref = parse_zone_ref(ts)?;
+            let zref = if ts.eat_word("of") {
+                parse_zone_ref(ts)?
+            } else {
+                ZoneRef {
+                    zone: ZoneKind::Library,
+                    owner: ZoneOwner::You,
+                }
+            };
             return Ok((
                 vec![Effect::ZoneOp {
                     actor,
@@ -2241,11 +2482,17 @@ pub(super) fn parse_player_verb_frame(
             ));
         }
         if ts.eat_phrase(&["khans", "or", "dragons"])
+            || ts.eat_phrase(&["dragons", "or", "khans"])
             || ts.eat_phrase(&["abzan", "or", "mardu"])
             || ts.eat_phrase(&["temur", "or", "sultai"])
             || ts.eat_phrase(&["jeskai", "or", "abzan"])
             || ts.eat_phrase(&["mardu", "or", "temur"])
             || ts.eat_phrase(&["sultai", "or", "jeskai"])
+            || ts.eat_phrase(&["sultai", "or", "abzan"])
+            || ts.eat_phrase(&["abzan", "or", "sultai"])
+            || ts.eat_phrase(&["war", "or", "peace"])
+            || ts.eat_phrase(&["left", "or", "right"])
+            || ts.eat_phrase(&["friend", "or", "foe"])
             || ts.eat_phrase(&["friends", "or", "foes"])
         {
             return Ok((
@@ -2464,29 +2711,79 @@ pub(super) fn parse_player_verb_frame(
         }
     }
 
-    // 24. `counter <subj> [unless its controller pays <cost> [for each <expr>]]`
+    // 24. `counter <subj> [unless its controller pays <cost> [for each <expr>] | unless its controller <effect>]`
     if ts.eat_word("counter") {
         let subject = parse_subject_ref(ts)?;
-        let unless_pay = if ts.eat_phrase(&["unless", "its", "controller", "pays"]) {
-            let base_cost = parse_cost_atom(ts)?;
-            let final_cost = match base_cost {
-                Cost::Mana(mc) => {
-                    if let Some(scale) = opt(ts, parse_for_each_expr) {
-                        Cost::ScaledMana { base: mc, scale }
-                    } else {
-                        Cost::Mana(mc)
-                    }
+        {
+            let ucp = ts.checkpoint();
+            if ts.eat_word("unless") {
+                if ts.eat_phrase(&["its", "controller", "pays"]) {
+                    let base_cost = parse_cost_atom(ts)?;
+                    let final_cost = match base_cost {
+                        Cost::Mana(mc) => {
+                            if let Some(scale) = opt(ts, parse_for_each_expr) {
+                                Cost::ScaledMana { base: mc, scale }
+                            } else {
+                                Cost::Mana(mc)
+                            }
+                        }
+                        other => other,
+                    };
+                    return Ok((
+                        vec![Effect::ZoneOp {
+                            actor,
+                            op: ZoneOpKind::CounterSpell {
+                                unless_pay: Some(Box::new(final_cost)),
+                            },
+                            subject,
+                            from: vec![ZoneRef {
+                                zone: ZoneKind::Stack,
+                                owner: ZoneOwner::Default,
+                            }],
+                            to: None,
+                            modifiers: EntryModifiers::default(),
+                            except: None,
+                            count: None,
+                        }],
+                        (),
+                    ));
                 }
-                other => other,
-            };
-            Some(Box::new(final_cost))
-        } else {
-            None
-        };
+                if let Ok(payer) = try_parse(ts, parse_player_ref)
+                    && let Ok((alt_body, _)) = try_parse(ts, |t| parse_player_verb_frame(t, payer))
+                {
+                    return Ok((
+                        vec![Effect::Unless {
+                            body: vec![Effect::ZoneOp {
+                                actor,
+                                op: ZoneOpKind::CounterSpell { unless_pay: None },
+                                subject,
+                                from: vec![ZoneRef {
+                                    zone: ZoneKind::Stack,
+                                    owner: ZoneOwner::Default,
+                                }],
+                                to: None,
+                                modifiers: EntryModifiers::default(),
+                                except: None,
+                                count: None,
+                            }],
+                            payer: Some(payer),
+                            cost: None,
+                            condition: if alt_body.is_empty() {
+                                None
+                            } else {
+                                Some(crate::v2::ir::ConditionExpr::AdditionalCostPaid)
+                            },
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(ucp);
+        }
         return Ok((
             vec![Effect::ZoneOp {
                 actor,
-                op: ZoneOpKind::CounterSpell { unless_pay },
+                op: ZoneOpKind::CounterSpell { unless_pay: None },
                 subject,
                 from: vec![ZoneRef {
                     zone: ZoneKind::Stack,
@@ -2501,24 +2798,47 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 25. `mill(s) <N> card(s)`
+    // 25. `mill(s) [half their/your library, rounded up/down | cards equal to <val> | <N> card(s)]`
     if ts.eat_word("mill") || ts.eat_word("mills") {
-        let count = if ts.eat_word("a") {
-            ValueExpr::Const(1)
-        } else {
-            parse_value_expr(ts)?
-        };
-        if !(ts.eat_word("card") || ts.eat_word("cards")) {
-            return Err(ts.err("expected `card(s)` after `mill`"));
-        }
-        let final_cnt = if let Some(fe) = opt(ts, parse_for_each_expr) {
-            if count == ValueExpr::Const(1) {
-                fe
+        let final_cnt = if ts.eat_phrase(&["half", "their", "library"])
+            || ts.eat_phrase(&["half", "your", "library"])
+            || ts.eat_phrase(&["half", "that", "player's", "library"])
+        {
+            let _ = ts.eat_comma();
+            let rounding = if ts.eat_phrase(&["rounded", "up"]) {
+                crate::ast::Rounding::Up
             } else {
-                ValueExpr::Mul(Box::new(count), Box::new(fe))
+                let _ = ts.eat_phrase(&["rounded", "down"]);
+                crate::ast::Rounding::Down
+            };
+            ValueExpr::Div {
+                expr: Box::new(ValueExpr::PlayerStat {
+                    player: actor,
+                    stat: crate::ast::PlayerStatKind::CardsInLibrary,
+                }),
+                denom: 2,
+                rounding,
             }
+        } else if ts.eat_phrase(&["cards", "equal", "to"]) {
+            parse_value_expr(ts)?
         } else {
-            count
+            let count = if ts.eat_word("a") {
+                ValueExpr::Const(1)
+            } else {
+                parse_value_expr(ts)?
+            };
+            if !(ts.eat_word("card") || ts.eat_word("cards")) {
+                return Err(ts.err("expected `card(s)` after `mill`"));
+            }
+            if let Some(fe) = opt(ts, parse_for_each_expr) {
+                if count == ValueExpr::Const(1) {
+                    fe
+                } else {
+                    ValueExpr::Mul(Box::new(count), Box::new(fe))
+                }
+            } else {
+                count
+            }
         };
         return Ok((
             vec![Effect::ZoneOp {
@@ -2995,6 +3315,22 @@ fn parse_keyword_action_verb(ts: &mut TokenStream<'_>, actor: PlayerRef) -> PRes
             duration: Duration::Instant,
         });
     }
+    if ts.eat_word("blight") || ts.eat_word("blights") {
+        let amount = parse_value_expr(ts)?;
+        return Ok(Effect::MutatePlayer {
+            player: actor,
+            mutation: PlayerMutation::Blight(amount),
+            duration: Duration::Instant,
+        });
+    }
+    if ts.eat_word("behold") || ts.eat_word("beholds") {
+        let flt = parse_object_filter(ts)?;
+        return Ok(Effect::MutatePlayer {
+            player: actor,
+            mutation: PlayerMutation::Behold(flt),
+            duration: Duration::Instant,
+        });
+    }
     if ts.eat_word("adapt") || ts.eat_word("adapts") {
         let n = ts
             .next_number(false)
@@ -3136,4 +3472,42 @@ fn parse_keyword_action_verb(ts: &mut TokenStream<'_>, actor: PlayerRef) -> PRes
         });
     }
     Err(ts.err("not a keyword action verb"))
+}
+
+fn parse_exile_with_counters(ts: &mut TokenStream<'_>) -> Option<(CounterKind, ValueExpr)> {
+    if !ts
+        .peek_word()
+        .is_some_and(|w| w.eq_ignore_ascii_case("with"))
+    {
+        return None;
+    }
+    let wcp = ts.checkpoint();
+    ts.eat_word("with");
+    if ts.eat_phrase(&["a", "number", "of"]) {
+        if let Ok(ck) = try_parse(ts, parse_counter_kind)
+            && (ts.eat_word("counters") || ts.eat_word("counter"))
+            && ts.eat_phrase(&["on", "it", "equal", "to"])
+            && let Ok(val) = try_parse(ts, parse_value_expr)
+        {
+            return Some((ck, val));
+        }
+        ts.restore(wcp);
+        return None;
+    }
+    let val = if ts.eat_word("a") || ts.eat_word("an") {
+        ValueExpr::Const(1)
+    } else if let Ok(v) = try_parse(ts, parse_value_expr) {
+        v
+    } else {
+        ts.restore(wcp);
+        return None;
+    };
+    if let Ok(ck) = try_parse(ts, parse_counter_kind)
+        && (ts.eat_word("counters") || ts.eat_word("counter"))
+    {
+        let _ = ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]);
+        return Some((ck, val));
+    }
+    ts.restore(wcp);
+    None
 }

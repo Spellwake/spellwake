@@ -28,6 +28,17 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     {
         return Ok(PlayerRef::HighestLifePlayer);
     }
+    if ts.eat_phrase(&[
+        "each", "player", "who", "searched", "their", "library", "this", "way",
+    ]) {
+        return Ok(PlayerRef::SearchedLibraryPlayer);
+    }
+    if ts.eat_phrase(&["each", "player", "who", "controls", "the", "most"])
+        || ts.eat_phrase(&["the", "player", "who", "controls", "the", "most"])
+    {
+        let _ = try_parse(ts, parse_object_filter);
+        return Ok(PlayerRef::MostObjectsPlayer);
+    }
     if ts.eat_phrase(&["each", "other", "opponent"]) {
         return Ok(PlayerRef::EachOtherOpponent);
     }
@@ -678,6 +689,18 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 ts.next_word();
                 flt.flags = flt.flags.union(FilterFlags::SUSPENDED);
             }
+            "stickered" => {
+                ts.next_word();
+                flt.flags = flt.flags.union(FilterFlags::STICKERED);
+            }
+            "renowned" => {
+                ts.next_word();
+                flt.flags = flt.flags.union(FilterFlags::RENOWNED);
+            }
+            "adventure" => {
+                ts.next_word();
+                flt.flags = flt.flags.union(FilterFlags::HAS_ADVENTURE);
+            }
             "permanent" | "permanents" => {
                 ts.next_word();
                 flt.any_permanent = true;
@@ -962,7 +985,35 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 zone: ZoneKind::Battlefield,
                 owner: ZoneOwner::Default,
             });
+            if ts.eat_phrase(&["or", "in", "the", "command", "zone"]) {
+                flt.zones.push(ZoneRef {
+                    zone: ZoneKind::CommandZone,
+                    owner: ZoneOwner::Default,
+                });
+            }
             continue;
+        }
+        if ts.eat_phrase(&["you", "exiled"]) || ts.eat_phrase(&["you've", "exiled"]) {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::ExiledThisWay,
+            ));
+            continue;
+        }
+        if ts.eat_phrase(&["at", "the", "beginning", "of", "this", "turn"]) {
+            flt.flags = flt.flags.union(FilterFlags::LKI_PAST_TENSE);
+            continue;
+        }
+        {
+            let acp = ts.checkpoint();
+            if ts.eat_word("attacking")
+                && let Ok(p) = try_parse(ts, parse_player_ref)
+            {
+                flt.combat = Some(CombatState::Attacking);
+                flt.predicates
+                    .push(FilterPredicate::AttackedPlayerThisTurn(p));
+                continue;
+            }
+            ts.restore(acp);
         }
         if ts.eat_phrase(&["you've", "cast", "this", "turn"]) {
             flt.controller = Some(ControllerRelation::You);
@@ -1039,6 +1090,30 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             flt.predicates.push(FilterPredicate::OfChosenCreatureType);
             continue;
         }
+        if ts.eat_phrase(&["of", "that", "color"]) {
+            flt.predicates.push(FilterPredicate::OfThatColor);
+            continue;
+        }
+        if ts.eat_phrase(&["you", "both", "own", "and", "control"]) {
+            flt.controller = Some(ControllerRelation::You);
+            flt.owner = Some(ControllerRelation::OwnerYou);
+            flt.predicates
+                .push(FilterPredicate::OwnedAndControlledByYou);
+            continue;
+        }
+        if ts.eat_phrase(&["you", "own", "that", "your", "opponents", "control"])
+            || ts.eat_phrase(&["you", "own", "that", "an", "opponent", "controls"])
+        {
+            flt.owner = Some(ControllerRelation::OwnerYou);
+            flt.controller = Some(ControllerRelation::Opponents);
+            continue;
+        }
+        if ts.eat_phrase(&["controlled", "by", "the", "same", "opponent"])
+            || ts.eat_phrase(&["controlled", "by", "the", "same", "player"])
+        {
+            flt.predicates.push(FilterPredicate::SameController);
+            continue;
+        }
         if ts.eat_phrase(&["you", "control"]) || ts.eat_phrase(&["you", "cast"]) {
             flt.controller = Some(ControllerRelation::You);
             continue;
@@ -1104,7 +1179,18 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             flt.controller = Some(ControllerRelation::TargetOpponent);
             continue;
         }
-        if ts.eat_phrase(&["they", "control"]) || ts.eat_phrase(&["that", "player", "controls"]) {
+        if ts.eat_phrase(&["they", "control"])
+            || ts.eat_phrase(&["that", "player", "controls"])
+            || ts.eat_phrase(&[
+                "that",
+                "player",
+                "or",
+                "that",
+                "planeswalker's",
+                "controller",
+                "controls",
+            ])
+        {
             flt.controller = Some(ControllerRelation::ThatPlayer);
             continue;
         }
@@ -1117,7 +1203,8 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             flt.predicates.push(FilterPredicate::OfChosenColor);
             continue;
         }
-        if ts.eat_phrase(&["of", "the", "chosen", "creature", "type"])
+        if ts.eat_phrase(&["of", "the", "creature", "type", "of", "your", "choice"])
+            || ts.eat_phrase(&["of", "the", "chosen", "creature", "type"])
             || ts.eat_phrase(&["of", "the", "chosen", "type"])
         {
             flt.predicates.push(FilterPredicate::OfChosenCreatureType);
@@ -1131,6 +1218,13 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
         }
         if ts.eat_phrase(&["drawn", "this", "turn"]) {
             flt.predicates.push(FilterPredicate::DrawnThisTurn);
+            continue;
+        }
+        if ts.eat_phrase(&["of", "an", "opponent's", "choice"])
+            || ts.eat_phrase(&["of", "opponents'", "choice"])
+        {
+            flt.predicates
+                .push(FilterPredicate::OfChosenPlayer(PlayerRef::AnyOpponent));
             continue;
         }
         if ts.eat_phrase(&["of", "their", "choice"]) {
@@ -1147,7 +1241,13 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             flt.flags = flt.flags.union(FilterFlags::EXILED_WITH_SELF);
             continue;
         }
-        if ts.eat_phrase(&["from", "among", "them"])
+        if ts.eat_phrase(&["from", "among", "the", "cards", "milled", "this", "way"])
+            || ts.eat_phrase(&["from", "among", "the", "cards", "exiled", "this", "way"])
+            || ts.eat_phrase(&["from", "among", "the", "cards", "revealed", "this", "way"])
+            || ts.eat_phrase(&["among", "the", "cards", "milled", "this", "way"])
+            || ts.eat_phrase(&["among", "the", "cards", "exiled", "this", "way"])
+            || ts.eat_phrase(&["among", "the", "cards", "revealed", "this", "way"])
+            || ts.eat_phrase(&["from", "among", "them"])
             || ts.eat_phrase(&["from", "among", "those", "cards"])
             || ts.eat_phrase(&["from", "among", "the", "milled", "cards"])
             || ts.eat_phrase(&["from", "among", "the", "exiled", "cards"])
@@ -1158,6 +1258,13 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             || ts.eat_phrase(&["among", "those", "cards"])
         {
             flt.predicates.push(FilterPredicate::AmongPriorCards);
+            continue;
+        }
+        if (ts.eat_phrase(&["from", "among", "cards", "exiled", "with"])
+            || ts.eat_phrase(&["among", "cards", "exiled", "with"]))
+            && (ts.eat_tilde() || ts.eat_word("it"))
+        {
+            flt.flags = flt.flags.union(FilterFlags::EXILED_WITH_SELF);
             continue;
         }
 
@@ -1193,7 +1300,7 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 ts.restore(cp);
                 break;
             }
-            if ts.eat_phrase(&["the", "chosen", "name"]) {
+            if ts.eat_phrase(&["the", "chosen", "name"]) || ts.eat_phrase(&["that", "name"]) {
                 flt.predicates.push(FilterPredicate::OfChosenName);
                 continue;
             }
@@ -1242,16 +1349,75 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 });
                 continue;
             }
+            if ts.eat_phrase(&["the", "same", "controller"]) {
+                flt.predicates.push(FilterPredicate::SameController);
+                continue;
+            }
+            if ts.eat_phrase(&["the", "same", "mana", "value"]) {
+                let ref_subj = if ts.eat_word("as") {
+                    try_parse(ts, parse_subject_ref).unwrap_or(SubjectRef::SelfObject)
+                } else {
+                    SubjectRef::SelfObject
+                };
+                flt.predicates.push(FilterPredicate::SharesPropertyWith {
+                    property: SharedProperty::ManaValue,
+                    reference: Box::new(ref_subj),
+                    negated: false,
+                });
+                continue;
+            }
             if ts.eat_phrase(&["the", "greatest"])
                 && let Some(stat) = parse_single_stat_kind(ts)
-                && ts.eat_word("among")
-                && let Ok(scope) = try_parse(ts, parse_object_filter)
             {
+                let scope = if ts.eat_word("among") {
+                    try_parse(ts, parse_object_filter).unwrap_or_default()
+                } else {
+                    ObjectFilter::default()
+                };
                 flt.predicates.push(FilterPredicate::GreatestStat {
                     stat,
                     scope: Box::new(scope),
                 });
                 continue;
+            }
+            if ts.eat_phrase(&["the", "least"])
+                && let Some(stat) = parse_single_stat_kind(ts)
+            {
+                let scope = if ts.eat_word("among") {
+                    try_parse(ts, parse_object_filter).unwrap_or_default()
+                } else {
+                    ObjectFilter::default()
+                };
+                flt.predicates.push(FilterPredicate::LeastStat {
+                    stat,
+                    scope: Box::new(scope),
+                });
+                continue;
+            }
+            if ts.eat_phrase(&["a", "name", "sticker", "on", "it"])
+                || ts.eat_phrase(&["a", "name", "sticker", "on", "them"])
+            {
+                flt.predicates.push(FilterPredicate::HasNameSticker);
+                continue;
+            }
+            if ts.eat_phrase(&["a", "basic", "land", "type"]) {
+                flt.predicates.push(FilterPredicate::HasBasicLandType);
+                continue;
+            }
+            if ts.eat_phrase(&["a", "mana", "ability"]) {
+                flt.predicates.push(FilterPredicate::HasManaAbility);
+                continue;
+            }
+            {
+                let abcp = ts.checkpoint();
+                if (ts.eat_word("a") || ts.eat_word("an"))
+                    && let Ok(kw) = try_parse(ts, crate::v2::keywords::parse_keyword_kind)
+                    && ts.eat_word("ability")
+                {
+                    flt.predicates.push(FilterPredicate::HasNamedAbility(kw));
+                    continue;
+                }
+                ts.restore(abcp);
             }
             if ts.eat_phrase(&["a", "single", "target"]) {
                 flt.flags = flt.flags.union(FilterFlags::SINGLE_TARGET);
@@ -1459,6 +1625,8 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             }
             if ts.eat_phrase(&["was", "dealt", "damage", "this", "turn"])
                 || ts.eat_phrase(&["were", "dealt", "damage", "this", "turn"])
+                || ts.eat_phrase(&["has", "been", "dealt", "damage", "this", "turn"])
+                || ts.eat_phrase(&["have", "been", "dealt", "damage", "this", "turn"])
             {
                 flt.flags = flt.flags.union(FilterFlags::DEALT_DAMAGE_THIS_TURN);
                 continue;
@@ -1467,6 +1635,11 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 || ts.eat_phrase(&["entered", "this", "turn"])
             {
                 flt.flags = flt.flags.union(FilterFlags::ENTERED_THIS_TURN);
+                continue;
+            }
+            if ts.eat_phrase(&["died", "under", "your", "control", "this", "turn"]) {
+                flt.flags = flt.flags.union(FilterFlags::DIED_THIS_TURN);
+                flt.controller = Some(ControllerRelation::You);
                 continue;
             }
             if ts.eat_phrase(&["died", "this", "turn"])
@@ -1510,6 +1683,42 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 flt.flags = flt.flags.union(FilterFlags::HAS_ADVENTURE);
                 continue;
             }
+            {
+                let ecp = ts.checkpoint();
+                if (ts.eat_phrase(&["are", "enchanted", "by"])
+                    || ts.eat_phrase(&["is", "enchanted", "by"]))
+                    && try_parse(ts, parse_object_filter).is_ok()
+                {
+                    flt.flags = flt.flags.union(FilterFlags::ENCHANTED);
+                    continue;
+                }
+                ts.restore(ecp);
+            }
+            if ts.eat_phrase(&["are", "equipped"]) || ts.eat_phrase(&["is", "equipped"]) {
+                flt.flags = flt.flags.union(FilterFlags::EQUIPPED);
+                continue;
+            }
+            if ts.eat_phrase(&["are", "enchanted"]) || ts.eat_phrase(&["is", "enchanted"]) {
+                flt.flags = flt.flags.union(FilterFlags::ENCHANTED);
+                continue;
+            }
+            if ts.eat_phrase(&["aren't", "on", "the", "battlefield"])
+                || ts.eat_phrase(&["isn't", "on", "the", "battlefield"])
+            {
+                flt.flags = flt.flags.union(FilterFlags::NOT_ON_BATTLEFIELD);
+                continue;
+            }
+            {
+                let kwcp = ts.checkpoint();
+                if (ts.eat_word("has") || ts.eat_word("have"))
+                    && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
+                {
+                    flt.required_keywords
+                        .extend(kws.into_iter().map(|k| k.kind));
+                    continue;
+                }
+                ts.restore(kwcp);
+            }
             if ts.eat_word("targets") || ts.eat_word("target") {
                 if ts.eat_phrase(&["only", "a", "single"]) || ts.eat_word("only") {
                     flt.flags = flt.flags.union(FilterFlags::SINGLE_TARGET);
@@ -1546,6 +1755,54 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                     flt.subtypes.extend(subs);
                     continue;
                 }
+            }
+            if ts.eat_phrase(&["share", "a", "card", "type"])
+                && !ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("with"))
+            {
+                flt.predicates.push(FilterPredicate::SharesPropertyWith {
+                    property: SharedProperty::CardType,
+                    reference: Box::new(SubjectRef::SelfObject),
+                    negated: false,
+                });
+                continue;
+            }
+            if ts.eat_phrase(&["share", "a", "permanent", "type"])
+                && !ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("with"))
+            {
+                flt.predicates.push(FilterPredicate::SharesPropertyWith {
+                    property: SharedProperty::PermanentType,
+                    reference: Box::new(SubjectRef::SelfObject),
+                    negated: false,
+                });
+                continue;
+            }
+            if ts.eat_phrase(&["share", "a", "color"])
+                && !ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("with"))
+            {
+                flt.predicates.push(FilterPredicate::SharesPropertyWith {
+                    property: SharedProperty::Color,
+                    reference: Box::new(SubjectRef::SelfObject),
+                    negated: false,
+                });
+                continue;
+            }
+            if ts.eat_phrase(&["share", "a", "creature", "type"])
+                && !ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("with"))
+            {
+                flt.predicates.push(FilterPredicate::SharesPropertyWith {
+                    property: SharedProperty::CreatureType,
+                    reference: Box::new(SubjectRef::SelfObject),
+                    negated: false,
+                });
+                continue;
             }
             if ts.eat_phrase(&["shares", "a", "creature", "type", "with"])
                 || ts.eat_phrase(&["share", "a", "creature", "type", "with"])
@@ -1724,6 +1981,13 @@ fn parse_stat_comparison(ts: &mut TokenStream<'_>) -> PResult<(CompareOp, ValueE
 /// `another target ...`, `all ...`, `each ...`, anaphoric references, and players).
 pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
     if ts.eat_tilde() {
+        let cp = ts.checkpoint();
+        if ts.eat_word("and")
+            && let Ok(other) = try_parse(ts, parse_trailing_target_conjunct)
+        {
+            return Ok(SubjectRef::Compound(vec![SubjectRef::SelfObject, other]));
+        }
+        ts.restore(cp);
         return Ok(SubjectRef::SelfObject);
     }
     if ts.eat_phrase(&["any", "target"])
@@ -1747,6 +2011,9 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
             return Ok(SubjectRef::AnyTarget);
         }
         ts.restore(tcp);
+    }
+    if ts.eat_phrase(&["both", "creatures"]) {
+        return Ok(SubjectRef::BothPairedCreatures);
     }
     // `equipped creature` / `enchanted creature` / `enchanted permanent`
     if ts.eat_phrase(&["equipped", "creature"]) {
@@ -1791,6 +2058,8 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
         } else if ts.eat_word("another") {
             another = true;
             Some(TargetCount::Exact(1))
+        } else if ts.eat_word("x") {
+            Some(TargetCount::VariableX)
         } else if let Some(n) = ts.next_number(false) {
             u16::try_from(n).ok().map(TargetCount::Exact)
         } else {
@@ -1803,8 +2072,8 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
         if ts.eat_word("target") {
             let count = count_opt.unwrap_or(TargetCount::Exact(1));
             if ts.eat_word("opponent") || ts.eat_word("opponents") {
-                if ts.eat_phrase(&["or", "planeswalker"]) {
-                    return Ok(SubjectRef::Compound(vec![
+                let base_target = if ts.eat_phrase(&["or", "planeswalker"]) {
+                    SubjectRef::Compound(vec![
                         SubjectRef::TargetPlayer {
                             opponent_only: true,
                             count,
@@ -1817,16 +2086,25 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                             count,
                             another,
                         },
-                    ]));
+                    ])
+                } else {
+                    SubjectRef::TargetPlayer {
+                        opponent_only: true,
+                        count,
+                    }
+                };
+                let ccp = ts.checkpoint();
+                if ts.eat_word("and")
+                    && let Ok(other) = try_parse(ts, parse_trailing_target_conjunct)
+                {
+                    return Ok(SubjectRef::Compound(vec![base_target, other]));
                 }
-                return Ok(SubjectRef::TargetPlayer {
-                    opponent_only: true,
-                    count,
-                });
+                ts.restore(ccp);
+                return Ok(base_target);
             }
             if ts.eat_word("player") || ts.eat_word("players") {
-                if ts.eat_phrase(&["or", "planeswalker"]) {
-                    return Ok(SubjectRef::Compound(vec![
+                let base_target = if ts.eat_phrase(&["or", "planeswalker"]) {
+                    SubjectRef::Compound(vec![
                         SubjectRef::TargetPlayer {
                             opponent_only: false,
                             count,
@@ -1839,12 +2117,21 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                             count,
                             another,
                         },
-                    ]));
+                    ])
+                } else {
+                    SubjectRef::TargetPlayer {
+                        opponent_only: false,
+                        count,
+                    }
+                };
+                let ccp = ts.checkpoint();
+                if ts.eat_word("and")
+                    && let Ok(other) = try_parse(ts, parse_trailing_target_conjunct)
+                {
+                    return Ok(SubjectRef::Compound(vec![base_target, other]));
                 }
-                return Ok(SubjectRef::TargetPlayer {
-                    opponent_only: false,
-                    count,
-                });
+                ts.restore(ccp);
+                return Ok(base_target);
             }
             if let Ok(mut flt) = try_parse(ts, parse_object_filter) {
                 if another {
@@ -1864,11 +2151,20 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                         },
                     ]));
                 }
-                return Ok(SubjectRef::TargetObject {
+                let first_target = SubjectRef::TargetObject {
                     filter: Box::new(flt),
                     count,
                     another,
-                });
+                };
+                // Support `<target1> and [up to <N> | another | <N>] [other] target <flt2>` (`Hull Breach`, `Relic Crush`, `Blizzard Brawl`, `Grim Contest`)
+                let ccp = ts.checkpoint();
+                if ts.eat_word("and")
+                    && let Ok(other) = try_parse(ts, parse_trailing_target_conjunct)
+                {
+                    return Ok(SubjectRef::Compound(vec![first_target, other]));
+                }
+                ts.restore(ccp);
+                return Ok(first_target);
             }
         }
         ts.restore(cp);
@@ -2064,6 +2360,69 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
     Ok(SubjectRef::Group(Box::new(flt)))
 }
 
+fn parse_trailing_target_conjunct(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
+    if ts.eat_phrase(&["each", "player"]) {
+        return Ok(SubjectRef::Player(PlayerRef::EachPlayer));
+    }
+    if ts.eat_phrase(&["each", "opponent"]) {
+        return Ok(SubjectRef::Player(PlayerRef::EachOpponent));
+    }
+    if ts.eat_word("each") {
+        let flt = parse_object_filter(ts)?;
+        return Ok(SubjectRef::Each(Box::new(flt)));
+    }
+    if ts.eat_word("all") {
+        let flt = parse_object_filter(ts)?;
+        return Ok(SubjectRef::All(Box::new(flt)));
+    }
+    if ts
+        .peek_word()
+        .is_some_and(|w| w.eq_ignore_ascii_case("other"))
+        && !ts.peek_n(1).is_some_and(
+            |t| matches!(t.kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("target")),
+        )
+    {
+        let flt = parse_object_filter(ts)?;
+        return Ok(SubjectRef::Group(Box::new(flt)));
+    }
+    let mut another = false;
+    let count = if ts.eat_phrase(&["up", "to"]) {
+        if ts.eat_word("x") {
+            TargetCount::UpToX
+        } else {
+            let n = ts
+                .next_number(false)
+                .and_then(|v| u16::try_from(v).ok())
+                .ok_or_else(|| ts.err("expected count after `up to`"))?;
+            TargetCount::UpTo(n)
+        }
+    } else if ts.eat_word("another") {
+        another = true;
+        TargetCount::Exact(1)
+    } else if ts.eat_word("x") {
+        TargetCount::VariableX
+    } else if let Some(n) = ts.next_number(false).and_then(|v| u16::try_from(v).ok()) {
+        TargetCount::Exact(n)
+    } else {
+        TargetCount::Exact(1)
+    };
+    if ts.eat_word("other") {
+        another = true;
+    }
+    if !ts.eat_word("target") {
+        return Err(ts.err("expected `target` in trailing target conjunct"));
+    }
+    let mut flt = parse_object_filter(ts)?;
+    if another {
+        flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
+    }
+    Ok(SubjectRef::TargetObject {
+        filter: Box::new(flt),
+        count,
+        another,
+    })
+}
+
 /// Parse a strictly-typed anaphora token/phrase.
 pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     if ts.eat_phrase(&["the", "rest", "of", "the", "cards"])
@@ -2084,6 +2443,15 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
         || ts.eat_phrase(&["that", "revealed", "card"])
     {
         return Some(AnaphoraRef::RevealedCard);
+    }
+    if ts.eat_phrase(&["the", "blighted", "creature"]) {
+        return Some(AnaphoraRef::BlightedCreature);
+    }
+    if ts.eat_phrase(&["that", "source"]) {
+        return Some(AnaphoraRef::ThatSource);
+    }
+    if ts.eat_phrase(&["that", "damage"]) {
+        return Some(AnaphoraRef::ThatDamage);
     }
     if ts.eat_phrase(&["the", "sacrificed", "creature"])
         || ts.eat_phrase(&["the", "sacrificed", "permanent"])
@@ -2131,7 +2499,20 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     if ts.eat_phrase(&["that", "creature"]) {
         return Some(AnaphoraRef::ThatCreature);
     }
-    if ts.eat_phrase(&["that", "card"]) || ts.eat_phrase(&["the", "card"]) {
+    if ts.eat_phrase(&["that", "card"]) {
+        return Some(AnaphoraRef::ThatCard);
+    }
+    if ts.peek_phrase(&["the", "card"]) && !ts.peek_n(2).is_some_and(|t| {
+        matches!(
+            t.kind,
+            TokenKind::Word(w)
+                if matches!(
+                    w.to_ascii_lowercase().as_str(),
+                    "you" | "you've" | "they" | "that" | "named" | "exiled" | "with" | "in" | "from"
+                )
+        )
+    }) {
+        ts.eat_phrase(&["the", "card"]);
         return Some(AnaphoraRef::ThatCard);
     }
     if ts.eat_phrase(&["that", "spell"]) {

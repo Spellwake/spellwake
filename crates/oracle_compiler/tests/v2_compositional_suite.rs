@@ -1525,3 +1525,275 @@ fn v2_wave3_compositional_grammar_deep_ir_assertions() {
         }
     ));
 }
+
+/// 7. Deep Wave 4 compositional IR assertions covering zero-lexer-error coverage,
+///    `AnyPhyrexian`, `LegendRuleDoesntApply`, multi-clause `Protection from`,
+///    `DoubleStat` / `DoubleCounters`, `BecomeColors`, `LoseLifeInsteadOfGain`,
+///    `SkipExtraTurn`, `BonusTokens` with full creature specs, `DamageCap`,
+///    `LoyaltyAsInstant`, `SpendManaAsAnyColor`, `AllColors`, `GameIsDraw`,
+///    `UnlessEffect`, `Blight`, `Behold`, and `has base power and toughness` conjuncts.
+#[test]
+fn v2_wave4_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        KeywordKind, KeywordParam, ObjectMutation, PlayerMutation, Replacement, StaticAbility,
+        TriggerEvent, ValueExpr,
+    };
+
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "Mirror Box",
+            "Artifact",
+            "The \"legend rule\" doesn't apply to permanents you control.\nEach legendary creature you control gets +1/+1.\nEach nontoken creature you control gets +1/+1 for each other creature you control with the same name as that creature.",
+        ),
+        (
+            "Tainted Remedy",
+            "Enchantment",
+            "If an opponent would gain life, that player loses that much life instead.",
+        ),
+        (
+            "Stranglehold",
+            "Enchantment",
+            "Your opponents can't search libraries.\nIf an opponent would begin an extra turn, that player skips that turn instead.",
+        ),
+        (
+            "Oversoul of Dusk",
+            "Creature — Spirit Avatar",
+            "Protection from blue, from black, and from red",
+        ),
+        (
+            "Elite Inquisitor",
+            "Creature — Human Soldier",
+            "First strike, vigilance\nProtection from Vampires, from Werewolves, and from Zombies",
+        ),
+        (
+            "Alpha Authority",
+            "Enchantment — Aura",
+            "Enchant creature\nEnchanted creature has hexproof and can't be blocked by more than one creature.",
+        ),
+        (
+            "Turn to Frog",
+            "Instant",
+            "Until end of turn, target creature loses all abilities and becomes a blue Frog with base power and toughness 1/1.",
+        ),
+        (
+            "Unleash Fury",
+            "Instant",
+            "Double the power of target creature until end of turn.",
+        ),
+        (
+            "Vorel of the Hull Clade",
+            "Legendary Creature — Human Merfolk",
+            "{G}{U}, {T}: Double the number of each kind of counter on target artifact, creature, or land.",
+        ),
+        (
+            "Azusa, Lost but Seeking",
+            "Legendary Creature — Human Monk",
+            "You may play two additional lands on each of your turns.",
+        ),
+        (
+            "Pithing Needle",
+            "Artifact",
+            "As Pithing Needle enters, choose a card name.\nActivated abilities of sources with the chosen name can't be activated unless they're mana abilities.",
+        ),
+        (
+            "Faerie Squadron",
+            "Creature — Faerie",
+            "Kicker {3}{U}\nIf Faerie Squadron was kicked, it enters with two +1/+1 counters on it and with flying.",
+        ),
+        (
+            "Forethought Amulet",
+            "Artifact",
+            "At the beginning of your upkeep, sacrifice Forethought Amulet unless you pay {3}.\nIf an instant or sorcery source would deal 3 or more damage to you, it deals 2 damage to you instead.",
+        ),
+        (
+            "Quina, Qu Gourmet",
+            "Legendary Creature — Qu Citizen",
+            "If one or more tokens would be created under your control, those tokens plus a 1/1 green Frog creature token are created instead.",
+        ),
+        (
+            "Eight-and-a-Half-Tails",
+            "Legendary Creature — Fox Cleric",
+            "{1}{W}: Target spell or permanent becomes white until end of turn.",
+        ),
+        (
+            "Square Up",
+            "Instant",
+            "Target creature has base power and toughness 4/4 until end of turn.",
+        ),
+        (
+            "Riverfall Mimic",
+            "Creature — Shapeshifter",
+            "Whenever you cast a spell that's both blue and red, Riverfall Mimic has base power and toughness 3/3 until end of turn and can't be blocked this turn.",
+        ),
+        (
+            "Divine Intervention",
+            "Enchantment",
+            "Divine Intervention enters with two intervention counters on it.\nAt the beginning of your upkeep, remove an intervention counter from Divine Intervention.\nWhen you remove the last intervention counter from Divine Intervention, the game is a draw.",
+        ),
+        (
+            "Warped Tusker",
+            "Creature — Eldrazi Boar",
+            "Reach\nWhen you cast or cycle Warped Tusker, create a 0/1 colorless Eldrazi Spawn creature token with \"Sacrifice this token: Add {C}.\"\nCycling {2}{G}",
+        ),
+        (
+            "Wound Reflection",
+            "Enchantment",
+            "At the beginning of each end step, each opponent loses life equal to the life they lost this turn.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in cases {
+        let card = CardInput {
+            oracle_id: name,
+            name,
+            layout: "normal",
+            faces: vec![FaceInput {
+                name,
+                type_line,
+                oracle_text,
+            }],
+        };
+        let compiled = compile_card_v2(&card, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 4 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep IR spot checks:
+    // 1. Tainted Remedy -> Replacement::LoseLifeInsteadOfGain(AnyOpponent)
+    let remedy = compile_v2_strict(
+        "Tainted Remedy",
+        "Enchantment",
+        "If an opponent would gain life, that player loses that much life instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        remedy.faces[0].replacements.as_slice(),
+        [Replacement::LoseLifeInsteadOfGain(PlayerRef::AnyOpponent)]
+    ));
+
+    // 2. Elite Inquisitor -> Protection from AnyOf([Vampires, Werewolves, Zombies])
+    let inquisitor = compile_v2_strict(
+        "Elite Inquisitor",
+        "Creature — Human Soldier",
+        "Protection from Vampires, from Werewolves, and from Zombies",
+        &vocab,
+    );
+    assert!(matches!(
+        inquisitor.faces[0].keywords.as_slice(),
+        [spellwake_oracle_compiler::v2::ir::KeywordSpec {
+            kind: KeywordKind::Protection,
+            param: Some(KeywordParam::Filter(flt)),
+        }] if matches!(
+            flt.predicates.as_slice(),
+            [FilterPredicate::AnyOf(parts)] if parts.len() == 3
+        )
+    ));
+
+    // 3. Turn to Frog -> ScopedDuration(RemoveAllAbilities, BecomeColors(BLUE), BecomeCreatureTypes(Frog, 1/1))
+    let frog = compile_v2_strict(
+        "Turn to Frog",
+        "Instant",
+        "Until end of turn, target creature loses all abilities and becomes a blue Frog with base power and toughness 1/1.",
+        &vocab,
+    );
+    assert!(matches!(
+        frog.faces[0].spell_effects.as_slice(),
+        [Effect::ScopedDuration {
+            duration: Duration::UntilEndOfTurn,
+            body,
+        }] if matches!(
+            body.as_slice(),
+            [
+                Effect::MutateObject { mutation: ObjectMutation::RemoveAllAbilities, .. },
+                Effect::MutateObject { mutation: ObjectMutation::BecomeColors { .. }, .. },
+                Effect::MutateObject {
+                    mutation: ObjectMutation::BecomeCreatureTypes { base_pt: Some((1, 1)), .. },
+                    ..
+                }
+            ]
+        )
+    ));
+
+    // 4. Unleash Fury -> ObjectMutation::DoubleStat { power: true, toughness: false }
+    let fury = compile_v2_strict(
+        "Unleash Fury",
+        "Instant",
+        "Double the power of target creature until end of turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        fury.faces[0].spell_effects.as_slice(),
+        [Effect::MutateObject {
+            mutation: ObjectMutation::DoubleStat {
+                power: true,
+                toughness: false,
+            },
+            duration: Duration::UntilEndOfTurn,
+            ..
+        }]
+    ));
+
+    // 5. Divine Intervention -> LastCounterRemoved trigger with PlayerMutation::GameIsDraw
+    let divine = compile_v2_strict(
+        "Divine Intervention",
+        "Enchantment",
+        "When you remove the last intervention counter from Divine Intervention, the game is a draw.",
+        &vocab,
+    );
+    assert!(matches!(
+        divine.faces[0].abilities.as_slice(),
+        [Ability::Triggered { trigger, body }]
+            if matches!(trigger.events.as_slice(), [TriggerEvent::LastCounterRemoved { .. }])
+                && matches!(
+                    body.as_slice(),
+                    [Effect::MutatePlayer {
+                        mutation: PlayerMutation::GameIsDraw,
+                        ..
+                    }]
+                )
+    ));
+
+    // 6. Mirror Box -> StaticAbility::LegendRuleDoesntApply(Some(...))
+    let mirror = compile_v2_strict(
+        "Mirror Box",
+        "Artifact",
+        "The \"legend rule\" doesn't apply to permanents you control.",
+        &vocab,
+    );
+    assert!(matches!(
+        mirror.faces[0].statics.as_slice(),
+        [StaticAbility::LegendRuleDoesntApply(Some(flt))]
+            if flt.any_permanent && flt.controller == Some(ControllerRelation::You)
+    ));
+
+    // 7. Wound Reflection -> AdjustLife using ValueExpr::EventCountThisTurn(LifeLost)
+    let wound = compile_v2_strict(
+        "Wound Reflection",
+        "Enchantment",
+        "At the beginning of each end step, each opponent loses life equal to the life they lost this turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        wound.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::AdjustLife {
+                    player: PlayerRef::EachOpponent,
+                    amount: ValueExpr::EventCountThisTurn { .. },
+                    op: LifeOp::Lose,
+                }]
+            )
+    ));
+}

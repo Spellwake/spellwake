@@ -113,6 +113,31 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             PriorActionKind::DamagePreventedThisWay,
         ));
     }
+    if ts.eat_phrase(&["the", "life", "paid", "as"]) && ts.eat_tilde() && ts.eat_word("entered") {
+        return Ok(ValueExpr::PriorActionCount(
+            PriorActionKind::LifePaidAsEntered,
+        ));
+    }
+    if ts.eat_phrase(&["their", "total", "power"]) {
+        return Ok(ValueExpr::AggregateStat {
+            op: AggregateOp::Sum,
+            stat: StatKind::Power,
+            filter: Box::new(crate::v2::ir::ObjectFilter {
+                any_permanent: true,
+                ..Default::default()
+            }),
+        });
+    }
+    if ts.eat_phrase(&["their", "total", "toughness"]) {
+        return Ok(ValueExpr::AggregateStat {
+            op: AggregateOp::Sum,
+            stat: StatKind::Toughness,
+            filter: Box::new(crate::v2::ir::ObjectFilter {
+                any_permanent: true,
+                ..Default::default()
+            }),
+        });
+    }
     if ts.eat_phrase(&["the", "life", "lost", "this", "way"])
         || ts.eat_phrase(&["the", "life", "gained", "this", "way"])
         || ts.eat_phrase(&["the", "damage", "dealt", "this", "way"])
@@ -327,8 +352,25 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                     exclude_first: false,
                 });
             }
+            if ts.eat_phrase(&["mana", "spent", "to", "cast"])
+                && try_parse(ts, parse_subject_ref).is_ok()
+            {
+                return Ok(ValueExpr::ManaPaidThisWay);
+            }
             if ts.eat_phrase(&["damage", "dealt"]) {
                 let _ = ts.eat_phrase(&["this", "way"]) || ts.eat_phrase(&["this", "turn"]);
+                return Ok(ValueExpr::PriorActionCount(
+                    PriorActionKind::DealtDamageThisWay,
+                ));
+            }
+            if ts.eat_word("damage")
+                && try_parse(ts, parse_subject_ref).is_ok()
+                && ts.eat_word("dealt")
+            {
+                if ts.eat_word("to") {
+                    let _ = try_parse(ts, parse_subject_ref);
+                }
+                let _ = ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["this", "way"]);
                 return Ok(ValueExpr::PriorActionCount(
                     PriorActionKind::DealtDamageThisWay,
                 ));
@@ -388,6 +430,75 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             filter: Box::new(flt),
         });
     }
+    // `the greatest/highest mana value among <flt>` (`Reward the Faithful` + others)
+    {
+        let gcp = ts.checkpoint();
+        if (ts.eat_phrase(&["the", "greatest", "mana", "value", "among"])
+            || ts.eat_phrase(&["the", "highest", "mana", "value", "among"]))
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+        {
+            let _ = ts.eat_phrase(&["as", "you", "cast"]) && ts.eat_tilde();
+            return Ok(ValueExpr::AggregateStat {
+                op: AggregateOp::Max,
+                stat: StatKind::ManaValue,
+                filter: Box::new(flt),
+            });
+        }
+        ts.restore(gcp);
+    }
+    // `the life <player> lost/gained this turn` (`Warlock Class`, `Archfiend of Despair`, `Wound Reflection`)
+    {
+        let lcp = ts.checkpoint();
+        if (ts.eat_phrase(&["the", "life"]) || ts.eat_phrase(&["the", "amount", "of", "life"]))
+            && let Ok(player) = try_parse(ts, parse_player_ref)
+        {
+            if ts.eat_phrase(&["lost", "this", "turn"]) {
+                return Ok(ValueExpr::EventCountThisTurn {
+                    event: TurnEventKind::LifeLost,
+                    player: Some(player),
+                    exclude_first: false,
+                });
+            }
+            if ts.eat_phrase(&["gained", "this", "turn"]) {
+                return Ok(ValueExpr::EventCountThisTurn {
+                    event: TurnEventKind::LifeGained,
+                    player: Some(player),
+                    exclude_first: false,
+                });
+            }
+        }
+        ts.restore(lcp);
+    }
+    // `the damage [already] dealt to <player> this turn` (`Final Punishment`)
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "damage"]) {
+            let _ = ts.eat_word("already");
+            if ts.eat_phrase(&["dealt", "to"])
+                && let Ok(player) = try_parse(ts, parse_player_ref)
+                && ts.eat_phrase(&["this", "turn"])
+            {
+                return Ok(ValueExpr::DamageDealtToPlayerThisTurn(player));
+            }
+        }
+        ts.restore(dcp);
+    }
+    // `the difference between <subj>'s power and [its] toughness` (`Jaws of Defeat`)
+    {
+        let diff_cp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "difference", "between"])
+            && let Ok(subj) = try_parse(ts, parse_subject_ref)
+            && ts.eat_word("'s")
+            && ts.eat_word("power")
+            && ts.eat_word("and")
+        {
+            let _ = ts.eat_word("its");
+            if ts.eat_word("toughness") {
+                return Ok(ValueExpr::StatDifference(Box::new(subj)));
+            }
+        }
+        ts.restore(diff_cp);
+    }
 
     // `the number of ...`
     if ts.eat_phrase(&["the", "number", "of"]) {
@@ -432,10 +543,36 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                 return Ok(ValueExpr::TimesKicked);
             }
             ts.restore(kcp);
+            if ts.eat_word("times")
+                && (ts.eat_tilde() || ts.eat_word("it"))
+                && ts.eat_phrase(&["has", "mutated"])
+            {
+                return Ok(ValueExpr::MutatedCount);
+            }
+            ts.restore(kcp);
         }
-        // `the number of counters on <subj>` (bare unspecified counter kind! `Warden of the Grove`, `Parting Thoughts`)
+        // `the number of different kinds of counters among <flt>` (`Perrie, the Pulverizer`)
+        {
+            let dcp = ts.checkpoint();
+            if ts.eat_phrase(&["different", "kinds", "of", "counters", "among"])
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+            {
+                return Ok(ValueExpr::DistinctCounterKinds(Box::new(flt)));
+            }
+            ts.restore(dcp);
+        }
+        // `the number of counters on <subj>` / `the number of counters it had on it`
         {
             let bcp = ts.checkpoint();
+            if (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_phrase(&["it", "had", "on", "it"])
+            {
+                return Ok(ValueExpr::CounterCount {
+                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                    kind: crate::v2::ir::CounterKind::Any,
+                });
+            }
+            ts.restore(bcp);
             if (ts.eat_word("counters") || ts.eat_word("counter"))
                 && ts.eat_word("on")
                 && let Ok(subject) = try_parse(ts, parse_subject_ref)
@@ -461,6 +598,11 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                 stat: PlayerStatKind::CardsInHand,
             });
         }
+        if ts.eat_phrase(&["cards", "looked", "at", "while", "scrying", "this", "way"]) {
+            return Ok(ValueExpr::PriorActionCount(
+                PriorActionKind::LookedAtScryingThisWay,
+            ));
+        }
         if ts.eat_phrase(&["basic", "land", "types", "among", "lands", "you", "control"]) {
             return Ok(ValueExpr::DomainCount(PlayerRef::You));
         }
@@ -468,12 +610,22 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             let zone = parse_zone_ref(ts)?;
             return Ok(ValueExpr::DistinctCardTypes(zone));
         }
-        // `the number of <kind> counters on <subj>` / `the number of <kind> counters <player> have/has`
+        if ts.eat_phrase(&["card", "types", "among"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+        {
+            return Ok(ValueExpr::DistinctCardTypesAmong(Box::new(flt)));
+        }
+        // `the number of <kind> counters on <subj>` / `the number of <kind> counters <player> have/has` / `removed this way`
         {
             let ccp = ts.checkpoint();
             if let Ok(kind) = try_parse(ts, parse_counter_kind)
                 && (ts.eat_word("counters") || ts.eat_word("counter"))
             {
+                if ts.eat_phrase(&["removed", "this", "way"]) {
+                    return Ok(ValueExpr::PriorActionCount(
+                        PriorActionKind::CountersRemovedThisWay,
+                    ));
+                }
                 if ts.eat_word("on")
                     && let Ok(subject) = try_parse(ts, parse_subject_ref)
                 {
@@ -491,8 +643,9 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             ts.restore(ccp);
         }
         let flt = parse_object_filter(ts)?;
-        // Optional trailing `at that time` (e.g. delayed trigger X binding)
-        let _ = ts.eat_phrase(&["at", "that", "time"]);
+        // Optional trailing `at that time` / `as you cast ~`
+        let _ = ts.eat_phrase(&["at", "that", "time"])
+            || (ts.eat_phrase(&["as", "you", "cast"]) && ts.eat_tilde());
         return Ok(ValueExpr::Count(Box::new(flt)));
     }
 
@@ -586,6 +739,7 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         });
     }
     if ts.eat_phrase(&["that", "creature's", "power"])
+        || ts.eat_phrase(&["that", "creature", "card's", "power"])
         || ts.eat_phrase(&["that", "permanent's", "power"])
         || ts.eat_phrase(&["that", "spell's", "power"])
         || ts.eat_phrase(&["that", "card's", "power"])
@@ -596,6 +750,7 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         });
     }
     if ts.eat_phrase(&["that", "creature's", "toughness"])
+        || ts.eat_phrase(&["that", "creature", "card's", "toughness"])
         || ts.eat_phrase(&["that", "permanent's", "toughness"])
         || ts.eat_phrase(&["that", "spell's", "toughness"])
         || ts.eat_phrase(&["that", "card's", "toughness"])
@@ -606,14 +761,56 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         });
     }
     if ts.eat_phrase(&["that", "card's", "mana", "value"])
+        || ts.eat_phrase(&["that", "creature", "card's", "mana", "value"])
         || ts.eat_phrase(&["that", "spell's", "mana", "value"])
         || ts.eat_phrase(&["that", "creature's", "mana", "value"])
         || ts.eat_phrase(&["that", "permanent's", "mana", "value"])
+        || ts.eat_phrase(&["that", "enchantment's", "mana", "value"])
+        || ts.eat_phrase(&["that", "artifact's", "mana", "value"])
+        || ts.eat_phrase(&["that", "planeswalker's", "mana", "value"])
     {
         return Ok(ValueExpr::ObjectStat {
             subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCard)),
             stat: StatKind::ManaValue,
         });
+    }
+    // `target <noun>'s mana value/power/toughness` (`target nonland permanent's mana value`)
+    {
+        let tcp = ts.checkpoint();
+        if ts.eat_word("target") {
+            let _ = ts.eat_word("nonland");
+            if ts.eat_word("permanent's")
+                || ts.eat_word("creature's")
+                || ts.eat_word("spell's")
+                || ts.eat_word("artifact's")
+                || ts.eat_word("enchantment's")
+                || ts.eat_word("card's")
+            {
+                let stat = if ts.eat_phrase(&["mana", "value"]) {
+                    Some(StatKind::ManaValue)
+                } else if ts.eat_word("power") {
+                    Some(StatKind::Power)
+                } else if ts.eat_word("toughness") {
+                    Some(StatKind::Toughness)
+                } else {
+                    None
+                };
+                if let Some(stat) = stat {
+                    return Ok(ValueExpr::ObjectStat {
+                        subject: Box::new(SubjectRef::TargetObject {
+                            filter: Box::new(crate::v2::ir::ObjectFilter {
+                                any_permanent: true,
+                                ..Default::default()
+                            }),
+                            count: crate::v2::ir::TargetCount::Exact(1),
+                            another: false,
+                        }),
+                        stat,
+                    });
+                }
+            }
+        }
+        ts.restore(tcp);
     }
 
     // `its mana value` / `its power` / `its toughness`
@@ -750,8 +947,85 @@ pub fn parse_for_each_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
     if ts.eat_phrase(&["basic", "land", "type", "among", "lands", "you", "control"]) {
         return Ok(ValueExpr::DomainCount(PlayerRef::You));
     }
-    if ts.eat_phrase(&["opponent", "you", "have"]) {
+    if ts.eat_phrase(&["opponent", "you", "have"])
+        || ts.eat_phrase(&["opponent", "you're", "attacking"])
+    {
         return Ok(ValueExpr::OpponentsCount);
+    }
+    if ts.eat_phrase(&["1", "damage", "prevented", "this", "way"])
+        || ts.eat_phrase(&["one", "damage", "prevented", "this", "way"])
+    {
+        return Ok(ValueExpr::PriorActionCount(
+            PriorActionKind::DamagePreventedThisWay,
+        ));
+    }
+    if ts.eat_phrase(&["1", "life", "you", "gained", "this", "turn"])
+        || ts.eat_phrase(&["1", "life", "you", "gained"])
+    {
+        return Ok(ValueExpr::EventCountThisTurn {
+            event: TurnEventKind::LifeGained,
+            player: Some(PlayerRef::You),
+            exclude_first: false,
+        });
+    }
+    if ts.eat_phrase(&["1", "life", "you", "lost", "this", "turn"])
+        || ts.eat_phrase(&["1", "life", "you", "lost"])
+    {
+        return Ok(ValueExpr::EventCountThisTurn {
+            event: TurnEventKind::LifeLost,
+            player: Some(PlayerRef::You),
+            exclude_first: false,
+        });
+    }
+    {
+        let pcp = ts.checkpoint();
+        let opp_only = if ts.eat_phrase(&["opponent", "who"]) {
+            Some(true)
+        } else if ts.eat_phrase(&["player", "who"]) {
+            Some(false)
+        } else {
+            None
+        };
+        if let Some(opponents_only) = opp_only {
+            if ts.eat_phrase(&["lost", "life", "this", "turn"]) {
+                return Ok(ValueExpr::PlayersWhoDidThisTurn {
+                    event: TurnEventKind::LifeLost,
+                    opponents_only,
+                });
+            }
+            if ts.eat_phrase(&["discarded", "a", "card", "this", "turn"])
+                || ts.eat_phrase(&["discarded", "one", "or", "more", "cards", "this", "turn"])
+            {
+                return Ok(ValueExpr::PlayersWhoDidThisTurn {
+                    event: TurnEventKind::CardDiscarded,
+                    opponents_only,
+                });
+            }
+            if ts.eat_phrase(&["drew", "two", "or", "more", "cards", "this", "turn"])
+                || ts.eat_phrase(&["drew", "a", "card", "this", "turn"])
+            {
+                return Ok(ValueExpr::PlayersWhoDidThisTurn {
+                    event: TurnEventKind::CardDrawn,
+                    opponents_only,
+                });
+            }
+        }
+        ts.restore(pcp);
+    }
+    if ts.eat_phrase(&["kind", "of", "counter", "on"])
+        && let Ok(subject) = try_parse(ts, parse_subject_ref)
+    {
+        return Ok(ValueExpr::CounterCount {
+            subject: Box::new(subject),
+            kind: crate::v2::ir::CounterKind::Any,
+        });
+    }
+    if ts.eat_phrase(&["color", "among"])
+        && let Ok(flt) = try_parse(ts, parse_object_filter)
+    {
+        return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Group(
+            Box::new(flt),
+        ))));
     }
     if ts.eat_phrase(&["of", "its", "colors"]) {
         return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Anaphora(

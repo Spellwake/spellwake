@@ -730,8 +730,9 @@ fn strip_ability_word_prefix(line: &str) -> String {
     let words: Vec<&str> = p.split_whitespace().collect();
     if words.len() <= 7
         && words.iter().all(|w| {
-            w.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '\'' | '!' | ','))
+            w.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '-' | '\'' | '!' | ',' | '?' | '.')
+            })
         })
         && words
             .first()
