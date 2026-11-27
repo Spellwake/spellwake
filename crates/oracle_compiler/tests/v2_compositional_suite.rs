@@ -2458,3 +2458,368 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
         }] if flt.flags.contains(FilterFlags::NOT_ON_BATTLEFIELD)
     ));
 }
+
+/// 10. Deep Wave 7 compositional IR assertions (zero new core IR enum variants):
+///     shared static subject tail combinator, activation cost modifiers, revolt/trap conditions,
+///     `instead of putting it anywhere else` replacements, damage-prevention reflexive riders,
+///     generalized untap/token/counter/lose-game replacements, `or on the bottom` library destinations,
+///     `in addition to its other types` conjuncts, and `Hardened Scales` zero-regression guard.
+#[test]
+fn v2_wave7_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        CounterKind, DamageReplacement, LibraryPosition, ObjectMutation, PlayerRestrictionKind,
+        PlayerTriggerKind, Replacement, StaticAbility, TokenReplacementKind, TriggerEvent, VarName,
+        ZoneOpKind,
+    };
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let wave7_cards: &[(&str, &str, &str)] = &[
+        (
+            "Hardened Scales",
+            "Enchantment",
+            "If one or more +1/+1 counters would be put on a creature you control, that many plus one +1/+1 counters are put on it instead.",
+        ),
+        (
+            "Vizier of Remedies",
+            "Creature - Human Cleric",
+            "If one or more -1/-1 counters would be put on a creature you control, that many -1/-1 counters minus one are put on it instead.",
+        ),
+        (
+            "Divine Visitation",
+            "Enchantment",
+            "If one or more creature tokens would be created under your control, that many 4/4 white Angel creature tokens with flying and vigilance are created instead.",
+        ),
+        (
+            "Primal Vigor",
+            "Enchantment",
+            "If one or more tokens would be created, twice that many of those tokens are created instead.\nIf one or more +1/+1 counters would be put on a creature, twice that many +1/+1 counters are put on that creature instead.",
+        ),
+        (
+            "Jinnie Fay, Jetmir's Second",
+            "Legendary Creature - Elf Druid",
+            "If you would create one or more tokens, you may instead create that many 2/2 green Cat creature tokens with haste or that many 3/1 green Dog creature tokens with vigilance.",
+        ),
+        (
+            "Winter Orb",
+            "Artifact",
+            "As long as Winter Orb is untapped, players can't untap more than one land during their untap steps.",
+        ),
+        (
+            "Winter Moon",
+            "Artifact",
+            "Players can't untap more than one nonbasic land during their untap steps.",
+        ),
+        (
+            "Phyrexian Vindicator",
+            "Creature - Phyrexian Horror",
+            "Flying\nIf damage would be dealt to Phyrexian Vindicator, prevent that damage. When damage is prevented this way, Phyrexian Vindicator deals that much damage to any other target.",
+        ),
+        (
+            "Dralnu, Lich Lord",
+            "Legendary Creature - Zombie Wizard",
+            "If damage would be dealt to Dralnu, Lich Lord, sacrifice that many permanents instead.\n{T}: Target instant or sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost.",
+        ),
+        (
+            "The Golden Throne",
+            "Legendary Artifact",
+            "Arcane Life-support \u{2014} If you would lose the game, instead exile The Golden Throne and your life total becomes 1.\nA Thousand Souls Die Every Day \u{2014} {T}, Sacrifice a creature: Add three mana in any combination of colors.",
+        ),
+        (
+            "Kruphix, God of Horizons",
+            "Legendary Enchantment Creature - God",
+            "Indestructible\nAs long as your devotion to green and blue is less than seven, Kruphix isn't a creature.\nYou have no maximum hand size.\nIf you would lose unspent mana, that mana becomes colorless instead.",
+        ),
+        (
+            "Training Grounds",
+            "Enchantment",
+            "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.",
+        ),
+        (
+            "Fatal Push",
+            "Instant",
+            "Destroy target creature if it has mana value 2 or less.\nRevolt \u{2014} Destroy that creature if it has mana value 4 or less instead if a permanent left the battlefield under your control this turn.",
+        ),
+        (
+            "Ygra, Eater of All",
+            "Legendary Creature - Elemental Cat",
+            "Ward\u{2014}Sacrifice a Food.\nOther creatures are Food artifacts in addition to their other types and have \"{2}, {T}, Sacrifice this permanent: You gain 3 life.\"\nWhenever a Food is put into a graveyard from the battlefield, put two +1/+1 counters on Ygra, Eater of All.",
+        ),
+        (
+            "Whip of Erebos",
+            "Legendary Enchantment Artifact",
+            "Creatures you control have lifelink.\n{2}{B}{B}, {T}: Return target creature card from your graveyard to the battlefield. It gains haste. Exile it at the beginning of the next end step. If it would leave the battlefield, exile it instead of putting it anywhere else. Activate only as a sorcery.",
+        ),
+        (
+            "Ramos, Dragon Engine",
+            "Legendary Artifact Creature - Dragon",
+            "Flying\nWhenever you cast a spell, put a +1/+1 counter on Ramos, Dragon Engine for each of that spell's colors.\nRemove five +1/+1 counters from Ramos, Dragon Engine: Add {W}{W}{U}{U}{B}{B}{R}{R}{G}{G}. Activate only once each turn.",
+        ),
+        (
+            "Bolas's Citadel",
+            "Legendary Artifact",
+            "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library. If you cast a spell this way, pay life equal to its mana value rather than pay its mana cost.\n{T}, Sacrifice ten nonland permanents: Each opponent loses 10 life.",
+        ),
+        (
+            "Knight of the Holy Nimbus",
+            "Creature - Human Rebel Knight",
+            "Flanking\nIf Knight of the Holy Nimbus would be destroyed, regenerate it.\n{2}: Knight of the Holy Nimbus can't be regenerated this turn. Only any opponent may activate this ability.",
+        ),
+        (
+            "Baloth Cage Trap",
+            "Instant - Trap",
+            "If an opponent had an artifact enter the battlefield under their control this turn, you may pay {1}{G} rather than pay this spell's mana cost.\nCreate a 4/4 green Beast creature token.",
+        ),
+        (
+            "Foul Renewal",
+            "Sorcery",
+            "Return target creature card from your graveyard to your hand. Target creature gets -X/-X until end of turn, where X is the toughness of the card returned this way.",
+        ),
+        (
+            "Cactus Preserve",
+            "Land",
+            "Cactus Preserve enters tapped.\n{T}: Add one mana of any type that a land you control could produce.\n{3}: Until end of turn, Cactus Preserve becomes an X/X green Plant creature with reach, where X is the greatest mana value among your commanders. It's still a land.",
+        ),
+        (
+            "Deem Inferior",
+            "Sorcery",
+            "This spell costs {1} less to cast for each card you've drawn this turn.\nThe owner of target nonland permanent puts it into their library second from the top or on the bottom.",
+        ),
+        (
+            "Stegron the Dinosaur Man",
+            "Legendary Creature - Dinosaur Human Scientist Villain",
+            "Menace\nDinosaur Formula \u{2014} {1}{R}, Discard Stegron the Dinosaur Man: Until end of turn, target creature you control gets +3/+1 and becomes a Dinosaur in addition to its other types.",
+        ),
+        (
+            "Bestial Menace",
+            "Sorcery",
+            "Create a 1/1 green Snake creature token, a 2/2 green Wolf creature token, and a 3/3 green Elephant creature token.",
+        ),
+        (
+            "Crumbling Sanctuary",
+            "Artifact",
+            "If damage would be dealt to a player, that player exiles that many cards from the top of their library instead.",
+        ),
+        (
+            "Nether Spirit",
+            "Creature - Spirit",
+            "At the beginning of your upkeep, if Nether Spirit is the only creature card in your graveyard, you may return Nether Spirit to the battlefield.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in wave7_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 7 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep typed IR assertions on Wave 7 orthogonal compositions:
+    // 1. Hardened Scales zero-regression guard (`add: 1`, `factor: 1`)
+    let scales = compile_v2_strict(
+        "Hardened Scales",
+        "Enchantment",
+        "If one or more +1/+1 counters would be put on a creature you control, that many plus one +1/+1 counters are put on it instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        scales.faces[0].replacements.as_slice(),
+        [Replacement::CounterRule {
+            kind: Some(CounterKind::PlusOnePlusOne),
+            add: 1,
+            factor: 1,
+            ..
+        }]
+    ));
+
+    // 2. Vizier of Remedies (`add: -1`, `MinusOneMinusOne`)
+    let vizier = compile_v2_strict(
+        "Vizier of Remedies",
+        "Creature - Human Cleric",
+        "If one or more -1/-1 counters would be put on a creature you control, that many -1/-1 counters minus one are put on it instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        vizier.faces[0].replacements.as_slice(),
+        [Replacement::CounterRule {
+            kind: Some(CounterKind::MinusOneMinusOne),
+            add: -1,
+            factor: 1,
+            ..
+        }]
+    ));
+
+    // 3. Divine Visitation (`TokenReplacementKind::Replace`)
+    let visitation = compile_v2_strict(
+        "Divine Visitation",
+        "Enchantment",
+        "If one or more creature tokens would be created under your control, that many 4/4 white Angel creature tokens with flying and vigilance are created instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        visitation.faces[0].replacements.as_slice(),
+        [Replacement::TokenRule {
+            rule: TokenReplacementKind::Replace(_),
+            ..
+        }]
+    ));
+
+    // 4. Winter Moon (`PlayerRestrictionKind::CantUntapMoreThan(1)`)
+    let winter_moon = compile_v2_strict(
+        "Winter Moon",
+        "Artifact",
+        "Players can't untap more than one nonbasic land during their untap steps.",
+        &vocab,
+    );
+    assert!(matches!(
+        winter_moon.faces[0].statics.as_slice(),
+        [StaticAbility::PlayerRestriction {
+            restriction: PlayerRestrictionKind::CantUntapMoreThan(1),
+            ..
+        }]
+    ));
+
+    // 5. Phyrexian Vindicator (`PreventWithRider` with non-empty reflexive trigger rider)
+    let vindicator = compile_v2_strict(
+        "Phyrexian Vindicator",
+        "Creature - Phyrexian Horror",
+        "If damage would be dealt to Phyrexian Vindicator, prevent that damage. When damage is prevented this way, Phyrexian Vindicator deals that much damage to any other target.",
+        &vocab,
+    );
+    assert!(matches!(
+        vindicator.faces[0].replacements.as_slice(),
+        [Replacement::DamageRule(DamageReplacement::PreventWithRider { rider, .. })]
+            if !rider.is_empty()
+    ));
+
+    // 6. The Golden Throne (`Replacement::EventInstead` on `PlayerTriggerKind::LosesGame`)
+    let throne = compile_v2_strict(
+        "The Golden Throne",
+        "Legendary Artifact",
+        "If you would lose the game, instead exile The Golden Throne and your life total becomes 1.",
+        &vocab,
+    );
+    assert!(matches!(
+        throne.faces[0].replacements.as_slice(),
+        [Replacement::EventInstead {
+            event: TriggerEvent::PlayerAction {
+                player: PlayerRef::You,
+                action: PlayerTriggerKind::LosesGame,
+            },
+            instead,
+        }] if instead.len() >= 2
+    ));
+
+    // 7. Dralnu (`sacrifice that many permanents` compiles as counted ZoneOpKind::Sacrifice)
+    let dralnu = compile_v2_strict(
+        "Dralnu, Lich Lord",
+        "Legendary Creature - Zombie Wizard",
+        "If damage would be dealt to Dralnu, Lich Lord, sacrifice that many permanents instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        dralnu.faces[0].replacements.as_slice(),
+        [Replacement::EventInstead {
+            event: TriggerEvent::DealtDamage { .. },
+            instead,
+        }] if matches!(
+            instead.as_slice(),
+            [Effect::ZoneOp {
+                op: ZoneOpKind::Sacrifice,
+                count: Some(_),
+                ..
+            }]
+        )
+    ));
+
+    // 8. Deem Inferior (`second from the top or on the bottom` -> `LibraryPosition::TopOrBottom`)
+    let deem = compile_v2_strict(
+        "Deem Inferior",
+        "Sorcery",
+        "The owner of target nonland permanent puts it into their library second from the top or on the bottom.",
+        &vocab,
+    );
+    assert!(matches!(
+        deem.faces[0].spell_effects.as_slice(),
+        [Effect::ZoneOp {
+            op: ZoneOpKind::Move,
+            to: Some(dest),
+            ..
+        }] if dest.library_position == Some(LibraryPosition::TopOrBottom)
+    ));
+
+    // 9. Stegron (`keep_existing_types: true` on `gets +3/+1 and becomes a Dinosaur in addition to its other types`)
+    let stegron = compile_v2_strict(
+        "Stegron the Dinosaur Man",
+        "Legendary Creature - Dinosaur Human Scientist Villain",
+        "{1}{R}, Discard Stegron the Dinosaur Man: Until end of turn, target creature you control gets +3/+1 and becomes a Dinosaur in addition to its other types.",
+        &vocab,
+    );
+    assert!(matches!(
+        stegron.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ScopedDuration { body: inner, .. }]
+                    if matches!(
+                        inner.as_slice(),
+                        [
+                            Effect::MutateObject { mutation: ObjectMutation::ModifyPT { .. }, .. },
+                            Effect::MutateObject {
+                                mutation: ObjectMutation::BecomeCreatureTypes { keep_existing_types: true, .. },
+                                ..
+                            }
+                        ]
+                    )
+            )
+    ));
+
+    // 10. Bestial Menace (3-token creation compiles into 3 distinct Effect::CreateToken atoms)
+    let menace = compile_v2_strict(
+        "Bestial Menace",
+        "Sorcery",
+        "Create a 1/1 green Snake creature token, a 2/2 green Wolf creature token, and a 3/3 green Elephant creature token.",
+        &vocab,
+    );
+    assert_eq!(menace.faces[0].spell_effects.len(), 3);
+    assert!(
+        menace.faces[0]
+            .spell_effects
+            .iter()
+            .all(|e| matches!(e, Effect::CreateToken { .. }))
+    );
+
+    // 11. Foul Renewal (`where X is the toughness of the card returned this way` -> BindVariable::X)
+    let renewal = compile_v2_strict(
+        "Foul Renewal",
+        "Sorcery",
+        "Return target creature card from your graveyard to your hand. Target creature gets -X/-X until end of turn, where X is the toughness of the card returned this way.",
+        &vocab,
+    );
+    assert!(matches!(
+        renewal.faces[0].spell_effects.get(1),
+        Some(Effect::BindVariable {
+            var: VarName::X,
+            ..
+        })
+    ));
+
+    // 12. Training Grounds (activation cost modifier -> StaticAbility::ActivationCostModifier with less: true)
+    let grounds = compile_v2_strict(
+        "Training Grounds",
+        "Enchantment",
+        "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.",
+        &vocab,
+    );
+    assert!(matches!(
+        grounds.faces[0].statics.first(),
+        Some(StaticAbility::ActivationCostModifier { less: true, .. })
+    ));
+}

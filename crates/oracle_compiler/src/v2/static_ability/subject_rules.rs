@@ -738,10 +738,16 @@ pub(super) fn parse_subject_static_ability(
                 || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "their", "other", "land", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "its", "other", "land", "types"]);
-            return Ok(StaticAbility::SetSubtypes {
-                subject,
+            let mut parts = vec![StaticAbility::SetSubtypes {
+                subject: subject.clone(),
                 subtypes,
                 keep_existing,
+            }];
+            parse_static_subject_tail(ts, &subject, &condition, &mut parts);
+            return Ok(if parts.len() == 1 {
+                parts.remove(0)
+            } else {
+                StaticAbility::Compound(parts)
             });
         }
     }
@@ -871,12 +877,13 @@ pub(super) fn parse_subject_static_ability(
                         .eat_phrase(&["in", "addition", "to", "their", "other", "types"])
                         || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"]);
                     parts.push(StaticAbility::SetSubtypes {
-                        subject,
+                        subject: subject.clone(),
                         subtypes,
                         keep_existing,
                     });
                 }
             }
+            parse_static_subject_tail(ts, &subject, &condition, &mut parts);
             return Ok(if parts.len() == 1 {
                 parts.remove(0)
             } else {
@@ -1128,10 +1135,30 @@ pub(super) fn parse_subject_static_ability(
         ));
     }
     if ts.eat_phrase(&["enters", "tapped"]) || ts.eat_phrase(&["enter", "tapped"]) {
-        return Ok(StaticAbility::SubjectRule {
-            subject,
+        let mut parts = vec![StaticAbility::SubjectRule {
+            subject: subject.clone(),
             rule: SubjectStaticRule::EntersTapped,
-            condition,
+            condition: condition.clone(),
+        }];
+        let ucp = ts.checkpoint();
+        if (ts.eat_phrase(&["and", "doesn't", "untap", "during"])
+            || ts.eat_phrase(&["and", "don't", "untap", "during"]))
+            && (ts.eat_phrase(&["your", "untap", "step"])
+                || ts.eat_phrase(&["its", "controller's", "untap", "step"])
+                || ts.eat_phrase(&["their", "controllers'", "untap", "steps"]))
+        {
+            parts.push(StaticAbility::SubjectRule {
+                subject,
+                rule: SubjectStaticRule::DoesntUntap,
+                condition,
+            });
+        } else {
+            ts.restore(ucp);
+        }
+        return Ok(if parts.len() == 1 {
+            parts.remove(0)
+        } else {
+            StaticAbility::Compound(parts)
         });
     }
     if ts.eat_phrase(&["enters", "with"]) || ts.eat_phrase(&["enter", "with"]) {
@@ -1343,6 +1370,148 @@ pub(super) fn parse_subject_static_ability(
     }
 
     Err(ts.err("expected static ability predicate"))
+}
+
+/// Shared tail combinator for subject-headed static abilities:
+/// chains `[, ] [and] has/have "<quoted>"`, `[, ] [and] has/have <kws>`,
+/// `[, ] [and] can't <rule>`, `[, ] [and] [it] loses all other abilities`,
+/// and `[, ] [and] is/are [a/an] <colors/subtypes> [in addition to ...]` onto `parts`.
+fn parse_static_subject_tail(
+    ts: &mut TokenStream<'_>,
+    subject: &crate::v2::ir::SubjectRef,
+    condition: &Option<ConditionExpr>,
+    parts: &mut Vec<StaticAbility>,
+) {
+    loop {
+        let cp = ts.checkpoint();
+        let had_comma = ts.eat_comma();
+        let had_and = ts.eat_word("and");
+        if !had_comma && !had_and {
+            ts.restore(cp);
+            break;
+        }
+        // `has/have "<quoted>"` or `has/have <kws>`
+        if ts.eat_word("has") || ts.eat_word("have") {
+            if let Some(quoted) = ts.next_quoted() {
+                let compiled = crate::v2::card::compile_face_v2(
+                    crate::FaceInput {
+                        name: "~",
+                        type_line: "Permanent",
+                        oracle_text: quoted,
+                    },
+                    ts.vocab,
+                );
+                if compiled.is_ok() {
+                    parts.push(StaticAbility::GrantAbility {
+                        subject: subject.clone(),
+                        ability: Box::new(compiled),
+                        condition: condition.clone(),
+                    });
+                    continue;
+                }
+            } else if let Ok((keywords, _)) = try_parse(ts, parse_keyword_list) {
+                parts.push(StaticAbility::GrantKeywords {
+                    subject: subject.clone(),
+                    keywords,
+                    condition: condition.clone(),
+                });
+                continue;
+            }
+            ts.restore(cp);
+            break;
+        }
+        // `can't <rule>`
+        if ts.eat_word("can't")
+            && let Ok(rule) = try_parse(ts, parse_cant_rule)
+        {
+            parts.push(StaticAbility::RuleRestriction {
+                subject: Some(subject.clone()),
+                rule,
+                condition: condition.clone(),
+            });
+            continue;
+        }
+        // `[it/they] loses/lose all other abilities[, card types, and creature types]`
+        let _ = ts.eat_word("it") || ts.eat_word("they");
+        if ts.eat_phrase(&["loses", "all", "other"]) || ts.eat_phrase(&["lose", "all", "other"]) {
+            let mut ate = false;
+            while ts.eat_word("abilities")
+                || ts.eat_phrase(&["card", "types"])
+                || ts.eat_phrase(&["creature", "types"])
+                || ts.eat_word("types")
+            {
+                ate = true;
+                let _ = ts.eat_comma();
+                let _ = ts.eat_word("and");
+            }
+            if ate {
+                parts.push(StaticAbility::RemoveAllAbilities {
+                    subject: subject.clone(),
+                });
+                continue;
+            }
+        }
+        ts.restore(cp);
+        let cp2 = ts.checkpoint();
+        let _ = ts.eat_comma();
+        let _ = ts.eat_word("and");
+        // `is/are [a/an] <colors/subtypes/types> [in addition to ...]`
+        if ts.eat_word("is") || ts.eat_word("are") {
+            let _ = ts.eat_word("a") || ts.eat_word("an");
+            let mut colors = crate::ast::ColorMask::EMPTY;
+            let mut subtypes = Vec::new();
+            let mut saw_type = false;
+            while let Some(w) = ts.peek_word() {
+                let low = w.to_ascii_lowercase();
+                if let Some(c) = crate::vocab::lookup_color(&low) {
+                    ts.next_word();
+                    colors = colors.union(c);
+                } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                    ts.next_word();
+                    subtypes.push(sub.to_string());
+                } else if crate::vocab::lookup_card_type(&low).is_some() {
+                    ts.next_word();
+                    saw_type = true;
+                } else {
+                    break;
+                }
+            }
+            if !subtypes.is_empty() || !colors.is_empty() || saw_type {
+                let keep_existing = ts.eat_phrase(&[
+                    "in", "addition", "to", "its", "other", "colors", "and", "types",
+                ]) || ts.eat_phrase(&[
+                    "in", "addition", "to", "their", "other", "colors", "and", "types",
+                ]) || ts
+                    .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
+                    || ts
+                        .eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+                    || ts.eat_phrase(&[
+                        "in", "addition", "to", "their", "other", "creature", "types",
+                    ]);
+                if !colors.is_empty() {
+                    parts.push(StaticAbility::SubjectRule {
+                        subject: subject.clone(),
+                        rule: SubjectStaticRule::SetColors {
+                            colors,
+                            keep_existing,
+                        },
+                        condition: condition.clone(),
+                    });
+                }
+                if !subtypes.is_empty() || saw_type {
+                    parts.push(StaticAbility::SetSubtypes {
+                        subject: subject.clone(),
+                        subtypes,
+                        keep_existing,
+                    });
+                }
+                continue;
+            }
+        }
+        ts.restore(cp2);
+        break;
+    }
 }
 
 pub(super) fn parse_cant_rule(ts: &mut TokenStream<'_>) -> PResult<RuleRestrictionKind> {

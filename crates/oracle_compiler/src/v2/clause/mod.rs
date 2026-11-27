@@ -1156,10 +1156,15 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     }
 
     // 10. Trailing `if <cond>` on a sentence (`draw two cards if you control a Demon`,
-    //     `Create five of those tokens instead if ...`, `... at the beginning of the next end step if ...`)
-    if let Some(if_idx) = find_top_level_word(ts.tokens, ts.pos, "if")
-        && if_idx > ts.pos
-    {
+    //     `Create five of those tokens instead if ...`, `Destroy that creature if it has mana value 4 or less instead if a permanent left the battlefield under your control this turn`)
+    //     Iterate rightmost-first so nested `<body> if <inner> instead if <outer>` composes cleanly!
+    for if_idx in (ts.pos + 1..ts.tokens.len()).rev() {
+        if !matches!(
+            ts.tokens[if_idx].kind,
+            TokenKind::Word(w) if w.eq_ignore_ascii_case("if")
+        ) {
+            continue;
+        }
         let mut body_end = if_idx;
         if body_end > ts.pos && matches!(ts.tokens[body_end - 1].kind, TokenKind::Comma) {
             body_end -= 1;
@@ -1324,6 +1329,39 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         }
     }
 
+    // 11c. Clause sequence with automatic player-actor propagation, plus general trailing `for each <expr>` fallback!
+    {
+        let seq_cp = ts.checkpoint();
+        if let Ok(effs) = parse_clause_seq(ts, None)
+            && ts.is_eof()
+        {
+            return Ok(effs);
+        }
+        ts.restore(seq_cp);
+        if let Some(fe_idx) = find_phrase_index(ts.tokens, ts.pos, &["for", "each"])
+            && fe_idx > ts.pos
+        {
+            let body_slice = &ts.tokens[ts.pos..fe_idx];
+            let fe_slice = &ts.tokens[fe_idx..];
+            let mut fe_ts = ts.sub_stream(fe_slice, ParseStage::Effect);
+            if let Ok(scale) = crate::v2::value::parse_for_each_expr(&mut fe_ts)
+                && fe_ts.is_eof()
+            {
+                let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
+                if let Ok(body) = parse_clause_seq(&mut body_ts, None)
+                    && body_ts.is_eof()
+                {
+                    ts.pos = ts.tokens.len();
+                    return Ok(vec![Effect::ForEach {
+                        over: ForEachDomain::Count(scale),
+                        body,
+                    }]);
+                }
+            }
+        }
+        ts.restore(seq_cp);
+    }
+
     // 12. Clause sequence with automatic player-actor propagation!
     parse_clause_seq(ts, None)
 }
@@ -1367,7 +1405,8 @@ fn parse_clause_seq(
     ts: &mut TokenStream<'_>,
     inherited_actor: Option<PlayerRef>,
 ) -> PResult<Vec<Effect>> {
-    let (mut effects, mut active_actor) = parse_single_clause(ts, inherited_actor)?;
+    let (first_effs, mut active_actor) = parse_single_clause(ts, inherited_actor)?;
+    let mut effects = wrap_optional_trailing_if(ts, first_effs);
 
     loop {
         if ts.is_eof() {
@@ -1388,7 +1427,7 @@ fn parse_clause_seq(
         let _ = ts.eat_word("then");
         match try_parse(ts, |s| parse_single_clause(s, active_actor)) {
             Ok((next_effs, next_actor)) => {
-                effects.extend(next_effs);
+                effects.extend(wrap_optional_trailing_if(ts, next_effs));
                 if next_actor.is_some() {
                     active_actor = next_actor;
                 }
@@ -1403,6 +1442,21 @@ fn parse_clause_seq(
     Ok(effects)
 }
 
+fn wrap_optional_trailing_if(ts: &mut TokenStream<'_>, effs: Vec<Effect>) -> Vec<Effect> {
+    let cp = ts.checkpoint();
+    if ts.eat_word("if")
+        && let Ok(cond) = try_parse(ts, parse_condition)
+    {
+        return vec![Effect::BranchCondition {
+            condition: cond,
+            then_body: effs,
+            else_body: Vec::new(),
+        }];
+    }
+    ts.restore(cp);
+    effs
+}
+
 /// Parse one atomic clause, returning `(Vec<Effect>, Option<PlayerRef>)` where the second element
 /// is the clause's explicit player actor (for propagation across `and` / `, then`).
 fn parse_single_clause(
@@ -1410,6 +1464,29 @@ fn parse_single_clause(
     inherited_actor: Option<PlayerRef>,
 ) -> PResult<(Vec<Effect>, Option<PlayerRef>)> {
     // A0. `you may spend [colorless] mana as though it were mana of any color/type to cast that spell / those spells / it`
+    //     OR `[you] [may] pay <cost> rather than pay [~'s | this spell's | its | that spell's] mana cost` (Zendikar Traps, `Bolas's Citadel`, `Xander's Pact`)
+    {
+        let acp = ts.checkpoint();
+        let _ = ts.eat_word("you");
+        let _ = ts.eat_word("may");
+        if let Ok(costs) = try_parse(ts, crate::v2::cost::parse_cost_list)
+            && (ts.eat_phrase(&["rather", "than", "pay"])
+                || ts.eat_phrase(&["rather", "than", "paying"]))
+            && (ts.eat_phrase(&["its", "mana", "cost"])
+                || ts.eat_phrase(&["that", "spell's", "mana", "cost"])
+                || ts.eat_phrase(&["this", "spell's", "mana", "cost"])
+                || (ts.eat_tilde() && ts.eat_phrase(&["'s", "mana", "cost"])))
+        {
+            return Ok((
+                vec![Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::AlternativeCost(costs)),
+                    duration: Duration::Instant,
+                }],
+                Some(PlayerRef::You),
+            ));
+        }
+        ts.restore(acp);
+    }
     {
         let scp = ts.checkpoint();
         if ts.eat_phrase(&["you", "may", "spend"]) {
@@ -1618,6 +1695,42 @@ fn parse_single_clause(
             ));
         }
         ts.restore(cp);
+    }
+
+    // `<player>'s life total becomes [equal to] <val>` as a clause (e.g. `exile ~ and your life total becomes 1`)
+    {
+        let lcp = ts.checkpoint();
+        let life_player = if ts.eat_phrase(&["each", "player's", "life", "total", "becomes"]) {
+            Some(PlayerRef::EachPlayer)
+        } else if ts.eat_phrase(&["each", "opponent's", "life", "total", "becomes"]) {
+            Some(PlayerRef::EachOpponent)
+        } else if ts.eat_phrase(&["target", "player's", "life", "total", "becomes"]) {
+            Some(PlayerRef::TargetPlayer)
+        } else if ts.eat_phrase(&["target", "opponent's", "life", "total", "becomes"]) {
+            Some(PlayerRef::TargetOpponent)
+        } else if ts.eat_phrase(&["that", "player's", "life", "total", "becomes"])
+            || ts.eat_phrase(&["their", "life", "total", "becomes"])
+        {
+            Some(PlayerRef::ThatPlayer)
+        } else if ts.eat_phrase(&["your", "life", "total", "becomes"]) {
+            Some(PlayerRef::You)
+        } else {
+            None
+        };
+        if let Some(player) = life_player {
+            let _ = ts.eat_phrase(&["equal", "to"]);
+            if let Ok(amount) = try_parse(ts, parse_value_expr) {
+                return Ok((
+                    vec![Effect::AdjustLife {
+                        player,
+                        amount,
+                        op: crate::v2::ir::LifeOp::Set,
+                    }],
+                    Some(player),
+                ));
+            }
+        }
+        ts.restore(lcp);
     }
 
     // Explicit `You and <player2> each <verb>` (`You and target opponent each create a Treasure token`)
@@ -1892,8 +2005,20 @@ fn parse_activation_restrictions(ts: &mut TokenStream<'_>) -> PResult<Vec<Activa
         {
             out.push(ActivationRestriction::ControlledContinuously);
         } else if ts.eat_word("if") {
-            let cond = parse_condition(ts)?;
-            out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
+            // Split before trailing `and only ...` (`Activate only if <cond> and only once each turn`)
+            if let Some(ao_idx) = find_phrase_index(ts.tokens, ts.pos, &["and", "only"])
+                && ao_idx > ts.pos
+            {
+                let cond_slice = &ts.tokens[ts.pos..ao_idx];
+                let mut cond_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
+                let cond = parse_condition(&mut cond_ts)?;
+                cond_ts.expect_eof()?;
+                ts.pos = ao_idx;
+                out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
+            } else {
+                let cond = parse_condition(ts)?;
+                out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
+            }
         } else {
             return Err(ts.err("expected timing restriction after `Activate only`"));
         }

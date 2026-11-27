@@ -493,8 +493,11 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     if ts.eat_phrase(&["the", "copy"]) || ts.eat_phrase(&["that", "copy"]) {
         return Some(AnaphoraRef::TheCopy);
     }
+    let next_is_that_at_3 = ts
+        .peek_n(3)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("that")));
     if ts.eat_phrase(&["the", "revealed", "card"])
-        || ts.eat_phrase(&["the", "revealed", "cards"])
+        || (!next_is_that_at_3 && ts.eat_phrase(&["the", "revealed", "cards"]))
         || ts.eat_phrase(&["that", "revealed", "card"])
     {
         return Some(AnaphoraRef::RevealedCard);
@@ -527,7 +530,7 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     if ts.eat_phrase(&["the", "exiled", "creature"])
         || ts.eat_phrase(&["the", "exiled", "permanent"])
         || ts.eat_phrase(&["the", "exiled", "spell"])
-        || ts.eat_phrase(&["the", "exiled", "cards"])
+        || (!next_is_that_at_3 && ts.eat_phrase(&["the", "exiled", "cards"]))
     {
         return Some(AnaphoraRef::ExiledObject);
     }

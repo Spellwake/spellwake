@@ -66,6 +66,12 @@ pub fn parse_trigger_header(ts: &mut TokenStream<'_>) -> PResult<TriggerSpec> {
 
     let mut intervening_if = parse_optional_intervening_if(ts);
     loop {
+        if ts.eat_phrase(&["this", "way"])
+            || ts.eat_phrase(&["this", "turn"])
+            || ts.eat_phrase(&["this", "combat"])
+        {
+            continue;
+        }
         if ts.eat_phrase(&["for", "the", "first", "time", "each", "turn"])
             || ts.eat_phrase(&[
                 "for", "the", "first", "time", "during", "each", "of", "your", "turns",
@@ -297,6 +303,33 @@ pub fn parse_step_with_owner(ts: &mut TokenStream<'_>) -> PResult<(TurnStepAst, 
 
 /// Parse one or more trigger events sharing a subject (`When ~ enters or attacks`, `Whenever ~ blocks or becomes blocked`).
 pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<TriggerEvent>> {
+    // Passive prevention / counter-removal reflexive triggers (`When damage is prevented this way`, `When one or more counters are removed from ~ this way`)
+    if ts.eat_phrase(&["damage", "is", "prevented"]) {
+        return Ok(vec![TriggerEvent::DealtDamage {
+            subject: SubjectRef::SelfObject,
+            combat_only: false,
+        }]);
+    }
+    {
+        let rcp = ts.checkpoint();
+        if ts.eat_phrase(&["one", "or", "more"]) {
+            let kind = opt(ts, parse_counter_kind).unwrap_or(crate::v2::ir::CounterKind::Any);
+            if (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_phrase(&["are", "removed", "from"])
+                && let Ok(subject) = try_parse(ts, parse_subject_ref)
+            {
+                return Ok(vec![TriggerEvent::CounterEvent {
+                    subject,
+                    kind,
+                    event: crate::v2::ir::CounterTriggerKind::Removed {
+                        while_exiled: false,
+                    },
+                }]);
+            }
+        }
+        ts.restore(rcp);
+    }
+
     // Player-initiated events (`<player> casts ...`, `<player> sacrifices ...`, `<player> draws ...`, `you cycle ~`, etc.)
     {
         let cp = ts.checkpoint();
@@ -332,7 +365,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                 ]);
             }
             if ts.eat_word("cast") || ts.eat_word("casts") {
-                if ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]) {
+                if ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]) || ts.eat_word("it") {
                     if ts.eat_phrase(&["or", "cycle"]) && ts.eat_tilde() {
                         return Ok(vec![
                             TriggerEvent::SpellCast {
@@ -352,7 +385,9 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                         from_outside_hand: false,
                     }]);
                 }
-                let _ = ts.eat_phrase(&["your", "first"])
+                let _ = ts.eat_phrase(&["your", "next"])
+                    || ts.eat_phrase(&["their", "next"])
+                    || ts.eat_phrase(&["your", "first"])
                     || ts.eat_phrase(&["their", "first"])
                     || ts.eat_phrase(&["your", "second"])
                     || ts.eat_phrase(&["their", "second"]);
@@ -466,6 +501,10 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if ts.eat_phrase(&["win", "a", "coin", "flip"])
                 || ts.eat_phrase(&["wins", "a", "coin", "flip"])
+                || ts.eat_phrase(&["win", "the", "flip"])
+                || ts.eat_phrase(&["wins", "the", "flip"])
+                || ts.eat_phrase(&["lose", "the", "flip"])
+                || ts.eat_phrase(&["loses", "the", "flip"])
             {
                 return Ok(vec![TriggerEvent::PlayerAction {
                     player,
@@ -810,13 +849,36 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     filter: Some(filter),
                 }]);
             }
-            if (ts.eat_word("put") || ts.eat_word("puts")) && ts.eat_phrase(&["one", "or", "more"])
-            {
-                let kind = opt(ts, parse_counter_kind);
-                if (ts.eat_word("counters") || ts.eat_word("counter")) && ts.eat_word("on") {
-                    let subject = parse_subject_ref(ts)?;
-                    return Ok(vec![TriggerEvent::CounterPlaced { subject, kind }]);
+            if ts.eat_word("put") || ts.eat_word("puts") {
+                let pcp = ts.checkpoint();
+                if ts.eat_phrase(&["one", "or", "more"]) || ts.eat_word("a") || ts.eat_word("an") {
+                    let kind = opt(ts, parse_counter_kind);
+                    if (ts.eat_word("counters") || ts.eat_word("counter")) && ts.eat_word("on") {
+                        let _ = ts.eat_phrase(&["one", "or", "more"]);
+                        let subject = parse_subject_ref(ts)?;
+                        return Ok(vec![TriggerEvent::CounterPlaced { subject, kind }]);
+                    }
                 }
+                ts.restore(pcp);
+                let _ = ts.eat_phrase(&["one", "or", "more"]);
+                if let Ok(subject) = try_parse(ts, parse_subject_ref)
+                    && ts.eat_phrase(&["onto", "the", "battlefield"])
+                {
+                    return Ok(vec![TriggerEvent::ZoneChange {
+                        from: None,
+                        to: Some(ZoneKind::Battlefield),
+                        subject,
+                    }]);
+                }
+            }
+            if (ts.eat_word("reveal") || ts.eat_word("reveals"))
+                && let Ok(filter) = try_parse(ts, parse_object_filter)
+            {
+                return Ok(vec![TriggerEvent::PlayerObjectEvent {
+                    player,
+                    kind: PlayerObjectTriggerKind::CardPlayed,
+                    filter: Some(filter),
+                }]);
             }
         }
         ts.restore(cp);
@@ -891,13 +953,17 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
         ts.restore(ncp);
     }
 
-    // `a/an <kind> counter is removed from <subj> [while it's exiled]` (`Benalish Commander`)
+    // `[a/an | the last | ] <kind> counter(s) is/are removed from <subj> [while it's exiled]` (`Benalish Commander`, `Chandra, Fire Artisan`)
     {
         let rcp = ts.checkpoint();
-        if (ts.eat_word("a") || ts.eat_word("an") || ts.eat_phrase(&["the", "last"]))
-            && let Ok(kind) = try_parse(ts, parse_counter_kind)
+        let _ = ts.eat_phrase(&["one", "or", "more"])
+            || ts.eat_phrase(&["the", "last"])
+            || ts.eat_word("a")
+            || ts.eat_word("an");
+        if let Ok(kind) = try_parse(ts, parse_counter_kind)
             && (ts.eat_word("counter") || ts.eat_word("counters"))
-            && ts.eat_phrase(&["is", "removed", "from"])
+            && (ts.eat_phrase(&["is", "removed", "from"])
+                || ts.eat_phrase(&["are", "removed", "from"]))
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             let while_exiled = ts.eat_phrase(&["while", "it's", "exiled"]);
@@ -942,6 +1008,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             if (ts.eat_word("counters") || ts.eat_word("counter"))
                 && (ts.eat_phrase(&["are", "put", "on"]) || ts.eat_phrase(&["is", "put", "on"]))
             {
+                let _ = ts.eat_phrase(&["one", "or", "more"]);
                 let subject = parse_subject_ref(ts)?;
                 return Ok(vec![TriggerEvent::CounterPlaced { subject, kind }]);
             }
@@ -970,7 +1037,21 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
         ts.restore(fcp);
     }
 
-    // `you're dealt [combat|noncombat] damage`
+    // `you're dealt [combat|noncombat] damage` / `[combat|noncombat] damage is dealt to you`
+    if ts.eat_phrase(&["combat", "damage", "is", "dealt", "to", "you"]) {
+        return Ok(vec![TriggerEvent::DealtDamage {
+            subject: SubjectRef::Player(crate::v2::ir::PlayerRef::You),
+            combat_only: true,
+        }]);
+    }
+    if ts.eat_phrase(&["damage", "is", "dealt", "to", "you"])
+        || ts.eat_phrase(&["noncombat", "damage", "is", "dealt", "to", "you"])
+    {
+        return Ok(vec![TriggerEvent::DealtDamage {
+            subject: SubjectRef::Player(crate::v2::ir::PlayerRef::You),
+            combat_only: false,
+        }]);
+    }
     if ts.eat_phrase(&["you're", "dealt"]) || ts.eat_phrase(&["you", "are", "dealt"]) {
         let combat_only = ts.eat_word("combat");
         let _ = ts.eat_word("noncombat");

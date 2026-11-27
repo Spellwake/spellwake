@@ -421,6 +421,16 @@ pub(super) fn parse_player_verb_frame(
             };
             let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
                 || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
+            let alt_costs = if !free && ts.eat_word("by") {
+                let costs = crate::v2::cost::parse_cost_list(ts).unwrap_or_default();
+                let _ = ts.eat_phrase(&["rather", "than", "paying", "its", "mana", "cost"])
+                    || ts.eat_phrase(&["rather", "than", "paying", "their", "mana", "costs"])
+                    || ts.eat_phrase(&["in", "addition", "to", "paying", "its", "other", "costs"])
+                    || ts.eat_phrase(&["in", "addition", "to", "its", "other", "costs"]);
+                costs
+            } else {
+                Vec::new()
+            };
             let dur = parse_trailing_duration(ts).unwrap_or(Duration::Instant);
             let mut out = vec![Effect::MutatePlayer {
                 player: actor,
@@ -431,6 +441,12 @@ pub(super) fn parse_player_verb_frame(
                 },
                 duration: dur.clone(),
             }];
+            if !alt_costs.is_empty() {
+                out.push(Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::AlternativeCost(alt_costs)),
+                    duration: dur.clone(),
+                });
+            }
             let m_cp = ts.checkpoint();
             let _ = ts.eat_comma();
             if ts.eat_phrase(&[
@@ -880,30 +896,112 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 3i. `double(s) the number of [<kind>] counters on <subj>`
-    if (ts.eat_word("double") || ts.eat_word("doubles")) && ts.eat_phrase(&["the", "number", "of"])
-    {
-        let kind = if ts.eat_word("counters") || ts.eat_word("counter") {
-            None
-        } else {
-            let ck = parse_counter_kind(ts)?;
-            if !(ts.eat_word("counters") || ts.eat_word("counter")) {
-                return Err(ts.err("expected `counters` in double counters"));
+    // 3i. `double(s) the number of [<kind>] counters on <subj>` OR `double(s) <subj>'s power [and toughness] [<val> times] [until end of turn]`
+    if ts.eat_word("double") || ts.eat_word("doubles") {
+        if ts.eat_phrase(&["the", "number", "of"]) {
+            let kind = if ts.eat_word("counters") || ts.eat_word("counter") {
+                None
+            } else {
+                let ck = parse_counter_kind(ts)?;
+                if !(ts.eat_word("counters") || ts.eat_word("counter")) {
+                    return Err(ts.err("expected `counters` in double counters"));
+                }
+                Some(ck)
+            };
+            if !ts.eat_word("on") {
+                return Err(ts.err("expected `on` in double counters"));
             }
-            Some(ck)
-        };
-        if !ts.eat_word("on") {
-            return Err(ts.err("expected `on` in double counters"));
+            let subject = parse_subject_ref(ts)?;
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::DoubleCounters { kind },
+                    duration: Duration::Instant,
+                }],
+                (),
+            ));
         }
-        let subject = parse_subject_ref(ts)?;
-        return Ok((
-            vec![Effect::MutateObject {
-                subject,
-                mutation: ObjectMutation::DoubleCounters { kind },
-                duration: Duration::Instant,
-            }],
-            (),
-        ));
+        let dcp = ts.checkpoint();
+        let subj = if ts.eat_phrase(&["target", "creature's"]) {
+            Some(SubjectRef::TargetObject {
+                filter: Box::new(ObjectFilter {
+                    any_types: crate::ast::CardTypeMask::CREATURE,
+                    ..Default::default()
+                }),
+                count: crate::v2::ir::TargetCount::Exact(1),
+                another: false,
+            })
+        } else if ts.eat_phrase(&["that", "creature's"]) {
+            Some(SubjectRef::Anaphora(
+                crate::v2::ir::AnaphoraRef::ThatCreature,
+            ))
+        } else if ts.eat_phrase(&["equipped", "creature's"]) {
+            Some(SubjectRef::Anaphora(
+                crate::v2::ir::AnaphoraRef::EquippedCreature,
+            ))
+        } else if ts.eat_phrase(&["enchanted", "creature's"]) {
+            Some(SubjectRef::Anaphora(
+                crate::v2::ir::AnaphoraRef::EnchantedCreature,
+            ))
+        } else if ts.eat_word("its") {
+            Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It))
+        } else if ts.eat_tilde() && ts.eat_word("'s") {
+            Some(SubjectRef::SelfObject)
+        } else {
+            None
+        };
+        if let Some(subject) = subj {
+            let both = ts.eat_phrase(&["power", "and", "toughness"]);
+            let only_p = !both && ts.eat_word("power");
+            let only_t = !both && !only_p && ts.eat_word("toughness");
+            if both || only_p || only_t {
+                let times = {
+                    let tcp = ts.checkpoint();
+                    if let Ok(v) = try_parse(ts, parse_value_expr)
+                        && (ts.eat_word("times") || ts.eat_word("time"))
+                    {
+                        Some(v)
+                    } else {
+                        ts.restore(tcp);
+                        None
+                    }
+                };
+                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                let mut eff = Effect::MutateObject {
+                    subject: subject.clone(),
+                    mutation: ObjectMutation::ModifyPT {
+                        power: if both || only_p {
+                            crate::v2::ir::PtDelta::PlusX
+                        } else {
+                            crate::v2::ir::PtDelta::Fixed(0)
+                        },
+                        toughness: if both || only_t {
+                            crate::v2::ir::PtDelta::PlusX
+                        } else {
+                            crate::v2::ir::PtDelta::Fixed(0)
+                        },
+                        scale: Some(Box::new(ValueExpr::ObjectStat {
+                            subject: Box::new(subject),
+                            stat: if only_t {
+                                crate::ast::StatKind::Toughness
+                            } else {
+                                crate::ast::StatKind::Power
+                            },
+                        })),
+                    },
+                    duration,
+                };
+                if let Some(t) = times {
+                    eff = Effect::ForEach {
+                        over: ForEachDomain::Count(t),
+                        body: vec![eff],
+                    };
+                }
+                return Ok((vec![eff], ()));
+            }
+        }
+        ts.restore(dcp);
+        return Err(ts.err("expected counters or power/toughness after `double`"));
     }
 
     // 3j. `exchange control of <subj>`
@@ -920,6 +1018,8 @@ pub(super) fn parse_player_verb_frame(
             Cost::PayAnyAmountMana
         } else if ts.eat_phrase(&["any", "amount", "of", "life"]) {
             Cost::PayAnyAmountLife
+        } else if ts.eat_phrase(&["life", "equal", "to"]) {
+            Cost::PayLife(parse_value_expr(ts)?)
         } else if ts.eat_phrase(&["an", "amount", "of"])
             && matches!(
                 ts.peek().map(|t| &t.kind),

@@ -51,7 +51,9 @@ pub(crate) fn parse_token_creation(
     let count = if ts.eat_phrase(&["a", "number", "of"]) {
         deferred_equal_to = true;
         ValueExpr::Const(1)
-    } else if ts.eat_word("a") || ts.eat_word("an") {
+    } else if ts.eat_phrase(&["that", "many"]) {
+        ValueExpr::PriorActionCount(crate::v2::ir::PriorActionKind::ThatMany)
+    } else if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
         ValueExpr::Const(1)
     } else {
         parse_value_expr(ts)?

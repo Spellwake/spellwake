@@ -131,11 +131,14 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     if ts.eat_phrase(&["it", "has", "this", "ability"]) {
                         exceptions.push(crate::v2::ir::CopyException::HasThisAbility);
                     } else if ts.eat_phrase(&["it", "enters", "with"]) {
+                        let _ = ts.eat_word("an") || ts.eat_word("a");
+                        let _ = ts.eat_word("additional");
                         let count = if ts.eat_word("a") || ts.eat_word("an") {
                             ValueExpr::Const(1)
                         } else {
                             try_parse(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1))
                         };
+                        let _ = ts.eat_word("additional");
                         if let Ok(kind) = try_parse(ts, parse_counter_kind)
                             && (ts.eat_word("counter") || ts.eat_word("counters"))
                             && ts.eat_phrase(&["on", "it"])
@@ -154,6 +157,16 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             ts.restore(item_cp);
                             break;
                         }
+                    } else if ts.peek_phrase(&["it", "has"])
+                        && matches!(
+                            ts.peek_n(2).map(|t| &t.kind),
+                            Some(crate::v2::lexer::TokenKind::Tilde)
+                        )
+                        && ts.eat_phrase(&["it", "has"])
+                        && ts.eat_tilde()
+                        && ts.eat_phrase(&["'s", "other", "abilities"])
+                    {
+                        exceptions.push(crate::v2::ir::CopyException::KeepOwnOtherAbilities);
                     } else if ((ts.eat_tilde() && ts.eat_phrase(&["'s", "name", "is"]))
                         || ts.eat_phrase(&["its", "name", "is"]))
                         && ts.eat_tilde()
@@ -203,6 +216,8 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     } else if ts.eat_phrase(&["it's", "a"])
                         || ts.eat_phrase(&["it's", "an"])
                         || ts.eat_word("it's")
+                        || ts.eat_phrase(&["is", "a"])
+                        || ts.eat_phrase(&["is", "an"])
                     {
                         let pt = ts.next_base_pt();
                         let mut supertypes = crate::ast::SupertypeMask::EMPTY;
@@ -214,6 +229,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                 ts.next_word();
                                 supertypes = supertypes.union(st);
                                 let _ = ts.eat_word("and");
+                            } else if crate::vocab::lookup_color(&low).is_some() {
+                                ts.next_word();
+                                let _ = ts.eat_word("and");
                             } else if let Some(ct) = crate::vocab::lookup_card_type(&low) {
                                 ts.next_word();
                                 types = types.union(ct);
@@ -224,7 +242,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                 break;
                             }
                         }
-                        let keep_existing_types = ts
+                        let keep_existing_types = ts.eat_phrase(&[
+                            "in", "addition", "to", "its", "other", "colors", "and", "types",
+                        ]) || ts.eat_phrase(&[
+                            "in", "addition", "to", "its", "other", "creature", "types",
+                        ]) || ts
                             .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
                             || ts.eat_phrase(&["in", "addition", "to", "his", "other", "types"])
                             || ts.eat_phrase(&["in", "addition", "to", "her", "other", "types"]);
@@ -552,137 +574,181 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 });
             }
             ts.restore(cp);
-            if ts.eat_phrase(&["one", "or", "more"])
-                && {
-                    let _ = ts.eat_word("creature")
-                        || ts.eat_word("artifact")
-                        || ts.eat_word("enchantment");
-                    ts.eat_phrase(&[
-                        "tokens", "would", "be", "created", "under", "your", "control",
-                    ])
-                }
-                && ts.eat_comma()
-            {
-                if ts.eat_phrase(&[
-                    "twice", "that", "many", "of", "those", "tokens", "are", "created", "instead",
-                ]) {
-                    let _ = ts.eat_period();
-                    ts.expect_eof()?;
-                    return Ok(Replacement::TokenRule {
-                        controller: PlayerRef::You,
-                        filter: None,
-                        rule: TokenReplacementKind::Multiply(2),
-                    });
-                }
-                if ts.eat_phrase(&[
-                    "three", "times", "that", "many", "of", "those", "tokens", "are", "created",
-                    "instead",
-                ]) {
-                    let _ = ts.eat_period();
-                    ts.expect_eof()?;
-                    return Ok(Replacement::TokenRule {
-                        controller: PlayerRef::You,
-                        filter: None,
-                        rule: TokenReplacementKind::Multiply(3),
-                    });
-                }
-                {
-                    let dcp = ts.checkpoint();
-                    if ts.eat_phrase(&["that", "many"])
-                        && let Ok((_, spec, _)) =
-                            try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
-                        && ts.eat_phrase(&["are", "created", "instead"])
-                    {
+            if ts.eat_phrase(&["one", "or", "more"]) && {
+                let _ = ts.eat_word("creature")
+                    || ts.eat_word("artifact")
+                    || ts.eat_word("enchantment");
+                ts.eat_phrase(&["tokens", "would", "be", "created"])
+            } {
+                let controller = if ts.eat_phrase(&["under", "your", "control"]) {
+                    PlayerRef::You
+                } else {
+                    PlayerRef::EachPlayer
+                };
+                if ts.eat_comma() {
+                    if ts.eat_phrase(&[
+                        "twice", "that", "many", "of", "those", "tokens", "are", "created",
+                        "instead",
+                    ]) {
                         let _ = ts.eat_period();
-                        if ts.is_eof() {
-                            return Ok(Replacement::TokenRule {
-                                controller: PlayerRef::You,
-                                filter: None,
-                                rule: TokenReplacementKind::Replace(Box::new(spec)),
-                            });
-                        }
+                        ts.expect_eof()?;
+                        return Ok(Replacement::TokenRule {
+                            controller,
+                            filter: None,
+                            rule: TokenReplacementKind::Multiply(2),
+                        });
                     }
-                    ts.restore(dcp);
-                }
-                if ts.eat_phrase(&["those", "tokens", "plus"]) {
-                    let t_cp = ts.checkpoint();
-                    let _ = ts.eat_phrase(&["an", "additional"])
-                        || ts.eat_word("a")
-                        || ts.eat_word("an");
-                    if let Some(w) = ts.peek_word()
-                        && let Some(pt) = lookup_predefined_token(&w.to_ascii_lowercase())
+                    if ts.eat_phrase(&[
+                        "three", "times", "that", "many", "of", "those", "tokens", "are",
+                        "created", "instead",
+                    ]) {
+                        let _ = ts.eat_period();
+                        ts.expect_eof()?;
+                        return Ok(Replacement::TokenRule {
+                            controller,
+                            filter: None,
+                            rule: TokenReplacementKind::Multiply(3),
+                        });
+                    }
                     {
-                        ts.next_word();
-                        if (ts.eat_word("token") || ts.eat_word("tokens"))
+                        let dcp = ts.checkpoint();
+                        if ts.peek_phrase(&["that", "many"])
+                            && let Ok((_, spec, _)) =
+                                try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
                             && ts.eat_phrase(&["are", "created", "instead"])
                         {
                             let _ = ts.eat_period();
                             if ts.is_eof() {
                                 return Ok(Replacement::TokenRule {
-                                    controller: PlayerRef::You,
+                                    controller,
+                                    filter: None,
+                                    rule: TokenReplacementKind::Replace(Box::new(spec)),
+                                });
+                            }
+                        }
+                        ts.restore(dcp);
+                    }
+                    if ts.eat_phrase(&["those", "tokens", "plus"]) {
+                        let t_cp = ts.checkpoint();
+                        let _ = ts.eat_phrase(&["an", "additional"])
+                            || ts.eat_word("a")
+                            || ts.eat_word("an");
+                        if let Some(w) = ts.peek_word()
+                            && let Some(pt) = lookup_predefined_token(&w.to_ascii_lowercase())
+                        {
+                            ts.next_word();
+                            if (ts.eat_word("token") || ts.eat_word("tokens"))
+                                && ts.eat_phrase(&["are", "created", "instead"])
+                            {
+                                let _ = ts.eat_period();
+                                if ts.is_eof() {
+                                    return Ok(Replacement::TokenRule {
+                                        controller,
+                                        filter: None,
+                                        rule: TokenReplacementKind::Bonus {
+                                            spec: Box::new(crate::v2::ir::TokenSpec::Predefined(
+                                                pt,
+                                            )),
+                                            count: ValueExpr::Const(1),
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                        ts.restore(t_cp);
+                        if let Ok((bonus_count, spec, _)) =
+                            try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
+                            && ts.eat_phrase(&["are", "created", "instead"])
+                        {
+                            let _ = ts.eat_period();
+                            if ts.is_eof() {
+                                return Ok(Replacement::TokenRule {
+                                    controller,
                                     filter: None,
                                     rule: TokenReplacementKind::Bonus {
-                                        spec: Box::new(crate::v2::ir::TokenSpec::Predefined(pt)),
-                                        count: ValueExpr::Const(1),
+                                        spec: Box::new(spec),
+                                        count: bonus_count,
                                     },
                                 });
                             }
                         }
                     }
-                    ts.restore(t_cp);
-                    if let Ok((bonus_count, spec, _)) =
-                        try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
-                        && ts.eat_phrase(&["are", "created", "instead"])
-                    {
-                        let _ = ts.eat_period();
-                        if ts.is_eof() {
-                            return Ok(Replacement::TokenRule {
-                                controller: PlayerRef::You,
-                                filter: None,
-                                rule: TokenReplacementKind::Bonus {
-                                    spec: Box::new(spec),
-                                    count: bonus_count,
-                                },
-                            });
-                        }
-                    }
                 }
             }
             ts.restore(cp);
-            if ts.eat_phrase(&["you", "would", "create", "one", "or", "more"])
-                && let Some(w) = ts.peek_word()
-                && let Some(pt) = lookup_predefined_token(&w.to_ascii_lowercase())
-            {
-                ts.next_word();
-                if (ts.eat_word("tokens") || ts.eat_word("token"))
-                    && ts.eat_comma()
-                    && ts.eat_phrase(&[
-                        "instead",
-                        "create",
-                        "those",
-                        "tokens",
-                        "plus",
-                        "an",
-                        "additional",
-                    ])
-                    && let Some(w2) = ts.peek_word()
-                    && let Some(pt2) = lookup_predefined_token(&w2.to_ascii_lowercase())
+            if ts.eat_phrase(&["you", "would", "create", "one", "or", "more"]) {
+                let mut filter: Option<ObjectFilter> = None;
+                if let Some(w) = ts.peek_word()
+                    && let Some(pt) = lookup_predefined_token(&w.to_ascii_lowercase())
                 {
                     ts.next_word();
-                    if ts.eat_word("token") || ts.eat_word("tokens") {
+                    filter = Some(ObjectFilter {
+                        token: Some(true),
+                        subtypes: vec![format!("{pt:?}")],
+                        ..Default::default()
+                    });
+                } else if ts.eat_word("artifact") {
+                    filter = Some(ObjectFilter {
+                        token: Some(true),
+                        any_types: crate::ast::CardTypeMask::ARTIFACT,
+                        ..Default::default()
+                    });
+                } else if ts.eat_word("creature") {
+                    filter = Some(ObjectFilter {
+                        token: Some(true),
+                        any_types: crate::ast::CardTypeMask::CREATURE,
+                        ..Default::default()
+                    });
+                } else if ts.eat_word("enchantment") {
+                    filter = Some(ObjectFilter {
+                        token: Some(true),
+                        any_types: crate::ast::CardTypeMask::ENCHANTMENT,
+                        ..Default::default()
+                    });
+                }
+                if (ts.eat_word("tokens") || ts.eat_word("token")) && ts.eat_comma() {
+                    let _ = ts.eat_phrase(&["you", "may"]);
+                    if ts.eat_phrase(&["instead", "create", "those", "tokens", "plus"]) {
+                        if let Ok((bonus_count, spec, _)) =
+                            try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
+                        {
+                            let _ = ts.eat_period();
+                            if ts.is_eof() {
+                                return Ok(Replacement::TokenRule {
+                                    controller: PlayerRef::You,
+                                    filter,
+                                    rule: TokenReplacementKind::Bonus {
+                                        spec: Box::new(spec),
+                                        count: bonus_count,
+                                    },
+                                });
+                            }
+                        }
+                    } else if ts.eat_phrase(&["instead", "create"])
+                        && let Ok((_, spec1, _)) =
+                            try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
+                    {
+                        let mut rules = vec![Replacement::TokenRule {
+                            controller: PlayerRef::You,
+                            filter: filter.clone(),
+                            rule: TokenReplacementKind::Replace(Box::new(spec1)),
+                        }];
+                        if ts.eat_word("or")
+                            && let Ok((_, spec2, _)) =
+                                try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
+                        {
+                            rules.push(Replacement::TokenRule {
+                                controller: PlayerRef::You,
+                                filter,
+                                rule: TokenReplacementKind::Replace(Box::new(spec2)),
+                            });
+                        }
                         let _ = ts.eat_period();
                         if ts.is_eof() {
-                            return Ok(Replacement::TokenRule {
-                                controller: PlayerRef::You,
-                                filter: Some(ObjectFilter {
-                                    token: Some(true),
-                                    subtypes: vec![format!("{pt:?}")],
-                                    ..Default::default()
-                                }),
-                                rule: TokenReplacementKind::Bonus {
-                                    spec: Box::new(crate::v2::ir::TokenSpec::Predefined(pt2)),
-                                    count: ValueExpr::Const(1),
-                                },
+                            return Ok(if rules.len() == 1 {
+                                rules.remove(0)
+                            } else {
+                                Replacement::Compound(rules)
                             });
                         }
                     }
@@ -821,33 +887,63 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                     factor: 2,
                                 });
                             }
-                        } else if ts.eat_phrase(&["that", "many", "plus"])
-                            && let Some(n) = ts.next_number(false)
-                        {
-                            let _ = ts.eat_phrase(&["of", "those", "counters"])
-                                || (opt(ts, parse_counter_kind).is_some()
-                                    && (ts.eat_word("counters") || ts.eat_word("counter")));
-                            if ts.eat_phrase(&["are", "put", "on", "it", "instead"])
-                                || ts.eat_phrase(&[
-                                    "are",
-                                    "put",
-                                    "on",
-                                    "that",
-                                    "permanent",
-                                    "instead",
-                                ])
-                                || ts.eat_phrase(&[
-                                    "are", "put", "on", "that", "creature", "instead",
-                                ])
+                        } else if ts.eat_phrase(&["that", "many"]) {
                             {
-                                let _ = ts.eat_period();
-                                ts.expect_eof()?;
-                                return Ok(Replacement::CounterRule {
-                                    filter: flt,
-                                    kind,
-                                    add: i16::try_from(n).unwrap_or(1),
-                                    factor: 1,
-                                });
+                                let kcp = ts.checkpoint();
+                                if !ts.peek_word().is_some_and(|w| {
+                                    w.eq_ignore_ascii_case("plus")
+                                        || w.eq_ignore_ascii_case("minus")
+                                }) && opt(ts, parse_counter_kind).is_some()
+                                    && (ts.eat_word("counters") || ts.eat_word("counter"))
+                                {
+                                    // consumed optional `<kind> counter(s)` before `minus <N>` (`Vizier of Remedies`)
+                                } else {
+                                    ts.restore(kcp);
+                                }
+                            }
+                            let sign: i16 = if ts.eat_word("plus") {
+                                1
+                            } else if ts.eat_word("minus") {
+                                -1
+                            } else {
+                                0
+                            };
+                            if sign != 0
+                                && let Some(n) = ts.next_number(false)
+                            {
+                                if !ts.eat_phrase(&[
+                                    "of", "each", "of", "those", "kinds", "of", "counters",
+                                ]) && !ts.eat_phrase(&["of", "those", "counters"])
+                                {
+                                    let k2cp = ts.checkpoint();
+                                    if !(opt(ts, parse_counter_kind).is_some()
+                                        && (ts.eat_word("counters") || ts.eat_word("counter")))
+                                    {
+                                        ts.restore(k2cp);
+                                    }
+                                }
+                                if ts.eat_phrase(&["are", "put", "on", "it", "instead"])
+                                    || ts.eat_phrase(&[
+                                        "are",
+                                        "put",
+                                        "on",
+                                        "that",
+                                        "permanent",
+                                        "instead",
+                                    ])
+                                    || ts.eat_phrase(&[
+                                        "are", "put", "on", "that", "creature", "instead",
+                                    ])
+                                {
+                                    let _ = ts.eat_period();
+                                    ts.expect_eof()?;
+                                    return Ok(Replacement::CounterRule {
+                                        filter: flt,
+                                        kind,
+                                        add: sign * i16::try_from(n).unwrap_or(1),
+                                        factor: 1,
+                                    });
+                                }
                             }
                         }
                     }
@@ -969,6 +1065,7 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         }
                         {
                             let pcp = ts.checkpoint();
+                            let _ = ts.eat_phrase(&["you", "may"]);
                             if ts.eat_word("prevent")
                                 && let Ok(amount) = try_parse(ts, parse_value_expr)
                                 && (ts.eat_phrase(&["of", "that", "damage"])
@@ -981,13 +1078,21 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                         true
                                     }))
                             {
+                                let final_amount = if ts.eat_comma()
+                                    && ts.eat_phrase(&["where", "x", "is"])
+                                    && let Ok(val) = try_parse(ts, parse_value_expr)
+                                {
+                                    val
+                                } else {
+                                    amount
+                                };
                                 let _ = ts.eat_period();
                                 if ts.is_eof() {
                                     return Ok(Replacement::DamageRule(
                                         DamageReplacement::PreventFixed {
                                             source: Some(src_flt),
                                             target,
-                                            amount,
+                                            amount: final_amount,
                                         },
                                     ));
                                 }
@@ -1139,6 +1244,7 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             if ts.eat_phrase(&["damage", "would", "be", "dealt", "to"])
                 && let Ok(target) = try_parse(ts, parse_subject_ref)
             {
+                let _ = ts.eat_phrase(&["this", "turn"]);
                 let cond = if ts.eat_word("while") {
                     opt(ts, parse_condition)
                 } else {
@@ -1146,35 +1252,64 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 };
                 if ts.eat_comma() {
                     if ts.eat_phrase(&["prevent", "that", "damage"]) {
-                        if ts.eat_word("and") || ts.eat_comma() || (ts.eat_period() && !ts.is_eof())
-                        {
+                        let mut rider = Vec::new();
+                        if ts.eat_word("and") || ts.eat_comma() {
                             let _ = ts.eat_word("and");
-                            let rider = parse_effect_sentence(ts)?;
-                            let _ = ts.eat_period();
-                            if ts.is_eof() {
-                                return Ok(Replacement::DamageRule(
-                                    DamageReplacement::PreventWithRider {
-                                        target,
-                                        condition: cond,
-                                        rider,
-                                    },
-                                ));
+                            // Parse up to the first period (or EOF)
+                            let start = ts.pos;
+                            let mut end = start;
+                            while end < ts.tokens.len()
+                                && !matches!(
+                                    ts.tokens[end].kind,
+                                    crate::v2::lexer::TokenKind::Period
+                                )
+                            {
+                                end += 1;
                             }
-                        } else {
-                            let _ = ts.eat_period();
-                            if ts.is_eof() {
-                                return Ok(if cond.is_some() {
-                                    Replacement::DamageRule(DamageReplacement::PreventWithRider {
-                                        target,
-                                        condition: cond,
-                                        rider: Vec::new(),
-                                    })
-                                } else {
-                                    Replacement::DamageRule(DamageReplacement::PreventAll {
-                                        target,
-                                    })
-                                });
+                            let mut sub = ts.sub_stream(
+                                &ts.tokens[start..end],
+                                crate::v2::ir::ParseStage::Effect,
+                            );
+                            if let Ok(r) = parse_effect_sentence(&mut sub)
+                                && sub.is_eof()
+                            {
+                                rider.extend(r);
+                                ts.pos = end;
                             }
+                        }
+                        if ts.eat_period() && !ts.is_eof() {
+                            let start = ts.pos;
+                            let mut end = ts.tokens.len();
+                            if end > start
+                                && matches!(
+                                    ts.tokens[end - 1].kind,
+                                    crate::v2::lexer::TokenKind::Period
+                                )
+                            {
+                                end -= 1;
+                            }
+                            let mut sub = ts.sub_stream(
+                                &ts.tokens[start..end],
+                                crate::v2::ir::ParseStage::Effect,
+                            );
+                            if let Ok(r2) = parse_effect_sentence(&mut sub)
+                                && sub.is_eof()
+                            {
+                                rider.extend(r2);
+                                ts.pos = ts.tokens.len();
+                            }
+                        }
+                        let _ = ts.eat_period();
+                        if ts.is_eof() {
+                            return Ok(if !rider.is_empty() || cond.is_some() {
+                                Replacement::DamageRule(DamageReplacement::PreventWithRider {
+                                    target,
+                                    condition: cond,
+                                    rider,
+                                })
+                            } else {
+                                Replacement::DamageRule(DamageReplacement::PreventAll { target })
+                            });
                         }
                     } else if let Ok(instead) = parse_instead_clause(ts) {
                         let _ = ts.eat_period();
@@ -1191,6 +1326,34 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 }
             }
             ts.restore(cp);
+        }
+
+        // 1f1. `If <subj> would be destroyed, regenerate it.` (`Knight of the Holy Nimbus`)
+        {
+            let dcp = ts.checkpoint();
+            if let Ok(subject) = try_parse(ts, parse_subject_ref)
+                && ts.eat_phrase(&["would", "be", "destroyed"])
+                && ts.eat_comma()
+                && ts.eat_word("regenerate")
+                && (ts.eat_word("it") || ts.eat_word("them") || ts.eat_tilde())
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::Dies {
+                            subject: subject.clone(),
+                        },
+                        instead: vec![crate::v2::ir::Effect::MutateObject {
+                            subject,
+                            mutation: crate::v2::ir::ObjectMutation::StateAction(
+                                crate::v2::ir::ObjectStateAction::Regenerate,
+                            ),
+                            duration: crate::v2::ir::Duration::Instant,
+                        }],
+                    });
+                }
+            }
+            ts.restore(dcp);
         }
 
         // 1f2. `If you would begin your draw step, [you may] skip that step instead.`
@@ -1420,6 +1583,46 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             duration: crate::v2::ir::Duration::Instant,
                         }],
                     });
+                }
+            }
+            ts.restore(cp);
+        }
+
+        // 1g5. Lose-the-game replacement (`If you would lose the game, instead ...`) (`Exquisite Archangel`, `The Golden Throne`, `Lich's Mirror`)
+        {
+            let cp = ts.checkpoint();
+            if ts.eat_phrase(&["you", "would", "lose", "the", "game"])
+                && ts.eat_comma()
+                && let Ok(instead) = parse_instead_clause(ts)
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::PlayerAction {
+                            player: PlayerRef::You,
+                            action: PlayerTriggerKind::LosesGame,
+                        },
+                        instead,
+                    });
+                }
+            }
+            ts.restore(cp);
+        }
+
+        // 1g6. Unspent mana becomes colorless (`If you would lose unspent mana, that mana becomes colorless instead.`) (`Horizon Stone`, `Kruphix`)
+        {
+            let cp = ts.checkpoint();
+            if ts.eat_phrase(&["you", "would", "lose", "unspent", "mana"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["that", "mana", "becomes", "colorless", "instead"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::Rule(ReplacementRuleKind::ManaOverride(
+                        crate::v2::ir::ManaCost {
+                            symbols: vec![crate::v2::ir::ManaSymbol::Colorless],
+                        },
+                    )));
                 }
             }
             ts.restore(cp);
@@ -2130,15 +2333,39 @@ fn parse_instead_clause(ts: &mut TokenStream<'_>) -> PResult<Vec<crate::v2::ir::
     if end > 0 && matches!(remaining[end - 1].kind, crate::v2::lexer::TokenKind::Period) {
         end -= 1;
     }
-    if end == 0
-        || !matches!(
-            remaining[end - 1].kind,
+    // Support trailing `instead of putting it/them anywhere else` / `instead of putting it/them into your/its owner's/a graveyard [as it resolves]`
+    let mut instead_idx: Option<usize> = None;
+    for i in (0..end).rev() {
+        if matches!(
+            remaining[i].kind,
             crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("instead")
-        )
-    {
-        return Err(ts.err("expected trailing `instead` on replacement clause"));
+        ) {
+            if i + 1 == end {
+                instead_idx = Some(i);
+                break;
+            }
+            let tail = &remaining[i + 1..end];
+            let mut tail_ts = ts.sub_stream(tail, ts.stage);
+            let ok_tail = (tail_ts.eat_phrase(&["of", "putting", "it", "anywhere", "else"])
+                || tail_ts.eat_phrase(&["of", "putting", "them", "anywhere", "else"])
+                || ((tail_ts.eat_phrase(&["of", "putting", "it", "into"])
+                    || tail_ts.eat_phrase(&["of", "putting", "them", "into"]))
+                    && try_parse(&mut tail_ts, crate::v2::filter::parse_zone_ref).is_ok()
+                    && {
+                        let _ = tail_ts.eat_phrase(&["as", "it", "resolves"]);
+                        true
+                    }))
+                && tail_ts.is_eof();
+            if ok_tail {
+                instead_idx = Some(i);
+                break;
+            }
+        }
     }
-    let body_slice = &remaining[..end - 1];
+    let Some(idx) = instead_idx else {
+        return Err(ts.err("expected trailing `instead` on replacement clause"));
+    };
+    let body_slice = &remaining[..idx];
     let mut sub = ts.sub_stream(body_slice, ts.stage);
     let effects = parse_effect_sentence(&mut sub)?;
     sub.expect_eof()?;

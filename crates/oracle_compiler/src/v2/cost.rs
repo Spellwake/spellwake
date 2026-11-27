@@ -99,8 +99,8 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Ok(Cost::Mana(mana));
     }
 
-    // `Pay <val> life` / `Pay {E}...` / `Pay <mana> [for each <expr>]`
-    if ts.eat_word("pay") {
+    // `Pay <val> life` / `Pay {E}...` / `Pay <mana> [for each <expr>]` (including gerund `paying ...` after `by`)
+    if ts.eat_word("pay") || ts.eat_word("paying") {
         let mut energy = 0i32;
         while matches!(
             ts.peek().map(|t| &t.kind),
@@ -124,6 +124,10 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         if ts.eat_phrase(&["any", "amount", "of", "mana"]) {
             return Ok(Cost::PayAnyAmountMana);
         }
+        if ts.eat_phrase(&["life", "equal", "to"]) {
+            let amt = parse_value_expr(ts)?;
+            return Ok(Cost::PayLife(amt));
+        }
         let amt = parse_value_expr(ts)?;
         if ts.eat_word("life") {
             return Ok(Cost::PayLife(amt));
@@ -145,7 +149,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
     }
 
     // `Sacrifice ~` / `Sacrifice it` / `Sacrifice [all | any number of | one or more | N] <filter> [or <filter2>]`
-    if ts.eat_word("sacrifice") {
+    if ts.eat_word("sacrifice") || ts.eat_word("sacrificing") {
         if ts.eat_tilde() || ts.eat_word("it") {
             return Ok(Cost::SacrificeSelf);
         }
@@ -212,8 +216,8 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Ok(Cost::CollectEvidence(amt));
     }
 
-    // `Exile ~` / `Exile the top [N] card(s) of <zone>` / `Exile <N> <filter> [from <zone>]`
-    if ts.eat_word("exile") {
+    // `Exile ~` / `Exile the top [N] card(s) of <zone>` / `Exile <N> <filter> [from <zone>]` (including gerund `exiling ...` after `by`)
+    if ts.eat_word("exile") || ts.eat_word("exiling") {
         if ts.eat_tilde() {
             let _ = ts.eat_word("from") && try_parse(ts, parse_zone_ref).is_ok();
             return Ok(Cost::ExileSelf);
@@ -305,7 +309,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
     }
 
     // `Discard your hand` / `Discard ~` / `Discard <N> <filter> [at random]`
-    if ts.eat_word("discard") {
+    if ts.eat_word("discard") || ts.eat_word("discarding") {
         if ts.eat_phrase(&["your", "hand"]) {
             return Ok(Cost::DiscardHand);
         }
@@ -349,7 +353,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
     }
 
     // `Remove <N | all | any number of | one or more> [<kind>] counter(s) from [among] <subj>`
-    if ts.eat_word("remove") {
+    if ts.eat_word("remove") || ts.eat_word("removing") {
         let count = if ts.eat_word("all")
             || ts.eat_phrase(&["any", "number", "of"])
             || ts.eat_phrase(&["one", "or", "more"])
