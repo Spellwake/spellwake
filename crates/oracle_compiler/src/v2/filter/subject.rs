@@ -545,6 +545,8 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     }
     if ts.eat_phrase(&["the", "chosen", "creature"])
         || ts.eat_phrase(&["the", "chosen", "permanent"])
+        || ts.eat_phrase(&["the", "chosen", "cards"])
+        || ts.eat_phrase(&["the", "chosen", "card"])
         || ts.eat_phrase(&["the", "chosen", "card"])
     {
         return Some(AnaphoraRef::ThatObject);

@@ -218,7 +218,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
 
     // `Exile ~` / `Exile the top [N] card(s) of <zone>` / `Exile <N> <filter> [from <zone>]` (including gerund `exiling ...` after `by`)
     if ts.eat_word("exile") || ts.eat_word("exiling") {
-        if ts.eat_tilde() {
+        if ts.eat_tilde() || ts.eat_word("it") {
             let _ = ts.eat_word("from") && try_parse(ts, parse_zone_ref).is_ok();
             return Ok(Cost::ExileSelf);
         }

@@ -559,6 +559,24 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                 }]);
             }
             {
+                let ccp = ts.checkpoint();
+                if ts.eat_word("create") || ts.eat_word("creates") {
+                    let _ = ts.eat_phrase(&["one", "or", "more"])
+                        || ts.eat_word("a")
+                        || ts.eat_word("an");
+                    if let Ok(flt) = try_parse(ts, parse_object_filter)
+                        && flt.token == Some(true)
+                    {
+                        return Ok(vec![TriggerEvent::PlayerObjectEvent {
+                            player,
+                            kind: PlayerObjectTriggerKind::CreatesTokens,
+                            filter: Some(flt),
+                        }]);
+                    }
+                }
+                ts.restore(ccp);
+            }
+            {
                 let ecp = ts.checkpoint();
                 if (ts.eat_word("activate") || ts.eat_word("activates"))
                     && ts.eat_phrase(&["an", "exhaust", "ability"])
@@ -588,6 +606,40 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     }]);
                 }
                 ts.restore(gcp);
+            }
+            if ts.eat_phrase(&["gain", "or", "lose", "life"])
+                || ts.eat_phrase(&["gains", "or", "loses", "life"])
+            {
+                return Ok(vec![
+                    TriggerEvent::LifeChanged {
+                        player,
+                        gained: true,
+                    },
+                    TriggerEvent::LifeChanged {
+                        player,
+                        gained: false,
+                    },
+                ]);
+            }
+            if ts.eat_phrase(&["lose", "the", "game"]) || ts.eat_phrase(&["loses", "the", "game"]) {
+                return Ok(vec![TriggerEvent::PlayerAction {
+                    player,
+                    action: PlayerTriggerKind::LosesGame,
+                }]);
+            }
+            {
+                let tap_cp = ts.checkpoint();
+                if (ts.eat_word("tap") || ts.eat_word("taps"))
+                    && ts.eat_tilde()
+                    && ts.eat_phrase(&["for", "mana"])
+                {
+                    return Ok(vec![TriggerEvent::PlayerObjectEvent {
+                        player,
+                        kind: PlayerObjectTriggerKind::TappedForMana,
+                        filter: None,
+                    }]);
+                }
+                ts.restore(tap_cp);
             }
             if (ts.eat_word("tap") || ts.eat_word("taps"))
                 && let Ok(filter) = try_parse(ts, parse_object_filter)
@@ -641,6 +693,40 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                         action: PlayerTriggerKind::CardDrawn,
                     }]);
                 }
+            }
+            if ts.eat_phrase(&["gain", "or", "lose", "life"])
+                || ts.eat_phrase(&["gains", "or", "loses", "life"])
+            {
+                return Ok(vec![
+                    TriggerEvent::LifeChanged {
+                        player,
+                        gained: true,
+                    },
+                    TriggerEvent::LifeChanged {
+                        player,
+                        gained: false,
+                    },
+                ]);
+            }
+            if ts.eat_phrase(&["lose", "the", "game"]) || ts.eat_phrase(&["loses", "the", "game"]) {
+                return Ok(vec![TriggerEvent::PlayerAction {
+                    player,
+                    action: PlayerTriggerKind::LosesGame,
+                }]);
+            }
+            {
+                let tap_cp = ts.checkpoint();
+                if (ts.eat_word("tap") || ts.eat_word("taps"))
+                    && ts.eat_tilde()
+                    && ts.eat_phrase(&["for", "mana"])
+                {
+                    return Ok(vec![TriggerEvent::PlayerObjectEvent {
+                        player,
+                        kind: PlayerObjectTriggerKind::TappedForMana,
+                        filter: None,
+                    }]);
+                }
+                ts.restore(tap_cp);
             }
             if (ts.eat_word("tap") || ts.eat_word("taps"))
                 && let Ok(filter) = try_parse(ts, parse_object_filter)
@@ -1070,11 +1156,22 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
         )]);
     }
 
-    // `a [color] source you control deals [noncombat|combat] damage to <tgt>`
+    // `a/an [another] [noncreature] [color] source [you control] deals [noncombat|combat] [exactly <N>] damage [to <tgt>]`
     {
         let cp = ts.checkpoint();
-        if ts.eat_word("a") || ts.eat_word("an") {
+        let started_another = ts.eat_word("another");
+        if started_another || ts.eat_word("a") || ts.eat_word("an") {
             let mut src_flt = ObjectFilter::default();
+            if started_another || ts.eat_word("another") {
+                src_flt.flags = src_flt
+                    .flags
+                    .union(crate::v2::ir::FilterFlags::EXCLUDE_SELF);
+            }
+            if ts.eat_word("noncreature") {
+                src_flt.forbidden_types = src_flt
+                    .forbidden_types
+                    .union(crate::ast::CardTypeMask::CREATURE);
+            }
             if let Some(w) = ts.peek_word()
                 && let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase())
             {
@@ -1092,12 +1189,17 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                         .flags
                         .union(crate::v2::ir::FilterFlags::EXCLUDE_SELF);
                 }
-                let combat_only = if ts.eat_phrase(&["deals", "combat", "damage"]) {
-                    Some(true)
-                } else if ts.eat_phrase(&["deals", "noncombat", "damage"])
-                    || ts.eat_phrase(&["deals", "damage"])
-                {
-                    Some(false)
+                let combat_only = if ts.eat_word("deals") {
+                    let is_combat = ts.eat_word("combat");
+                    let _ = ts.eat_word("noncombat");
+                    if ts.eat_word("exactly") {
+                        let _ = ts.next_number(false);
+                    }
+                    if ts.eat_word("damage") {
+                        Some(is_combat)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -1142,6 +1244,10 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
     let subject = {
         let cp = ts.checkpoint();
         if (ts.eat_word("or") || ts.eat_word("and/or"))
+            && {
+                let _ = ts.eat_phrase(&["one", "or", "more"]);
+                true
+            }
             && let Ok(other_subj) = try_parse(ts, parse_subject_ref)
         {
             SubjectRef::Compound(vec![first_subj, other_subj])

@@ -66,6 +66,66 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             ConditionFlag::IsYourTurn,
         ))));
     }
+    // `~ isn't on the battlefield` (`Grist, the Hunger Tide`)
+    {
+        let bcp = ts.checkpoint();
+        if (ts.eat_tilde() || ts.eat_word("it"))
+            && ts.eat_phrase(&["isn't", "on", "the", "battlefield"])
+        {
+            return Ok(ConditionExpr::SubjectMatches {
+                subject: Box::new(SubjectRef::SelfObject),
+                filter: Box::new(crate::v2::ir::ObjectFilter {
+                    flags: crate::v2::ir::FilterFlags::NOT_ON_BATTLEFIELD,
+                    ..Default::default()
+                }),
+            });
+        }
+        ts.restore(bcp);
+    }
+    // `defending player is poisoned / the monarch` (`Chained Throatseeker`, `Crown-Hunter Hireling`)
+    if ts.eat_phrase(&["defending", "player", "is", "poisoned"]) {
+        return Ok(ConditionExpr::PlayerCheck {
+            player: PlayerRef::DefendingPlayer,
+            kind: PlayerConditionKind::Poisoned,
+        });
+    }
+    if ts.eat_phrase(&["defending", "player", "is", "the", "monarch"]) {
+        return Ok(ConditionExpr::PlayerCheck {
+            player: PlayerRef::DefendingPlayer,
+            kind: PlayerConditionKind::IsMonarch,
+        });
+    }
+    // `you revealed a/an <flt> or controlled a/an <flt> as you cast ~` (`Silumgar's Scorn`, `Dragonlord's Prerogative`, DTK Dragon cycle)
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "revealed"])
+            && {
+                let _ = ts.eat_word("a") || ts.eat_word("an");
+                true
+            }
+            && try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_phrase(&["or", "controlled"])
+            && {
+                let _ = ts.eat_word("a") || ts.eat_word("an");
+                true
+            }
+            && let Ok(f2) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["as", "you", "cast"])
+            && (ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]))
+        {
+            return Ok(ConditionExpr::Or(
+                Box::new(ConditionExpr::EventCheck(EventCheckKind::PriorObjectEvent(
+                    PriorActionKind::RevealedThisWay,
+                ))),
+                Box::new(ConditionExpr::Controls {
+                    player: PlayerRef::You,
+                    filter: Box::new(f2),
+                    min_count: 1,
+                }),
+            ));
+        }
+        ts.restore(dcp);
+    }
     if ts.eat_phrase(&["excess", "damage", "was", "dealt"]) {
         if ts.eat_word("to") {
             let _ = try_parse(ts, parse_subject_ref);
@@ -1487,7 +1547,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                 .and_then(|n| u16::try_from(n).ok())
                 .unwrap_or(1);
             let _ = ts.eat_phrase(&["or", "more"]);
-            if ts.eat_phrase(&["card", "types", "among", "cards", "in"])
+            if (ts.eat_phrase(&["card", "types", "among", "cards", "in"])
+                || ts.eat_phrase(&["permanent", "types", "among", "cards", "in"]))
                 && let Ok(zone) = try_parse(ts, parse_zone_ref)
             {
                 return Ok(ConditionExpr::ZoneMetric {
@@ -1539,6 +1600,11 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                         min_count,
                     });
                 }
+                return Ok(ConditionExpr::Compare {
+                    lhs: Box::new(ValueExpr::Count(Box::new(flt))),
+                    op: CompareOp::Ge,
+                    rhs: Box::new(ValueExpr::Const(i32::from(min_count))),
+                });
             }
         }
         ts.restore(cp);

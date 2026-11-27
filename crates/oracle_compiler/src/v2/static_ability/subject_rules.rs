@@ -845,11 +845,35 @@ pub(super) fn parse_subject_static_ability(
     // OR `<subj> has/have "<quoted ability>"` OR `<subj> has/have <kws>`
     if ts.eat_word("has") || ts.eat_word("have") {
         if ts.eat_phrase(&["all", "activated", "abilities", "of"]) {
-            let source = parse_object_filter(ts)?;
+            let source = if ts.eat_phrase(&["that", "card"]) || ts.eat_phrase(&["that", "creature"])
+            {
+                crate::v2::ir::ObjectFilter {
+                    any_card: true,
+                    ..Default::default()
+                }
+            } else {
+                let _ = ts.eat_word("all");
+                parse_object_filter(ts)?
+            };
             return Ok(StaticAbility::SubjectRule {
                 subject,
                 rule: SubjectStaticRule::CopyActivatedAbilities(source),
-                condition: None,
+                condition,
+            });
+        }
+        if ts.eat_phrase(&["base", "toughness"])
+            && let Some(toughness) = ts.next_number(false)
+        {
+            let mut parts = vec![StaticAbility::SetBasePT {
+                subject: subject.clone(),
+                power: 0,
+                toughness,
+            }];
+            parse_static_subject_tail(ts, &subject, &condition, &mut parts);
+            return Ok(if parts.len() == 1 {
+                parts.remove(0)
+            } else {
+                StaticAbility::Compound(parts)
             });
         }
         if ts.eat_phrase(&["base", "power", "and", "toughness"])
@@ -1224,6 +1248,26 @@ pub(super) fn parse_subject_static_ability(
             rule: RuleRestrictionKind::MustBeBlocked,
             condition,
         });
+    }
+
+    // `<subj> can't attack [or block] unless its/their controller pays {M} [for each <expr>]` (`Brainwash`, `Oppressive Rays`, `Whipgrass Entangler`, `Cowed by Wisdom`)
+    {
+        let ucp = ts.checkpoint();
+        if (ts.eat_phrase(&["can't", "attack", "or", "block", "unless"])
+            || ts.eat_phrase(&["can't", "attack", "unless"])
+            || ts.eat_phrase(&["can't", "block", "unless"]))
+            && (ts.eat_phrase(&["its", "controller", "pays"])
+                || ts.eat_phrase(&["their", "controller", "pays"]))
+            && let Some(mc) = ts.eat_mana_cost()
+        {
+            let per_creature = crate::v2::value::parse_for_each_expr(ts).is_ok();
+            return Ok(StaticAbility::AttackTax {
+                target: subject,
+                cost: crate::v2::ir::Cost::Mana(mc),
+                per_creature,
+            });
+        }
+        ts.restore(ucp);
     }
 
     // `<subj> can't attack you [or planeswalkers you control] unless their controller pays {M} [for each of those creatures]` (Ghostly Prison / Archon of Absolution)

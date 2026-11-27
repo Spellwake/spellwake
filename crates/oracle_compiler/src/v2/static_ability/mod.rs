@@ -605,30 +605,70 @@ fn parse_static_core(
         if (ts.eat_phrase(&["once", "during", "each", "of", "your", "turns"])
             || ts.eat_phrase(&["once", "each", "turn"]))
             && ts.eat_comma()
-            && ts.eat_phrase(&["you", "may", "cast"])
-            && let Ok(mut filter) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["you", "may"])
         {
-            let zone = if ts.eat_word("from") {
-                opt(ts, parse_zone_ref)
-            } else {
-                filter.zones.pop()
-            };
-            let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
-                || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
-            let alt_cost = if !free && ts.eat_word("by") {
-                opt(ts, parse_cost_list)
-            } else {
-                None
-            };
-            let _ = ts.eat_phrase(&["rather", "than", "paying", "its", "mana", "cost"]);
-            return Ok(StaticAbility::ZoneCastPermission {
-                player: PlayerRef::You,
-                filter: Some(filter),
-                subject: None,
-                zone,
-                mode: CastPermissionMode::OncePerTurn { free, alt_cost },
-                condition: None,
-            });
+            if ts.eat_word("pay")
+                && let Some(mc) = ts.eat_mana_cost()
+                && ts.eat_phrase(&["rather", "than", "pay", "the", "mana", "cost", "for"])
+                && let Ok(mut filter) = try_parse(ts, parse_object_filter)
+            {
+                let _ = ts.eat_phrase(&["you", "cast"]);
+                let zone = if ts.eat_word("from") {
+                    opt(ts, parse_zone_ref)
+                } else {
+                    filter.zones.pop()
+                };
+                if ts.eat_word("with") {
+                    let _ = ts.eat_phrase(&["mana", "value"]);
+                    let _ = opt(ts, parse_value_expr);
+                    let _ = ts.eat_phrase(&["or", "less"]) || ts.eat_phrase(&["or", "greater"]);
+                }
+                if ts.eat_comma() && ts.eat_phrase(&["where", "x", "is"]) {
+                    let _ = opt(ts, parse_value_expr);
+                }
+                let free = mc.symbols.len() == 1
+                    && matches!(mc.symbols[0], crate::v2::ir::ManaSymbol::Generic(0));
+                return Ok(StaticAbility::ZoneCastPermission {
+                    player: PlayerRef::You,
+                    filter: Some(filter),
+                    subject: None,
+                    zone,
+                    mode: CastPermissionMode::OncePerTurn {
+                        free,
+                        alt_cost: if free {
+                            None
+                        } else {
+                            Some(vec![crate::v2::ir::Cost::Mana(mc)])
+                        },
+                    },
+                    condition: None,
+                });
+            }
+            if (ts.eat_word("cast") || ts.eat_word("play"))
+                && let Ok(mut filter) = try_parse(ts, parse_object_filter)
+            {
+                let zone = if ts.eat_word("from") {
+                    opt(ts, parse_zone_ref)
+                } else {
+                    filter.zones.pop()
+                };
+                let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+                    || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
+                let alt_cost = if !free && ts.eat_word("by") {
+                    opt(ts, parse_cost_list)
+                } else {
+                    None
+                };
+                let _ = ts.eat_phrase(&["rather", "than", "paying", "its", "mana", "cost"]);
+                return Ok(StaticAbility::ZoneCastPermission {
+                    player: PlayerRef::You,
+                    filter: Some(filter),
+                    subject: None,
+                    zone,
+                    mode: CastPermissionMode::OncePerTurn { free, alt_cost },
+                    condition: None,
+                });
+            }
         }
         ts.restore(cp);
     }
@@ -645,50 +685,33 @@ fn parse_static_core(
         });
     }
 
-    // 0ab. `Players can't gain life / search libraries / draw more than one card each turn / cast more than one spell each turn / untap more than N permanents`
-    if ts.eat_phrase(&[
-        "the",
-        "same",
-        "is",
-        "true",
-        "for",
-        "creature",
-        "spells",
-        "you",
-        "control",
-        "and",
-        "creature",
-        "cards",
-        "you",
-        "own",
-        "that",
-        "aren't",
-        "on",
-        "the",
-        "battlefield",
-    ]) || ts.eat_phrase(&[
-        "the",
-        "same",
-        "is",
-        "true",
-        "for",
-        "creature",
-        "spells",
-        "you",
-        "control",
-        "and",
-        "creature",
-        "cards",
-        "you",
-        "own",
-        "that",
-        "are",
-        "not",
-        "on",
-        "the",
-        "battlefield",
-    ]) {
-        return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+    // 0ab. `The same is true for <flt> [and <flt>]` (`Encroaching Mycosynth`) / `The same is true for <kw_list>` (`Escaped Shapeshifter`)
+    {
+        let tcp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "same", "is", "true", "for"]) {
+            if try_parse(ts, parse_object_filter).is_ok() {
+                while ts.eat_word("and") || ts.eat_comma() {
+                    let _ = ts.eat_word("and");
+                    if try_parse(ts, parse_object_filter).is_err() {
+                        break;
+                    }
+                }
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+                }
+            }
+            ts.restore(tcp);
+            if ts.eat_phrase(&["the", "same", "is", "true", "for"])
+                && try_parse(ts, crate::v2::filter::parse_keyword_list).is_ok()
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
+                }
+            }
+        }
+        ts.restore(tcp);
     }
     if ts.eat_phrase(&["this", "effect", "doesn't", "remove"]) && ts.eat_tilde() {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::RetainAttachment));
@@ -1282,6 +1305,35 @@ fn parse_static_core(
                         "an",
                         "instant",
                     ])
+                {
+                    return Ok(StaticAbility::GlobalFlag(StaticFlagKind::LoyaltyAsInstant));
+                }
+                ts.restore(actcp);
+                if ts.eat_phrase(&["may", "pay"])
+                    && let Some(mc) = ts.eat_mana_cost()
+                    && ts.eat_phrase(&["rather", "than", "pay", "the"])
+                    && (ts.eat_phrase(&[
+                        "cycling", "cost", "of", "the", "first", "card", "you", "cycle", "each",
+                        "turn",
+                    ]) || ts.eat_phrase(&[
+                        "equip", "cost", "of", "the", "first", "equip", "ability", "you",
+                        "activate", "each", "turn",
+                    ]))
+                {
+                    return Ok(StaticAbility::ActivationCostModifier {
+                        delta: mc,
+                        less: true,
+                        scale: None,
+                        condition,
+                    });
+                }
+                ts.restore(actcp);
+                if ts.eat_phrase(&["may", "activate", "loyalty", "abilities", "of"])
+                    && try_parse(ts, parse_object_filter).is_ok()
+                    && {
+                        let _ = ts.eat_phrase(&["on", "any", "player's", "turn"]);
+                        ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"])
+                    }
                 {
                     return Ok(StaticAbility::GlobalFlag(StaticFlagKind::LoyaltyAsInstant));
                 }

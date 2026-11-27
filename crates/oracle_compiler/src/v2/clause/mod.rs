@@ -1697,6 +1697,39 @@ fn parse_single_clause(
         ts.restore(cp);
     }
 
+    // `the damage can't be prevented` as a clause (`Demonfire`, `Urza's Rage`, `Skullcrack`)
+    if ts.eat_phrase(&["the", "damage", "can't", "be", "prevented"]) {
+        return Ok((
+            vec![Effect::ApplyContinuous {
+                effect: Box::new(StaticAbility::RuleRestriction {
+                    subject: None,
+                    rule: RuleRestrictionKind::DamageCantBePrevented,
+                    condition: None,
+                }),
+                duration: Duration::UntilEndOfTurn,
+            }],
+            inherited_actor,
+        ));
+    }
+    // `The same is true for <kw_list>` (`Bleeding Effect`, `Thunderous Orator`)
+    {
+        let scp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "same", "is", "true", "for"])
+            && try_parse(ts, crate::v2::filter::parse_keyword_list).is_ok()
+        {
+            return Ok((
+                vec![Effect::ApplyContinuous {
+                    effect: Box::new(StaticAbility::GlobalFlag(
+                        crate::v2::ir::StaticFlagKind::AppliesInAllZones,
+                    )),
+                    duration: Duration::UntilEndOfTurn,
+                }],
+                inherited_actor,
+            ));
+        }
+        ts.restore(scp);
+    }
+
     // `<player>'s life total becomes [equal to] <val>` as a clause (e.g. `exile ~ and your life total becomes 1`)
     {
         let lcp = ts.checkpoint();
