@@ -1665,13 +1665,16 @@ pub(super) fn lower_instruction(
         | InstructionAst::ExileWithCounters { .. }
         | InstructionAst::FlipCoin
         | InstructionAst::ForEachCount { .. }
+        | InstructionAst::ForEachMatchingPlayer { .. }
         | InstructionAst::ForEachObject { .. }
         | InstructionAst::ForEachPlayer { .. }
         | InstructionAst::ForEachSubjectPlayer { .. }
         | InstructionAst::Forage
+        | InstructionAst::IfPreviousFailed(..)
         | InstructionAst::InteractiveChoice(..)
         | InstructionAst::Learn
         | InstructionAst::LookAtHand { .. }
+        | InstructionAst::ManifestByPlayer { .. }
         | InstructionAst::ManualTabletopAction { .. }
         | InstructionAst::Modal { .. }
         | InstructionAst::OpenAttraction
@@ -1681,10 +1684,12 @@ pub(super) fn lower_instruction(
         | InstructionAst::PlayerPayCost { .. }
         | InstructionAst::PutSticker { .. }
         | InstructionAst::PutStickerWithCost { .. }
+        | InstructionAst::RevealRandomFromHand { .. }
         | InstructionAst::RevealUntil { .. }
         | InstructionAst::RingTemptsYou
         | InstructionAst::RollDiceChooseOne { .. }
         | InstructionAst::RollDie { .. }
+        | InstructionAst::SacrificeAllExcept { .. }
         | InstructionAst::SetLifeTotal { .. }
         | InstructionAst::TakeInitiative { .. }
         | InstructionAst::Unless { .. }

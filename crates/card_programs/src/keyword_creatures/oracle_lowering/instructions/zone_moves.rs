@@ -327,25 +327,7 @@ pub(super) fn lower_zone_moves_instruction(
             {
                 return Ok(());
             }
-            if let Some(pos) = builder.instructions.iter().rposition(|op| {
-                matches!(
-                    op,
-                    Instruction::AffectPermanentTargets {
-                        action: PermanentTargetAction::Destroy,
-                        ..
-                    }
-                )
-            }) {
-                builder.instructions.insert(
-                    pos,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                            BlockingRestriction::CannotBeRegenerated,
-                        )]),
-                        ResolvedDuration::UntilEndOfTurn,
-                    ),
-                );
+            if try_upgrade_affect_destroy_no_regen_in_ops(&mut builder.instructions) {
                 return Ok(());
             }
             let dmg_no_regen_query = builder
@@ -2063,7 +2045,75 @@ pub(super) fn lower_zone_moves_instruction(
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(players));
                     Ok(())
                 }
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "their library" | "your library" | "that player's library"
+                    ) =>
+                {
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Group(players),
+                                    )),
+                                    ObjectFilter::any(),
+                                ),
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            ),
+                        ));
+                    Ok(())
+                }
                 SubjectRefAst::Anaphora(raw) => {
+                    let mut zone_trial = builder.clone();
+                    let slice_or_whole = match parse_ordered_zone_slice_anaphora_query(
+                        raw,
+                        &mut zone_trial,
+                        in_trigger,
+                    )? {
+                        Some(q) => Some(q),
+                        None => parse_whole_zone_anaphora_query(raw, &mut zone_trial, in_trigger)?,
+                    };
+                    if let Some(q) = slice_or_whole {
+                        zone_trial
+                            .instructions
+                            .push(super::super::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    q,
+                                    spellwake_engine::toolbox::ZoneDest::exile(),
+                                ),
+                            ));
+                        *builder = zone_trial;
+                        return Ok(());
+                    }
+                    if has_prior_moved_object(&builder.instructions)
+                        && let Some(pick_n) = parse_last_moved_subset_count(raw)
+                        && let AffectedPlayers::One(rp) = players
+                    {
+                        builder
+                            .instructions
+                            .push(super::super::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::simple(
+                                    spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                        chooser:
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                rp,
+                                            ),
+                                        min: Box::new(ValueExpr::literal(pick_n)),
+                                        max: Box::new(ValueExpr::literal(pick_n)),
+                                        constraint: None,
+                                        category:
+                                            spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                        hidden: false,
+                                    },
+                                    spellwake_engine::toolbox::ZoneDest::exile(),
+                                ),
+                            ));
+                        return Ok(());
+                    }
                     let low = raw.trim().to_ascii_lowercase();
                     if matches!(
                         low.as_str(),
@@ -2075,7 +2125,8 @@ pub(super) fn lower_zone_moves_instruction(
                             | "that creature"
                             | "that permanent"
                             | "that"
-                    ) {
+                    ) || is_last_moved_card_anaphora(raw)
+                    {
                         if last_instruction_moved_object(&builder.instructions)
                             || has_prior_moved_object(&builder.instructions)
                         {
@@ -5133,6 +5184,35 @@ pub(super) fn lower_zone_moves_instruction(
                             builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(bf_dest, is_singular_linked_exile_anaphora(raw)));
                             return Ok(());
                         }
+                        if builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions)
+                            && matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "them"
+                                    | "those"
+                                    | "those creatures"
+                                    | "those permanents"
+                                    | "each of them"
+                                    | "all of them"
+                            )
+                            && let Some(group_obj) = builder.last_group_filter
+                        {
+                            builder
+                                .instructions
+                                .push(super::super::toolbox_emit::zone_op(
+                                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                        spellwake_engine::toolbox::ObjectQuery::zone(
+                                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                                            group_obj,
+                                        ),
+                                        super::super::toolbox_emit::subject_dest_to_zone_dest(
+                                            bf_dest,
+                                        ),
+                                    ),
+                                ));
+                            return Ok(());
+                        }
                         let subj_ref = if builder.target != BodyTarget::None
                             && !matches!(
                                 builder.target,
@@ -5929,6 +6009,35 @@ pub(super) fn lower_zone_moves_instruction(
                             && !has_prior_moved_object(&builder.instructions)
                         {
                             builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(bf_dest, is_singular_linked_exile_anaphora(raw)));
+                            return Ok(());
+                        }
+                        if builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions)
+                            && matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "them"
+                                    | "those"
+                                    | "those creatures"
+                                    | "those permanents"
+                                    | "each of them"
+                                    | "all of them"
+                            )
+                            && let Some(group_obj) = builder.last_group_filter
+                        {
+                            builder
+                                .instructions
+                                .push(super::super::toolbox_emit::zone_op(
+                                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                        spellwake_engine::toolbox::ObjectQuery::zone(
+                                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                                            group_obj,
+                                        ),
+                                        super::super::toolbox_emit::subject_dest_to_zone_dest(
+                                            bf_dest,
+                                        ),
+                                    ),
+                                ));
                             return Ok(());
                         }
                         let subj_ref = if builder.target != BodyTarget::None
@@ -6886,6 +6995,21 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
+                        if is_linked_exile_anaphora(raw)
+                            && (in_trigger || self_pronoun_valid || builder.has_source)
+                            && builder.target == BodyTarget::None
+                            && !last_instruction_moved_object(&builder.instructions)
+                            && !has_prior_moved_object(&builder.instructions) =>
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_linked_exile(
+                                SubjectDestination::Library(pl),
+                                is_singular_linked_exile_anaphora(raw),
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    SubjectRefAst::Anaphora(raw)
                         if last_instruction_moved_object(&builder.instructions)
                             || (is_last_moved_card_anaphora(raw)
                                 && has_prior_moved_object(&builder.instructions)) =>
@@ -6932,6 +7056,26 @@ pub(super) fn lower_zone_moves_instruction(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
                                 MoveSubjectRef::RevealedCard,
                                 SubjectDestination::Library(pl),
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if builder.target == BodyTarget::None
+                            && matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "them"
+                                    | "those"
+                                    | "those creatures"
+                                    | "those permanents"
+                                    | "each of them"
+                                    | "all of them"
+                            )
+                            && let Some(group_obj) = builder.last_group_filter =>
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group_to_library(
+                                group_obj, pl,
                             ),
                         );
                         return Ok(());
@@ -7343,9 +7487,13 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: count @ (TargetCountAst::ChosenX | TargetCountAst::AnyNumber),
+                        count:
+                            count @ (TargetCountAst::ChosenX
+                            | TargetCountAst::UpToX
+                            | TargetCountAst::AnyNumber),
                     } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
-                        && (*count != TargetCountAst::ChosenX || !in_trigger)
+                        && (!matches!(count, TargetCountAst::ChosenX | TargetCountAst::UpToX)
+                            || !in_trigger)
                         && matches!(
                             pd,
                             PublicZoneDestination::Hand
@@ -7359,6 +7507,8 @@ pub(super) fn lower_zone_moves_instruction(
                         builder.bind_target(bt)?;
                         if *count == TargetCountAst::ChosenX {
                             builder.x_target_count = true;
+                        } else if *count == TargetCountAst::UpToX {
+                            builder.up_to_x_target_count = true;
                         }
                         let action = match pd {
                             PublicZoneDestination::Hand => PermanentTargetAction::ReturnToHand,
@@ -10131,6 +10281,23 @@ pub(super) fn lower_zone_moves_instruction(
             Ok(())
         }
         InstructionAst::ShuffleIntoLibrary { subject }
+            if matches!(subject.as_ref(), SubjectRefAst::InZone { .. }) =>
+        {
+            let unwrapped =
+                unwrap_in_zone_subject(subject).ok_or("oracle:unsupported-shuffle-into-library")?;
+            lower_instruction(
+                &InstructionAst::ShuffleIntoLibrary {
+                    subject: Box::new(unwrapped),
+                },
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )
+        }
+        InstructionAst::ShuffleIntoLibrary { subject }
             if is_self_pronoun(subject, builder, self_pronoun_valid) =>
         {
             if !in_trigger && !self_pronoun_valid {
@@ -10181,6 +10348,19 @@ pub(super) fn lower_zone_moves_instruction(
                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library());
                 Ok(())
             }
+            SubjectRefAst::TargetOneOf {
+                options,
+                count: TargetCountAst::Exact(1),
+            } => {
+                let bt = lower_target_one_of_permanent_body_target(
+                    options, builder, in_trigger, vocabulary,
+                )?;
+                builder.bind_target(bt)?;
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_target_into_library(),
+                );
+                Ok(())
+            }
             SubjectRefAst::TargetObject {
                 filter,
                 count: TargetCountAst::Exact(1),
@@ -10189,12 +10369,14 @@ pub(super) fn lower_zone_moves_instruction(
                 Some(
                     ZoneFilter::YourGraveyard
                         | ZoneFilter::OpponentGraveyard
+                        | ZoneFilter::OpponentsGraveyards
                         | ZoneFilter::AnyGraveyard
+                        | ZoneFilter::AllGraveyards
                         | ZoneFilter::SingleGraveyard
                 )
             ) =>
             {
-                let bt = lower_target_subject(subject, vocabulary)?;
+                let bt = lower_target_subject_zone_normalized(subject, vocabulary)?;
                 builder.bind_target(bt)?;
                 builder
                     .instructions
@@ -10207,26 +10389,41 @@ pub(super) fn lower_zone_moves_instruction(
                     Some(
                         ZoneFilter::YourGraveyard
                             | ZoneFilter::OpponentGraveyard
+                            | ZoneFilter::OpponentsGraveyards
                             | ZoneFilter::AnyGraveyard
+                            | ZoneFilter::AllGraveyards
                             | ZoneFilter::SingleGraveyard
                     )
-                ) && matches!(
+                ) && (matches!(
                     count,
                     TargetCountAst::Exact(_) | TargetCountAst::UpTo(_) | TargetCountAst::AnyNumber
-                ) =>
+                ) || (matches!(
+                    count,
+                    TargetCountAst::ChosenX | TargetCountAst::UpToX
+                ) && !in_trigger)) =>
             {
-                let (min_t, max_t) = match *count {
-                    TargetCountAst::Exact(n) if n > 0 => (usize::from(n), usize::from(n)),
-                    TargetCountAst::UpTo(n) if n > 0 => (0, usize::from(n)),
-                    TargetCountAst::AnyNumber => (0, usize::from(u16::MAX)),
+                let (min_t, max_t, is_x, is_up_to_x) = match *count {
+                    TargetCountAst::Exact(n) if n > 0 => {
+                        (usize::from(n), usize::from(n), false, false)
+                    }
+                    TargetCountAst::UpTo(n) if n > 0 => (0, usize::from(n), false, false),
+                    TargetCountAst::AnyNumber => (0, usize::from(u16::MAX), false, false),
+                    TargetCountAst::ChosenX => (0, usize::from(u16::MAX), true, false),
+                    TargetCountAst::UpToX => (0, usize::from(u16::MAX), false, true),
                     _ => return Err("oracle:unsupported-shuffle-into-library"),
                 };
                 let single_subj = SubjectRefAst::TargetObject {
                     filter: filter.clone(),
                     count: TargetCountAst::Exact(1),
                 };
-                let bt = lower_target_subject(&single_subj, vocabulary)?;
+                let bt = lower_target_subject_zone_normalized(&single_subj, vocabulary)?;
                 builder.bind_target(bt)?;
+                if is_x {
+                    builder.x_target_count = true;
+                }
+                if is_up_to_x {
+                    builder.up_to_x_target_count = true;
+                }
                 builder.graveyard_target_bounds = Some((min_t, max_t));
                 builder
                     .instructions
@@ -10293,6 +10490,80 @@ pub(super) fn lower_zone_moves_instruction(
                 }
                 Ok(())
             }
+            SubjectRefAst::Anaphora(raw)
+                if !raw.to_ascii_lowercase().contains("library")
+                    && let Some(query) =
+                        parse_ordered_zone_slice_anaphora_query(raw, builder, in_trigger)? =>
+            {
+                let shuffle_owner = extract_zone_op_resolving_player(&query)
+                    .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+                    .or_else(|| {
+                        extract_zone_op_group_players(&query)
+                            .map(spellwake_engine::toolbox::PlayerSelector::Group)
+                    });
+                let mut spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    query,
+                    spellwake_engine::toolbox::ZoneDest::Library {
+                        position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                    },
+                );
+                spec.shuffle_library = shuffle_owner;
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(spec));
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
+                if !raw.to_ascii_lowercase().contains("library")
+                    && let Some(query) =
+                        parse_whole_zone_anaphora_query(raw, builder, in_trigger)? =>
+            {
+                let shuffle_owner = extract_zone_op_resolving_player(&query)
+                    .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+                    .or_else(|| {
+                        extract_zone_op_group_players(&query)
+                            .map(spellwake_engine::toolbox::PlayerSelector::Group)
+                    });
+                let mut spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    query,
+                    spellwake_engine::toolbox::ZoneDest::Library {
+                        position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                    },
+                );
+                spec.shuffle_library = shuffle_owner;
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(spec));
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
+                if is_linked_exile_anaphora(raw)
+                    && (in_trigger || self_pronoun_valid || builder.has_source)
+                    && builder.target == BodyTarget::None
+                    && !last_instruction_moved_object(&builder.instructions)
+                    && !has_prior_moved_object(&builder.instructions) =>
+            {
+                let base = spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None };
+                let source = if is_singular_linked_exile_anaphora(raw) {
+                    spellwake_engine::toolbox::ObjectQuery::Take {
+                        source: Box::new(base),
+                        count: Box::new(ValueExpr::literal(1)),
+                    }
+                } else {
+                    base
+                };
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            source,
+                            spellwake_engine::toolbox::ZoneDest::Library {
+                                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                            },
+                        ),
+                    ));
+                Ok(())
+            }
             SubjectRefAst::Anaphora(_)
                 if last_instruction_created_tokens(&builder.instructions) =>
             {
@@ -10313,7 +10584,11 @@ pub(super) fn lower_zone_moves_instruction(
                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::TargetObject, None));
                 Ok(())
             }
-            SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
+            SubjectRefAst::Anaphora(raw)
+                if last_instruction_moved_object(&builder.instructions)
+                    || (is_last_moved_card_anaphora(raw)
+                        && has_prior_moved_object(&builder.instructions)) =>
+            {
                 builder
                     .instructions
                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::LastMoved, None));
@@ -10366,23 +10641,47 @@ pub(super) fn lower_zone_moves_instruction(
                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(group_obj), None));
                 Ok(())
             }
+            SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+                if has_prior_moved_object(&builder.instructions)
+                    && let Some(obj) =
+                        strip_move_zone_last_moved_filter(f, builder, in_trigger, vocabulary) =>
+            {
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::filtered(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                obj,
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::Library {
+                                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                            },
+                        ),
+                    ));
+                Ok(())
+            }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => {
+                let is_all_or_each = matches!(
+                    subject.as_ref(),
+                    SubjectRefAst::All(_) | SubjectRefAst::Each(_)
+                );
                 let mut inner = f.as_ref().clone();
-                let zone = if (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0 {
+                let zone_res = if (inner.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0 {
                     if !self_pronoun_valid && !in_trigger {
                         return Err("oracle:unsupported-shuffle-into-library");
                     }
                     inner.flags.0 &= !AstFilterFlags::EXILED_WITH_SELF.0;
-                    Some(SourceZoneFilter::LinkedExile)
+                    Ok(Some(SourceZoneFilter::LinkedExile))
                 } else {
                     match f.zone {
-                        None | Some(ZoneFilter::Battlefield) => None,
-                        Some(ZoneFilter::YourGraveyard) => Some(SourceZoneFilter::Graveyard),
+                        None | Some(ZoneFilter::Battlefield) => Ok(None),
+                        Some(ZoneFilter::YourGraveyard) => Ok(Some(SourceZoneFilter::Graveyard)),
                         Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
-                            Some(SourceZoneFilter::OpponentGraveyard)
+                            Ok(Some(SourceZoneFilter::OpponentGraveyard))
                         }
                         Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
-                            Some(SourceZoneFilter::AnyGraveyard)
+                            Ok(Some(SourceZoneFilter::AnyGraveyard))
                         }
                         Some(ZoneFilter::Exile)
                             if matches!(
@@ -10395,10 +10694,11 @@ pub(super) fn lower_zone_moves_instruction(
                             ) =>
                         {
                             inner.controller = None;
-                            Some(SourceZoneFilter::OpponentExile)
+                            Ok(Some(SourceZoneFilter::OpponentExile))
                         }
-                        Some(ZoneFilter::Exile) => Some(SourceZoneFilter::Exile),
-                        Some(ZoneFilter::YourHand) => Some(SourceZoneFilter::Hand),
+                        Some(ZoneFilter::Exile) => Ok(Some(SourceZoneFilter::Exile)),
+                        Some(ZoneFilter::YourHand) => Ok(Some(SourceZoneFilter::Hand)),
+                        Some(other_z) if is_all_or_each => Err(other_z),
                         _ => return Err("oracle:unsupported-shuffle-into-library"),
                     }
                 };
@@ -10408,17 +10708,39 @@ pub(super) fn lower_zone_moves_instruction(
                 } else {
                     lower_object_filter(&inner, vocabulary)?
                 };
-                bind_filter_player_target(builder, &obj)?;
-                if zone == Some(SourceZoneFilter::Graveyard) && obj == ObjectFilter::any() {
-                    builder
-                        .instructions
-                        .push(emit_shuffle_own_graveyard_into_library());
-                } else {
-                    builder
-                        .instructions
-                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(obj), zone));
+                match zone_res {
+                    Ok(zone) => {
+                        bind_filter_player_target(builder, &obj)?;
+                        if zone == Some(SourceZoneFilter::Graveyard) && obj == ObjectFilter::any() {
+                            builder
+                                .instructions
+                                .push(emit_shuffle_own_graveyard_into_library());
+                        } else {
+                            builder
+                                .instructions
+                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_subject_into_library(EffectSubject::Matching(obj), zone));
+                        }
+                        Ok(())
+                    }
+                    Err(other_z) => {
+                        let mut trial = builder.clone();
+                        bind_filter_player_target(&mut trial, &obj)?;
+                        let query =
+                            zone_filter_to_object_query(other_z, obj, &mut trial, in_trigger)
+                                .map_err(|_| "oracle:unsupported-shuffle-into-library")?;
+                        trial.instructions.push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                query,
+                                spellwake_engine::toolbox::ZoneDest::Library {
+                                    position:
+                                        spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                                },
+                            ),
+                        ));
+                        *builder = trial;
+                        Ok(())
+                    }
                 }
-                Ok(())
             }
             SubjectRefAst::Compound(items) if !items.is_empty() => {
                 for it in items {
@@ -10853,7 +11175,13 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
             | Instruction::BranchIfFalse { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
+            | Instruction::BindEnv { .. }
+            | Instruction::PromptChoice(_)
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
@@ -10893,18 +11221,35 @@ pub(super) fn is_last_moved_card_anaphora(raw: &str) -> bool {
             | "the cards"
             | "the exiled card"
             | "the exiled cards"
+            | "that exiled card"
+            | "those exiled cards"
+            | "the card exiled this way"
+            | "the cards exiled this way"
+            | "cards exiled this way"
+            | "the cards you exiled this way"
+            | "the cards they exiled this way"
             | "the revealed card"
             | "the revealed cards"
+            | "the card revealed this way"
             | "the cards you revealed this way"
             | "cards revealed this way"
             | "the milled card"
             | "the milled cards"
+            | "the card milled this way"
+            | "the cards milled this way"
             | "the discarded card"
             | "the discarded cards"
+            | "the card discarded this way"
+            | "the cards discarded this way"
             | "the looked-at card"
             | "the looked-at cards"
             | "the chosen card"
             | "the chosen cards"
+            | "the chosen permanent"
+            | "the chosen creature"
+            | "the chosen artifact"
+            | "the chosen enchantment"
+            | "the chosen land"
             | "that creature"
             | "those creatures"
             | "that creature card"
@@ -11101,7 +11446,13 @@ pub(super) fn has_live_last_moved_producer(
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
             | Instruction::BranchIfFalse { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
+            | Instruction::BindEnv { .. }
+            | Instruction::PromptChoice(_)
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
@@ -11558,7 +11909,12 @@ fn can_upgrade_destroy_no_regen(op: &Instruction) -> bool {
             .iter()
             .rev()
             .any(can_upgrade_destroy_no_regen),
-        Instruction::ForEachPlayerQuery { body, .. } | Instruction::RepeatLoop { body, .. } => body
+        Instruction::ForEach { body, .. }
+        | Instruction::ForEachPlayerQuery { body, .. }
+        | Instruction::RepeatLoop { body, .. }
+        | Instruction::ScheduleDelayedEventTrigger { body, .. }
+        | Instruction::ScheduleDelayedStepTrigger { body, .. }
+        | Instruction::EmitReflexiveTrigger { body } => body
             .instructions
             .iter()
             .rev()
@@ -11602,7 +11958,12 @@ fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
             .iter_mut()
             .rev()
             .any(try_upgrade_destroy_no_regen),
-        Instruction::ForEachPlayerQuery { body, .. } | Instruction::RepeatLoop { body, .. } => body
+        Instruction::ForEach { body, .. }
+        | Instruction::ForEachPlayerQuery { body, .. }
+        | Instruction::RepeatLoop { body, .. }
+        | Instruction::ScheduleDelayedEventTrigger { body, .. }
+        | Instruction::ScheduleDelayedStepTrigger { body, .. }
+        | Instruction::EmitReflexiveTrigger { body } => body
             .instructions
             .iter_mut()
             .rev()
@@ -11638,6 +11999,75 @@ fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
     }
 }
 
+fn try_upgrade_affect_destroy_no_regen_in_ops(ops: &mut Vec<Instruction>) -> bool {
+    if let Some(pos) = ops.iter().rposition(|op| {
+        matches!(
+            op,
+            Instruction::AffectPermanentTargets {
+                action: PermanentTargetAction::Destroy,
+                ..
+            }
+        )
+    }) {
+        for op in ops.iter_mut() {
+            op.shift_jumps(1, pos + 1);
+        }
+        for (i, op) in ops[..pos].iter_mut().enumerate() {
+            if let Instruction::OptionalSequence { instructions, .. } = op
+                && i + 1 + *instructions > pos
+            {
+                *instructions += 1;
+            }
+        }
+        if pos > 0
+            && let Instruction::OptionalEffect { chooser } = ops[pos - 1]
+        {
+            ops[pos - 1] = Instruction::OptionalSequence {
+                chooser,
+                instructions: 2,
+            };
+        }
+        ops.insert(
+            pos,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                    BlockingRestriction::CannotBeRegenerated,
+                )]),
+                ResolvedDuration::UntilEndOfTurn,
+            ),
+        );
+        return true;
+    }
+    for op in ops.iter_mut().rev() {
+        let upgraded = match op {
+            Instruction::FixedTargetClause(body)
+            | Instruction::ForEach { body, .. }
+            | Instruction::ForEachPlayerQuery { body, .. }
+            | Instruction::RepeatLoop { body, .. }
+            | Instruction::ScheduleDelayedEventTrigger { body, .. }
+            | Instruction::ScheduleDelayedStepTrigger { body, .. }
+            | Instruction::EmitReflexiveTrigger { body } => {
+                try_upgrade_affect_destroy_no_regen_in_ops(&mut body.instructions)
+            }
+            Instruction::ChooseOption { options, .. } => {
+                let mut any = false;
+                for branch in options {
+                    if try_upgrade_affect_destroy_no_regen_in_ops(&mut branch.body.instructions) {
+                        any = true;
+                    }
+                }
+                any
+            }
+            _ => false,
+        };
+        if upgraded {
+            return true;
+        }
+    }
+    false
+}
+
 fn is_damage_instruction_for_no_regen(op: &Instruction) -> bool {
     matches!(
         op,
@@ -11659,11 +12089,24 @@ fn find_damage_instruction_for_no_regen(op: &Instruction) -> Option<&Instruction
             .iter()
             .rev()
             .find_map(find_damage_instruction_for_no_regen),
-        Instruction::ForEachPlayerQuery { body, .. } | Instruction::RepeatLoop { body, .. } => body
+        Instruction::ForEach { body, .. }
+        | Instruction::ForEachPlayerQuery { body, .. }
+        | Instruction::RepeatLoop { body, .. }
+        | Instruction::ScheduleDelayedEventTrigger { body, .. }
+        | Instruction::ScheduleDelayedStepTrigger { body, .. }
+        | Instruction::EmitReflexiveTrigger { body } => body
             .instructions
             .iter()
             .rev()
             .find_map(find_damage_instruction_for_no_regen),
+        Instruction::ChooseOption { options, .. } => options.iter().find_map(|branch| {
+            branch
+                .body
+                .instructions
+                .iter()
+                .rev()
+                .find_map(find_damage_instruction_for_no_regen)
+        }),
         _ => None,
     }
 }
@@ -12178,7 +12621,13 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::BranchIfFalse { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
+            | Instruction::BindEnv { .. }
+            | Instruction::PromptChoice(_)
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::ChooseValue { .. } => continue,
             Instruction::MutateObject(spec)
                 if matches!(
@@ -13736,7 +14185,21 @@ fn lower_exile_random_or_face_down(
             count: TargetCountAst::Exact(1),
             ..
         } => {
-            let bt = lower_target_subject(subject, vocabulary)?;
+            let bt = lower_target_subject_zone_normalized(subject, vocabulary)?;
+            trial.bind_target(bt)?;
+            trial
+                .instructions
+                .push(super::super::toolbox_emit::zone_op(ZoneOpSpec::move_all(
+                    ObjectQuery::Targets,
+                    exile_dest,
+                )));
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::Exact(1),
+        } => {
+            let bt =
+                lower_target_one_of_permanent_body_target(options, &trial, in_trigger, vocabulary)?;
             trial.bind_target(bt)?;
             trial
                 .instructions
@@ -13772,6 +14235,24 @@ fn lower_exile_random_or_face_down(
                     .instructions
                     .push(super::super::toolbox_emit::zone_op(ZoneOpSpec::move_all(
                         q, exile_dest,
+                    )));
+            } else if has_prior_moved_object(&trial.instructions)
+                && let Some(pick_n) = parse_last_moved_subset_count(raw)
+                && let AffectedPlayers::One(rp) = players
+            {
+                trial
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(ZoneOpSpec::simple(
+                        ObjectQuery::LastMoved,
+                        ZoneSelection::Prompt {
+                            chooser: PlayerSelector::Resolving(rp),
+                            min: Box::new(ValueExpr::literal(pick_n)),
+                            max: Box::new(ValueExpr::literal(pick_n)),
+                            constraint: None,
+                            category: ChoiceCategory::Generic,
+                            hidden: false,
+                        },
+                        exile_dest,
                     )));
             } else if trial.target != BodyTarget::None
                 && !matches!(

@@ -195,6 +195,7 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
         flashback_tap_white_creatures: 0,
         flashback_life: 0,
         additional_cast_costs: vec![],
+        per_extra_target_cost: None,
         activation_restrictions: Default::default(),
         activation_hybrid_symbols: Default::default(),
         extra_activation_costs: Default::default(),

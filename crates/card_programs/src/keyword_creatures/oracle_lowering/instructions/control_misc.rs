@@ -162,12 +162,16 @@ pub(super) fn lower_control_misc_instruction(
                     then_body,
                 },
             ] = inner.as_slice()
+                && !matches!(
+                    then_body.as_slice(),
+                    [InstructionAst::PayCost(CostAtomAst::PayMana(_))]
+                )
             {
-                return lower_instruction(
-                    &InstructionAst::IfCondition {
+                return lower_instruction_seq(
+                    &[InstructionAst::IfCondition {
                         condition: condition.clone(),
                         then_body: vec![InstructionAst::Optional(then_body.clone())],
-                    },
+                    }],
                     builder,
                     vocabulary,
                     ids,
@@ -1937,15 +1941,135 @@ pub(super) fn lower_control_misc_instruction(
                         });
                         return Ok(());
                     }
+                } else if *player == PlayerRefAst::You {
+                    return lower_instruction_seq(
+                        body,
+                        builder,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    );
+                } else if matches!(
+                    *player,
+                    PlayerRefAst::TargetOpponent
+                        | PlayerRefAst::TargetPlayer
+                        | PlayerRefAst::ThatPlayer
+                ) {
+                    let mut trial = builder.clone();
+                    if *player == PlayerRefAst::TargetOpponent {
+                        trial.bind_target(BodyTarget::SingleOpponent)?;
+                    } else if *player == PlayerRefAst::TargetPlayer {
+                        trial.bind_target(BodyTarget::SinglePlayer)?;
+                    }
+                    let rewritten_body: Vec<InstructionAst> = body
+                        .iter()
+                        .map(|ins| rewrite_loop_player_ast(ins, PlayerRefAst::You))
+                        .collect();
+                    if lower_instruction_seq(
+                        &rewritten_body,
+                        &mut trial,
+                        vocabulary,
+                        ids,
+                        in_trigger,
+                        self_pronoun_valid,
+                        bound_x,
+                    )
+                    .is_ok()
+                    {
+                        *builder = trial;
+                        return Ok(());
+                    }
+                } else if matches!(
+                    *player,
+                    PlayerRefAst::DefendingPlayer
+                        | PlayerRefAst::ActivePlayer
+                        | PlayerRefAst::EnchantedPlayer
+                        | PlayerRefAst::ItsController
+                        | PlayerRefAst::ItsOwner
+                        | PlayerRefAst::ChosenPlayer
+                ) {
+                    let mut trial = builder.clone();
+                    if let Ok(rp) =
+                        lower_resolving_player_in_context(*player, &mut trial, in_trigger)
+                    {
+                        let rewritten_body: Vec<InstructionAst> = body
+                            .iter()
+                            .map(|ins| rewrite_loop_player_ast(ins, PlayerRefAst::You))
+                            .collect();
+                        if let Ok(sub) = lower_loop_player_sub_body(
+                            &rewritten_body,
+                            &mut trial,
+                            vocabulary,
+                            ids,
+                            in_trigger,
+                            self_pronoun_valid,
+                            bound_x,
+                        ) && !sub.instructions.is_empty()
+                        {
+                            trial.instructions.push(Instruction::ForEachPlayerQuery {
+                                selector: Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                ),
+                                bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                                body: Box::new(sub),
+                            });
+                            *builder = trial;
+                            return Ok(());
+                        }
+                    }
                 }
             }
             Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::ForEachMatchingPlayer {
+            player,
+            condition_text: _,
+            condition: Some(cond),
+            body,
+        } if !body.is_empty() => {
+            let players = match *player {
+                PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer => AffectedPlayers::EachPlayer,
+                PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent => {
+                    AffectedPlayers::EachOpponent
+                }
+                PlayerRefAst::EachOtherPlayer => AffectedPlayers::EachOtherPlayer,
+                _ => return Err("oracle:unsupported-instruction"),
+            };
+            let rewritten_cond = rewrite_loop_player_condition(cond, *player);
+            let rewritten_body: Vec<InstructionAst> = body
+                .iter()
+                .map(|ins| rewrite_loop_player_ast(ins, *player))
+                .collect();
+            let gated = vec![InstructionAst::IfCondition {
+                condition: Box::new(rewritten_cond),
+                then_body: rewritten_body,
+            }];
+            let sub = lower_loop_player_sub_body(
+                &gated,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            if sub.instructions.is_empty() {
+                return Err("oracle:unsupported-instruction");
+            }
+            builder.instructions.push(Instruction::ForEachPlayerQuery {
+                selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                body: Box::new(sub),
+            });
+            Ok(())
         }
         InstructionAst::ForEachObject { filter, body } => {
             if !body.is_empty() && !body.iter().any(instruction_references_anaphora) {
                 let scaled_all: Option<Vec<InstructionAst>> = body
                     .iter()
-                    .map(|s| try_scale_instruction(s, ValueExprAst::Count(filter.clone())))
+                    .map(|s| try_scale_instruction_ext(s, ValueExprAst::Count(filter.clone())))
                     .collect();
                 if let Some(seq) = scaled_all {
                     return lower_instruction_seq(
@@ -2001,7 +2125,7 @@ pub(super) fn lower_control_misc_instruction(
                 let mult = resolve_x(count, bound_x).clone();
                 let scaled_all: Option<Vec<InstructionAst>> = body
                     .iter()
-                    .map(|s| try_scale_instruction(s, mult.clone()))
+                    .map(|s| try_scale_instruction_ext(s, mult.clone()))
                     .collect();
                 if let Some(seq) = scaled_all {
                     return lower_instruction_seq(
@@ -2451,10 +2575,353 @@ pub(super) fn lower_control_misc_instruction(
         } => lower_standalone_choose_and_keep(
             pick, keep_to, rest_to, builder, vocabulary, in_trigger, bound_x,
         ),
+        InstructionAst::IfPreviousFailed(fail_body) => {
+            if let Some(Instruction::ScheduleDelayedStepTrigger {
+                body: delayed_body, ..
+            }) = builder.instructions.last_mut()
+                && let Some(offer_idx) = delayed_body.instructions.len().checked_sub(1)
+                && matches!(
+                    delayed_body.instructions.get(offer_idx),
+                    Some(Instruction::OfferDynamicManaPayment {
+                        paid_destination,
+                        declined_destination,
+                        ..
+                    }) if *paid_destination == offer_idx + 1
+                        && *declined_destination == offer_idx + 1
+                )
+            {
+                let mut fail_builder = BodyBuilder::new();
+                fail_builder.has_source = builder.has_source || in_trigger || self_pronoun_valid;
+                lower_instruction_seq(
+                    fail_body,
+                    &mut fail_builder,
+                    vocabulary,
+                    ids,
+                    true,
+                    self_pronoun_valid,
+                    bound_x,
+                )?;
+                if fail_builder.target != BodyTarget::None || fail_builder.instructions.is_empty() {
+                    return Err("oracle:unsupported-instruction");
+                }
+                let offset = offer_idx + 1;
+                let delta =
+                    isize::try_from(offset).map_err(|_| "oracle:unsupported-instruction")?;
+                for mut op in fail_builder.instructions {
+                    op.shift_jumps(delta, 0);
+                    delayed_body.instructions.push(op);
+                }
+                let end_dest = delayed_body.instructions.len();
+                if let Some(Instruction::OfferDynamicManaPayment {
+                    paid_destination, ..
+                }) = delayed_body.instructions.get_mut(offer_idx)
+                {
+                    *paid_destination = end_dest;
+                }
+                return Ok(());
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::RevealRandomFromHand { player } => {
+            if let Some(players) = try_group_affected_players(*player) {
+                let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    ResolvingPlayer::LoopPlayer,
+                );
+                let op = crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                p_sel.clone(),
+                            )),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::All,
+                        },
+                        spellwake_engine::toolbox::ZoneSelection::Random {
+                            count: Box::new(ValueExpr::literal(1)),
+                            chooser: p_sel,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly,
+                    ),
+                );
+                push_for_each_player(players, vec![op], builder);
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(rp);
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                p_sel.clone(),
+                            )),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::All,
+                        },
+                        spellwake_engine::toolbox::ZoneSelection::Random {
+                            count: Box::new(ValueExpr::literal(1)),
+                            chooser: p_sel,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly,
+                    ),
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::ManifestByPlayer {
+            player,
+            count,
+            dread,
+            subject: None,
+        } => {
+            if *player == PlayerRefAst::You {
+                return lower_instruction(
+                    &InstructionAst::Manifest {
+                        count: count.clone(),
+                        dread: *dread,
+                        subject: None,
+                    },
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                );
+            }
+            if *player == PlayerRefAst::ItsOwner && builder.target == BodyTarget::None {
+                return Err("oracle:unsupported-its-owner");
+            }
+            const MANIFEST_DREAD_REST_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(945);
+            let build_ops = |rp: ResolvingPlayer,
+                             b: &BodyBuilder|
+             -> Result<Vec<Instruction>, &'static str> {
+                if !*dread {
+                    let amt = lower_value_expr_in_context(
+                        resolve_x(count, bound_x),
+                        b,
+                        in_trigger,
+                        vocabulary,
+                    )?;
+                    return Ok(vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(rp, amt),
+                    ))]);
+                }
+                let n = match resolve_x(count, bound_x) {
+                    ValueExprAst::Const(k) if *k >= 1 && *k <= 8 => {
+                        usize::try_from(*k).unwrap_or(1)
+                    }
+                    _ => return Err("oracle:unsupported-manifest-dread-count"),
+                };
+                let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(rp);
+                let mut ops = Vec::with_capacity(n * 2);
+                for _ in 0..n {
+                    let mut pick = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                p_sel.clone(),
+                            )),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                ValueExpr::literal(2),
+                            )),
+                        },
+                        spellwake_engine::toolbox::ZoneSelection::Prompt {
+                            chooser: p_sel.clone(),
+                            min: Box::new(ValueExpr::literal(1)),
+                            max: Box::new(ValueExpr::literal(1)),
+                            constraint: None,
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            hidden: true,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::battlefield_face_down(
+                            spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                p_sel.clone(),
+                            )),
+                            false,
+                        ),
+                    );
+                    pick.bind_unchosen = Some(MANIFEST_DREAD_REST_BIND);
+                    ops.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(pick),
+                    );
+                    ops.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Bound(
+                                    MANIFEST_DREAD_REST_BIND,
+                                ),
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Move,
+                                },
+                            ),
+                        ),
+                    );
+                }
+                Ok(ops)
+            };
+            if let Some(players) = try_group_affected_players(*player) {
+                let ops = build_ops(ResolvingPlayer::LoopPlayer, builder)?;
+                push_for_each_player(players, ops, builder);
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            let ops = build_ops(rp, builder)?;
+            builder.instructions.extend(ops);
+            Ok(())
+        }
+        InstructionAst::SacrificeAllExcept {
+            player,
+            filter,
+            keep,
+        } => {
+            if filter.is_ability
+                || filter.any_spell
+                || !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            {
+                return Err("oracle:unsupported-instruction");
+            }
+            if !matches!(
+                filter.controller,
+                None | Some(ControllerRelation::You | ControllerRelation::ThatPlayer)
+            ) {
+                return Err("oracle:unsupported-instruction");
+            }
+            if let Some(players) = try_group_affected_players(*player) {
+                let rewritten = InstructionAst::SacrificeAllExcept {
+                    player: PlayerRefAst::ThatPlayer,
+                    filter: Box::new(rewrite_loop_player_filter(filter, *player)),
+                    keep: Box::new(rewrite_loop_player_value_expr(keep, *player)),
+                };
+                let sub = lower_loop_player_sub_body(
+                    &[rewritten],
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )?;
+                builder.instructions.push(Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                    bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                    body: Box::new(sub),
+                });
+                return Ok(());
+            }
+            const SAC_ALL_EXCEPT_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(946);
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            let keep_expr = lower_value_expr_in_context(
+                resolve_x(keep, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            let mut clean = filter.as_ref().clone();
+            clean.zone = None;
+            clean.controller = None;
+            let obj = if is_unrestricted_filter(&clean) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?
+            };
+            let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(rp);
+            let mut keep_pick = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        p_sel.clone(),
+                    )),
+                    filter: Box::new(obj),
+                    slice: spellwake_engine::toolbox::QuerySlice::All,
+                },
+                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                    chooser: p_sel,
+                    min: Box::new(keep_expr.clone()),
+                    max: Box::new(keep_expr),
+                    constraint: None,
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    hidden: false,
+                },
+                spellwake_engine::toolbox::ZoneDest::None,
+            );
+            keep_pick.bind_unchosen = Some(SAC_ALL_EXCEPT_UNCHOSEN_BIND);
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(keep_pick));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Bound(SAC_ALL_EXCEPT_UNCHOSEN_BIND),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                        },
+                    ),
+                ),
+            );
+            Ok(())
+        }
         InstructionAst::ManualTabletopAction { .. } => {
             Err("oracle:tabletop-honor-excluded-from-constructed")
         }
         _ => Err("oracle:unsupported-instruction"),
+    }
+}
+
+fn try_scale_instruction_ext(instr: &InstructionAst, mult: ValueExprAst) -> Option<InstructionAst> {
+    if let Some(scaled) = try_scale_instruction(instr, mult.clone()) {
+        return Some(scaled);
+    }
+    match instr {
+        InstructionAst::Sacrifice {
+            player,
+            count,
+            subject,
+            except,
+            half: false,
+            rounding: None,
+            chooser,
+        } if matches!(subject.as_ref(), SubjectRefAst::Group(_)) => {
+            Some(InstructionAst::Sacrifice {
+                player: *player,
+                count: Some(Box::new(scale_ast_amount(
+                    count.as_deref().unwrap_or(&ValueExprAst::Const(1)),
+                    mult,
+                ))),
+                subject: subject.clone(),
+                except: except.clone(),
+                half: false,
+                rounding: None,
+                chooser: *chooser,
+            })
+        }
+        InstructionAst::ModifyPT {
+            subject,
+            dx,
+            dy,
+            duration,
+            scale: None,
+        } if parse_signed_pt_delta(dx).is_some() && parse_signed_pt_delta(dy).is_some() => {
+            Some(InstructionAst::ModifyPT {
+                subject: subject.clone(),
+                dx: dx.clone(),
+                dy: dy.clone(),
+                duration: duration.clone(),
+                scale: Some(Box::new(mult)),
+            })
+        }
+        InstructionAst::AddMana {
+            player,
+            mana: ManaSpecAst::Fixed(raw),
+        } => Some(InstructionAst::AddMana {
+            player: *player,
+            mana: ManaSpecAst::ScaledSymbol {
+                symbol: raw.clone(),
+                amount: Box::new(mult),
+            },
+        }),
+        _ => None,
     }
 }
 
@@ -5857,6 +6324,29 @@ pub(super) fn rewrite_loop_player_ast(
         },
         InstructionAst::RevealHand { player } => InstructionAst::RevealHand {
             player: map_p(*player),
+        },
+        InstructionAst::RevealRandomFromHand { player } => InstructionAst::RevealRandomFromHand {
+            player: map_p(*player),
+        },
+        InstructionAst::ManifestByPlayer {
+            player,
+            count,
+            dread,
+            subject,
+        } => InstructionAst::ManifestByPlayer {
+            player: map_p(*player),
+            count: Box::new(map_ve(count)),
+            dread: *dread,
+            subject: subject.as_deref().map(|s| Box::new(map_subj(s))),
+        },
+        InstructionAst::SacrificeAllExcept {
+            player,
+            filter,
+            keep,
+        } => InstructionAst::SacrificeAllExcept {
+            player: map_p(*player),
+            filter: Box::new(map_flt(filter)),
+            keep: Box::new(map_ve(keep)),
         },
         InstructionAst::RevealByPlayer { player, subject } => InstructionAst::RevealByPlayer {
             player: map_p(*player),

@@ -1132,6 +1132,8 @@ impl EffectWindow {
         }
         let mut consumed_temp_rules = Vec::new();
         let mut temporary_flash = false;
+        let mut granted_next_spell_cascades: usize = 0;
+        let mut granted_next_spell_storms: usize = 0;
         // Every matching "next spell" effect is used by the cast, even when another
         // permission or ordinary timing already allows it. Commit consumption only
         // on the successful candidate below, after all cast checks have passed.
@@ -1141,6 +1143,19 @@ impl EffectWindow {
                 .is_some()
             {
                 consumed_temp_rules.push(rule_idx);
+            }
+            if let Some(cast_kw) =
+                self.next_spell_cast_keyword_for_cast(active, &current, current_spell, actor)
+            {
+                consumed_temp_rules.push(rule_idx);
+                match cast_kw {
+                    crate::program::NextSpellCastKeyword::Cascade => {
+                        granted_next_spell_cascades = granted_next_spell_cascades.saturating_add(1);
+                    }
+                    crate::program::NextSpellCastKeyword::Storm => {
+                        granted_next_spell_storms = granted_next_spell_storms.saturating_add(1);
+                    }
+                }
             }
             if !active.consumed
                 && active.resolved_players.contains(&actor)
@@ -2230,6 +2245,20 @@ impl EffectWindow {
                 }
             }
         }
+        if source.face_down().is_none()
+            && let Some(per_extra) = &program.per_extra_target_cost
+        {
+            let extra_targets =
+                (usize::from(target.is_some()) + mode_targets.len()).saturating_sub(1);
+            if extra_targets > 0 {
+                let times = RulesInteger::from_usize(extra_targets);
+                cost.generic = cost.generic.plus(&per_extra.generic.times(&times));
+                for (&color, amount) in &per_extra.required {
+                    let existing = cost.required.entry(color).or_insert_with(|| 0.into());
+                    *existing = existing.plus(&amount.times(&times));
+                }
+            }
+        }
         let keyword_cast_matches = |kind: crate::characteristics::CastKeywordCostKind| -> bool {
             use crate::characteristics::CastKeywordCostKind as K;
             use crate::program::{ConditionalCastCost, EndStepCast};
@@ -3270,28 +3299,27 @@ impl EffectWindow {
         next.window = window;
         let mut append = RulesJournal::default();
         let announcement = self.rules_snapshot(turn)?;
-        let StackKind::CardSpell(admitted_object) = next
+        let admitted_object = match next
             .window
             .entries()
             .last()
             .ok_or(EffectError::InconsistentProgram)?
             .kind()
-        else {
-            return Err(EffectError::InconsistentProgram);
+        {
+            StackKind::CardSpell(id) => *id,
+            _ => return Err(EffectError::InconsistentProgram),
         };
         if cast_bestowed {
-            next.characteristics
-                .bestowed_spells
-                .insert(*admitted_object);
+            next.characteristics.bestowed_spells.insert(admitted_object);
         }
         if resolving_cast.is_some_and(|cast| cast.kind == ExileCastAbility::Suspend)
             && current_spell.is_creature()
         {
             next.characteristics
                 .suspend_haste
-                .insert(*admitted_object, (actor, None));
+                .insert(admitted_object, (actor, None));
         }
-        let resulting_mana_value = next.stack_spell_mana_value(*admitted_object)?;
+        let resulting_mana_value = next.stack_spell_mana_value(admitted_object)?;
         if let Some(cast) = resolving_cast
             && cast.kind == ExileCastAbility::Cascade
         {
@@ -3307,7 +3335,7 @@ impl EffectWindow {
             after: next
                 .window
                 .cards()
-                .get(*admitted_object)
+                .get(admitted_object)
                 .ok_or(EffectError::InconsistentProgram)?
                 .clone(),
         };
@@ -3344,6 +3372,40 @@ impl EffectWindow {
             crate::occurrence::RulesRecord::Event(event) if matches!(&event.cause, crate::occurrence::EventCause::CastAnnouncement { entry: actual } if *actual == entry) => Some(event.id),
             _ => None,
         }).ok_or(EffectError::InconsistentProgram)?;
+        if granted_next_spell_cascades > 0 || granted_next_spell_storms > 0 {
+            let spell_appearance = next
+                .rules_snapshot(turn)?
+                .view()
+                .appearance(admitted_object)
+                .ok_or(EffectError::InconsistentProgram)?;
+            for _ in 0..granted_next_spell_cascades {
+                let ability = crate::program::TriggeredAbility::cascade(
+                    crate::program::TriggeredAbilityId(0),
+                );
+                next.triggers.delay_event_trigger(
+                    spell_appearance.clone(),
+                    actor,
+                    ability.condition,
+                    ability.body,
+                    crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                    true,
+                );
+            }
+            for _ in 0..granted_next_spell_storms {
+                let ability = crate::program::TriggeredAbility::spell_copies(
+                    crate::program::TriggeredAbilityId(0),
+                    crate::program::CastCopyKeyword::Storm,
+                );
+                next.triggers.delay_event_trigger(
+                    spell_appearance.clone(),
+                    actor,
+                    ability.condition,
+                    ability.body,
+                    crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                    true,
+                );
+            }
+        }
         let has_attached_spell_copy_trigger = current.objects.values().any(|permanent| {
             permanent.zone == ObjectZone::Battlefield
                 && self.characteristics.attachments.get(&permanent.object)
@@ -3396,6 +3458,7 @@ impl EffectWindow {
                 .entry_counter_abilities
                 .contains(&crate::program::EntryCounterAbility::Sunburst),
             copy_source_needed: paid_granted_replicate
+                || granted_next_spell_storms > 0
                 || current_spell
                     .printed_text
                     .triggered
@@ -3600,6 +3663,30 @@ impl EffectWindow {
                 spell,
                 active.controller,
                 None,
+                &BTreeSet::new(),
+                evaluated,
+            ))
+        .then_some(*keyword)
+    }
+    fn next_spell_cast_keyword_for_cast(
+        &self,
+        active: &ActiveTemporaryRule,
+        evaluated: &EvaluatedCharacteristics,
+        spell: &crate::characteristics::ObjectCharacteristics,
+        actor: SeatId,
+    ) -> Option<crate::program::NextSpellCastKeyword> {
+        let crate::program::TemporaryRuleKind::NextSpellCastKeyword { filter, keyword } =
+            &active.rule
+        else {
+            return None;
+        };
+        (!active.consumed
+            && active.controller == actor
+            && self.matches_object_filter(
+                *filter,
+                spell,
+                active.controller,
+                active.source_object,
                 &BTreeSet::new(),
                 evaluated,
             ))

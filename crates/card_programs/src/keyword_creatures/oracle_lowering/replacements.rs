@@ -1430,7 +1430,11 @@ pub(super) fn lower_replacement(
             }
         }
         ReplacementEffectAst::AsEntersChoose { choice } => {
-            let low = choice.trim().to_ascii_lowercase();
+            let low = choice
+                .trim()
+                .trim_end_matches('.')
+                .trim()
+                .to_ascii_lowercase();
             let parse_except_color = |s: &str| -> Option<ManaType> {
                 let c = s.strip_prefix("a color other than ")?.trim();
                 match c {
@@ -1469,15 +1473,30 @@ pub(super) fn lower_replacement(
                 };
             }
             let entry_tap = match low.as_str() {
-                "a creature type" | "creature type" => EntryTap::ChooseCreatureType,
+                "a creature type" | "creature type" | "a creature type of your choice" => {
+                    EntryTap::ChooseCreatureType
+                }
                 "a nonland card name" | "nonland card name" => EntryTap::ChooseNonlandCardName,
-                "two players" => EntryTap::ChooseTwoPlayers,
-                "a color" | "color" => EntryTap::ChooseColor,
-                "an opponent" | "opponent" => EntryTap::ChooseOpponent,
+                "two players" | "two different players" | "two distinct players" => {
+                    EntryTap::ChooseTwoPlayers
+                }
+                "a color" | "color" | "any color" | "a mana color" | "one of the five colors" => {
+                    EntryTap::ChooseColor
+                }
+                "an opponent"
+                | "opponent"
+                | "one of your opponents"
+                | "an opponent of your choice" => EntryTap::ChooseOpponent,
                 "opponent_controller" => EntryTap::ChosenOpponentControls,
-                "a player" | "player" => EntryTap::ChoosePlayer,
-                "a card type" | "card type" => EntryTap::ChooseCardType,
-                "a basic land type" | "basic land type" => EntryTap::ChooseBasicLandType,
+                "a player" | "player" | "any player" | "a player of your choice" => {
+                    EntryTap::ChoosePlayer
+                }
+                "a card type" | "card type" | "a card type of your choice" => {
+                    EntryTap::ChooseCardType
+                }
+                "a basic land type" | "basic land type" | "a basic land type of your choice" => {
+                    EntryTap::ChooseBasicLandType
+                }
                 "odd or even" => EntryTap::ChooseOddOrEven,
                 "even or odd" => EntryTap::ChooseOptions(&["Even", "Odd"]),
                 "khans or dragons" => EntryTap::ChooseKhansOrDragons,
@@ -1544,6 +1563,8 @@ pub(super) fn lower_replacement(
                 "swamp or island" => EntryTap::ChooseOptions(&["Swamp", "Island"]),
                 "black or red" => EntryTap::ChooseOptions(&["Black", "Red"]),
                 "red or black" => EntryTap::ChooseOptions(&["Red", "Black"]),
+                "cosplay or science" => EntryTap::ChooseOptions(&["Cosplay", "Science"]),
+                "science or cosplay" => EntryTap::ChooseOptions(&["Science", "Cosplay"]),
                 _ => return Err("oracle:unsupported-as-enters-choose"),
             };
             if def.entry_tap.is_none() {
@@ -7699,10 +7720,18 @@ fn lower_entry_copy_exception(
         "its name is still ~",
         "his name is still ~",
         "her name is still ~",
+        "its name remains ~",
+        "his name remains ~",
+        "her name remains ~",
         "its name is ~",
         "his name is ~",
         "her name is ~",
         "it's still named ~",
+        "it is still named ~",
+        "he's still named ~",
+        "he is still named ~",
+        "she's still named ~",
+        "she is still named ~",
         "it's named ~",
         "it is named ~",
         "he's named ~",
@@ -7867,10 +7896,23 @@ fn lower_entry_copy_exception(
                 (&after_ew[..stop], ew_pos + "enters with ".len() + stop)
             }
         };
-        let Some((kind, count)) = parse_counter_spec_phrase(counter_phrase) else {
+        if let Some((kind, count)) = parse_counter_spec_phrase(counter_phrase) {
+            ext.extra_counters.push((kind, count));
+        } else if counter_phrase.contains(" and ") {
+            let mut parsed_multi = Vec::new();
+            for seg in counter_phrase.split(" and ") {
+                let Some(pair) = parse_counter_spec_phrase(seg) else {
+                    return Err("oracle:unsupported-enters-as-copy");
+                };
+                parsed_multi.push(pair);
+            }
+            if parsed_multi.is_empty() {
+                return Err("oracle:unsupported-enters-as-copy");
+            }
+            ext.extra_counters.extend(parsed_multi);
+        } else {
             return Err("oracle:unsupported-enters-as-copy");
-        };
-        ext.extra_counters.push((kind, count));
+        }
         low = format!("{} {}", &low[..start], &low[end..]);
     }
 
@@ -7883,6 +7925,9 @@ fn lower_entry_copy_exception(
             "in addition to its other types and colors",
             "in addition to his other types and colors",
             "in addition to her other types and colors",
+            "in addition to its other types and subtypes",
+            "in addition to his other types and subtypes",
+            "in addition to her other types and subtypes",
             "in addition to its other creature types",
             "in addition to his other creature types",
             "in addition to her other creature types",
@@ -7903,10 +7948,12 @@ fn lower_entry_copy_exception(
             break;
         };
         let prefix = &low[..pos];
-        let copula = ["it's ", "he's ", "she's ", "it is ", "he is ", "she is "]
-            .into_iter()
-            .filter_map(|op| prefix.rfind(op).map(|idx| (idx, op.len())))
-            .max_by_key(|(idx, _)| *idx);
+        let copula = [
+            "it's ", "he's ", "she's ", "it is ", "he is ", "she is ", ", is ", " and is ",
+        ]
+        .into_iter()
+        .filter_map(|op| prefix.rfind(op).map(|idx| (idx, op.len())))
+        .max_by_key(|(idx, _)| *idx);
         let (clause_start, body) = match copula {
             Some((idx, len)) => (idx, prefix[idx + len..].trim()),
             None => (0, prefix.trim()),
@@ -8054,6 +8101,12 @@ fn lower_entry_copy_exception(
         ("flanking", |ids| {
             TriggeredAbility::combat_keyword(ids.triggered(), CombatTriggerKeyword::Flanking)
         }),
+        ("battle cry", |ids| {
+            TriggeredAbility::combat_keyword(ids.triggered(), CombatTriggerKeyword::BattleCry)
+        }),
+        ("ingest", |ids| {
+            TriggeredAbility::combat_keyword(ids.triggered(), CombatTriggerKeyword::Ingest)
+        }),
         ("undying", |ids| {
             CounterKeyword::Undying.ability(ids.triggered())
         }),
@@ -8122,7 +8175,15 @@ fn lower_entry_copy_exception(
         "nonbasic landwalk",
         "legendary landwalk",
         "snow landwalk",
+        "snow forestwalk",
+        "snow swampwalk",
         "artifact landwalk",
+        "umbra armor",
+        "totem armor",
+        "split second",
+        "choose a background",
+        "doctor's companion",
+        "start your engines!",
         "haste",
         "flying",
         "trample",
@@ -8147,11 +8208,23 @@ fn lower_entry_copy_exception(
         "infect",
         "devoid",
         "decayed",
+        "partner",
+        "convoke",
+        "improvise",
+        "delve",
+        "bargain",
+        "rebound",
+        "retrace",
+        "jump-start",
+        "banding",
+        "daybound",
+        "nightbound",
         "plainswalk",
         "islandwalk",
         "swampwalk",
         "mountainwalk",
         "forestwalk",
+        "desertwalk",
     ] {
         if let Some(ka) = lower_keyword_ability_name(kw_name) {
             let mut matched_kw = false;

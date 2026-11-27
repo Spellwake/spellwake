@@ -163,6 +163,82 @@ pub(super) fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKin
     None
 }
 
+fn is_pure_remember_target_clause(op: &Instruction) -> bool {
+    matches!(
+        op,
+        Instruction::FixedTargetClause(body)
+            if !body.instructions.is_empty()
+                && body.instructions.iter().all(|inner| {
+                    matches!(
+                        inner,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            )
+                    )
+                })
+    )
+}
+
+fn try_append_fixed_first_target_pt_parts(
+    builder: &mut BodyBuilder,
+    part: ResolvedPartSpec,
+    dur: ResolvedDuration,
+) -> bool {
+    if try_append_fixed_first_target_parts(builder, ResolvedPartsSpec(vec![part.clone()]), dur) {
+        return true;
+    }
+    if builder.target != BodyTarget::None || builder.instructions.len() < 2 {
+        return false;
+    }
+    let first_is_remembered_perm = matches!(
+        builder.instructions.first(),
+        Some(Instruction::FixedTargetClause(first_body))
+            if is_permanent_body_target(first_body.target)
+                && first_body.instructions.iter().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            )
+                    )
+                })
+    );
+    if !first_is_remembered_perm {
+        return false;
+    }
+    let rest = &builder.instructions[1..];
+    if rest[..rest.len() - 1]
+        .iter()
+        .all(is_pure_remember_target_clause)
+        && let Some(Instruction::BranchIfFalse {
+            condition,
+            destination: 0,
+        }) = rest.last()
+    {
+        let cond_clone = condition.clone();
+        if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
+            let next_dest = first_body.instructions.len() + 2;
+            first_body.instructions.push(Instruction::BranchIfFalse {
+                condition: cond_clone,
+                destination: next_dest,
+            });
+            first_body.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
+            return true;
+        }
+    }
+    false
+}
+
 fn try_append_fixed_first_target_counters(
     builder: &mut BodyBuilder,
     kind: CounterKind,
@@ -215,11 +291,15 @@ fn try_append_fixed_first_target_counters(
         return false;
     }
     if !rest.is_empty()
+        && !rest[..rest.len() - 1].iter().any(is_control_flow)
         && let Some(Instruction::BranchIfFalse {
             condition,
             destination: 0,
         }) = rest.last()
-        && resolution_condition_is_spell_cast_invariant(condition)
+        && (resolution_condition_is_spell_cast_invariant(condition)
+            || rest[..rest.len() - 1]
+                .iter()
+                .all(is_pure_remember_target_clause))
     {
         let cond_clone = condition.clone();
         if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
@@ -455,7 +535,12 @@ pub(super) fn lower_counters_pt_instruction(
             duration,
             scale: Some(scale_expr),
         } => {
-            let clean_subject = strip_battlefield_zone_from_subject(subject);
+            let clean_subject = match strip_battlefield_zone_from_subject(subject) {
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer) => {
+                    SubjectRefAst::Anaphora("they".to_string())
+                }
+                other => other,
+            };
             let subject = &clean_subject;
             if let SubjectRefAst::Compound(items) = subject
                 && !items.is_empty()
@@ -512,6 +597,20 @@ pub(super) fn lower_counters_pt_instruction(
                         SubjectRefAst::TriggerSubject if in_trigger => {
                             Some(EffectSubject::TriggerSubject)
                         }
+                        SubjectRefAst::Anaphora(raw)
+                            if has_source
+                                && (is_explicit_self_permanent_noun(raw)
+                                    || (builder.target == BodyTarget::None
+                                        && matches!(
+                                            raw.trim().to_ascii_lowercase().as_str(),
+                                            "it" | "him" | "her"
+                                        )
+                                        && prior_op_acted_on_ability_source(
+                                            &builder.instructions,
+                                        ))) =>
+                        {
+                            Some(EffectSubject::AbilitySource)
+                        }
                         SubjectRefAst::Anaphora(_)
                             if !is_permanent_body_target(builder.target) && anaphora_created =>
                         {
@@ -521,6 +620,12 @@ pub(super) fn lower_counters_pt_instruction(
                             if !is_permanent_body_target(builder.target) && anaphora_moved =>
                         {
                             Some(EffectSubject::LastMoved)
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if !is_permanent_body_target(builder.target)
+                                && let Some(group_obj) = builder.last_group_filter =>
+                        {
+                            Some(EffectSubject::Matching(group_obj))
                         }
                         SubjectRefAst::Anaphora(raw)
                             if in_trigger
@@ -535,6 +640,7 @@ pub(super) fn lower_counters_pt_instruction(
                             let obj =
                                 lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                             bind_filter_player_target(builder, &obj)?;
+                            builder.last_group_filter = Some(obj);
                             Some(EffectSubject::Matching(obj))
                         }
                         _ => None,
@@ -584,6 +690,51 @@ pub(super) fn lower_counters_pt_instruction(
                             spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
                                 EffectSubject::LastMoved,
                             )),
+                            ResolvedPartsSpec(vec![part]),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+                if let SubjectRefAst::Anaphora(raw) = subject
+                    && has_source
+                    && (is_explicit_self_permanent_noun(raw)
+                        || (builder.target == BodyTarget::None
+                            && matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "it" | "him" | "her"
+                            )
+                            && prior_op_acted_on_ability_source(&builder.instructions)))
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            ResolvedPartsSpec(vec![part]),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+                if matches!(subject, SubjectRefAst::Anaphora(_))
+                    && try_append_fixed_first_target_pt_parts(builder, part.clone(), dur)
+                {
+                    return Ok(());
+                }
+                if matches!(subject, SubjectRefAst::Anaphora(_))
+                    && matches!(
+                        builder.target,
+                        BodyTarget::SingleAnyTarget
+                            | BodyTarget::SingleCreatureOrPlayer
+                            | BodyTarget::SinglePlayerOrPlaneswalker
+                            | BodyTarget::SingleOpponentOrPlaneswalker
+                    )
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::filtered(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ObjectFilter::creature(),
+                            ),
                             ResolvedPartsSpec(vec![part]),
                             dur,
                         ),
@@ -681,6 +832,32 @@ pub(super) fn lower_counters_pt_instruction(
                 );
                 return Ok(());
             }
+            if matches!(subject, SubjectRefAst::Anaphora(_))
+                && try_append_fixed_first_target_pt_parts(builder, part.clone(), dur)
+            {
+                return Ok(());
+            }
+            if matches!(subject, SubjectRefAst::Anaphora(_))
+                && matches!(
+                    builder.target,
+                    BodyTarget::SingleAnyTarget
+                        | BodyTarget::SingleCreatureOrPlayer
+                        | BodyTarget::SinglePlayerOrPlaneswalker
+                        | BodyTarget::SingleOpponentOrPlaneswalker
+                )
+            {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::filtered(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ObjectFilter::creature(),
+                        ),
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
             lower_modify_pt_part(
                 subject,
                 part,
@@ -698,8 +875,14 @@ pub(super) fn lower_counters_pt_instruction(
             duration,
             scale: None,
         } => {
-            let clean_subject = strip_battlefield_zone_from_subject(subject);
+            let clean_subject = match strip_battlefield_zone_from_subject(subject) {
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer) => {
+                    SubjectRefAst::Anaphora("they".to_string())
+                }
+                other => other,
+            };
             let subject = &clean_subject;
+            let has_source = in_trigger || self_pronoun_valid || builder.has_source;
             let dur = lower_duration(duration)?;
             let dp = parse_signed_pt_delta(dx);
             let dt = parse_signed_pt_delta(dy);
@@ -788,6 +971,67 @@ pub(super) fn lower_counters_pt_instruction(
                         }
                         return Ok(());
                     }
+                    if let SubjectRefAst::Anaphora(raw) = subject
+                        && has_source
+                        && (is_explicit_self_permanent_noun(raw)
+                            || (builder.target == BodyTarget::None
+                                && matches!(
+                                    raw.trim().to_ascii_lowercase().as_str(),
+                                    "it" | "him" | "her"
+                                )
+                                && prior_op_acted_on_ability_source(&builder.instructions)))
+                    {
+                        if dur == ResolvedDuration::UntilEndOfTurn {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                                    EffectSubject::AbilitySource,
+                                    ValueExpr::literal(pt.power),
+                                    ValueExpr::literal(pt.toughness),
+                                    BTreeSet::new(),
+                                    BTreeSet::new(),
+                                ),
+                            );
+                        } else {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Source,
+                                    ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
+                                    dur,
+                                ),
+                            );
+                        }
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && try_append_fixed_first_target_pt_parts(
+                            builder,
+                            ResolvedPartSpec::ModifyPT(pt.clone()),
+                            dur,
+                        )
+                    {
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && matches!(
+                            builder.target,
+                            BodyTarget::SingleAnyTarget
+                                | BodyTarget::SingleCreatureOrPlayer
+                                | BodyTarget::SinglePlayerOrPlaneswalker
+                                | BodyTarget::SingleOpponentOrPlaneswalker
+                        )
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::filtered(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    ObjectFilter::creature(),
+                                ),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
                     lower_modify_pt_target(
                         subject,
                         pt,
@@ -859,6 +1103,51 @@ pub(super) fn lower_counters_pt_instruction(
                                 spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
                                     EffectSubject::LastMoved,
                                 )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    if let SubjectRefAst::Anaphora(raw) = subject
+                        && has_source
+                        && (is_explicit_self_permanent_noun(raw)
+                            || (builder.target == BodyTarget::None
+                                && matches!(
+                                    raw.trim().to_ascii_lowercase().as_str(),
+                                    "it" | "him" | "her"
+                                )
+                                && prior_op_acted_on_ability_source(&builder.instructions)))
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Source,
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && try_append_fixed_first_target_pt_parts(builder, part.clone(), dur)
+                    {
+                        return Ok(());
+                    }
+                    if matches!(subject, SubjectRefAst::Anaphora(_))
+                        && matches!(
+                            builder.target,
+                            BodyTarget::SingleAnyTarget
+                                | BodyTarget::SingleCreatureOrPlayer
+                                | BodyTarget::SinglePlayerOrPlaneswalker
+                                | BodyTarget::SingleOpponentOrPlaneswalker
+                        )
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::filtered(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    ObjectFilter::creature(),
+                                ),
                                 ResolvedPartsSpec(vec![part]),
                                 dur,
                             ),
@@ -3129,11 +3418,16 @@ pub(super) fn lower_counters_pt_instruction(
                             kind_low_full.strip_prefix("counter of your choice from among ")
                         })
                         .or_else(|| kind_low_full.strip_prefix("one counter from among "))
-                        .or_else(|| kind_low_full.strip_prefix("your choice of a "))
+                        .or_else(|| {
+                            kind_low_full
+                                .strip_prefix("your choice of a ")
+                                .or_else(|| kind_low_full.strip_prefix("your choice of an "))
+                        })
                         .and_then(|rest| {
                             if rest.starts_with("counter from among ") {
                                 rest.strip_prefix("counter from among ")
-                            } else if kind_low_full.starts_with("your choice of a ")
+                            } else if (kind_low_full.starts_with("your choice of a ")
+                                || kind_low_full.starts_with("your choice of an "))
                                 && !kind_low_full
                                     .starts_with("your choice of a counter from among ")
                             {
@@ -3260,7 +3554,8 @@ pub(super) fn lower_counters_pt_instruction(
                     let mut branches = Vec::with_capacity(parsed_opts.len());
                     let mut branches_ok = true;
                     let prior_had_tokens = has_prior_token_creation(&trial.instructions);
-                    let prior_had_moved = last_instruction_moved_object(&trial.instructions);
+                    let prior_had_moved = last_instruction_moved_object(&trial.instructions)
+                        || has_prior_moved_object(&trial.instructions);
                     let anaphora_direct_subj =
                         if matches!(branch_subject, SubjectRefAst::Anaphora(_))
                             && !is_permanent_body_target(trial.target)
@@ -4189,6 +4484,77 @@ pub(super) fn lower_counters_pt_instruction(
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::LastMoved, ck, amt));
                     Ok(())
                 }
+                SubjectRefAst::TargetObject { filter, count }
+                    if matches!(
+                        filter.zone,
+                        Some(
+                            ZoneFilter::YourGraveyard
+                                | ZoneFilter::OpponentGraveyard
+                                | ZoneFilter::OpponentsGraveyards
+                                | ZoneFilter::AnyGraveyard
+                                | ZoneFilter::AllGraveyards
+                                | ZoneFilter::SingleGraveyard
+                        )
+                    ) && (matches!(count, TargetCountAst::Exact(n) if *n >= 1)
+                        || matches!(count, TargetCountAst::UpTo(max) if *max > 0)
+                        || matches!(count, TargetCountAst::AnyNumber)
+                        || (matches!(count, TargetCountAst::ChosenX | TargetCountAst::UpToX)
+                            && !in_trigger)) =>
+                {
+                    let (bounds, is_x, is_up_to_x) = match *count {
+                        TargetCountAst::Exact(1) => (None, false, false),
+                        TargetCountAst::Exact(n) => {
+                            (Some((usize::from(n), usize::from(n))), false, false)
+                        }
+                        TargetCountAst::UpTo(max) => (Some((0, usize::from(max))), false, false),
+                        TargetCountAst::AnyNumber => (Some((0, usize::MAX)), false, false),
+                        TargetCountAst::ChosenX => (Some((0, usize::MAX)), true, false),
+                        TargetCountAst::UpToX => (Some((0, usize::MAX)), false, true),
+                    };
+                    let mut inner = filter.as_ref().clone();
+                    inner.zone = None;
+                    let obj = if is_unrestricted_filter(&inner) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter(&inner, vocabulary)?
+                    };
+                    let bt = match filter.zone {
+                        Some(ZoneFilter::YourGraveyard) => {
+                            BodyTarget::FilteredOwnGraveyardCard(obj)
+                        }
+                        Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
+                            BodyTarget::FilteredAnyGraveyardCard {
+                                filter: obj,
+                                opponents_only: true,
+                            }
+                        }
+                        Some(
+                            ZoneFilter::AnyGraveyard
+                            | ZoneFilter::AllGraveyards
+                            | ZoneFilter::SingleGraveyard,
+                        ) => BodyTarget::FilteredAnyGraveyardCard {
+                            filter: obj,
+                            opponents_only: false,
+                        },
+                        _ => return Err("oracle:unsupported-put-counters"),
+                    };
+                    builder.bind_target(bt)?;
+                    if let Some(b) = bounds {
+                        builder.graveyard_target_bounds = Some(b);
+                    }
+                    if is_x {
+                        builder.x_target_count = true;
+                    }
+                    if is_up_to_x {
+                        builder.up_to_x_target_count = true;
+                    }
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                            ck, amt,
+                        ),
+                    );
+                    Ok(())
+                }
                 SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                     if is_permanent_body_target(builder.target) =>
                 {
@@ -4197,6 +4563,43 @@ pub(super) fn lower_counters_pt_instruction(
                             ck, amt,
                         ),
                     );
+                    Ok(())
+                }
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                    if !is_permanent_body_target(builder.target)
+                        && (last_instruction_created_tokens(&builder.instructions)
+                            || (has_prior_token_creation(&builder.instructions)
+                                && !has_prior_moved_object(&builder.instructions))) =>
+                {
+                    builder
+                        .instructions
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::CreatedTokens, ck, amt));
+                    Ok(())
+                }
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                    if builder.target == BodyTarget::None
+                        && let Some(group_obj) = builder.last_group_filter =>
+                {
+                    builder
+                        .instructions
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::Matching(group_obj), ck, amt));
+                    Ok(())
+                }
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                    if !is_permanent_body_target(builder.target)
+                        && has_prior_moved_object(&builder.instructions) =>
+                {
+                    builder
+                        .instructions
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::LastMoved, ck, amt));
+                    Ok(())
+                }
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                    if in_trigger && builder.target == BodyTarget::None =>
+                {
+                    builder
+                        .instructions
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::TriggerSubject, ck, amt));
                     Ok(())
                 }
                 SubjectRefAst::Compound(items) if !items.is_empty() => {

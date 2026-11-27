@@ -8124,6 +8124,7 @@ pub fn decode_for_owner(
                 })
             })
             .collect::<Result<_, String>>()?,
+        per_extra_target_cost: None,
         additional_cast_costs: raw
             .additional_cast_costs
             .into_iter()

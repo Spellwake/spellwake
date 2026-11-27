@@ -216,6 +216,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
         flashback_tap_white_creatures: 0,
         flashback_life: 0,
         additional_cast_costs: vec![],
+        per_extra_target_cost: None,
         activation_restrictions: Default::default(),
         activation_cost_reductions: Default::default(),
         activation_target_cost_reductions: Default::default(),

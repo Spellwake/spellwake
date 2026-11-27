@@ -133,6 +133,7 @@ fn expected(helper: &Helper) -> Program {
         flashback_tap_white_creatures: 0,
         flashback_life: 0,
         additional_cast_costs: vec![],
+        per_extra_target_cost: None,
         sacrifice_creature_cast_cost: false,
         sacrifice_cast_cost_filter: None,
         tap_creatures_cast_cost: false,

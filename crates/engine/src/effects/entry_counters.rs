@@ -1859,3 +1859,114 @@ impl EffectWindow {
         Ok(placement)
     }
 }
+
+fn body_grants_next_spell_storm(body: &crate::program::ExecutableBody) -> bool {
+    if let Some(modes) = body.triggered_modes()
+        && modes.options.iter().any(body_grants_next_spell_storm)
+    {
+        return true;
+    }
+    body.instructions.iter().any(|op| match op {
+        Instruction::ApplyContinuous(spec) => matches!(
+            &spec.payload,
+            crate::toolbox::ContinuousPayload::TemporaryRule(rule)
+                if matches!(
+                    rule.as_ref(),
+                    crate::program::TemporaryRuleKind::NextSpellCastKeyword {
+                        keyword: crate::program::NextSpellCastKeyword::Storm,
+                        ..
+                    }
+                )
+        ),
+        Instruction::ScheduleDelayedStepTrigger { body, .. }
+        | Instruction::ScheduleDelayedEventTrigger { body, .. }
+        | Instruction::EmitReflexiveTrigger { body, .. }
+        | Instruction::FixedTargetClause(body)
+        | Instruction::ForEach { body, .. }
+        | Instruction::ForEachPlayerQuery { body, .. } => body_grants_next_spell_storm(body),
+        Instruction::ChooseOption { options, .. } => options
+            .iter()
+            .any(|b| body_grants_next_spell_storm(&b.body)),
+        Instruction::MutatePlayer(spec) => match &spec.op {
+            crate::toolbox::PlayerMutation::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+            } => {
+                body_grants_next_spell_storm(cost_body)
+                    || body_grants_next_spell_storm(paid_body)
+                    || declined_body
+                        .as_deref()
+                        .is_some_and(body_grants_next_spell_storm)
+            }
+            _ => false,
+        },
+        _ => false,
+    })
+}
+
+/// Whether this program (or any face/token it can create) needs `CastTurnHistory`.
+pub(super) fn needs_cast_history(program: &Program) -> bool {
+    let direct = definition_or_token_matches(program, |p| {
+        p.triggered
+            .iter()
+            .any(|t| t.cast_copy_keyword().is_some() || body_grants_next_spell_storm(&t.body))
+            || p.activated
+                .iter()
+                .any(|a| body_grants_next_spell_storm(&a.body))
+            || p.activation_modes.values().any(|modes| {
+                modes
+                    .prefix
+                    .as_deref()
+                    .is_some_and(body_grants_next_spell_storm)
+                    || modes
+                        .suffix
+                        .as_deref()
+                        .is_some_and(body_grants_next_spell_storm)
+                    || modes.additional.iter().any(body_grants_next_spell_storm)
+            })
+            || match &p.kind {
+                ProgramKind::Spell(spell) => {
+                    body_grants_next_spell_storm(&spell.body)
+                        || spell.modes.as_ref().is_some_and(|modes| {
+                            modes
+                                .prefix
+                                .as_deref()
+                                .is_some_and(body_grants_next_spell_storm)
+                                || modes
+                                    .suffix
+                                    .as_deref()
+                                    .is_some_and(body_grants_next_spell_storm)
+                                || modes.additional.iter().any(body_grants_next_spell_storm)
+                        })
+                }
+                ProgramKind::Permanent(_) => false,
+            }
+            || matches!(
+                p.conditional_cost,
+                Some(
+                    crate::program::ConditionalCastCost::Prowl(_)
+                        | crate::program::ConditionalCastCost::Freerunning(_)
+                        | crate::program::ConditionalCastCost::Mayhem(_)
+                        | crate::program::ConditionalCastCost::Surge(_)
+                        | crate::program::ConditionalCastCost::Spectacle(_)
+                )
+            )
+    });
+    if direct {
+        return true;
+    }
+    let sub_programs = [
+        program.nightbound_back.as_deref(),
+        program.transform_back.as_deref(),
+        program.modal_back.as_deref(),
+        program.flip_back.as_deref(),
+        program.prototype.as_deref(),
+        program.adventure.as_deref(),
+        program.prepare_spell.as_deref(),
+        program.split.as_ref().map(|s| &s.right),
+        program.siege_back.as_deref(),
+        program.disturb.as_ref().map(|d| &d.back),
+    ];
+    sub_programs.into_iter().flatten().any(needs_cast_history)
+}

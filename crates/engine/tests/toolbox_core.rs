@@ -3642,3 +3642,194 @@ fn phase14_mutate_object_goad_permanent_persists_across_turns() {
         "ObjectMutation::GoadPermanent must persist past the goader's next turn start"
     );
 }
+
+#[test]
+fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
+    use spellwake_engine::{
+        mana::{CastingPayment, ManaType},
+        program::PermanentTargetAction,
+    };
+    use std::collections::BTreeMap;
+
+    let vocab = vocabulary();
+    let mut strive_spell = Program::sorcery(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::FilteredPermanent(ObjectFilter::creature()),
+            vec![Instruction::AffectPermanentTargets {
+                minimum: 1,
+                maximum: u16::MAX,
+                action: PermanentTargetAction::Tap,
+            }],
+        ),
+    );
+    strive_spell.per_extra_target_cost = Some(ManaCost {
+        generic: 1.into(),
+        required: BTreeMap::new(),
+    });
+    let strive_spell = validated(strive_spell, &vocab);
+
+    let b1 = bear(2, 2, BTreeSet::new(), &vocab);
+    let b2 = bear(2, 2, BTreeSet::new(), &vocab);
+    let ritual = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::MutatePlayer(Box::new(
+                    MutatePlayerSpec::add_mana(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::EffectManaYield::Fixed(BTreeMap::from([(
+                            ManaType::Green,
+                            1.into(),
+                        )])),
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, strive_spell),
+            bf(2, P1, b1),
+            bf(3, P1, b2),
+            in_hand(4, P0, ritual),
+        ],
+    );
+    let c1 = object(&game, 2);
+    let c2 = object(&game, 3);
+    let make_cast = |targets: Vec<TargetRef>, mana: ManaPayment| GameCommand::CastWithResources {
+        spell: object(&game, 1),
+        target: None,
+        payment: CastingPayment {
+            chosen_x: None,
+            hybrid_choices: Vec::new(),
+            fixed_targets: Vec::new(),
+            permanent_targets: targets,
+            target_division: Vec::new(),
+            modes: Vec::new(),
+            adventure: false,
+            split_half: None,
+            disturb: false,
+            modal_back: false,
+            prototype: false,
+            prepare: false,
+            splice: vec![],
+            exile_cast_type: None,
+            alternative_cost_source: None,
+            graveyard_permission: None,
+            use_alternative: false,
+            use_granted_flashback: false,
+            additional: BTreeMap::new(),
+            mana: Some(mana),
+            restricted_mana: Vec::new(),
+            objects: Vec::new(),
+        },
+    };
+
+    // 2 targets with 0 mana paid must be rejected because Strive adds {1} for the 2nd target.
+    let unpaid = attempt(
+        &game,
+        P0,
+        make_cast(
+            vec![TargetRef::Object(c1), TargetRef::Object(c2)],
+            ManaPayment::default(),
+        ),
+    );
+    assert!(
+        unpaid.is_err(),
+        "Strive spell with 2 targets must reject 0 mana payment"
+    );
+
+    // Add {G} to pool via ritual, then cast targeting both creatures paying 1 generic.
+    let with_mana = cast_untargeted(&game, 4).into_state();
+    let paid = submit(
+        &with_mana,
+        P0,
+        make_cast(
+            vec![TargetRef::Object(c1), TargetRef::Object(c2)],
+            ManaPayment {
+                spend: vec![spellwake_engine::mana::ManaSpend {
+                    mana_type: ManaType::Green,
+                    amount: 1.into(),
+                }],
+                from_lots: std::collections::BTreeMap::new(),
+            },
+        ),
+    );
+    let after = pass_pair(paid.state()).into_state();
+    assert_eq!(
+        after.execution().window().cards().get(c1).unwrap().tapped(),
+        Some(true)
+    );
+    assert_eq!(
+        after.execution().window().cards().get(c2).unwrap().tapped(),
+        Some(true)
+    );
+}
+
+#[test]
+fn phase15_next_spell_cast_keyword_storm_copies_next_spell() {
+    use spellwake_engine::program::NextSpellCastKeyword;
+
+    let vocab = vocabulary();
+    let storm_granter = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::ApplyContinuous(Box::new(
+                    ApplyContinuousSpec::temporary_rule(
+                        TemporaryRuleKind::NextSpellCastKeyword {
+                            filter: ObjectFilter::any(),
+                            keyword: NextSpellCastKeyword::Storm,
+                        },
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+    let gain_three = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                    PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    ValueExpr::literal(3),
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![in_hand(1, P0, storm_granter), in_hand(2, P0, gain_three)],
+    );
+    // Cast spell #1 (grants Storm to next spell).
+    let after_grant = cast_untargeted(&game, 1).into_state();
+    // Cast spell #2 (storm count = 1 previous spell -> 1 Storm copy + 1 original = +6 life).
+    let cast2 = submit(
+        &after_grant,
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(&after_grant, 2),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    // Resolve Storm trigger (places copy on stack), resolve copy (+3), resolve original (+3).
+    let s1 = pass_pair(cast2.state());
+    let s2 = pass_pair(s1.state());
+    let s3 = pass_pair(s2.state()).into_state();
+    assert_eq!(
+        s3.execution().life_total(P0),
+        Some(&RulesInteger::from(26)),
+        "NextSpellCastKeyword::Storm must copy the next spell once (20 + 3 + 3 = 26)"
+    );
+}
