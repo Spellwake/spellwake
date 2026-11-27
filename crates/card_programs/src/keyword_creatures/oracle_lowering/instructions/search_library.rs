@@ -3394,9 +3394,17 @@ pub(super) fn lower_search_library_group(
         } => {
             let has_source = in_trigger || self_pronoun_valid || builder.has_source;
             let lib_low = library.trim().to_ascii_lowercase();
-            if (lib_low == "ref" || (lib_low == "exiled" && !*reveal))
-                && has_prior_moved_object(&builder.instructions)
-            {
+            let has_prior_moved = has_prior_moved_object(&builder.instructions);
+            let has_prior_exile = builder.instructions.iter().rev().any(|op| {
+                matches!(op, Instruction::ExileTopPlay { .. })
+                    || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        )
+                    })
+            });
+            if (lib_low == "ref" || (lib_low == "exiled" && !*reveal)) && has_prior_moved {
                 let dest = if *reveal {
                     spellwake_engine::toolbox::ZoneDest::RevealOnly
                 } else {
@@ -3416,14 +3424,87 @@ pub(super) fn lower_search_library_group(
                     ));
                 return Ok(());
             }
+            if lib_low == "exiled" && !*reveal && has_prior_exile && has_source {
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::LinkedExile {
+                                group: Some(LinkedExileGroup::SourceLinked),
+                            },
+                            spellwake_engine::toolbox::ZoneDest::LookOnly {
+                                viewer: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            },
+                        ),
+                    ));
+                return Ok(());
+            }
+            // Only lower unfiltered hand reveals (`reveal N cards from your hand`).
+            // Fail closed on `ValueExprAst::ChosenX` because `reveal any number of <filter>`
+            // currently lowers to `LookTopLibrary("hand", ChosenX)` without preserving the filter.
+            if *reveal
+                && matches!(lib_low.as_str(), "hand" | "your hand")
+                && !matches!(count.as_ref(), ValueExprAst::ChosenX)
+            {
+                let cnt = lower_value_expr_in_context(
+                    resolve_x(count, bound_x),
+                    builder,
+                    in_trigger,
+                    vocabulary,
+                )?;
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::simple(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    ),
+                                )),
+                                ObjectFilter::any(),
+                            ),
+                            spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                min: Box::new(cnt.clone()),
+                                max: Box::new(cnt),
+                                constraint: None,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                hidden: true,
+                            },
+                            spellwake_engine::toolbox::ZoneDest::RevealOnly,
+                        ),
+                    ));
+                return Ok(());
+            }
             let group_players = match lib_low.as_str() {
-                "each player" | "each player's" | "each player's library" | "eachplayer" => {
-                    Some(AffectedPlayers::EachPlayer)
-                }
+                "each player"
+                | "each player's"
+                | "each player's library"
+                | "eachplayer"
+                | "all players"
+                | "all players'"
+                | "all players' libraries"
+                | "every player"
+                | "every player's"
+                | "every player's library" => Some(AffectedPlayers::EachPlayer),
                 "each opponent"
                 | "each opponent's"
                 | "each opponent's library"
-                | "eachopponent" => Some(AffectedPlayers::EachOpponent),
+                | "eachopponent"
+                | "each of your opponents"
+                | "each of your opponents'"
+                | "each of your opponents' libraries"
+                | "opponents"
+                | "opponents'"
+                | "opponents' libraries"
+                | "your opponents"
+                | "your opponents'"
+                | "your opponents' libraries" => Some(AffectedPlayers::EachOpponent),
                 "each other player"
                 | "each other player's"
                 | "each other player's library"
@@ -3474,7 +3555,7 @@ pub(super) fn lower_search_library_group(
                     ResolvingPlayer::TargetPlayer,
                 )),
                 "that player" | "that player's" | "thatplayer" | "that opponent"
-                | "that opponent's" | "thatopponent" | "that" | "their" => Some((
+                | "that opponent's" | "thatopponent" | "that" | "their" | "his or her" => Some((
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ThatPlayer,
@@ -3484,8 +3565,18 @@ pub(super) fn lower_search_library_group(
                 )),
                 "its controller"
                 | "its controller's"
+                | "that spell's controller"
+                | "that spell's controller's"
+                | "that land's controller"
+                | "that land's controller's"
+                | "that artifact's controller"
+                | "that artifact's controller's"
+                | "that enchantment's controller"
+                | "that enchantment's controller's"
                 | "that creature's controller"
-                | "that permanent's controller" => Some((
+                | "that creature's controller's"
+                | "that permanent's controller"
+                | "that permanent's controller's" => Some((
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ItsController,
@@ -3496,15 +3587,30 @@ pub(super) fn lower_search_library_group(
                 "its owner"
                 | "its owner's"
                 | "that card's owner"
+                | "that card's owner's"
+                | "that spell's owner"
+                | "that spell's owner's"
+                | "that land's owner"
+                | "that land's owner's"
+                | "that artifact's owner"
+                | "that artifact's owner's"
+                | "that enchantment's owner"
+                | "that enchantment's owner's"
                 | "that creature's owner"
-                | "that permanent's owner" => Some((
+                | "that creature's owner's"
+                | "that permanent's owner"
+                | "that permanent's owner's" => Some((
                     None,
                     lower_resolving_player_in_context(PlayerRefAst::ItsOwner, builder, in_trigger)?,
                 )),
                 "chosen player"
                 | "chosen player's"
                 | "the chosen player"
-                | "the chosen player's" => Some((
+                | "the chosen player's"
+                | "chosen opponent"
+                | "chosen opponent's"
+                | "the chosen opponent"
+                | "the chosen opponent's" => Some((
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ChosenPlayer,
@@ -3530,7 +3636,11 @@ pub(super) fn lower_search_library_group(
                 | "active player's"
                 | "activeplayer"
                 | "the active player"
-                | "the active player's" => Some((None, ResolvingPlayer::ActivePlayer)),
+                | "the active player's"
+                | "attacking player"
+                | "attacking player's"
+                | "the attacking player"
+                | "the attacking player's" => Some((None, ResolvingPlayer::ActivePlayer)),
                 _ => None,
             };
             let (req_bt, library_owner) = owner_opt.ok_or("oracle:unsupported-instruction")?;
@@ -4426,8 +4536,19 @@ pub(super) fn lower_search_library_group(
                     "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" | "library" => {
                         (None, ResolvingPlayer::Controller)
                     }
-                    "their" | "that player" | "that player's" | "thatplayer" | "that opponent"
-                    | "that opponent's" => (None, ResolvingPlayer::LoopPlayer),
+                    "their"
+                    | "his or her"
+                    | "that player"
+                    | "that player's"
+                    | "thatplayer"
+                    | "that opponent"
+                    | "that opponent's"
+                    | "each player"
+                    | "each player's"
+                    | "each opponent"
+                    | "each opponent's"
+                    | "each other player"
+                    | "each other player's" => (None, ResolvingPlayer::LoopPlayer),
                     "target player" | "target player's" | "targetplayer" => (
                         Some(BodyTarget::SinglePlayer),
                         ResolvingPlayer::TargetPlayer,
@@ -4442,9 +4563,13 @@ pub(super) fn lower_search_library_group(
                     "enchanted player" | "enchanted player's" | "enchantedplayer" if has_source => {
                         (None, ResolvingPlayer::EnchantedPlayer)
                     }
-                    "active player" | "active player's" | "activeplayer" => {
-                        (None, ResolvingPlayer::ActivePlayer)
-                    }
+                    "active player"
+                    | "active player's"
+                    | "activeplayer"
+                    | "attacking player"
+                    | "attacking player's"
+                    | "the attacking player"
+                    | "the attacking player's" => (None, ResolvingPlayer::ActivePlayer),
                     _ => return Err("oracle:unsupported-player-look-top"),
                 };
                 if let Some(bt) = req_bt {
@@ -4513,9 +4638,9 @@ pub(super) fn lower_search_library_group(
                 "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" | "library" => {
                     (None, ResolvingPlayer::Controller)
                 }
-                "their" if actor != ResolvingPlayer::Controller => (None, actor),
+                "their" | "his or her" if actor != ResolvingPlayer::Controller => (None, actor),
                 "that player" | "that player's" | "thatplayer" | "that opponent"
-                | "that opponent's" | "thatopponent" | "that" | "their" => (
+                | "that opponent's" | "thatopponent" | "that" | "their" | "his or her" => (
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ThatPlayer,
@@ -4525,8 +4650,18 @@ pub(super) fn lower_search_library_group(
                 ),
                 "its controller"
                 | "its controller's"
+                | "that spell's controller"
+                | "that spell's controller's"
+                | "that land's controller"
+                | "that land's controller's"
+                | "that artifact's controller"
+                | "that artifact's controller's"
+                | "that enchantment's controller"
+                | "that enchantment's controller's"
                 | "that creature's controller"
-                | "that permanent's controller" => (
+                | "that creature's controller's"
+                | "that permanent's controller"
+                | "that permanent's controller's" => (
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ItsController,
@@ -4537,8 +4672,19 @@ pub(super) fn lower_search_library_group(
                 "its owner"
                 | "its owner's"
                 | "that card's owner"
+                | "that card's owner's"
+                | "that spell's owner"
+                | "that spell's owner's"
+                | "that land's owner"
+                | "that land's owner's"
+                | "that artifact's owner"
+                | "that artifact's owner's"
+                | "that enchantment's owner"
+                | "that enchantment's owner's"
                 | "that creature's owner"
-                | "that permanent's owner" => (
+                | "that creature's owner's"
+                | "that permanent's owner"
+                | "that permanent's owner's" => (
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ItsOwner,
@@ -4549,7 +4695,11 @@ pub(super) fn lower_search_library_group(
                 "chosen player"
                 | "chosen player's"
                 | "the chosen player"
-                | "the chosen player's" => (
+                | "the chosen player's"
+                | "chosen opponent"
+                | "chosen opponent's"
+                | "the chosen opponent"
+                | "the chosen opponent's" => (
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ChosenPlayer,
@@ -4583,7 +4733,11 @@ pub(super) fn lower_search_library_group(
                 | "active player's"
                 | "activeplayer"
                 | "the active player"
-                | "the active player's" => (None, ResolvingPlayer::ActivePlayer),
+                | "the active player's"
+                | "attacking player"
+                | "attacking player's"
+                | "the attacking player"
+                | "the attacking player's" => (None, ResolvingPlayer::ActivePlayer),
                 _ => return Err("oracle:unsupported-player-look-top"),
             };
             if let Some(bt) = req_bt {
@@ -5255,11 +5409,300 @@ fn value_expr_uses_chosen_x_search(expr: &ValueExprAst) -> bool {
     }
 }
 
+fn substitute_chosen_x_in_search_value(
+    expr: &ValueExprAst,
+    replacement: &ValueExprAst,
+) -> (ValueExprAst, bool) {
+    match expr {
+        ValueExprAst::ChosenX => (replacement.clone(), true),
+        ValueExprAst::Add(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_search_value(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_search_value(b, replacement);
+            (ValueExprAst::Add(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Sub(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_search_value(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_search_value(b, replacement);
+            (ValueExprAst::Sub(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Mul(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_search_value(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_search_value(b, replacement);
+            (ValueExprAst::Mul(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Max(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_search_value(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_search_value(b, replacement);
+            (ValueExprAst::Max(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        other => (other.clone(), false),
+    }
+}
+
+fn substitute_chosen_x_in_search_filter(
+    filter: &ObjectFilterAst,
+    replacement: &ValueExprAst,
+) -> Option<ObjectFilterAst> {
+    let mut cloned = filter.clone();
+    let mut changed = false;
+    for sb in &mut cloned.stat_bounds {
+        let (nv, ch) = substitute_chosen_x_in_search_value(&sb.value, replacement);
+        if ch {
+            *sb.value = nv;
+            changed = true;
+        }
+    }
+    changed.then_some(cloned)
+}
+
+fn parse_toolbox_entering_counter(raw: &str) -> Option<(CounterKind, Box<ValueExpr>)> {
+    let low = raw.trim().to_ascii_lowercase();
+    let cb = low
+        .split_once(" counter")
+        .map_or(low.as_str(), |(before, _)| before)
+        .trim();
+    let (cnt_expr, rest_after_qty): (ValueExpr, &str) = if let Some(rest) = cb
+        .strip_prefix("a ")
+        .or_else(|| cb.strip_prefix("an "))
+        .or_else(|| cb.strip_prefix("one "))
+    {
+        (ValueExpr::literal(1), rest.trim())
+    } else if let Some(rest) = cb.strip_prefix("two ") {
+        (ValueExpr::literal(2), rest.trim())
+    } else if let Some(rest) = cb.strip_prefix("three ") {
+        (ValueExpr::literal(3), rest.trim())
+    } else if let Some(rest) = cb.strip_prefix("four ") {
+        (ValueExpr::literal(4), rest.trim())
+    } else if let Some(rest) = cb.strip_prefix("five ") {
+        (ValueExpr::literal(5), rest.trim())
+    } else if let Some(rest) = cb.strip_prefix("x ") {
+        (ValueExpr::chosen_x(), rest.trim())
+    } else if let Some((num_s, rest)) = cb.split_once(' ')
+        && let Ok(n) = num_s.parse::<i64>()
+        && n > 0
+    {
+        (ValueExpr::literal(n), rest.trim())
+    } else {
+        (ValueExpr::literal(1), cb)
+    };
+    let kind_s = rest_after_qty
+        .strip_prefix("additional ")
+        .unwrap_or(rest_after_qty)
+        .trim();
+    let kind = parse_counter_kind(kind_s).filter(|k| k.is_permanent())?;
+    Some((kind, Box::new(cnt_expr)))
+}
+
+fn object_filter_guarantees_card_types(prior: ObjectFilter, required_any: CardTypeMask) -> bool {
+    if required_any.is_empty() {
+        return true;
+    }
+    let clause_ok = |c: ObjectClause| {
+        (!c.any_types.is_empty() && (c.any_types.bits() & !required_any.bits()) == 0)
+            || (!c.required_types.is_empty()
+                && (c.required_types.bits() & required_any.bits()) != 0)
+    };
+    match prior {
+        ObjectFilter::Clause(c) => clause_ok(c),
+        ObjectFilter::Either(a, b) => clause_ok(a) && clause_ok(b),
+    }
+}
+
+fn prior_zone_op_matches_count_filter(op: &Instruction, inner: &ObjectFilterAst) -> bool {
+    use spellwake_engine::toolbox::{GraveyardSemantics, ObjectQuery, PlayerSelector, ZoneDest};
+    use spellwake_oracle_compiler::ast::{FilterPredicateAst, PriorActionRefKind};
+    let [FilterPredicateAst::AffectedByPriorAction(kind)] = inner.predicates.as_slice() else {
+        return false;
+    };
+    let mut stripped = inner.clone();
+    stripped.predicates.clear();
+    stripped.zone = None;
+    if !stripped.forbidden_types.is_empty()
+        || !filter_only_has(
+            &stripped,
+            FilterAllow {
+                types: true,
+                ..FilterAllow::NONE
+            },
+        )
+    {
+        return false;
+    }
+    let Ok(req_types) = lower_card_type_mask(stripped.any_types) else {
+        return false;
+    };
+    let spec = match op {
+        Instruction::ZoneOp(spec) => spec.as_ref(),
+        Instruction::ForEachPlayerQuery { selector, body, .. }
+            if matches!(
+                selector.as_ref(),
+                PlayerSelector::Resolving(_) | PlayerSelector::Group(AffectedPlayers::One(_))
+            ) =>
+        {
+            match body.instructions.as_slice() {
+                [Instruction::ZoneOp(spec)] => spec.as_ref(),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+    let dest_ok = matches!(
+        (kind, &spec.destination),
+        (
+            PriorActionRefKind::SacrificedThisWay,
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Sacrifice,
+            },
+        ) | (
+            PriorActionRefKind::DiscardedThisWay,
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Discard,
+            },
+        ) | (
+            PriorActionRefKind::DestroyedThisWay,
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Destroy { .. },
+            },
+        ) | (
+            PriorActionRefKind::PutIntoGraveyardThisWay,
+            ZoneDest::Graveyard { .. },
+        ) | (PriorActionRefKind::ExiledThisWay, ZoneDest::Exile { .. })
+            | (PriorActionRefKind::ReturnedToHandThisWay, ZoneDest::Hand)
+    );
+    if !dest_ok {
+        return false;
+    }
+    let ObjectQuery::ZoneScan {
+        filter: prior_filter,
+        ..
+    } = &spec.source
+    else {
+        return false;
+    };
+    object_filter_guarantees_card_types(**prior_filter, req_types)
+}
+
+fn lower_toolbox_search_filter(
+    filter: &ObjectFilterAst,
+    trial: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<ObjectFilter, &'static str> {
+    use spellwake_oracle_compiler::ast::{FilterPredicateAst, NameFilterAst};
+    let mut clean_filter = filter.clone();
+    clean_filter.zone = None;
+
+    let has_prior_card_name_choice = trial.instructions.iter().any(|op| {
+        matches!(
+            op,
+            Instruction::ChooseValue {
+                domain: ResolutionChoiceDomain::CardName { .. },
+                ..
+            }
+        ) || matches!(
+            op,
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    spellwake_engine::toolbox::PromptDomain::CardName { .. }
+                )
+        )
+    });
+    let has_state_qual = clean_filter
+        .predicates
+        .iter()
+        .any(|p| matches!(p, FilterPredicateAst::StateQualification(_)));
+    if has_prior_card_name_choice
+        && !has_state_qual
+        && matches!(clean_filter.named, Some(NameFilterAst::SameAsReferenced))
+    {
+        clean_filter.named = None;
+        clean_filter.flags =
+            AstFilterFlags(clean_filter.flags.0 | AstFilterFlags::MATCHES_CHOSEN_NAME.0);
+    }
+
+    let mut add_same_name_as_target = false;
+    if is_permanent_body_target(trial.target)
+        && !trial
+            .instructions
+            .iter()
+            .any(has_prior_non_attached_object_op)
+        && let Some(NameFilterAst::SameAs(ref_subj)) = &clean_filter.named
+        && matches!(ref_subj.as_ref(), SubjectRefAst::Anaphora(_))
+    {
+        clean_filter.named = None;
+        add_same_name_as_target = true;
+    }
+
+    let mut prior_count_mv: Option<ManaValueFilter> = None;
+    if let Some(last_op) = trial.instructions.last() {
+        let mut mv_idx: Option<usize> = None;
+        for (idx, sb) in clean_filter.stat_bounds.iter().enumerate() {
+            if sb.stat == StatKind::ManaValue
+                && let ValueExprAst::Count(inner) = sb.value.as_ref()
+                && prior_zone_op_matches_count_filter(last_op, inner)
+            {
+                let cmp = match sb.op {
+                    CompareOp::Lt => Comparison::Less,
+                    CompareOp::Le => Comparison::LessOrEqual,
+                    CompareOp::Gt => Comparison::Greater,
+                    CompareOp::Ge => Comparison::GreaterOrEqual,
+                    CompareOp::Eq => Comparison::Equal,
+                };
+                prior_count_mv = Some(ManaValueFilter::CompareAnchor {
+                    op: cmp,
+                    anchor: DynamicStatAnchor::LastMovedCount,
+                });
+                mv_idx = Some(idx);
+                break;
+            }
+        }
+        if let Some(idx) = mv_idx {
+            clean_filter.stat_bounds.remove(idx);
+        }
+    }
+
+    let mut obj = if is_unrestricted_filter(&clean_filter) {
+        ObjectFilter::any()
+    } else {
+        lower_object_filter_in_context(&clean_filter, trial, in_trigger, vocabulary)?
+    };
+    if add_same_name_as_target {
+        let patch_name = |c: &mut ObjectClause| {
+            c.flags = c.flags.union(ObjectFilterFlags::SAME_NAME_AS_TARGET);
+        };
+        match &mut obj {
+            ObjectFilter::Clause(c) => patch_name(c),
+            ObjectFilter::Either(a, b) => {
+                patch_name(a);
+                patch_name(b);
+            }
+        }
+    }
+    if let Some(mv) = prior_count_mv {
+        let patch_mv = |c: &mut ObjectClause| -> Result<(), &'static str> {
+            if c.mana_value != ManaValueFilter::Any {
+                return Err("oracle:unsupported-stat-bound");
+            }
+            c.mana_value = mv;
+            Ok(())
+        };
+        match &mut obj {
+            ObjectFilter::Clause(c) => patch_mv(c)?,
+            ObjectFilter::Either(a, b) => {
+                patch_mv(a)?;
+                patch_mv(b)?;
+            }
+        }
+    }
+    Ok(obj)
+}
+
 fn parse_toolbox_search_dest(
     raw: &str,
     chooser: &spellwake_engine::toolbox::PlayerSelector,
     is_group_loop: bool,
-    _reveal: bool,
+    reveal: bool,
 ) -> Option<(spellwake_engine::toolbox::ZoneDest, bool)> {
     use spellwake_engine::toolbox::{
         GraveyardSemantics, LibraryOrderPos, ObjectQuery, ZoneController, ZoneDest,
@@ -5386,6 +5829,14 @@ fn parse_toolbox_search_dest(
     if matches!(d, "reveal" | "revealed") {
         return Some((ZoneDest::RevealOnly, false));
     }
+    if !is_group_loop && matches!(d, "found_set" | "found") {
+        let dest = if reveal {
+            ZoneDest::RevealOnly
+        } else {
+            ZoneDest::None
+        };
+        return Some((dest, false));
+    }
     if matches!(
         d,
         "top"
@@ -5456,11 +5907,24 @@ fn parse_toolbox_search_dest(
         ));
     }
     if d.contains("battlefield") {
+        if d.contains("opponent's control") || d.contains("opponents' control") {
+            return None;
+        }
         let attach_to = if let Some((_, after_attach)) = d.split_once("attached to ") {
             let tgt = after_attach.trim().trim_end_matches('.');
             if matches!(
                 tgt,
-                "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment"
+                "~" | "this creature"
+                    | "this permanent"
+                    | "this artifact"
+                    | "this enchantment"
+                    | "this equipment"
+                    | "this vehicle"
+                    | "this land"
+                    | "this aura"
+                    | "this planeswalker"
+                    | "this saga"
+                    | "this battle"
             ) {
                 Some(Box::new(ObjectQuery::Source))
             } else {
@@ -5474,29 +5938,9 @@ fn parse_toolbox_search_dest(
         let mut entering_counters = Vec::new();
         if d.contains("counter") {
             if let Some((_, after_with)) = d.split_once("with ")
-                && let Some((cnt_body, _)) = after_with.split_once(" counter")
+                && let Some((kind, cnt_expr)) = parse_toolbox_entering_counter(after_with)
             {
-                let cb = cnt_body.trim();
-                let (cnt_n, kind_s) = if let Some(rest) = cb
-                    .strip_prefix("a ")
-                    .or_else(|| cb.strip_prefix("an "))
-                    .or_else(|| cb.strip_prefix("one "))
-                {
-                    (1i64, rest.trim())
-                } else if let Some(rest) = cb.strip_prefix("two ") {
-                    (2i64, rest.trim())
-                } else if let Some(rest) = cb.strip_prefix("three ") {
-                    (3i64, rest.trim())
-                } else if let Some((num_s, rest)) = cb.split_once(' ')
-                    && let Ok(n) = num_s.parse::<i64>()
-                    && n > 0
-                {
-                    (n, rest.trim())
-                } else {
-                    return None;
-                };
-                let kind = parse_counter_kind(kind_s).filter(|k| k.is_permanent())?;
-                entering_counters.push((kind, Box::new(ValueExpr::literal(cnt_n))));
+                entering_counters.push((kind, cnt_expr));
             } else {
                 return None;
             }
@@ -5510,7 +5954,11 @@ fn parse_toolbox_search_dest(
             || d.contains("their control")
             || d.contains("that player's control")
             || is_group_loop;
-        let controller = if under_owner {
+        let controller = if d.contains("under your control") {
+            ZoneController::Player(Box::new(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ))
+        } else if under_owner {
             ZoneController::Owner
         } else {
             ZoneController::Player(Box::new(chooser.clone()))
@@ -5610,22 +6058,43 @@ fn try_lower_search_library_toolbox<'a>(
                 from_zone: None,
                 to,
                 tapped,
-                transformed: false,
-                with_counter: None,
-                attached_to: None,
+                transformed,
+                with_counter,
+                attached_to,
                 random: false,
                 except: None,
                 count: None,
                 up_to: false,
                 any_number: false,
-                actor: None,
+                actor: None | Some(PlayerRefAst::You | PlayerRefAst::ThatPlayer),
             }) if subject_is_anaphora(subject) => {
-                let to_low = to.to_ascii_lowercase();
-                eff_to_zone = if *tapped && !to_low.contains("tapped") {
-                    format!("{to} tapped")
-                } else {
-                    to.clone()
-                };
+                let mut built = to.clone();
+                let to_low = built.to_ascii_lowercase();
+                if *tapped && !to_low.contains("tapped") {
+                    built.push_str(" tapped");
+                }
+                if *transformed && !to_low.contains("transformed") && !to_low.contains("converted")
+                {
+                    built.push_str(" transformed");
+                }
+                if let Some(wc) = with_counter
+                    && !to_low.contains("counter")
+                {
+                    built.push_str(" with ");
+                    built.push_str(wc);
+                    if !wc.to_ascii_lowercase().contains("counter") {
+                        built.push_str(" counter");
+                    }
+                }
+                if let Some(att) = attached_to {
+                    if !is_self_pronoun(att, builder, self_pronoun_valid) {
+                        return Err("oracle:unsupported-search-follow-up");
+                    }
+                    if !to_low.contains("attached") {
+                        built.push_str(" attached to ~");
+                    }
+                }
+                eff_to_zone = built;
                 idx += 1;
             }
             Some(InstructionAst::Exile {
@@ -5677,18 +6146,59 @@ fn try_lower_search_library_toolbox<'a>(
         }
     }
 
+    let mut substituted_primary: Option<ObjectFilterAst> = None;
+    let mut substituted_secondary: Option<ObjectFilterAst> = None;
     let eff_count_ast = match where_x {
         Some(we) if matches!(count, ValueExprAst::ChosenX) => {
+            let resolved_we = resolve_x(we, bound_x);
             if search_ast_filter_uses_chosen_x(filter)
                 || secondary_filter.is_some_and(search_ast_filter_uses_chosen_x)
             {
+                if value_expr_uses_chosen_x_search(resolved_we) {
+                    return Err("oracle:unsupported-search-where-x");
+                }
+                if search_ast_filter_uses_chosen_x(filter) {
+                    substituted_primary = substitute_chosen_x_in_search_filter(filter, resolved_we);
+                    if substituted_primary.is_none() {
+                        return Err("oracle:unsupported-search-where-x");
+                    }
+                }
+                if let Some(sec) = secondary_filter
+                    && search_ast_filter_uses_chosen_x(sec)
+                {
+                    substituted_secondary = substitute_chosen_x_in_search_filter(sec, resolved_we);
+                    if substituted_secondary.is_none() {
+                        return Err("oracle:unsupported-search-where-x");
+                    }
+                }
+            }
+            resolved_we
+        }
+        Some(we) => {
+            let resolved_we = resolve_x(we, bound_x);
+            if value_expr_uses_chosen_x_search(resolved_we) {
                 return Err("oracle:unsupported-search-where-x");
             }
-            resolve_x(we, bound_x)
+            let mut any_sub = false;
+            if let Some(sub) = substitute_chosen_x_in_search_filter(filter, resolved_we) {
+                substituted_primary = Some(sub);
+                any_sub = true;
+            }
+            if let Some(sec) = secondary_filter
+                && let Some(sub) = substitute_chosen_x_in_search_filter(sec, resolved_we)
+            {
+                substituted_secondary = Some(sub);
+                any_sub = true;
+            }
+            if !any_sub {
+                return Err("oracle:unsupported-search-where-x");
+            }
+            resolve_x(count, bound_x)
         }
-        Some(_) => return Err("oracle:unsupported-search-where-x"),
         None => resolve_x(count, bound_x),
     };
+    let effective_filter = substituted_primary.as_ref().unwrap_or(filter);
+    let effective_secondary = substituted_secondary.as_ref().or(secondary_filter);
 
     let mut trial = builder.clone();
     let lib_low = library.trim().to_ascii_lowercase();
@@ -5786,7 +6296,7 @@ fn try_lower_search_library_toolbox<'a>(
                 lib_owner: PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
             }
         }
-        "that player" | "that player's" | "their" => {
+        "that player" | "that player's" | "their" | "his or her" => {
             let rp = lower_resolving_player_in_context(
                 PlayerRefAst::ThatPlayer,
                 &mut trial,
@@ -5830,6 +6340,14 @@ fn try_lower_search_library_toolbox<'a>(
         | "its owner's"
         | "that card's owner"
         | "that card's owner's"
+        | "that spell's owner"
+        | "that spell's owner's"
+        | "that land's owner"
+        | "that land's owner's"
+        | "that artifact's owner"
+        | "that artifact's owner's"
+        | "that enchantment's owner"
+        | "that enchantment's owner's"
         | "that creature's owner"
         | "that creature's owner's"
         | "that permanent's owner"
@@ -5848,12 +6366,17 @@ fn try_lower_search_library_toolbox<'a>(
             chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
             lib_owner: PlayerSelector::Resolving(ResolvingPlayer::DefendingPlayer),
         },
-        "active player" | "active player's" | "the active player" | "the active player's" => {
-            SearchScope::Single {
-                chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
-                lib_owner: PlayerSelector::Resolving(ResolvingPlayer::ActivePlayer),
-            }
-        }
+        "active player"
+        | "active player's"
+        | "the active player"
+        | "the active player's"
+        | "attacking player"
+        | "attacking player's"
+        | "the attacking player"
+        | "the attacking player's" => SearchScope::Single {
+            chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            lib_owner: PlayerSelector::Resolving(ResolvingPlayer::ActivePlayer),
+        },
         "enchanted player"
         | "enchanted player's"
         | "the enchanted player"
@@ -5865,12 +6388,17 @@ fn try_lower_search_library_toolbox<'a>(
                 lib_owner: PlayerSelector::Resolving(ResolvingPlayer::EnchantedPlayer),
             }
         }
-        "chosen player" | "chosen player's" | "the chosen player" | "the chosen player's" => {
-            SearchScope::Single {
-                chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
-                lib_owner: PlayerSelector::Resolving(ResolvingPlayer::ChosenPlayer),
-            }
-        }
+        "chosen player"
+        | "chosen player's"
+        | "the chosen player"
+        | "the chosen player's"
+        | "chosen opponent"
+        | "chosen opponent's"
+        | "the chosen opponent"
+        | "the chosen opponent's" => SearchScope::Single {
+            chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            lib_owner: PlayerSelector::Resolving(ResolvingPlayer::ChosenPlayer),
+        },
         "that opponent" | "that opponent's" => {
             let rp = lower_resolving_player_in_context(
                 PlayerRefAst::ThatPlayer,
@@ -5882,37 +6410,32 @@ fn try_lower_search_library_toolbox<'a>(
                 lib_owner: PlayerSelector::Resolving(rp),
             }
         }
-        "each opponent" | "each opponent's" | "opponents'" | "your opponents'" => {
-            SearchScope::Group(AffectedPlayers::EachOpponent)
+        "each opponent"
+        | "each opponent's"
+        | "opponents'"
+        | "your opponents'"
+        | "each of your opponents"
+        | "each of your opponents'" => SearchScope::Group(AffectedPlayers::EachOpponent),
+        "each player" | "each player's" | "all players" | "all players'" => {
+            SearchScope::Group(AffectedPlayers::EachPlayer)
         }
-        "each player" | "each player's" => SearchScope::Group(AffectedPlayers::EachPlayer),
         "each other player" | "each other player's" => {
             SearchScope::Group(AffectedPlayers::EachOtherPlayer)
         }
         _ => return Err("oracle:unsupported-search-source"),
     };
 
-    let mut clean_filter = filter.clone();
-    clean_filter.zone = None;
-    let is_unrestricted = is_unrestricted_filter(&clean_filter) && secondary_filter.is_none();
-    let obj1 = if is_unrestricted_filter(&clean_filter) {
-        ObjectFilter::any()
-    } else {
-        lower_object_filter_in_context(&clean_filter, &trial, in_trigger, vocabulary)?
-    };
+    let mut clean_primary = effective_filter.clone();
+    clean_primary.zone = None;
+    let is_unrestricted = is_unrestricted_filter(&clean_primary) && effective_secondary.is_none();
+    let obj1 = lower_toolbox_search_filter(effective_filter, &trial, in_trigger, vocabulary)?;
     bind_filter_player_target(&mut trial, &obj1)?;
     if obj1.uses_target_permanent() && !is_permanent_body_target(trial.target) {
         return Err("oracle:unsupported-search-source");
     }
 
-    let obj2_opt = if let Some(sec) = secondary_filter {
-        let mut clean_sec = sec.clone();
-        clean_sec.zone = None;
-        let obj2 = if is_unrestricted_filter(&clean_sec) {
-            ObjectFilter::any()
-        } else {
-            lower_object_filter_in_context(&clean_sec, &trial, in_trigger, vocabulary)?
-        };
+    let obj2_opt = if let Some(sec) = effective_secondary {
+        let obj2 = lower_toolbox_search_filter(sec, &trial, in_trigger, vocabulary)?;
         bind_filter_player_target(&mut trial, &obj2)?;
         if obj2.uses_target_permanent() && !is_permanent_body_target(trial.target) {
             return Err("oracle:unsupported-search-source");
@@ -5923,7 +6446,10 @@ fn try_lower_search_library_toolbox<'a>(
     };
 
     let (min_expr, max_expr) = if any_number {
-        (ValueExpr::literal(0), ValueExpr::literal(99))
+        (
+            ValueExpr::literal(0),
+            ValueExpr::literal(i64::from(u16::MAX)),
+        )
     } else {
         let cnt = lower_value_expr_in_context(eff_count_ast, &trial, in_trigger, vocabulary)?;
         if up_to || (!exact && !is_unrestricted) {
@@ -6060,7 +6586,37 @@ fn try_lower_search_library_toolbox<'a>(
                     category: ChoiceCategory::Search,
                     hidden: !eff_reveal,
                 };
-                if eff_shuffle && needs_shuffle_before_place {
+                if matches!(dest, ZoneDest::None | ZoneDest::RevealOnly) {
+                    const SEARCH_BIND_A: BindingId = BindingId(931);
+                    const SEARCH_BIND_B: BindingId = BindingId(932);
+                    let mut s1 = ZoneOpSpec::simple(q1, sel1, dest.clone());
+                    s1.bind_moved = Some(SEARCH_BIND_A);
+                    let q2_excl = ObjectQuery::Difference(
+                        Box::new(q2),
+                        Box::new(ObjectQuery::Bound(SEARCH_BIND_A)),
+                    );
+                    let mut s2 = ZoneOpSpec::simple(q2_excl, sel2, dest);
+                    s2.bind_moved = Some(SEARCH_BIND_B);
+                    let mut combine = ZoneOpSpec::move_all(
+                        ObjectQuery::Union(vec![
+                            ObjectQuery::Bound(SEARCH_BIND_A),
+                            ObjectQuery::Bound(SEARCH_BIND_B),
+                        ]),
+                        ZoneDest::None,
+                    );
+                    if eff_shuffle {
+                        combine.shuffle_library = Some(lib_owner);
+                    }
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(s1));
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(s2));
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(combine));
+                } else if eff_shuffle && needs_shuffle_before_place {
                     const SEARCH_BIND_A: BindingId = BindingId(931);
                     const SEARCH_BIND_B: BindingId = BindingId(932);
                     let hold_dest = if eff_reveal {
@@ -6070,7 +6626,11 @@ fn try_lower_search_library_toolbox<'a>(
                     };
                     let mut s1 = ZoneOpSpec::simple(q1, sel1, hold_dest.clone());
                     s1.bind_moved = Some(SEARCH_BIND_A);
-                    let mut s2 = ZoneOpSpec::simple(q2, sel2, hold_dest);
+                    let q2_excl = ObjectQuery::Difference(
+                        Box::new(q2),
+                        Box::new(ObjectQuery::Bound(SEARCH_BIND_A)),
+                    );
+                    let mut s2 = ZoneOpSpec::simple(q2_excl, sel2, hold_dest);
                     s2.bind_moved = Some(SEARCH_BIND_B);
                     s2.shuffle_library = Some(lib_owner);
                     trial

@@ -91,6 +91,87 @@ fn rewrite_bt_related_to_first_target_controller(bt: &mut BodyTarget) {
     }
 }
 
+fn is_owner_anaphora_label(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "its owner"
+            | "their owner"
+            | "that creature's owner"
+            | "that permanent's owner"
+            | "that card's owner"
+    )
+}
+
+fn lower_player_matching_damage_selector(
+    player: PlayerRefAst,
+    condition: &ConditionAst,
+    builder: &mut BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<spellwake_engine::toolbox::PlayerSelector> {
+    let ConditionAst::ControlsCount {
+        player: cond_player,
+        filter,
+        op,
+        value,
+    } = condition
+    else {
+        return None;
+    };
+    let at_least_one =
+        (*op == CompareOp::Ge && *value == 1) || (*op == CompareOp::Gt && *value == 0);
+    if !at_least_one || !matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) {
+        return None;
+    }
+    let mut clean = filter.as_ref().clone();
+    clean.zone = None;
+    match player {
+        PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer => {
+            if !matches!(
+                cond_player,
+                PlayerRefAst::AnyPlayer
+                    | PlayerRefAst::EachPlayer
+                    | PlayerRefAst::You
+                    | PlayerRefAst::ThatPlayer
+            ) || clean.controller.is_some()
+            {
+                return None;
+            }
+        }
+        PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent => {
+            if !matches!(
+                cond_player,
+                PlayerRefAst::AnyOpponent
+                    | PlayerRefAst::EachOpponent
+                    | PlayerRefAst::You
+                    | PlayerRefAst::ThatPlayer
+            ) {
+                return None;
+            }
+            if clean.controller.is_some()
+                && !matches!(
+                    clean.controller,
+                    Some(ControllerRelation::Opponent | ControllerRelation::Opponents)
+                )
+            {
+                return None;
+            }
+            clean.controller = Some(ControllerRelation::Opponent);
+        }
+        _ => return None,
+    }
+    let mut trial = builder.clone();
+    let obj = lower_object_filter_in_context(&clean, &trial, in_trigger, vocabulary).ok()?;
+    bind_filter_player_target(&mut trial, &obj).ok()?;
+    *builder = trial;
+    Some(spellwake_engine::toolbox::PlayerSelector::ControllersOf(
+        Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+            spellwake_engine::toolbox::QueryZone::Battlefield,
+            obj,
+        )),
+    ))
+}
+
 pub(super) fn lower_combat_damage_instruction(
     ins: &InstructionAst,
     builder: &mut BodyBuilder,
@@ -121,7 +202,13 @@ pub(super) fn lower_combat_damage_instruction(
                 SubjectRefAst::TargetObject { .. } | SubjectRefAst::AnyTarget
             ) || matches!(
                 target.as_ref(),
-                SubjectRefAst::Anaphora(a) if !a.eq_ignore_ascii_case("itself")
+                SubjectRefAst::Anaphora(a)
+                    if !a.eq_ignore_ascii_case("itself")
+                        && !a.eq_ignore_ascii_case("himself")
+                        && !a.eq_ignore_ascii_case("herself")
+                        && !a.eq_ignore_ascii_case("themselves")
+                        && !is_player_anaphora_label(a)
+                        && !is_owner_anaphora_label(a)
             );
             let target_is_returned_gy_card = matches!(
                 builder.target,
@@ -1250,6 +1337,19 @@ pub(super) fn lower_combat_damage_instruction(
                                         ),
                                     ),
                                 ),
+                                SubjectRefAst::Anaphora(raw) if is_owner_anaphora_label(raw) => {
+                                    Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                        spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                            Box::new(src_obj_q.clone()),
+                                        ),
+                                    ))
+                                }
+                                SubjectRefAst::PlayerMatching { player, condition } => {
+                                    lower_player_matching_damage_selector(
+                                        *player, condition, builder, in_trigger, vocabulary,
+                                    )
+                                    .map(spellwake_engine::toolbox::DamageTargetQuery::Players)
+                                }
                                 SubjectRefAst::OwnerOf(inner) => match inner.as_ref() {
                                     SubjectRefAst::Anaphora(_) => Some(
                                         spellwake_engine::toolbox::DamageTargetQuery::Players(
@@ -1419,6 +1519,21 @@ pub(super) fn lower_combat_damage_instruction(
                                                             ap,
                                                         ),
                                                     );
+                                                } else {
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            }
+                                            SubjectRefAst::PlayerMatching { player, condition }
+                                                if player_sel.is_none() =>
+                                            {
+                                                if let Some(sel) =
+                                                    lower_player_matching_damage_selector(
+                                                        *player, condition, builder, in_trigger,
+                                                        vocabulary,
+                                                    )
+                                                {
+                                                    player_sel = Some(sel);
                                                 } else {
                                                     all_ok = false;
                                                     break;
@@ -1966,6 +2081,23 @@ pub(super) fn lower_combat_damage_instruction(
                     );
                     Ok(())
                 }
+                SubjectRefAst::PlayerMatching { player, condition } => {
+                    let mut trial = builder.clone();
+                    let selector = lower_player_matching_damage_selector(
+                        *player, condition, &mut trial, in_trigger, vocabulary,
+                    )
+                    .ok_or("oracle:unsupported-damage-target")?;
+                    let amt_expr = lower_amt(&trial)?;
+                    trial.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Players(selector),
+                            amt_expr,
+                            false,
+                        ),
+                    );
+                    *builder = trial;
+                    Ok(())
+                }
                 SubjectRefAst::Anaphora(_)
                     if builder.target != BodyTarget::None
                         && !is_stack_body_target(builder.target)
@@ -2300,6 +2432,95 @@ pub(super) fn lower_combat_damage_instruction(
                             )?;
                         }
                         return Ok(());
+                    } else if items
+                        .iter()
+                        .any(|it| matches!(it, SubjectRefAst::PlayerMatching { .. }))
+                    {
+                        let mut trial = builder.clone();
+                        let mut obj_queries = Vec::new();
+                        let mut player_sel: Option<spellwake_engine::toolbox::PlayerSelector> =
+                            None;
+                        let mut all_ok = true;
+                        for item in items {
+                            match item {
+                                SubjectRefAst::Each(f)
+                                | SubjectRefAst::All(f)
+                                | SubjectRefAst::Group(f)
+                                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                                {
+                                    let mut clean = f.as_ref().clone();
+                                    clean.zone = None;
+                                    if let Ok(obj) = lower_object_filter_in_context(
+                                        &clean, &trial, in_trigger, vocabulary,
+                                    ) && bind_filter_player_target(&mut trial, &obj).is_ok()
+                                    {
+                                        obj_queries.push(
+                                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                                obj,
+                                            ),
+                                        );
+                                    } else {
+                                        all_ok = false;
+                                        break;
+                                    }
+                                }
+                                SubjectRefAst::Player(p) if player_sel.is_none() => {
+                                    if let Ok(ap) = lower_affected_players_in_context(
+                                        *p, &mut trial, in_trigger,
+                                    ) {
+                                        player_sel = Some(
+                                            spellwake_engine::toolbox::PlayerSelector::Group(ap),
+                                        );
+                                    } else {
+                                        all_ok = false;
+                                        break;
+                                    }
+                                }
+                                SubjectRefAst::PlayerMatching { player, condition }
+                                    if player_sel.is_none() =>
+                                {
+                                    if let Some(sel) = lower_player_matching_damage_selector(
+                                        *player, condition, &mut trial, in_trigger, vocabulary,
+                                    ) {
+                                        player_sel = Some(sel);
+                                    } else {
+                                        all_ok = false;
+                                        break;
+                                    }
+                                }
+                                _ => {
+                                    all_ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if all_ok && let Some(players) = player_sel {
+                            let target_q = if obj_queries.is_empty() {
+                                spellwake_engine::toolbox::DamageTargetQuery::Players(players)
+                            } else {
+                                let objects = if obj_queries.len() == 1 {
+                                    obj_queries.remove(0)
+                                } else {
+                                    spellwake_engine::toolbox::ObjectQuery::Union(obj_queries)
+                                };
+                                spellwake_engine::toolbox::DamageTargetQuery::Both {
+                                    objects,
+                                    players,
+                                }
+                            };
+                            let amt_expr = lower_amt(&trial)?;
+                            trial.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                                    target_q,
+                                    amt_expr,
+                                    false,
+                                ),
+                            );
+                            *builder = trial;
+                            return Ok(());
+                        }
+                        return Err("oracle:unsupported-damage-target");
                     } else {
                         let mut player_group: Option<AffectedPlayers> = None;
                         let mut simple_fallback_needed = false;
@@ -3246,7 +3467,9 @@ pub(super) fn lower_combat_damage_instruction(
                 return Ok(());
             }
             let has_source = in_trigger || self_pronoun_valid;
-            let recipient = if matches!(target.as_ref(), SubjectRefAst::Anaphora(_)) {
+            let recipient = if has_source && is_self_pronoun(target, builder, self_pronoun_valid) {
+                StaticDamageRecipient::SelfObject
+            } else if matches!(target.as_ref(), SubjectRefAst::Anaphora(_)) {
                 if is_permanent_body_target(builder.target) {
                     StaticDamageRecipient::TargetObject
                 } else if matches!(
@@ -3299,9 +3522,13 @@ pub(super) fn lower_combat_damage_instruction(
                     &src_low, &mut trial, has_source, in_trigger, vocabulary,
                 )
                 .ok_or("oracle:unsupported-prevent-damage")??;
-            let recipient = lower_prevent_recipient_subject(
-                target, &mut trial, has_source, in_trigger, vocabulary,
-            )?;
+            let recipient = if has_source && is_self_pronoun(target, &trial, self_pronoun_valid) {
+                StaticDamageRecipient::SelfObject
+            } else {
+                lower_prevent_recipient_subject(
+                    target, &mut trial, has_source, in_trigger, vocabulary,
+                )?
+            };
             if source_is_target
                 && matches!(
                     recipient,
@@ -5395,6 +5622,49 @@ pub(super) fn lower_combat_damage_instruction(
                 }
             }
             if matches!(
+                rule_for_br.as_str(),
+                "can't be sacrificed" | "cant_be_sacrificed" | "cannot be sacrificed"
+            ) {
+                let has_source = in_trigger || self_pronoun_valid || builder.has_source;
+                let sel_opt = if is_self_pronoun(eff_subject, builder, self_pronoun_valid) {
+                    has_source.then(|| PermanentSelector {
+                        controller: ControllerSelector::SourceItself,
+                        ..PermanentSelector::default()
+                    })
+                } else if matches!(eff_subject, SubjectRefAst::AttachedHost(_)) {
+                    has_source.then(|| PermanentSelector {
+                        attached_to_source: true,
+                        ..PermanentSelector::default()
+                    })
+                } else {
+                    lower_permanent_selector(eff_subject, vocabulary).ok()
+                };
+                if let Some(sel) = sel_opt {
+                    let sel_needs_source = sel.attached_to_source
+                        || sel.exclude_source
+                        || matches!(
+                            sel.controller,
+                            ControllerSelector::SourceItself
+                                | ControllerSelector::SelfAtMaxSpeed
+                                | ControllerSelector::SourcePair
+                        );
+                    if (!sel_needs_source && !br_dur.requires_ability_source()) || has_source {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                                TemporaryRuleKind::TemporaryStatic(Box::new(
+                                    StaticContinuousAbility::Restriction {
+                                        id: ids.static_id(),
+                                        rule: StaticRestriction::CannotBeSacrificed(Box::new(sel)),
+                                    },
+                                )),
+                                br_dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            if matches!(
                 low.as_str(),
                 "attacks during its controller's next turn if able"
                     | "attacks during their next turn if able"
@@ -6047,10 +6317,18 @@ pub(super) fn lower_combat_damage_instruction(
                     (src, is_tgt)
                 }
             };
-            let from_rec = lower_redirect_from_subject_with_target(
-                from, &mut trial, has_source, in_trigger, vocabulary,
-            )?;
-            let to_dst = lower_redirect_to_subject(to, &mut trial, has_source, vocabulary)?;
+            let from_rec = if has_source && is_self_pronoun(from, &trial, self_pronoun_valid) {
+                StaticDamageRecipient::SelfObject
+            } else {
+                lower_redirect_from_subject_with_target(
+                    from, &mut trial, has_source, in_trigger, vocabulary,
+                )?
+            };
+            let to_dst = if has_source && is_self_pronoun(to, &trial, self_pronoun_valid) {
+                DamageRedirectTarget::AbilitySource
+            } else {
+                lower_redirect_to_subject(to, &mut trial, has_source, vocabulary)?
+            };
             let target_slots = usize::from(source_is_target)
                 + usize::from(matches!(
                     from_rec,

@@ -111,6 +111,35 @@ pub(super) fn lower_tokens_copies_instruction(
                     {
                         Some(MoveSubjectRef::AbilitySource)
                     }
+                    SubjectRefAst::Anaphora(_)
+                        if !is_permanent_body_target(trial.target)
+                            && !is_graveyard_body_target(trial.target)
+                            && has_checked_revealed_top_strict(&trial.instructions) =>
+                    {
+                        Some(MoveSubjectRef::RevealedCard)
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if in_trigger
+                            && trial.target == BodyTarget::None
+                            && !last_instruction_moved_object(&trial.instructions)
+                            && !has_prior_moved_object(&trial.instructions)
+                            && matches!(
+                                raw.trim().to_ascii_lowercase().as_str(),
+                                "the exiled card" | "that exiled card" | "the card exiled with ~"
+                            ) =>
+                    {
+                        trial.instructions.push(Instruction::ChooseObjects {
+                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                            source_zone: SourceZoneFilter::LinkedExile,
+                            filter: Box::new(ObjectFilter::any()),
+                            min: ValueExpr::literal(1),
+                            max: ValueExpr::literal(1),
+                            distinct_powers: false,
+                            max_total_power: None,
+                            unchosen_action: None,
+                        });
+                        Some(MoveSubjectRef::LastMoved)
+                    }
                     SubjectRefAst::Anaphora(raw)
                         if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                     {
@@ -152,18 +181,31 @@ pub(super) fn lower_tokens_copies_instruction(
                         }
                     }
                     SubjectRefAst::Group(f)
-                        if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
-                            && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
+                        if matches!(
+                            f.zone,
+                            None | Some(
+                                ZoneFilter::Battlefield
+                                    | ZoneFilter::YourGraveyard
+                                    | ZoneFilter::OpponentGraveyard
+                                    | ZoneFilter::AnyGraveyard
+                            )
+                        ) && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
                             && !f.any_spell
                             && !f.is_ability =>
                     {
                         let mut inner = f.as_ref().clone();
-                        inner.zone = None;
-                        let source_zone = if inner.controller == Some(ControllerRelation::You) {
-                            inner.controller = None;
-                            SourceZoneFilter::Battlefield
-                        } else {
-                            SourceZoneFilter::AnyBattlefield
+                        let zone = inner.zone.take();
+                        let source_zone = match zone {
+                            Some(ZoneFilter::YourGraveyard) => SourceZoneFilter::Graveyard,
+                            Some(ZoneFilter::OpponentGraveyard) => {
+                                SourceZoneFilter::OpponentGraveyard
+                            }
+                            Some(ZoneFilter::AnyGraveyard) => SourceZoneFilter::AnyGraveyard,
+                            _ if inner.controller == Some(ControllerRelation::You) => {
+                                inner.controller = None;
+                                SourceZoneFilter::Battlefield
+                            }
+                            _ => SourceZoneFilter::AnyBattlefield,
                         };
                         let obj = if is_unrestricted_filter(&inner) {
                             ObjectFilter::any()
@@ -374,6 +416,16 @@ pub(super) fn lower_tokens_copies_instruction(
                     SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
                         Some((MoveSubjectRef::TargetObject, false))
                     }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_created_tokens(&builder.instructions) =>
+                    {
+                        Some((MoveSubjectRef::CreatedTokens, false))
+                    }
+                    SubjectRefAst::Anaphora(_)
+                        if last_instruction_moved_object(&builder.instructions) =>
+                    {
+                        Some((MoveSubjectRef::LastMoved, false))
+                    }
                     SubjectRefAst::Anaphora(raw)
                         if in_trigger && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                     {
@@ -402,10 +454,14 @@ pub(super) fn lower_tokens_copies_instruction(
                     return Ok(());
                 }
             }
+            let wrap_each_other_player = *controller == PlayerRefAst::EachOtherPlayer && in_trigger;
             let recipients = match controller {
                 PlayerRefAst::You => TokenRecipients::Controller,
                 PlayerRefAst::EachPlayer => TokenRecipients::EachPlayer,
                 PlayerRefAst::EachOpponent => TokenRecipients::EachOpponent,
+                PlayerRefAst::EachOtherPlayer if in_trigger => {
+                    TokenRecipients::Player(ResolvingPlayer::LoopPlayer)
+                }
                 PlayerRefAst::TargetPlayer => {
                     builder.bind_target(BodyTarget::SinglePlayer)?;
                     TokenRecipients::Player(ResolvingPlayer::TargetPlayer)
@@ -721,9 +777,19 @@ pub(super) fn lower_tokens_copies_instruction(
                 creation.attacking_defender =
                     Some(spellwake_engine::token::AttackingDefenderScope::AnyLegal);
             }
-            builder.instructions.push(Instruction::CreateTokens {
-                creations: vec![creation],
-            });
+            if wrap_each_other_player {
+                push_for_each_player(
+                    AffectedPlayers::EachOtherPlayer,
+                    vec![Instruction::CreateTokens {
+                        creations: vec![creation],
+                    }],
+                    builder,
+                );
+            } else {
+                builder.instructions.push(Instruction::CreateTokens {
+                    creations: vec![creation],
+                });
+            }
             Ok(())
         }
         InstructionAst::Amass { subtype, count } => {
@@ -929,16 +995,23 @@ pub(super) fn lower_tokens_copies_instruction(
             match subject.as_ref() {
                 SubjectRefAst::TargetObject {
                     filter,
-                    count: TargetCountAst::Exact(1),
+                    count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                 } if filter.any_spell
                     || filter.is_ability
                     || filter.zone == Some(ZoneFilter::Stack) =>
                 {
-                    let bt = lower_target_subject(subject, vocabulary)?;
+                    let exact_subj = SubjectRefAst::TargetObject {
+                        filter: filter.clone(),
+                        count: TargetCountAst::Exact(1),
+                    };
+                    let bt = lower_target_subject(&exact_subj, vocabulary)?;
                     if !is_stack_body_target(bt) {
                         return Err("oracle:unsupported-copy");
                     }
                     builder.bind_target(bt)?;
+                    if *count == TargetCountAst::UpTo(1) {
+                        builder.up_to_one_target = true;
+                    }
                     let copy_target = if filter.any_spell && filter.is_ability {
                         StackCopyTarget::TargetSpellOrAbility
                     } else if filter.is_ability {
@@ -1049,16 +1122,19 @@ pub(super) fn lower_tokens_copies_instruction(
                 source.as_ref(),
                 SubjectRefAst::TargetObject {
                     filter,
-                    count: TargetCountAst::Exact(1),
+                    count: TargetCountAst::Exact(1) | TargetCountAst::UpTo(1),
                 } if filter.zone.is_none()
             ) =>
         {
             let dur = lower_duration(duration)?;
-            let SubjectRefAst::TargetObject { filter, .. } = source.as_ref() else {
+            let SubjectRefAst::TargetObject { filter, count } = source.as_ref() else {
                 return Err("oracle:unsupported-become-copy");
             };
             let bt = lower_battlefield_body_target(filter, vocabulary)?;
             builder.bind_target(bt)?;
+            if *count == TargetCountAst::UpTo(1) {
+                builder.up_to_one_target = true;
+            }
             builder.instructions.push(Instruction::BecomeCopy {
                 receiver: Box::new(EffectSubject::AbilitySource),
                 donor: MoveSubjectRef::TargetObject,
@@ -1155,7 +1231,7 @@ pub(super) fn lower_tokens_copies_instruction(
                 }
                 SubjectRefAst::TargetObject {
                     filter,
-                    count: TargetCountAst::Exact(1),
+                    count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                 } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                     let mut f_clean = filter.as_ref().clone();
                     f_clean.zone = None;
@@ -1163,16 +1239,22 @@ pub(super) fn lower_tokens_copies_instruction(
                         &f_clean, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
+                    if *count == TargetCountAst::UpTo(1) {
+                        builder.up_to_one_target = true;
+                    }
                     EffectSubject::TargetObject
                 }
                 SubjectRefAst::TargetOneOf {
                     options,
-                    count: TargetCountAst::Exact(1),
+                    count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                 } => {
                     let bt = lower_target_one_of_permanent_body_target(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
+                    if *count == TargetCountAst::UpTo(1) {
+                        builder.up_to_one_target = true;
+                    }
                     EffectSubject::TargetObject
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1236,16 +1318,17 @@ pub(super) fn lower_tokens_copies_instruction(
                 }
                 SubjectRefAst::TargetObject {
                     filter,
-                    count: TargetCountAst::Exact(1),
-                } if matches!(
-                    filter.zone,
-                    None | Some(
-                        ZoneFilter::Battlefield
-                            | ZoneFilter::YourGraveyard
-                            | ZoneFilter::OpponentGraveyard
-                            | ZoneFilter::AnyGraveyard
-                    )
-                ) =>
+                    count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                    || (*count == TargetCountAst::Exact(1)
+                        && matches!(
+                            filter.zone,
+                            Some(
+                                ZoneFilter::YourGraveyard
+                                    | ZoneFilter::OpponentGraveyard
+                                    | ZoneFilter::AnyGraveyard
+                            )
+                        )) =>
                 {
                     let bt = if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) {
                         let mut f_clean = filter.as_ref().clone();
@@ -1257,16 +1340,22 @@ pub(super) fn lower_tokens_copies_instruction(
                         lower_target_subject(&eff_donor, vocabulary)?
                     };
                     builder.bind_target(bt)?;
+                    if *count == TargetCountAst::UpTo(1) {
+                        builder.up_to_one_target = true;
+                    }
                     MoveSubjectRef::TargetObject
                 }
                 SubjectRefAst::TargetOneOf {
                     options,
-                    count: TargetCountAst::Exact(1),
+                    count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                 } => {
                     let bt = lower_target_one_of_permanent_body_target(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
+                    if *count == TargetCountAst::UpTo(1) {
+                        builder.up_to_one_target = true;
+                    }
                     MoveSubjectRef::TargetObject
                 }
                 SubjectRefAst::Anaphora(_)
@@ -1286,6 +1375,35 @@ pub(super) fn lower_tokens_copies_instruction(
                     MoveSubjectRef::LastMoved
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => MoveSubjectRef::TriggeringObject,
+                SubjectRefAst::Anaphora(_)
+                    if !is_permanent_body_target(builder.target)
+                        && !is_graveyard_body_target(builder.target)
+                        && has_checked_revealed_top_strict(&builder.instructions) =>
+                {
+                    MoveSubjectRef::RevealedCard
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if in_trigger
+                        && builder.target == BodyTarget::None
+                        && !last_instruction_moved_object(&builder.instructions)
+                        && !has_prior_moved_object(&builder.instructions)
+                        && matches!(
+                            raw.trim().to_ascii_lowercase().as_str(),
+                            "the exiled card" | "that exiled card" | "the card exiled with ~"
+                        ) =>
+                {
+                    builder.instructions.push(Instruction::ChooseObjects {
+                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                        source_zone: SourceZoneFilter::LinkedExile,
+                        filter: Box::new(ObjectFilter::any()),
+                        min: ValueExpr::literal(1),
+                        max: ValueExpr::literal(1),
+                        distinct_powers: false,
+                        max_total_power: None,
+                        unchosen_action: None,
+                    });
+                    MoveSubjectRef::LastMoved
+                }
                 SubjectRefAst::Anaphora(raw)
                     if in_trigger
                         && (!self_pronoun_valid || !is_self_anaphora_label(raw))
@@ -1325,18 +1443,29 @@ pub(super) fn lower_tokens_copies_instruction(
                     MoveSubjectRef::LastMoved
                 }
                 SubjectRefAst::Group(f)
-                    if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
-                        && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
+                    if matches!(
+                        f.zone,
+                        None | Some(
+                            ZoneFilter::Battlefield
+                                | ZoneFilter::YourGraveyard
+                                | ZoneFilter::OpponentGraveyard
+                                | ZoneFilter::AnyGraveyard
+                        )
+                    ) && (f.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) == 0
                         && !f.any_spell
                         && !f.is_ability =>
                 {
                     let mut inner = f.as_ref().clone();
-                    inner.zone = None;
-                    let source_zone = if inner.controller == Some(ControllerRelation::You) {
-                        inner.controller = None;
-                        SourceZoneFilter::Battlefield
-                    } else {
-                        SourceZoneFilter::AnyBattlefield
+                    let zone = inner.zone.take();
+                    let source_zone = match zone {
+                        Some(ZoneFilter::YourGraveyard) => SourceZoneFilter::Graveyard,
+                        Some(ZoneFilter::OpponentGraveyard) => SourceZoneFilter::OpponentGraveyard,
+                        Some(ZoneFilter::AnyGraveyard) => SourceZoneFilter::AnyGraveyard,
+                        _ if inner.controller == Some(ControllerRelation::You) => {
+                            inner.controller = None;
+                            SourceZoneFilter::Battlefield
+                        }
+                        _ => SourceZoneFilter::AnyBattlefield,
                     };
                     let obj = if is_unrestricted_filter(&inner) {
                         ObjectFilter::any()
@@ -1987,6 +2116,10 @@ fn strip_self_name_clause_for_copy(low: &str, keep_name: bool) -> String {
         "its name is still ",
         "his name is still ",
         "her name is still ",
+        "except ~'s name is still ",
+        "except ~'s name is ",
+        "~'s name is still ",
+        "~'s name is ",
         "its name is ",
         "his name is ",
         "her name is ",
@@ -1995,9 +2128,6 @@ fn strip_self_name_clause_for_copy(low: &str, keep_name: bool) -> String {
             continue;
         };
         let after = &out[start + prefix.len()..];
-        if after.starts_with('~') {
-            continue;
-        }
         let end_rel = [
             " and it ",
             " and it's ",
@@ -2130,6 +2260,13 @@ pub(super) fn parse_copy_exceptions(
         || low.contains("except its name is")
         || low.contains("except his name is")
         || low.contains("except her name is")
+        || low.starts_with("its name is ")
+        || low.starts_with("his name is ")
+        || low.starts_with("her name is ")
+        || low.contains(", its name is ")
+        || low.contains(", his name is ")
+        || low.contains(", her name is ")
+        || low.contains("~'s name is ")
         || low.contains("its name is ~")
         || low.contains("his name is ~")
         || low.contains("her name is ~")
@@ -2140,6 +2277,8 @@ pub(super) fn parse_copy_exceptions(
         out.keep_name = true;
     }
     if low.contains("in addition to its other types")
+        || low.contains("in addition to his other types")
+        || low.contains("in addition to her other types")
         || low.contains("in addition to their other types")
         || low.contains("still a ")
         || low.contains("still an ")
@@ -2153,6 +2292,8 @@ pub(super) fn parse_copy_exceptions(
             || low.starts_with("has ")
             || low.starts_with("gains "));
     if low.contains("in addition to its other abilities")
+        || low.contains("in addition to his other abilities")
+        || low.contains("in addition to her other abilities")
         || low.contains("in addition to their other abilities")
         || low.contains("except it has this ability")
         || low.contains("it has this ability")
@@ -2212,6 +2353,14 @@ pub(super) fn parse_copy_exceptions(
         "except the tokens aren't legendary",
         "except that token isn't legendary",
         "except those tokens aren't legendary",
+        "except the creature isn't legendary",
+        "except the creatures aren't legendary",
+        "except that creature isn't legendary",
+        "except those creatures aren't legendary",
+        "except the permanent isn't legendary",
+        "except the permanents aren't legendary",
+        "except that permanent isn't legendary",
+        "except those permanents aren't legendary",
         "except it isn't legendary",
         "except they aren't legendary",
         "except it's not legendary",
@@ -2220,6 +2369,14 @@ pub(super) fn parse_copy_exceptions(
         "the tokens aren't legendary",
         "that token isn't legendary",
         "those tokens aren't legendary",
+        "the creature isn't legendary",
+        "the creatures aren't legendary",
+        "that creature isn't legendary",
+        "those creatures aren't legendary",
+        "the permanent isn't legendary",
+        "the permanents aren't legendary",
+        "that permanent isn't legendary",
+        "those permanents aren't legendary",
         "it isn't legendary",
         "they aren't legendary",
         "it's not legendary",
@@ -2242,21 +2399,25 @@ pub(super) fn parse_copy_exceptions(
         "it keeps its name",
         "keeps its name",
         "in addition to its other types",
+        "in addition to his other types",
+        "in addition to her other types",
         "in addition to their other types",
         "in addition to its other abilities",
+        "in addition to his other abilities",
+        "in addition to her other abilities",
         "in addition to their other abilities",
         "except it has this ability",
         "except it gains this ability",
-        "except he has this ability",
-        "except he gains this ability",
         "except she has this ability",
         "except she gains this ability",
+        "except he has this ability",
+        "except he gains this ability",
         "it has this ability",
         "it gains this ability",
-        "he has this ability",
-        "he gains this ability",
         "she has this ability",
         "she gains this ability",
+        "he has this ability",
+        "he gains this ability",
         "has this ability",
         "gains this ability",
         "and this ability",
@@ -2284,42 +2445,42 @@ pub(super) fn parse_copy_exceptions(
         "except it becomes a",
         "it becomes an",
         "it becomes a",
-        "except he's an",
-        "except he's a",
-        "except he's",
         "except she's an",
         "except she's a",
         "except she's",
+        "except he's an",
+        "except he's a",
+        "except he's",
         "except it has",
         "except they have",
-        "except he has",
         "except she has",
+        "except he has",
         "except it's an",
         "except it's a",
         "except it's",
         "except they're",
         "except it gains",
         "except they gain",
-        "except he gains",
         "except she gains",
+        "except he gains",
         "except",
         "it has",
         "they have",
-        "he has",
         "she has",
+        "he has",
         "it gains",
         "they gain",
-        "he gains",
         "she gains",
+        "he gains",
         "it's an",
         "it's a",
         "it's",
-        "he's an",
-        "he's a",
-        "he's",
         "she's an",
         "she's a",
         "she's",
+        "he's an",
+        "he's a",
+        "he's",
         "they're",
         "has",
         "gains",
@@ -2450,6 +2611,40 @@ pub(super) fn parse_copy_exceptions(
             "spacecraft" => {
                 out.extra_artifact_subtypes
                     .insert(ArtifactSubtype::Spacecraft);
+                continue;
+            }
+            "myriad" => {
+                out.extra_triggered.push(TriggeredAbility {
+                    id: ids.triggered(),
+                    condition: TriggerSpec::attacks(
+                        ObjectFilter::self_object(),
+                        AttackTriggerMode::Individual {
+                            capture_defender: true,
+                        },
+                    ),
+                    grouping: TriggerGrouping::EachOccurrence,
+                    body: ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![
+                            Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::myriad(),
+                            )),
+                            Instruction::ScheduleDelayedStepTrigger {
+                                step: Step::EndCombat,
+                                own_step_only: false,
+                                body: Box::new(ExecutableBody::new(
+                                    BodyTarget::None,
+                                    vec![Instruction::ZoneOp(Box::new(
+                                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                            spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                            spellwake_engine::toolbox::ZoneDest::exile(),
+                                        ),
+                                    ))],
+                                )),
+                            },
+                        ],
+                    ),
+                });
                 continue;
             }
             _ => {}
@@ -2694,6 +2889,10 @@ pub(super) fn parse_token_copy_exceptions(
         "except the tokens aren't legendary",
         "except that token isn't legendary",
         "except those tokens aren't legendary",
+        "except the copy isn't legendary",
+        "except the copies aren't legendary",
+        "except that copy isn't legendary",
+        "except those copies aren't legendary",
         "except it isn't legendary",
         "except they aren't legendary",
         "except it's not legendary",
@@ -2702,6 +2901,10 @@ pub(super) fn parse_token_copy_exceptions(
         "the tokens aren't legendary",
         "that token isn't legendary",
         "those tokens aren't legendary",
+        "the copy isn't legendary",
+        "the copies aren't legendary",
+        "that copy isn't legendary",
+        "those copies aren't legendary",
         "it isn't legendary",
         "they aren't legendary",
         "it's not legendary",
@@ -3730,5 +3933,185 @@ mod wave12_token_ability_tests {
             let result = compile_with_reason(&card, &vocab);
             result.unwrap_or_else(|error| panic!("{name}: {error}"));
         }
+    }
+    #[test]
+    fn phase13_copy_exceptions_and_each_other_player_tokens() {
+        let vocab = CreatureTypeVocabulary::new(
+            "phase13-tokens-copies".into(),
+            [0; 32],
+            vec![
+                "Angel".into(),
+                "Dragon".into(),
+                "Human".into(),
+                "Pest".into(),
+                "Rat".into(),
+                "Warlock".into(),
+            ],
+        )
+        .unwrap();
+        let mut ids = LoweringIds::default();
+        let echo_exc =
+            parse_copy_exceptions(Some("those creatures aren't legendary."), &vocab, &mut ids)
+                .expect("Echoing Equation nonlegendary exception");
+        assert!(echo_exc.nonlegendary);
+
+        let myriad_exc = parse_copy_exceptions(Some("it has myriad."), &vocab, &mut ids)
+            .expect("Muddle myriad exception");
+        assert_eq!(myriad_exc.extra_triggered.len(), 1);
+
+        let irma_exc = parse_copy_exceptions(
+            Some("her name is Irma, Part-Time Mutant and she has this ability."),
+            &vocab,
+            &mut ids,
+        )
+        .expect("Irma self-name and she-has-this-ability exception");
+        assert!(irma_exc.keep_name);
+        assert!(irma_exc.keep_abilities);
+
+        let hulkling_exc = parse_copy_exceptions(
+            Some("his name is Hulkling, Young Avenger, he's 4/4, and he has flying and this ability."),
+            &vocab,
+            &mut ids,
+        )
+        .expect("Hulkling self-name, P/T, flying, and this-ability exception");
+        assert!(hulkling_exc.keep_name);
+        assert!(hulkling_exc.keep_abilities);
+        assert_eq!(
+            hulkling_exc.override_pt,
+            Some(PowerToughness {
+                power: 4.into(),
+                toughness: 4.into(),
+            })
+        );
+        assert!(
+            hulkling_exc
+                .extra_keywords
+                .contains(&KeywordAbility::Flying)
+        );
+
+        assert!(
+            parse_copy_exceptions(
+                Some("its name is Lazav, Dimir Mastermind, it's legendary in addition to its other types, and it has hexproof and this ability."),
+                &vocab,
+                &mut ids,
+            )
+            .is_err(),
+            "additive legendary copy exception must remain fail-closed"
+        );
+
+        let water_maro = parse_token_copy_exceptions(Some("the copy isn't legendary."), &vocab)
+            .expect("The Water Maro nonlegendary copy exception");
+        assert!(water_maro.nonlegendary);
+        assert!(
+            parse_token_copy_exceptions(
+                Some("it's an enchantment and loses all other card types."),
+                &vocab,
+            )
+            .is_none(),
+            "losing other card types must remain fail-closed"
+        );
+        assert!(
+            parse_token_copy_exceptions(
+                Some("it enters with an additional +1/+1 counter on it."),
+                &vocab,
+            )
+            .is_none(),
+            "entering with additional counters must remain fail-closed"
+        );
+
+        let mk = |name: &str,
+                  type_line: &str,
+                  cost: &str,
+                  text: &str,
+                  p: Option<&str>,
+                  t: Option<&str>| InventoryCard {
+            scryfall_id: "00000000-0000-0000-0000-000000000000".into(),
+            oracle_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            name: name.into(),
+            layout: "normal".into(),
+            faces: vec![spellwake_content::CatalogFace {
+                name: name.into(),
+                type_line: Some(type_line.into()),
+                oracle_text: Some(text.into()),
+                mana_cost: Some(cost.into()),
+                power: p.map(str::to_owned),
+                toughness: t.map(str::to_owned),
+            }],
+            legalities: BTreeMap::new(),
+            eligible_formats: Vec::new(),
+            required_by_base_formats: true,
+            program_evidence: "test",
+        };
+        for (name, tl, cost, text, p, t) in [
+            (
+                "Impossible Man",
+                "Legendary Creature",
+                "{1}{U}",
+                "Flying
+{2}{U}: Impossible Man becomes a copy of another target permanent until end of turn, except his name is Impossible Man.",
+                Some("1"),
+                Some("1"),
+            ),
+            (
+                "Hulkling, Young Avenger",
+                "Legendary Creature",
+                "{2}{U}",
+                "Flying
+Whenever you cast a noncreature spell, Hulkling becomes a copy of up to one other target creature until end of turn, except his name is Hulkling, Young Avenger, he's 4/4, and he has flying and this ability.",
+                Some("2"),
+                Some("2"),
+            ),
+            (
+                "Irma, Part-Time Mutant",
+                "Legendary Creature",
+                "{2}{G}{U}",
+                "At the beginning of combat on your turn, Irma becomes a copy of up to one other target creature you control, except her name is Irma, Part-Time Mutant and she has this ability. Then put a +1/+1 counter on her.",
+                Some("2"),
+                Some("2"),
+            ),
+            (
+                "Kimahri, Valiant Guardian",
+                "Legendary Creature",
+                "{2}{G}{U}",
+                "Vigilance
+At the beginning of combat on your turn, put a +1/+1 counter on Kimahri and tap target creature an opponent controls. Then you may have Kimahri become a copy of that creature, except its name is Kimahri, Valiant Guardian and it has vigilance and this ability.",
+                Some("3"),
+                Some("3"),
+            ),
+            (
+                "Muddle, the Ever-Changing",
+                "Legendary Creature",
+                "{1}{U}{R}",
+                "Whenever you cast an instant or sorcery spell, Muddle becomes a copy of up to one target nonlegendary creature you control until end of turn, except it has myriad.",
+                Some("2"),
+                Some("2"),
+            ),
+            (
+                "Haunted Angel",
+                "Creature",
+                "{2}{W}",
+                "Flying
+When this creature dies, exile it and each other player creates a 3/3 black Angel creature token with flying.",
+                Some("3"),
+                Some("3"),
+            ),
+        ] {
+            let card = mk(name, tl, cost, text, p, t);
+            compile_with_reason(&card, &vocab)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+
+        let death_by_dragons = mk(
+            "Death by Dragons",
+            "Sorcery",
+            "{4}{R}{R}",
+            "Each player other than target player creates a 5/5 red Dragon creature token with flying.",
+            None,
+            None,
+        );
+        assert!(
+            compile_with_reason(&death_by_dragons, &vocab).is_err(),
+            "Death by Dragons must stay fail-closed until target-excluding player ref exists"
+        );
     }
 }
