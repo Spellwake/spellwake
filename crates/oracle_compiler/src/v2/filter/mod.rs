@@ -303,7 +303,7 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
         || ts.eat_phrase(&["defending", "player's"])
     {
         ZoneOwner::Opponent
-    } else if ts.eat_phrase(&["each", "player's"]) {
+    } else if ts.eat_phrase(&["each", "player's"]) || ts.eat_word("each") {
         ZoneOwner::EachPlayer
     } else if ts.eat_word("your") {
         ZoneOwner::You
@@ -468,7 +468,7 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
             modifiers.attached_to = Some(Box::new(host));
             continue;
         }
-        if ts.eat_word("transformed") {
+        if ts.eat_phrase(&["and", "transformed"]) || ts.eat_word("transformed") {
             modifiers.transformed = true;
             continue;
         }
@@ -608,15 +608,15 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             {
                 continue;
             }
-            // Allow Oxford comma inside card-type + subtype lists (`artifact, creature, or enchantment`, `creature, Spacecraft, or Planet`)
+            // Allow Oxford comma inside card-type + subtype lists (`artifact, creature, or enchantment`, `artifacts, creatures, and/or lands`)
             if !card_types_seen.is_empty() {
-                if ts
-                    .peek_word()
-                    .is_some_and(|w| w.eq_ignore_ascii_case("or") || w.eq_ignore_ascii_case("and"))
-                    && ts.peek_n(1).is_some_and(|t| {
-                        matches!(t.kind, TokenKind::Word(nw) if lookup_card_type(&nw.to_ascii_lowercase()).is_some() || ts.vocab.lookup_subtype(&nw.to_ascii_lowercase()).is_some())
-                    })
-                {
+                if ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("or")
+                        || w.eq_ignore_ascii_case("and")
+                        || w.eq_ignore_ascii_case("and/or")
+                }) && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if lookup_card_type(&nw.to_ascii_lowercase()).is_some() || ts.vocab.lookup_subtype(&nw.to_ascii_lowercase()).is_some())
+                }) {
                     pending_or_type = true;
                     continue;
                 }
@@ -631,13 +631,13 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             }
             // Allow Oxford comma inside subtype lists (`Elf, Warrior, or Tyvar`, `Cleric, Rogue, Warrior, and Wizard`)
             if saw_subtype {
-                if ts
-                    .peek_word()
-                    .is_some_and(|w| w.eq_ignore_ascii_case("or") || w.eq_ignore_ascii_case("and"))
-                    && ts.peek_n(1).is_some_and(|t| {
-                        matches!(t.kind, TokenKind::Word(nw) if ts.vocab.lookup_subtype(&nw.to_ascii_lowercase()).is_some())
-                    })
-                {
+                if ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("or")
+                        || w.eq_ignore_ascii_case("and")
+                        || w.eq_ignore_ascii_case("and/or")
+                }) && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if ts.vocab.lookup_subtype(&nw.to_ascii_lowercase()).is_some())
+                }) {
                     pending_or_subtype = true;
                     continue;
                 }
@@ -1150,6 +1150,9 @@ fn is_filter_modifier_word(w: &str, vocab: &crate::vocab::Vocabulary) -> bool {
         || lookup_card_type(&low).is_some()
         || lookup_supertype(&low).is_some()
         || vocab.lookup_subtype(&low).is_some()
+        || low
+            .strip_prefix("non-")
+            .is_some_and(|rest| vocab.lookup_subtype(rest).is_some())
         || matches!(
             low.as_str(),
             "nonwhite"

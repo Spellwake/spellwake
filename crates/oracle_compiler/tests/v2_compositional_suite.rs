@@ -3488,7 +3488,7 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 
-    // 5. Steel Golem -> RuleRestriction(CantBeCast) preserving creature-spell filter
+    // 5. Steel Golem -> CantCastSpellsMatching preserving BOTH PlayerRef::You and creature-spell filter
     let golem = compile_v2_strict(
         "Steel Golem",
         "Artifact Creature - Golem",
@@ -3497,9 +3497,8 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
     );
     assert!(matches!(
         golem.faces[0].statics.as_slice(),
-        [StaticAbility::RuleRestriction {
-            subject: Some(SubjectRef::Group(_)),
-            rule: RuleRestrictionKind::CantBeCast,
+        [StaticAbility::CantCastSpellsMatching {
+            player: PlayerRef::You,
             ..
         }]
     ));
@@ -4190,5 +4189,423 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
                         }]
                     )
             )
+    ));
+}
+
+#[test]
+fn v2_wave11_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        Ability, ChoiceKind, ConditionExpr, ConditionFlag, DamageReplacement, Duration, Effect,
+        EventCheckKind, FilterStaticKind, KeywordKind, ObjectMutation, PlayerRef,
+        PlayerRestrictionKind, Replacement, RuleRestrictionKind, StaticAbility,
+    };
+
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let wave11_cards = [
+        (
+            "Dryad of the Ilysian Grove",
+            "Enchantment Creature - Nymph Dryad",
+            "You may play an additional land on each of your turns.\nLands you control are every basic land type in addition to their other types.",
+        ),
+        (
+            "Prismatic Omen",
+            "Enchantment",
+            "Lands you control are every basic land type in addition to their other types.",
+        ),
+        (
+            "Phlage, Titan of Fire's Fury",
+            "Legendary Creature - Elder Giant",
+            "When Phlage enters, sacrifice it unless it escaped.\nWhenever Phlage enters or attacks, it deals 3 damage to any target and you gain 3 life.\nEscape\u{2014}{R}{R}{W}{W}, Exile five other cards from your graveyard.",
+        ),
+        (
+            "Uro, Titan of Nature's Wrath",
+            "Legendary Creature - Elder Giant",
+            "When Uro enters, sacrifice it unless it escaped.\nWhenever Uro enters or attacks, you gain 3 life and draw a card, then you may put a land card from your hand onto the battlefield.\nEscape\u{2014}{G}{G}{U}{U}, Exile five other cards from your graveyard.",
+        ),
+        (
+            "Underworld Breach",
+            "Enchantment",
+            "Each nonland card in your graveyard has escape. The escape cost is equal to the card's mana cost plus exile three other cards from your graveyard.\nAt the beginning of the end step, sacrifice this enchantment.",
+        ),
+        (
+            "Wrath of the Skies",
+            "Sorcery",
+            "You get X {E}, then you may pay any amount of {E}. Destroy each artifact, creature, and enchantment with mana value less than or equal to the amount of {E} paid this way.",
+        ),
+        (
+            "Galvanic Discharge",
+            "Instant",
+            "Choose target creature or planeswalker. You get {E}{E}{E}, then you may pay any amount of {E}. Galvanic Discharge deals that much damage to that permanent.",
+        ),
+        (
+            "Silumgar's Scorn",
+            "Instant",
+            "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nCounter target spell unless its controller pays {1}. If you revealed a Dragon card or controlled a Dragon as you cast this spell, counter that spell instead.",
+        ),
+        (
+            "Draconic Roar",
+            "Instant",
+            "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nDraconic Roar deals 3 damage to target creature. If you revealed a Dragon card or controlled a Dragon as you cast this spell, Draconic Roar deals 3 damage to that creature's controller.",
+        ),
+        (
+            "Windfall",
+            "Sorcery",
+            "Each player discards their hand, then draws cards equal to the greatest number of cards a player discarded this way.",
+        ),
+        (
+            "Rite of Flame",
+            "Sorcery",
+            "Add {R}{R}, then add {R} for each card named Rite of Flame in each graveyard.",
+        ),
+        (
+            "Flame Spill",
+            "Instant",
+            "Flame Spill deals 4 damage to target creature. Excess damage is dealt to that creature's controller instead.",
+        ),
+        (
+            "Gandalf's Sanction",
+            "Sorcery",
+            "Gandalf's Sanction deals X damage to target creature, where X is the number of instant and sorcery cards in your graveyard. Excess damage is dealt to that creature's controller instead.",
+        ),
+        (
+            "Gideon's Sacrifice",
+            "Instant",
+            "Choose a creature or planeswalker you control. All damage that would be dealt this turn to you and permanents you control is dealt to the chosen permanent instead.",
+        ),
+        (
+            "Weathered Bodyguards",
+            "Creature - Human Soldier",
+            "As long as this creature is untapped, all combat damage that would be dealt to you by unblocked creatures is dealt to this creature instead.\nMorph {3}{W}",
+        ),
+        (
+            "The Third Doctor",
+            "Legendary Creature - Time Lord Doctor",
+            "Trample\nThe Third Doctor gets +1/+1 for each noncreature token you control.\nWhen The Third Doctor enters, create your choice of a Clue token, a Food token, or a Treasure token.",
+        ),
+        (
+            "Vivien, Monsters' Advocate",
+            "Legendary Planeswalker - Vivien",
+            "You may look at the top card of your library any time.\nYou may cast creature spells from the top of your library.\n+1: Create a 3/3 green Beast creature token. Put your choice of a reach counter, a vigilance counter, or a trample counter on it.\n-2: When you next cast a creature spell this turn, search your library for a creature card with lesser mana value, put it onto the battlefield, then shuffle.",
+        ),
+        (
+            "Golos, Tireless Pilgrim",
+            "Legendary Artifact Creature - Scout",
+            "When Golos enters, you may search your library for a land card, put that card onto the battlefield tapped, then shuffle.\n{2}{W}{U}{B}{R}{G}: Exile the top three cards of your library. You may play them this turn without paying their mana costs.",
+        ),
+        (
+            "Parhelion II",
+            "Legendary Artifact - Vehicle",
+            "Flying, first strike, vigilance\nWhenever Parhelion II attacks, create two 4/4 white Angel creature tokens with flying and vigilance that are attacking.\nCrew 4",
+        ),
+        (
+            "Innkeeper's Talent",
+            "Enchantment - Class",
+            "At the beginning of combat on your turn, put a +1/+1 counter on target creature you control.\n{G}: Level 2\nPermanents you control with counters on them have ward {1}.\n{3}{G}: Level 3\nIf you would put one or more counters on a permanent or player, put twice that many of each of those kinds of counters on that permanent or player instead.",
+        ),
+        (
+            "Minsc & Boo, Timeless Heroes",
+            "Legendary Planeswalker - Minsc",
+            "When Minsc & Boo, Timeless Heroes enters and at the beginning of your upkeep, you may create Boo, a legendary 1/1 red Hamster creature token with trample and haste.\n+1: Put three +1/+1 counters on up to one target creature with trample or haste.\n-2: Sacrifice a creature. When you do, Minsc & Boo, Timeless Heroes deals X damage to any target, where X is that creature's power. If the sacrificed creature was a Hamster, draw X cards.\nMinsc & Boo, Timeless Heroes can be your commander.",
+        ),
+        (
+            "Narset Transcendent",
+            "Legendary Planeswalker - Narset",
+            "+1: Look at the top card of your library. If it's a noncreature, nonland card, you may reveal it and put it into your hand.\n-2: When you cast your next instant or sorcery spell from your hand this turn, it gains rebound.\n-9: You get an emblem with \"Your opponents can't cast noncreature spells.\"",
+        ),
+        (
+            "Vines of Vastwood",
+            "Instant",
+            "Kicker {G}\nTarget creature can't be the target of spells or abilities your opponents control this turn. If this spell was kicked, that creature gets +4/+4 until end of turn.",
+        ),
+        (
+            "Shadow of Doubt",
+            "Instant",
+            "Players can't search libraries this turn.\nDraw a card.",
+        ),
+        (
+            "Dark Depths",
+            "Legendary Snow Land",
+            "Dark Depths enters with ten ice counters on it.\n{3}: Remove an ice counter from Dark Depths.\nWhen Dark Depths has no ice counters on it, sacrifice it. If you do, create Marit Lage, a legendary 20/20 black Avatar creature token with flying and indestructible.",
+        ),
+        (
+            "Marisi, Breaker of the Coil",
+            "Legendary Creature - Cat Warrior",
+            "Your opponents can't cast spells during combat.\nWhenever a creature you control deals combat damage to a player, goad each creature that player controls.",
+        ),
+        (
+            "Experimental Frenzy",
+            "Enchantment",
+            "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library.\nYou can't play lands or cast spells from your hand.\n{3}{R}: Destroy Experimental Frenzy.",
+        ),
+        (
+            "Abyssal Persecutor",
+            "Creature - Demon",
+            "Flying, trample\nYou can't win the game and your opponents can't lose the game.",
+        ),
+        (
+            "Kutzil, Malamet Exemplar",
+            "Legendary Creature - Cat Warrior",
+            "Your opponents can't cast spells during your turn.\nWhenever one or more creatures you control each with power greater than its base power deal combat damage to a player, draw a card.",
+        ),
+        (
+            "Valkyrie's Call",
+            "Enchantment",
+            "Whenever a nontoken, non-Angel creature you control dies, return that card to the battlefield under its owner's control with a +1/+1 counter on it. It has flying and is an Angel in addition to its other types.",
+        ),
+        (
+            "Lignify",
+            "Kindred Enchantment - Treefolk Aura",
+            "Enchant creature\nEnchanted creature is a Treefolk with base power and toughness 0/4 and loses all abilities.",
+        ),
+        (
+            "Play with Fire",
+            "Instant",
+            "Play with Fire deals 2 damage to any target. If a player is dealt damage this way, scry 1.",
+        ),
+        (
+            "Alchemist's Gift",
+            "Instant",
+            "Target creature gets +1/+1 and gains your choice of deathtouch or lifelink until end of turn.",
+        ),
+        (
+            "Tamiyo, Compleated Sage",
+            "Legendary Planeswalker - Tamiyo",
+            "Compleated\n+1: Tap up to one target artifact or creature. It doesn't untap during its controller's next untap step.\n-X: Exile target nonland permanent card with mana value X from your graveyard. Create a token that's a copy of that card.\n-7: Create Tamiyo's Notebook, a legendary colorless Book artifact token with \"Spells you cast cost {2} less to cast\" and \"{T}: Draw a card.\"",
+        ),
+        (
+            "O-Naginata",
+            "Artifact - Equipment",
+            "O-Naginata can be attached only to a creature with power 3 or greater.\nEquipped creature gets +3/+0 and has trample.\nEquip {2}",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in wave11_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 11 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep typed IR assertions on Wave 11 orthogonal compositions (0 new core-enum variants):
+    // 1. Prismatic Omen -> SetSubtypes with all 5 basic land types + keep_existing = true
+    let omen = compile_v2_strict(
+        "Prismatic Omen",
+        "Enchantment",
+        "Lands you control are every basic land type in addition to their other types.",
+        &vocab,
+    );
+    assert!(matches!(
+        omen.faces[0].statics.as_slice(),
+        [StaticAbility::SetSubtypes {
+            subtypes,
+            keep_existing: true,
+            ..
+        }] if subtypes.len() == 5
+    ));
+
+    // 2. Phlage -> Unless with ConditionExpr::EventCheck(KeywordCostPaid(Escape))
+    let phlage = compile_v2_strict(
+        "Phlage, Titan of Fire's Fury",
+        "Legendary Creature - Elder Giant",
+        "When Phlage enters, sacrifice it unless it escaped.",
+        &vocab,
+    );
+    assert!(matches!(
+        phlage.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::Unless {
+                    condition: Some(ConditionExpr::EventCheck(EventCheckKind::KeywordCostPaid(
+                        KeywordKind::Escape
+                    ))),
+                    ..
+                }]
+            )
+    ));
+
+    // 3. Flame Spill -> ApplyReplacement(DamageRule(RedirectAll))
+    let spill = compile_v2_strict(
+        "Flame Spill",
+        "Instant",
+        "Flame Spill deals 4 damage to target creature. Excess damage is dealt to that creature's controller instead.",
+        &vocab,
+    );
+    assert!(spill.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::ApplyReplacement { replacement, .. }
+            if matches!(
+                replacement.as_ref(),
+                Replacement::DamageRule(DamageReplacement::RedirectAll { .. })
+            )
+    )));
+
+    // 4. The Third Doctor -> PromptChoice(ChooseBranch) with 3 token options
+    let doctor = compile_v2_strict(
+        "The Third Doctor",
+        "Legendary Creature - Time Lord Doctor",
+        "When The Third Doctor enters, create your choice of a Clue token, a Food token, or a Treasure token.",
+        &vocab,
+    );
+    assert!(matches!(
+        doctor.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::PromptChoice {
+                    kind: ChoiceKind::ChooseBranch(branches),
+                    ..
+                }] if branches.len() == 3
+            )
+    ));
+
+    // 5. Silumgar's Scorn -> BranchCondition(AdditionalCostPaid) with ReplacePrevious
+    let scorn = compile_v2_strict(
+        "Silumgar's Scorn",
+        "Instant",
+        "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nCounter target spell unless its controller pays {1}. If you revealed a Dragon card or controlled a Dragon as you cast this spell, counter that spell instead.",
+        &vocab,
+    );
+    assert!(scorn.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::BranchCondition {
+            condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
+            then_body,
+            ..
+        } if matches!(then_body.as_slice(), [Effect::ReplacePrevious(_)])
+    )));
+
+    // 6. Vines of Vastwood -> CantBeTargetedBy with Duration::UntilEndOfTurn
+    let vines = compile_v2_strict(
+        "Vines of Vastwood",
+        "Instant",
+        "Kicker {G}\nTarget creature can't be the target of spells or abilities your opponents control this turn. If this spell was kicked, that creature gets +4/+4 until end of turn.",
+        &vocab,
+    );
+    assert!(vines.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::MutateObject {
+            mutation: ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeTargetedBy(_)),
+            duration: Duration::UntilEndOfTurn,
+            ..
+        }
+    )));
+
+    // 7. Shadow of Doubt -> CantSearchLibraries with Duration::UntilEndOfTurn
+    let doubt = compile_v2_strict(
+        "Shadow of Doubt",
+        "Instant",
+        "Players can't search libraries this turn.\nDraw a card.",
+        &vocab,
+    );
+    assert!(doubt.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::ApplyContinuous { effect, duration: Duration::UntilEndOfTurn }
+            if matches!(
+                effect.as_ref(),
+                StaticAbility::PlayerRestriction {
+                    restriction: PlayerRestrictionKind::CantSearchLibraries,
+                    ..
+                }
+            )
+    )));
+
+    // 8. Abyssal Persecutor -> Compound([CantWinGame(You), CantLoseGame(EachOpponent)])
+    let persecutor = compile_v2_strict(
+        "Abyssal Persecutor",
+        "Creature - Demon",
+        "You can't win the game and your opponents can't lose the game.",
+        &vocab,
+    );
+    assert!(matches!(
+        persecutor.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)]
+            if matches!(
+                parts.as_slice(),
+                [
+                    StaticAbility::PlayerRestriction {
+                        player: PlayerRef::You,
+                        restriction: PlayerRestrictionKind::CantWinGame,
+                        ..
+                    },
+                    StaticAbility::PlayerRestriction {
+                        player: PlayerRef::EachOpponent,
+                        restriction: PlayerRestrictionKind::CantLoseGame,
+                        ..
+                    }
+                ]
+            )
+    ));
+
+    // 9. Experimental Frenzy -> CantPlayFromHand(You)
+    let frenzy = compile_v2_strict(
+        "Experimental Frenzy",
+        "Enchantment",
+        "You can't play lands or cast spells from your hand.",
+        &vocab,
+    );
+    assert!(matches!(
+        frenzy.faces[0].statics.as_slice(),
+        [StaticAbility::PlayerRestriction {
+            player: PlayerRef::You,
+            restriction: PlayerRestrictionKind::CantPlayFromHand,
+            ..
+        }]
+    ));
+
+    // 10. O-Naginata -> FilterRule(AttachmentRestriction)
+    let naginata = compile_v2_strict(
+        "O-Naginata",
+        "Artifact - Equipment",
+        "O-Naginata can be attached only to a creature with power 3 or greater.",
+        &vocab,
+    );
+    assert!(matches!(
+        naginata.faces[0].statics.as_slice(),
+        [StaticAbility::FilterRule {
+            kind: FilterStaticKind::AttachmentRestriction,
+            ..
+        }]
+    ));
+
+    // 11. Parhelion II -> CreateToken with attacking = true
+    let parhelion = compile_v2_strict(
+        "Parhelion II",
+        "Legendary Artifact - Vehicle",
+        "Whenever Parhelion II attacks, create two 4/4 white Angel creature tokens with flying and vigilance that are attacking.",
+        &vocab,
+    );
+    assert!(matches!(
+        parhelion.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::CreateToken { modifiers, .. }] if modifiers.attacking
+            )
+    ));
+
+    // 12. Innkeeper's Talent Level 3 -> Replacement::CounterRule { factor: 2, add: 0 }
+    let talent = compile_v2_strict(
+        "Innkeeper's Talent",
+        "Enchantment - Class",
+        "If you would put one or more counters on a permanent or player, put twice that many of each of those kinds of counters on that permanent or player instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        talent.faces[0].replacements.as_slice(),
+        [Replacement::CounterRule {
+            factor: 2,
+            add: 0,
+            ..
+        }]
     ));
 }

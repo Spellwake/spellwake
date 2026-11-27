@@ -21,7 +21,15 @@ pub(crate) fn parse_token_creation(
         let ncp = ts.checkpoint();
         let mut name_words = 0usize;
         while name_words < 6 {
-            if ts.peek_word().is_some_and(|w| {
+            if ts.eat_tilde() {
+                let _ = ts.eat_word("'s");
+                name_words += 1;
+                if ts.eat_comma()
+                    && (ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]))
+                {
+                    break;
+                }
+            } else if ts.peek_word().is_some_and(|w| {
                 w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
                     || matches!(w.to_ascii_lowercase().as_str(), "the" | "of" | "and")
             }) {
@@ -185,8 +193,9 @@ pub(crate) fn parse_token_creation(
         ts.restore(cp);
     }
 
-    // Creature/artifact token: `[<P>/<T>] [colors] [subtypes...] [card_types...] token(s) [named <Name>] [with <kws|"...">] [that are <colors>]`
+    // Creature/artifact token: `[legendary] [<P>/<T>] [colors] [subtypes...] [card_types...] token(s) [named <Name>] [with <kws|"...">] [that are <colors>]`
     // Also supports `X/X`, `X/1`, `1/X` dynamic P/T tokens and non-P/T tokens (`black Vampire creature token`, `colorless artifact token named Lotus`)!
+    let _ = ts.eat_word("legendary");
     let (power_expr, toughness_expr) = if let Some((p, t)) = ts.next_base_pt() {
         (Some(ValueExpr::Const(p)), Some(ValueExpr::Const(t)))
     } else {
@@ -295,10 +304,11 @@ pub(crate) fn parse_token_creation(
                 ts.restore(wcp);
                 break;
             }
-            // Optional `, and` / `,` / `and` before next quoted ability (checkpointed so we never eat `and` belonging to a later clause!)
+            // Optional `, and` / `,` / `and` [with] before next quoted ability (checkpointed so we never eat `and` belonging to a later clause!)
             let sep_cp = ts.checkpoint();
             let had_comma = ts.eat_comma();
             let had_and = ts.eat_word("and");
+            let _ = ts.eat_word("with");
             if (had_comma || had_and)
                 && (matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Quoted(_)))
                     || (had_and
@@ -334,15 +344,32 @@ pub(crate) fn parse_token_creation(
 
     let mut mods = EntryModifiers {
         tapped: leading_tapped,
+        attacking: leading_tapped_and_attacking,
         ..EntryModifiers::default()
     };
-    if ts.eat_phrase(&["tapped", "and", "attacking"]) {
+    if ts.eat_phrase(&["and", "that's", "tapped", "and", "attacking"])
+        || ts.eat_phrase(&["and", "that", "are", "tapped", "and", "attacking"])
+        || ts.eat_phrase(&["that's", "tapped", "and", "attacking"])
+        || ts.eat_phrase(&["that", "are", "tapped", "and", "attacking"])
+        || ts.eat_phrase(&["tapped", "and", "attacking"])
+    {
         mods.tapped = true;
         mods.attacking = true;
         let _ = ts.eat_phrase(&["that", "opponent"])
             || ts.eat_phrase(&["that", "player"])
             || ts.eat_phrase(&["the", "defending", "player"])
-            || ts.eat_phrase(&["defending", "player"]);
+            || ts.eat_phrase(&["defending", "player"])
+            || ts.eat_word("them");
+    } else if ts.eat_phrase(&["that's", "attacking"])
+        || ts.eat_phrase(&["that", "are", "attacking"])
+        || ts.eat_word("attacking")
+    {
+        mods.attacking = true;
+        let _ = ts.eat_phrase(&["that", "opponent"])
+            || ts.eat_phrase(&["that", "player"])
+            || ts.eat_phrase(&["the", "defending", "player"])
+            || ts.eat_phrase(&["defending", "player"])
+            || ts.eat_word("them");
     } else if ts.eat_word("tapped") {
         mods.tapped = true;
     }

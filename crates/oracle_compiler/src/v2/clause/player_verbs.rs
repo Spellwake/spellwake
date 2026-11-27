@@ -26,7 +26,8 @@ pub(super) fn parse_player_verb_frame(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
 ) -> PResult<(Vec<Effect>, ())> {
-    // 1. `Add <mana> [for each <expr>]` (exact, choice `{W} or {U}` / `{B}, {R}, or {G}`, any color, chosen color)
+    // 1. `double the power/toughness/number of counters ...` (falls through to section 3i for `double <subj>'s power [and toughness] [<val> times]`)
+    let outer_dcp = ts.checkpoint();
     if ts.eat_word("double") || ts.eat_word("doubles") {
         let dcp = ts.checkpoint();
         if ts.eat_phrase(&["the", "power", "and", "toughness", "of"])
@@ -150,8 +151,7 @@ pub(super) fn parse_player_verb_frame(
                 (),
             ));
         }
-        ts.restore(dcp);
-        return Err(ts.err("expected `the power/toughness/number of counters` after `double`"));
+        ts.restore(outer_dcp);
     }
 
     if ts.eat_word("add") || ts.eat_word("adds") {
@@ -232,29 +232,66 @@ pub(super) fn parse_player_verb_frame(
             }
             ts.restore(ecp);
         }
-        // `<val> {E}` (`you get that many {E}`, `you get X {E}`)
+        // `<val> {E}` (`you get that many {E}`, `you get X {E}`) or `<val> {TK}` (`Demonic Tourist Laser`)
         {
             let vecp = ts.checkpoint();
-            if let Ok(count) = try_parse(ts, parse_value_expr)
-                && matches!(
+            if let Ok(count) = try_parse(ts, parse_value_expr) {
+                if matches!(
                     ts.peek().map(|t| &t.kind),
                     Some(TokenKind::Mana(ManaSymbol::Energy))
-                )
+                ) {
+                    ts.next_tok();
+                    return Ok((
+                        vec![Effect::MutatePlayer {
+                            player: actor,
+                            mutation: PlayerMutation::GainCounters {
+                                kind: CounterKind::Energy,
+                                count,
+                            },
+                            duration: Duration::Instant,
+                        }],
+                        (),
+                    ));
+                }
+                if matches!(
+                    ts.peek().map(|t| &t.kind),
+                    Some(TokenKind::Mana(ManaSymbol::Ticket))
+                ) {
+                    ts.next_tok();
+                    return Ok((
+                        vec![Effect::MutatePlayer {
+                            player: actor,
+                            mutation: PlayerMutation::GainCounters {
+                                kind: CounterKind::Named("ticket".to_string()),
+                                count,
+                            },
+                            duration: Duration::Instant,
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(vecp);
+        }
+        // `a number of <kind> counters equal to <val>` (`Feral Ghoul`)
+        {
+            let ncp = ts.checkpoint();
+            if ts.eat_phrase(&["a", "number", "of"])
+                && let Ok(kind) = try_parse(ts, parse_counter_kind)
+                && (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_phrase(&["equal", "to"])
+                && let Ok(count) = try_parse(ts, parse_value_expr)
             {
-                ts.next_tok();
                 return Ok((
                     vec![Effect::MutatePlayer {
                         player: actor,
-                        mutation: PlayerMutation::GainCounters {
-                            kind: CounterKind::Energy,
-                            count,
-                        },
+                        mutation: PlayerMutation::GainCounters { kind, count },
                         duration: Duration::Instant,
                     }],
                     (),
                 ));
             }
-            ts.restore(vecp);
+            ts.restore(ncp);
         }
         // Energy symbols `{E}{E}{E}`
         let mut energy_count = 0i32;
@@ -378,9 +415,13 @@ pub(super) fn parse_player_verb_frame(
             ));
         }
         let subj = parse_subject_ref(ts)?;
-        let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+        let mut free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
             || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
         let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+        if !free {
+            free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+                || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
+        }
         let mut out = vec![Effect::MutatePlayer {
             player: actor,
             mutation: PlayerMutation::GrantPlayPermission {
@@ -521,7 +562,7 @@ pub(super) fn parse_player_verb_frame(
             } else {
                 None
             };
-            let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+            let mut free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
                 || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
             let alt_costs = if !free && ts.eat_word("by") {
                 let costs = crate::v2::cost::parse_cost_list(ts).unwrap_or_default();
@@ -534,6 +575,10 @@ pub(super) fn parse_player_verb_frame(
                 Vec::new()
             };
             let dur = parse_trailing_duration(ts).unwrap_or(Duration::Instant);
+            if !free {
+                free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+                    || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
+            }
             let mut out = vec![Effect::MutatePlayer {
                 player: actor,
                 mutation: PlayerMutation::GrantPlayPermission {
@@ -1018,10 +1063,12 @@ pub(super) fn parse_player_verb_frame(
         }
     }
 
-    // 3f2. `change(s) the target of <subj> [to <new_tgt>]` (`Muck Drubb`, `Willbender`, `Ricochet Trap`, `Untimely Malfunction`)
+    // 3f2. `change(s) [the | a | any] target(s) of <subj> [to <new_tgt>]` (`Muck Drubb`, `Willbender`, `Mizzium Meddler`, `Sideswipe`)
     if ts.eat_phrase(&["change", "the", "target", "of"])
         || ts.eat_phrase(&["changes", "the", "target", "of"])
         || ts.eat_phrase(&["change", "the", "targets", "of"])
+        || ts.eat_phrase(&["change", "a", "target", "of"])
+        || ts.eat_phrase(&["change", "any", "targets", "of"])
     {
         let subject = parse_subject_ref(ts)?;
         let new_target = if ts.eat_word("to") {
@@ -1042,18 +1089,31 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 3g. `flip(s) a coin` (checkpointed so `flip ~` / `flip it` falls through cleanly!)
+    // 3g. `flip(s) a coin [until you lose a flip]` (checkpointed so `flip ~` / `flip it` falls through cleanly!)
     {
         let fcp = ts.checkpoint();
         if (ts.eat_word("flip") || ts.eat_word("flips")) && ts.eat_phrase(&["a", "coin"]) {
-            return Ok((
-                vec![Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::Action(PlayerActionKind::FlipCoin),
-                    duration: Duration::Instant,
-                }],
-                (),
-            ));
+            let flip = Effect::MutatePlayer {
+                player: actor,
+                mutation: PlayerMutation::Action(PlayerActionKind::FlipCoin),
+                duration: Duration::Instant,
+            };
+            if ts.eat_phrase(&["until", "you", "lose", "a", "flip"])
+                || ts.eat_phrase(&["until", "they", "lose", "a", "flip"])
+            {
+                return Ok((
+                    vec![Effect::Unless {
+                        body: vec![flip],
+                        payer: None,
+                        cost: None,
+                        condition: Some(crate::v2::ir::ConditionExpr::Not(Box::new(
+                            crate::v2::ir::ConditionExpr::Flag(ConditionFlag::WonCoinFlip),
+                        ))),
+                    }],
+                    (),
+                ));
+            }
+            return Ok((vec![flip], ()));
         }
         ts.restore(fcp);
     }
@@ -1203,6 +1263,14 @@ pub(super) fn parse_player_verb_frame(
             Cost::PayAnyAmountMana
         } else if ts.eat_phrase(&["any", "amount", "of", "life"]) {
             Cost::PayAnyAmountLife
+        } else if ts.eat_phrase(&["any", "amount", "of"])
+            && matches!(
+                ts.peek().map(|t| &t.kind),
+                Some(TokenKind::Mana(ManaSymbol::Energy))
+            )
+        {
+            ts.next_tok();
+            Cost::PayEnergy(ValueExpr::Var(crate::v2::ir::VarName::X))
         } else if ts.eat_phrase(&["life", "equal", "to"]) {
             Cost::PayLife(parse_value_expr(ts)?)
         } else if ts.eat_phrase(&["an", "amount", "of"])

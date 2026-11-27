@@ -386,6 +386,47 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         }
         ts.restore(cp);
     }
+    // 1b0. `If you would put one or more counters on <flt> [or on yourself | or player], put [that many plus <N> | twice that many] of each of those kinds of counters on that permanent [or player] instead.`
+    // (`Doc Samson`, `Innkeeper's Talent`, `Lae'zel, Vlaakith's Champion`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "would", "put", "one", "or", "more", "counters", "on"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+        {
+            let _ = ts.eat_phrase(&["or", "on", "yourself"]) || ts.eat_phrase(&["or", "player"]);
+            if ts.eat_comma() && ts.eat_word("put") {
+                let (add, factor) = if ts.eat_phrase(&["twice", "that", "many"]) {
+                    (0i16, 2u8)
+                } else if ts.eat_phrase(&["that", "many", "plus"])
+                    && let Some(n) = ts.next_number(false)
+                {
+                    (i16::try_from(n).unwrap_or(1), 1u8)
+                } else {
+                    ts.restore(cp);
+                    (0, 0)
+                };
+                if (add != 0 || factor != 0)
+                    && (ts.eat_phrase(&["of", "each", "of", "those", "kinds", "of", "counters"])
+                        || ts.eat_phrase(&["of", "those", "counters"]))
+                    && ts.eat_phrase(&["on", "that", "permanent"])
+                {
+                    let _ = ts.eat_phrase(&["or", "player"]);
+                    if ts.eat_word("instead") {
+                        let _ = ts.eat_period();
+                        if ts.is_eof() {
+                            return Ok(Replacement::CounterRule {
+                                filter: flt,
+                                kind: None,
+                                add,
+                                factor,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        ts.restore(cp);
+    }
     // 1b. `If an effect would put one or more counters on <flt>, it puts twice that many of those counters on that permanent instead.`
     if ts.eat_phrase(&[
         "an", "effect", "would", "put", "one", "or", "more", "counters", "on",

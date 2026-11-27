@@ -7,7 +7,7 @@
 //! - `subject_verbs.rs`: object/subject-initiated verb frames and trailing duration parsing.
 //! - `tokens.rs`: predefined, creature, and copy-token creation parser.
 
-mod player_actions;
+pub(crate) mod player_actions;
 mod player_verbs;
 mod subject_verbs;
 pub(crate) mod tokens;
@@ -251,6 +251,11 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             duration: Duration::UntilEndOfTurn,
         }]);
     }
+    if let Ok(extra) = try_parse(ts, player_actions::parse_extra_sentence_effect)
+        && ts.is_eof()
+    {
+        return Ok(extra);
+    }
 
     // 0. `, where X is <ValueExpr>` binder (supports BOTH trailing and mid-sentence `, where X is <expr>, <rest>`)
     if let Some(where_idx) = find_where_x_is(ts.tokens, ts.pos) {
@@ -295,9 +300,11 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         return Ok(vec![vc]);
     }
 
-    // 2. Leading `When you do, <effect>` (reflexive trigger) OR `When/Whenever <trigger_header>, <effect>` (delayed/reflexive trigger)
-    //    OR `Otherwise, <effect>` OR `If <player> do/does/don't/doesn't, <effect>`
-    if ts.eat_phrase(&["when", "you", "do"]) && ts.eat_comma() {
+    // 2. Leading `When you do, <effect>` / `When it regenerates this way, <effect>` (reflexive trigger) OR `When/Whenever <trigger_header>, <effect>`
+    if (ts.eat_phrase(&["when", "you", "do"])
+        || ts.eat_phrase(&["when", "it", "regenerates", "this", "way"]))
+        && ts.eat_comma()
+    {
         let body = parse_sentence_top(ts)?;
         return Ok(vec![Effect::ReflexiveTrigger(body)]);
     }
@@ -1889,9 +1896,10 @@ fn parse_single_clause(
         let cp = ts.checkpoint();
         if let Ok(player) = try_parse(ts, parse_player_ref) {
             let _ = ts.eat_word("each");
-            // `<player> who can't <verb>` (`Plaguecrafter`, `Momentum Breaker`, `Skull Storm`, `Liliana, Waker of the Dead`)
-            // `<player> who didn't <verb>` (`Kynaios and Tiro of Meletis`)
-            if (ts.eat_phrase(&["who", "can't"]) || ts.eat_phrase(&["who", "didn't"]))
+            // `<player> who can't/didn't/doesn't <verb>` (`Plaguecrafter`, `Momentum Breaker`, `Fandaniel`)
+            if (ts.eat_phrase(&["who", "can't"])
+                || ts.eat_phrase(&["who", "didn't"])
+                || ts.eat_phrase(&["who", "doesn't"]))
                 && let Ok((body, _)) = try_parse(ts, |s| parse_player_verb_frame(s, player))
             {
                 return Ok((
@@ -1901,6 +1909,67 @@ fn parse_single_clause(
                     }],
                     Some(player),
                 ));
+            }
+            // `<player> who has <N> or more <kind> counters <verb>` (`Feed the Infection`, `Ixhel`)
+            {
+                let wcp = ts.checkpoint();
+                if ts.eat_phrase(&["who", "has"])
+                    && let Some(n) = ts.next_number(false)
+                    && ts.eat_phrase(&["or", "more"])
+                    && let Ok(kind) = try_parse(ts, crate::v2::filter::parse_counter_kind)
+                    && (ts.eat_word("counters") || ts.eat_word("counter"))
+                    && let Ok((body, _)) = try_parse(ts, |s| parse_player_verb_frame(s, player))
+                {
+                    return Ok((
+                        vec![Effect::ForEach {
+                            over: ForEachDomain::EachOpponentWithCondition(
+                                crate::v2::ir::ConditionExpr::PlayerHasCounters {
+                                    player,
+                                    kind,
+                                    min_count: u16::try_from(n.max(1)).unwrap_or(1),
+                                },
+                            ),
+                            body,
+                        }],
+                        Some(player),
+                    ));
+                }
+                ts.restore(wcp);
+                // `<player> who lost [<N> or more] life this turn <verb>` (`Davros`, `Papalymo`)
+                if ts.eat_phrase(&["who", "lost"]) {
+                    let min_life = if let Some(n) = ts.next_number(false) {
+                        let _ = ts.eat_phrase(&["or", "more"]);
+                        Some(n)
+                    } else {
+                        None
+                    };
+                    if ts.eat_phrase(&["life", "this", "turn"]) {
+                        let cond = if let Some(n) = min_life {
+                            crate::v2::ir::ConditionExpr::PlayerTurnEvent {
+                                player,
+                                event: crate::v2::ir::TurnEventKind::LifeLost,
+                                filter: None,
+                                min_count: u16::try_from(n.max(1)).unwrap_or(1),
+                            }
+                        } else {
+                            crate::v2::ir::ConditionExpr::PlayerCheck {
+                                player,
+                                kind: crate::v2::ir::PlayerConditionKind::LostLifeThisTurn,
+                            }
+                        };
+                        if let Ok((body, _)) = try_parse(ts, |s| parse_player_verb_frame(s, player))
+                        {
+                            return Ok((
+                                vec![Effect::ForEach {
+                                    over: ForEachDomain::EachOpponentWithCondition(cond),
+                                    body,
+                                }],
+                                Some(player),
+                            ));
+                        }
+                    }
+                }
+                ts.restore(wcp);
             }
             // `<player> with no cards in hand <verb>` (`Tinybones, Trinket Thief`)
             if ts.eat_phrase(&["with", "no", "cards", "in", "hand"])
@@ -2118,6 +2187,11 @@ fn parse_activation_restrictions(ts: &mut TokenStream<'_>) -> PResult<Vec<Activa
             out.push(ActivationRestriction::DuringCombat);
             out.push(ActivationRestriction::DuringCombatStep(
                 crate::v2::ir::CombatStepKind::DeclareAttackers,
+            ));
+        } else if ts.eat_phrase(&["during", "combat", "after", "blockers", "are", "declared"]) {
+            out.push(ActivationRestriction::DuringCombat);
+            out.push(ActivationRestriction::DuringCombatStep(
+                crate::v2::ir::CombatStepKind::DeclareBlockers,
             ));
         } else if ts.eat_phrase(&["during", "combat"]) {
             out.push(ActivationRestriction::DuringCombat);

@@ -85,6 +85,14 @@ fn parse_zone_verb_frame_inner(
             if !(ts.eat_word("card") || ts.eat_word("cards")) {
                 return Err(ts.err("expected `card(s)` after `draw`"));
             }
+            let rcp = ts.checkpoint();
+            if ts.eat_comma()
+                && (ts.eat_phrase(&["rounded", "down"]) || ts.eat_phrase(&["rounded", "up"]))
+            {
+                // rounding already captured in `half <expr>` / value expr
+            } else {
+                ts.restore(rcp);
+            }
             let adjusted = if ts.eat_word("plus") {
                 ValueExpr::Add(Box::new(base), Box::new(parse_value_expr(ts)?))
             } else if ts.eat_word("minus") {
@@ -357,8 +365,10 @@ fn parse_zone_verb_frame_inner(
         return Ok((out, ()));
     }
 
-    // 10. `create(s) <token1> [, <token2>, and <token3>]`
+    // 10. `create(s) [your choice of] <token1> [, <token2>, and/or <token3>]`
     if ts.eat_word("create") || ts.eat_word("creates") {
+        let is_choice =
+            ts.eat_phrase(&["your", "choice", "of"]) || ts.eat_phrase(&["their", "choice", "of"]);
         let (count, spec, modifiers) = parse_token_creation(ts)?;
         let mut out = vec![Effect::CreateToken {
             controller: actor,
@@ -366,13 +376,18 @@ fn parse_zone_verb_frame_inner(
             spec,
             modifiers,
         }];
+        let mut saw_or = is_choice;
         loop {
             let tcp = ts.checkpoint();
             let had_comma = ts.eat_comma();
-            let had_and = ts.eat_word("and");
-            if (had_comma || had_and)
+            let had_or = ts.eat_word("or");
+            let had_and = !had_or && ts.eat_word("and");
+            if (had_comma || had_and || had_or)
                 && let Ok((c2, s2, m2)) = try_parse(ts, parse_token_creation)
             {
+                if had_or {
+                    saw_or = true;
+                }
                 out.push(Effect::CreateToken {
                     controller: actor,
                     count: c2,
@@ -383,6 +398,17 @@ fn parse_zone_verb_frame_inner(
             }
             ts.restore(tcp);
             break;
+        }
+        if saw_or && out.len() >= 2 {
+            return Ok((
+                vec![Effect::PromptChoice {
+                    chooser: actor,
+                    kind: crate::v2::ir::ChoiceKind::ChooseBranch(
+                        out.into_iter().map(|e| vec![e]).collect(),
+                    ),
+                }],
+                (),
+            ));
         }
         return Ok((out, ()));
     }
@@ -997,6 +1023,64 @@ fn parse_zone_verb_frame_inner(
             }
             ts.restore(cp);
         }
+        // 14b0. `put your choice of a <k1> [counter], [a] <k2> [counter], or [a] <k3> counter on <subj>`
+        // (`Assaultron Dominator`, `T-45 Power Armor`, `Owen Grady`, `Inspirit`, `Vivien, Monsters' Advocate`, `Invoke the Ancients`)
+        {
+            let ccp = ts.checkpoint();
+            if ts.eat_phrase(&["your", "choice", "of"]) || ts.eat_phrase(&["their", "choice", "of"])
+            {
+                let mut pairs: Vec<(ValueExpr, CounterKind)> = Vec::new();
+                loop {
+                    let icp = ts.checkpoint();
+                    let cnt = if ts.eat_word("a") || ts.eat_word("an") {
+                        Some(ValueExpr::Const(1))
+                    } else if let Ok(v) = try_parse(ts, parse_value_expr) {
+                        Some(v)
+                    } else if !pairs.is_empty() {
+                        Some(ValueExpr::Const(1))
+                    } else {
+                        None
+                    };
+                    if let Some(c) = cnt
+                        && let Ok(k) = try_parse(ts, parse_counter_kind)
+                    {
+                        let _ = ts.eat_word("counter") || ts.eat_word("counters");
+                        pairs.push((c, k));
+                        let sep_cp = ts.checkpoint();
+                        let had_comma = ts.eat_comma();
+                        let had_or = ts.eat_word("or");
+                        if had_comma || had_or {
+                            continue;
+                        }
+                        ts.restore(sep_cp);
+                        break;
+                    }
+                    ts.restore(icp);
+                    break;
+                }
+                if pairs.len() >= 2 && ts.eat_word("on") {
+                    let subject = parse_subject_ref(ts)?;
+                    let branches = pairs
+                        .into_iter()
+                        .map(|(count, kind)| {
+                            vec![Effect::MutateObject {
+                                subject: subject.clone(),
+                                mutation: ObjectMutation::PutCounters { kind, count },
+                                duration: Duration::Instant,
+                            }]
+                        })
+                        .collect();
+                    return Ok((
+                        vec![Effect::PromptChoice {
+                            chooser: actor,
+                            kind: crate::v2::ir::ChoiceKind::ChooseBranch(branches),
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(ccp);
+        }
         // 14b. `put <cnt> <kind> counter(s) [and <cnt2> <kind2> counter(s)] on <subj> [for each/every ...]`
         {
             let cp = ts.checkpoint();
@@ -1010,9 +1094,11 @@ fn parse_zone_verb_frame_inner(
                 && (ts.eat_word("counter") || ts.eat_word("counters"))
             {
                 let mut pairs = vec![(base, kind)];
+                let mut is_choice = false;
                 loop {
                     let acp = ts.checkpoint();
-                    if ts.eat_word("and") {
+                    let sep_or = ts.eat_word("or");
+                    if sep_or || ts.eat_word("and") {
                         let c2 = if ts.eat_word("a") || ts.eat_word("an") || ts.eat_word("another")
                         {
                             Some(ValueExpr::Const(1))
@@ -1023,6 +1109,9 @@ fn parse_zone_verb_frame_inner(
                             && let Ok(k2) = try_parse(ts, parse_counter_kind)
                             && (ts.eat_word("counter") || ts.eat_word("counters"))
                         {
+                            if sep_or {
+                                is_choice = true;
+                            }
                             pairs.push((c2, k2));
                             continue;
                         }
@@ -1049,6 +1138,54 @@ fn parse_zone_verb_frame_inner(
                             mutation: ObjectMutation::PutCounters { kind: k, count },
                             duration: Duration::Instant,
                         });
+                    }
+                    if is_choice {
+                        return Ok((
+                            vec![Effect::PromptChoice {
+                                chooser: actor,
+                                kind: crate::v2::ir::ChoiceKind::ChooseBranch(
+                                    out.into_iter().map(|e| vec![e]).collect(),
+                                ),
+                            }],
+                            (),
+                        ));
+                    }
+                    // Support `put a <kind> counter on <subj> or remove one from it` (`Jinxed Choker`, `Sigurd, Jarl of Ravensthorpe`)
+                    {
+                        let rcp = ts.checkpoint();
+                        if out.len() == 1
+                            && (ts.eat_phrase(&["or", "remove", "one", "from", "it"])
+                                || ts.eat_phrase(&["or", "remove", "a", "counter", "from", "it"]))
+                        {
+                            let put_eff = out.remove(0);
+                            let kind = match &put_eff {
+                                Effect::MutateObject {
+                                    mutation: ObjectMutation::PutCounters { kind, .. },
+                                    ..
+                                } => kind.clone(),
+                                _ => CounterKind::Any,
+                            };
+                            let rem_eff = Effect::MutateObject {
+                                subject: subject.clone(),
+                                mutation: ObjectMutation::RemoveCounters {
+                                    kind,
+                                    count: Some(ValueExpr::Const(1)),
+                                    all: false,
+                                },
+                                duration: Duration::Instant,
+                            };
+                            return Ok((
+                                vec![Effect::PromptChoice {
+                                    chooser: actor,
+                                    kind: crate::v2::ir::ChoiceKind::ChooseBranch(vec![
+                                        vec![put_eff],
+                                        vec![rem_eff],
+                                    ]),
+                                }],
+                                (),
+                            ));
+                        }
+                        ts.restore(rcp);
                     }
                     // Support `put a +1/+1 counter on that creature and a +1/+1 counter on ~` (`Juniper Order Ranger`)
                     {
@@ -1790,21 +1927,99 @@ fn parse_zone_verb_frame_inner(
             ));
         }
         ts.restore(lcp);
-        // `look at <subj>` (`Look at target opponent's hand`, `Look at a card at random in target player's hand`)
+        // `look at and play/cast <subj> [dur] [, and you may spend mana as though ...]` (`Mindleecher`, `Outrageous Robbery`, `Decadent Dragon`, `Ixhel`)
+        {
+            let lp_cp = ts.checkpoint();
+            if ts.eat_word("and") {
+                let cast_only = if ts.eat_word("cast") || ts.eat_word("casts") {
+                    Some(true)
+                } else if ts.eat_word("play") || ts.eat_word("plays") {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(cast_only) = cast_only
+                    && let Ok(subject) = try_parse(ts, parse_subject_ref)
+                {
+                    let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
+                        || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
+                    let dur = parse_trailing_duration(ts).unwrap_or(Duration::ForAsLongAsExiled);
+                    let mut out = vec![
+                        Effect::ScopedDuration {
+                            duration: dur.clone(),
+                            body: vec![Effect::ZoneOp {
+                                actor,
+                                op: ZoneOpKind::LookAt,
+                                subject: subject.clone(),
+                                from: Vec::new(),
+                                to: None,
+                                modifiers: EntryModifiers::default(),
+                                except: None,
+                                count: None,
+                            }],
+                        },
+                        Effect::MutatePlayer {
+                            player: actor,
+                            mutation: crate::v2::ir::PlayerMutation::GrantPlayPermission {
+                                cast_only,
+                                subject: Box::new(subject),
+                                free,
+                            },
+                            duration: dur.clone(),
+                        },
+                    ];
+                    let mcp = ts.checkpoint();
+                    let _ = ts.eat_comma();
+                    if (ts.eat_phrase(&[
+                        "and", "you", "may", "spend", "mana", "as", "though", "it", "were", "mana",
+                        "of", "any", "color", "to", "cast",
+                    ]) || ts.eat_phrase(&[
+                        "and", "you", "may", "spend", "mana", "as", "though", "it", "were", "mana",
+                        "of", "any", "type", "to", "cast",
+                    ]) || ts.eat_phrase(&[
+                        "and", "mana", "of", "any", "type", "can", "be", "spent", "to", "cast",
+                    ])) && (ts.eat_phrase(&["those", "spells"])
+                        || ts.eat_phrase(&["that", "spell"])
+                        || ts.eat_word("it")
+                        || ts.eat_word("them"))
+                    {
+                        out.push(Effect::MutatePlayer {
+                            player: actor,
+                            mutation: crate::v2::ir::PlayerMutation::Action(
+                                crate::v2::ir::PlayerActionKind::SpendManaAsAnyType,
+                            ),
+                            duration: dur,
+                        });
+                    } else {
+                        ts.restore(mcp);
+                    }
+                    return Ok((out, ()));
+                }
+            }
+            ts.restore(lp_cp);
+        }
+        // `look at <subj> [for as long as ...]` (`Look at target opponent's hand`, `Gustha's Scepter`, `Jester's Scepter`)
         if let Ok(subject) = try_parse(ts, parse_subject_ref) {
-            return Ok((
-                vec![Effect::ZoneOp {
-                    actor,
-                    op: ZoneOpKind::LookAt,
-                    subject,
-                    from: Vec::new(),
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: None,
-                }],
-                (),
-            ));
+            let eff = Effect::ZoneOp {
+                actor,
+                op: ZoneOpKind::LookAt,
+                subject,
+                from: Vec::new(),
+                to: None,
+                modifiers: EntryModifiers::default(),
+                except: None,
+                count: None,
+            };
+            if let Some(dur) = parse_trailing_duration(ts) {
+                return Ok((
+                    vec![Effect::ScopedDuration {
+                        duration: dur,
+                        body: vec![eff],
+                    }],
+                    (),
+                ));
+            }
+            return Ok((vec![eff], ()));
         }
         return Err(ts.err("expected target after `look at`"));
     }
