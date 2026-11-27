@@ -305,63 +305,15 @@ native!(ExecutableBody, self, {
         | Instruction::SetObjectTag { .. }
         | Instruction::UpdateStateTrack { .. }
         | Instruction::SideDeckOp(_)
-        | Instruction::BindResolutionX(_)
-        | Instruction::CreateAuraTokenAttached { .. }
         | Instruction::ScheduleDelayedEventTrigger { .. }
-        | Instruction::OfferSourceCounters { .. }
         | Instruction::OptionalSequence { .. }
-        | Instruction::ReturnExiledTargetCohort { .. }
-        | Instruction::ExileDelayedObjects(_)
-        | Instruction::RequireCondition(_)
-        | Instruction::Encore
-        | Instruction::Ninjutsu
-        | Instruction::Unearth
-        | Instruction::Cascade
-        | Instruction::CascadeBottom
-        | Instruction::Myriad
-        | Instruction::CopyCapturedAbility
-        | Instruction::CopyOnCast(_)
-        | Instruction::MadnessCast
-        | Instruction::MiracleCast(_)
-        | Instruction::CastDefeatedSiege
-        | Instruction::ReboundCast(_)
-        | Instruction::EndStepCast { .. }
-        | Instruction::SacrificeDelayedObjects(_)
-        | Instruction::ScheduleArtifactReturn(_)
-        | Instruction::ReturnDelayedGraveyardCard(_)
-        | Instruction::ReturnDelayedPermanentToHand(_)
-        | Instruction::ReturnDelayedExileWithCounters(_)
-        | Instruction::ReturnDelayedExile(_)
-        | Instruction::ExileUnearthed(_)
-        | Instruction::ResolveTransfer(_)
-        | Instruction::ExileDefeatedSiege
-        | Instruction::ExtortDrain
-        | Instruction::ResolveGrowth(_)
-        | Instruction::ResolveCounterKeyword(_)
-        | Instruction::SacrificeEvoked
-        | Instruction::SacrificeStateTriggerSource
-        | Instruction::ResolveKeywordTrigger(_)
-        | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-        | Instruction::PutHandPermanentsOntoBattlefield { .. }
-        | Instruction::MayRevealLibraryTop
-        | Instruction::ChooseFoundSpell
-        | Instruction::CastFoundSpell(_)
-        | Instruction::ReturnChosenXGraveyardCreatures
         | Instruction::FixedTargetClause(_)
         | Instruction::SearchLibrary { .. }
-        | Instruction::CreateTokenAndAttach { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
-        | Instruction::ChooseRevealedHandCard { .. }
-        | Instruction::RememberPermanentTarget
-        | Instruction::ResolvePowerAbility(_)
         | Instruction::Attach(_)
         | Instruction::AffectPermanentTargets { .. }
-        | Instruction::ExileOnePerPlayerUntilSourceLeaves
-        | Instruction::ReturnDelayedGraveyardToHand(_)
-        | Instruction::DamageFromGrantingPermanent { .. }
         | Instruction::Sacrifice { .. }
-        | Instruction::SacrificeRandomUntilLand
         | Instruction::Discard { .. } => Err(ApplicabilityError),
         Instruction::CreateTokens { creations } => creations
             .iter()
@@ -452,6 +404,14 @@ native!(ExecutableBody, self, {
                     | spellwake_engine::toolbox::PlayerMutation::Mill(_)
                     | spellwake_engine::toolbox::PlayerMutation::Bolster(_)
                     | spellwake_engine::toolbox::PlayerMutation::Amass { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
+                    | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::RequireCondition(_)
+                    | spellwake_engine::toolbox::PlayerMutation::ExtortDrain
+                    | spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    | spellwake_engine::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+                    | spellwake_engine::toolbox::PlayerMutation::SacrificeRandomUntilLand
             ) =>
         {
             Err(ApplicabilityError)
@@ -466,6 +426,41 @@ native!(ExecutableBody, self, {
                     | spellwake_engine::toolbox::ObjectMutation::SetPrepared
                     | spellwake_engine::toolbox::ObjectMutation::ReselectAttackDefender
                     | spellwake_engine::toolbox::ObjectMutation::SoulbondPair { .. }
+                    | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    | spellwake_engine::toolbox::ObjectMutation::Ninjutsu
+                    | spellwake_engine::toolbox::ObjectMutation::Unearth
+                    | spellwake_engine::toolbox::ObjectMutation::Myriad
+                    | spellwake_engine::toolbox::ObjectMutation::ScheduleArtifactReturn(_)
+                    | spellwake_engine::toolbox::ObjectMutation::ExileUnearthed(_)
+                    | spellwake_engine::toolbox::ObjectMutation::ResolveTransfer(_)
+                    | spellwake_engine::toolbox::ObjectMutation::ExileDefeatedSiege
+                    | spellwake_engine::toolbox::ObjectMutation::ResolveGrowth(_)
+                    | spellwake_engine::toolbox::ObjectMutation::ResolveCounterKeyword(_)
+                    | spellwake_engine::toolbox::ObjectMutation::SacrificeEvoked
+                    | spellwake_engine::toolbox::ObjectMutation::SacrificeStateTriggerSource
+                    | spellwake_engine::toolbox::ObjectMutation::ResolveKeywordTrigger(_)
+                    | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                    | spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                    | spellwake_engine::toolbox::ObjectMutation::ResolvePowerAbility(_)
+            ) =>
+        {
+            Err(ApplicabilityError)
+        }
+        Instruction::StackOp(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::StackOpKind::Encore
+                    | spellwake_engine::toolbox::StackOpKind::Cascade
+                    | spellwake_engine::toolbox::StackOpKind::CascadeBottom
+                    | spellwake_engine::toolbox::StackOpKind::CopyCapturedAbility
+                    | spellwake_engine::toolbox::StackOpKind::CopyOnCast(_)
+                    | spellwake_engine::toolbox::StackOpKind::MadnessCast
+                    | spellwake_engine::toolbox::StackOpKind::MiracleCast(_)
+                    | spellwake_engine::toolbox::StackOpKind::CastDefeatedSiege
+                    | spellwake_engine::toolbox::StackOpKind::ReboundCast(_)
+                    | spellwake_engine::toolbox::StackOpKind::EndStepCast { .. }
+                    | spellwake_engine::toolbox::StackOpKind::ChooseFoundSpell
+                    | spellwake_engine::toolbox::StackOpKind::CastFoundSpell(_)
             ) =>
         {
             Err(ApplicabilityError)
@@ -481,6 +476,7 @@ native!(ExecutableBody, self, {
                     | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
                         ..
                     }
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent
             ) =>
         {
             Err(ApplicabilityError)
@@ -491,20 +487,11 @@ native!(ExecutableBody, self, {
         | Instruction::ChooseCreatureType { .. }
         | Instruction::ExileTopPlay { .. }
         | Instruction::RepeatLoop { .. }
-        | Instruction::RollDie { .. }
-        | Instruction::FlipCoins { .. }
         | Instruction::ChooseValue { .. }
-        | Instruction::Connive { .. }
-        | Instruction::ConniveFinalize { .. }
-        | Instruction::Discover { .. }
         | Instruction::Fight { .. }
         | Instruction::Exchange(_)
-        | Instruction::OfferAnyPlayer { .. }
         | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatchExt { .. }
-        | Instruction::CreateTokenCopyExt { .. }
-        | Instruction::ReturnEarthbentCard
         | Instruction::DrawCards(_)
         | Instruction::MutateObject(_)
         | Instruction::AdjustLife(_)

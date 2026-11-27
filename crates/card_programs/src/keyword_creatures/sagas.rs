@@ -83,7 +83,9 @@ fn chapter_body(
         "For each player, exile up to one target non-Saga, nonland permanent that player controls until this Saga leaves the battlefield." => {
             Some(ExecutableBody::new(
                 BodyTarget::FilteredPermanent(ObjectFilter::nonland().non_saga()),
-                vec![Instruction::ExileOnePerPlayerUntilSourceLeaves],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::exile_one_per_player_until_source_leaves(),
+                ))],
             ))
         }
         "Put target creature or planeswalker card from a graveyard onto the battlefield under your control." => {

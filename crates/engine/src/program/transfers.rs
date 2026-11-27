@@ -48,7 +48,9 @@ impl TransferKeyword {
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::ResolveTransfer(self),
+                    Instruction::MutateObject(Box::new(
+                        crate::toolbox::MutateObjectSpec::resolve_transfer(self),
+                    )),
                 ],
             ),
         }

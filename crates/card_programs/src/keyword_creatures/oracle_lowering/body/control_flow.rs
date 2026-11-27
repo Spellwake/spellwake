@@ -1893,10 +1893,16 @@ pub(super) fn lower_multi_target_fixed_clauses(
                         | Instruction::Jump { .. }
                         | Instruction::OptionalSequence { .. }
                         | Instruction::OfferDynamicManaPayment { .. }
-                        | Instruction::FlipCoins {
-                            lose_destination: Some(_),
-                            ..
-                        }
+                ) || matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                                lose_destination: Some(_),
+                                ..
+                            } | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
+                        )
                 )
             });
             let single_instruction = clause.instructions.len() == 1;
@@ -2453,8 +2459,15 @@ pub(super) fn lower_bound_x_for_resolution(
             }
             Instruction::LookTopChooseExt {
                 reveal_only: true, ..
+            } => Some(ValueObjectRef::RevealedTop),
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                ) =>
+            {
+                Some(ValueObjectRef::RevealedTop)
             }
-            | Instruction::MayRevealLibraryTop => Some(ValueObjectRef::RevealedTop),
             Instruction::ZoneOp(spec)
                 if matches!(
                     &spec.source,
@@ -7084,13 +7097,17 @@ pub(in super::super) fn lower_instruction_seq(
             && matches!(condition.as_ref(), ConditionAst::WonContest)
         {
             let flip_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::FlipCoins {
-                player: ResolvingPlayer::Controller,
-                mode: spellwake_engine::program::CoinFlipMode::Single,
-                win_body: None,
-                lose_body: None,
-                lose_destination: Some(0),
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::CoinFlipMode::Single,
+                        None,
+                        None,
+                        Some(0),
+                    ),
+                )));
             lower_instruction_seq(
                 then_body,
                 builder,
@@ -7108,9 +7125,12 @@ pub(in super::super) fn lower_instruction_seq(
                     .instructions
                     .push(Instruction::Jump { destination: 0 });
                 let lose_dest = builder.instructions.len();
-                if let Some(Instruction::FlipCoins {
-                    lose_destination, ..
-                }) = builder.instructions.get_mut(flip_idx)
+                if let Some(Instruction::MutatePlayer(spec)) =
+                    builder.instructions.get_mut(flip_idx)
+                    && let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                        lose_destination,
+                        ..
+                    } = &mut spec.op
                 {
                     *lose_destination = Some(lose_dest);
                 }
@@ -7132,9 +7152,12 @@ pub(in super::super) fn lower_instruction_seq(
                 i += 3;
             } else {
                 let lose_dest = builder.instructions.len();
-                if let Some(Instruction::FlipCoins {
-                    lose_destination, ..
-                }) = builder.instructions.get_mut(flip_idx)
+                if let Some(Instruction::MutatePlayer(spec)) =
+                    builder.instructions.get_mut(flip_idx)
+                    && let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                        lose_destination,
+                        ..
+                    } = &mut spec.op
                 {
                     *lose_destination = Some(lose_dest);
                 }
@@ -7552,9 +7575,14 @@ pub(in super::super) fn lower_instruction_seq(
                 )
                 .is_ok()
                     && probe.instructions.len() == 1
-                    && let Some(Instruction::OfferAnyPlayer {
-                        players, cost_body, ..
-                    }) = probe.instructions.pop()
+                    && let Some(Instruction::MutatePlayer(offer_spec)) = probe.instructions.pop()
+                    && let spellwake_engine::toolbox::MutatePlayerSpec {
+                        players: spellwake_engine::toolbox::PlayerSelector::Group(players),
+                        op:
+                            spellwake_engine::toolbox::PlayerMutation::OfferAnyPlayer {
+                                cost_body, ..
+                            },
+                    } = *offer_spec
                 {
                     let paid_body = match paid_slice {
                         Some(p_ast) => lower_offer_loop_player_sub_body(
@@ -7610,12 +7638,16 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     builder.x_target_count |= probe.x_target_count;
                     builder.up_to_x_target_count |= probe.up_to_x_target_count;
-                    builder.instructions.push(Instruction::OfferAnyPlayer {
-                        players,
-                        cost_body,
-                        paid_body,
-                        declined_body,
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::offer_any_player(
+                                players,
+                                *cost_body,
+                                paid_body,
+                                declined_body,
+                            ),
+                        )));
                     i += advance;
                     continue;
                 }
@@ -8262,7 +8294,11 @@ pub(in super::super) fn lower_instruction_seq(
                             )?;
                             let mut paid_ops = Vec::new();
                             if let Some(val) = bind_val {
-                                paid_ops.push(Instruction::BindResolutionX(val));
+                                paid_ops.push(Instruction::MutatePlayer(Box::new(
+                                    spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(
+                                        val,
+                                    ),
+                                )));
                             }
                             paid_ops.push(Instruction::EmitReflexiveTrigger {
                                 body: Box::new(reflexive_body),
@@ -8291,7 +8327,9 @@ pub(in super::super) fn lower_instruction_seq(
                                     self_pronoun_valid,
                                 )?;
                                 let paid_ops = vec![
-                                    Instruction::BindResolutionX(x_val),
+                                    Instruction::MutatePlayer(Box::new(
+                                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(x_val),
+                                    )),
                                     Instruction::EmitReflexiveTrigger {
                                         body: Box::new(reflexive_body),
                                     },
@@ -8567,7 +8605,13 @@ pub(in super::super) fn lower_instruction_seq(
                             offer_idx + 1 + paid_len,
                         ));
                         if let Some(val) = bind_val {
-                            builder.instructions.push(Instruction::BindResolutionX(val));
+                            builder
+                                .instructions
+                                .push(Instruction::MutatePlayer(Box::new(
+                                    spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(
+                                        val,
+                                    ),
+                                )));
                         }
                         builder
                             .instructions
@@ -8597,7 +8641,11 @@ pub(in super::super) fn lower_instruction_seq(
                             ));
                             builder
                                 .instructions
-                                .push(Instruction::BindResolutionX(x_val));
+                                .push(Instruction::MutatePlayer(Box::new(
+                                    spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(
+                                        x_val,
+                                    ),
+                                )));
                             builder
                                 .instructions
                                 .push(Instruction::EmitReflexiveTrigger {
@@ -8746,7 +8794,11 @@ pub(in super::super) fn lower_instruction_seq(
                 });
             }
             if let Some(val) = bind_val {
-                builder.instructions.push(Instruction::BindResolutionX(val));
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(val),
+                    )));
             }
             builder
                 .instructions
@@ -8830,7 +8882,11 @@ pub(in super::super) fn lower_instruction_seq(
                 .as_ref()
                 .is_some_and(|v| builder.target != BodyTarget::None || !v.uses_target());
             if emit_before && let Some(val) = pre_x {
-                builder.instructions.push(Instruction::BindResolutionX(val));
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(val),
+                    )));
                 lower_instruction_seq(
                     body,
                     builder,
@@ -8853,7 +8909,11 @@ pub(in super::super) fn lower_instruction_seq(
                 if let Ok(val) =
                     lower_bound_x_for_resolution(x_expr, builder, vocabulary, in_trigger)
                 {
-                    builder.instructions.push(Instruction::BindResolutionX(val));
+                    builder
+                        .instructions
+                        .push(Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(val),
+                        )));
                 }
             }
             i += 1;
@@ -8897,8 +8957,6 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::ExileTopPlay { .. }
                         | Instruction::LookTopChooseExt { .. }
                         | Instruction::RevealUntilMatchExt { .. }
-                        | Instruction::RevealTopTwoPiles { .. }
-                        | Instruction::MayRevealLibraryTop
                         | Instruction::SearchLibrary { .. }
                         | Instruction::MutateObject(_)
                 ) || matches!(
@@ -8918,6 +8976,8 @@ pub(in super::super) fn lower_instruction_seq(
                                 | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { .. }
                                 | spellwake_engine::toolbox::PlayerMutation::Behold { .. }
                                 | spellwake_engine::toolbox::PlayerMutation::Clash
+                                | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
+                                | spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
                                 | spellwake_engine::toolbox::PlayerMutation::ChooseOneLastMoved
                                 | spellwake_engine::toolbox::PlayerMutation::Mill(_)
                         )
@@ -9288,7 +9348,14 @@ pub(in super::super) fn lower_instruction_seq(
                     Instruction::LookTopChooseExt {
                         reveal_only: true,
                         ..
-                    } | Instruction::MayRevealLibraryTop
+                    }
+                ) || matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                        )
                 ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
                         &spec.source,
@@ -9806,7 +9873,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 found = Some(false);
                                 break;
                             }
-                            Instruction::MutatePlayer(spec) => match spec.op {
+                            Instruction::MutatePlayer(spec) => match &spec.op {
                                 spellwake_engine::toolbox::PlayerMutation::Mill(_) => {
                                     found = Some(false);
                                     break;
@@ -9815,7 +9882,10 @@ pub(in super::super) fn lower_instruction_seq(
                                     found = Some(true);
                                     break;
                                 }
-                                spellwake_engine::toolbox::PlayerMutation::AddMana(_) => continue,
+                                spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                                | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_) => {
+                                    continue;
+                                }
                                 _ => break,
                             },
                             Instruction::OptionalEffect { .. }
@@ -9823,7 +9893,6 @@ pub(in super::super) fn lower_instruction_seq(
                             | Instruction::BranchIfFalse { .. }
                             | Instruction::BranchCondition { .. }
                             | Instruction::Jump { .. }
-                            | Instruction::BindResolutionX(_)
                             | Instruction::ChooseValue { .. }
                             | Instruction::AdjustLife(_) => continue,
                             Instruction::ApplyContinuous(spec)
@@ -11661,7 +11730,12 @@ pub(in super::super) fn lower_instruction_seq(
                             .is_none_or(|eb| eb.target == BodyTarget::None)
                     {
                         if use_may_reveal {
-                            builder.instructions.push(Instruction::MayRevealLibraryTop);
+                            builder
+                                .instructions
+                                .push(Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::may_reveal_library_top(
+                                ),
+                            )));
                         } else {
                             builder.instructions.push(Instruction::OptionalEffect {
                                 chooser: ResolvingPlayer::Controller,
@@ -13486,13 +13560,15 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     builder
                         .instructions
-                        .push(Instruction::ChooseRevealedHandCard {
-                            minimum_mana_value,
-                            nonland_only,
-                            filter,
-                            count: nz,
-                            action,
-                        });
+                        .push(Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
+                                minimum_mana_value,
+                                nonland_only,
+                                filter,
+                                nz,
+                                action,
+                            ),
+                        )));
                     if let Some(draw_amt) = trailing_target_draw {
                         builder
                             .instructions
@@ -13844,9 +13920,11 @@ pub(in super::super) fn lower_instruction_seq(
         {
             builder
                 .instructions
-                .push(Instruction::CreateTokenAndAttach {
-                    definition: Box::new(creation.definition),
-                });
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::create_token_and_attach(Box::new(
+                        creation.definition,
+                    )),
+                )));
             i += 2;
             continue;
         }
@@ -13902,7 +13980,10 @@ pub(in super::super) fn lower_instruction_seq(
                 let fixed = |bt: BodyTarget| {
                     Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                         bt,
-                        vec![Instruction::RememberPermanentTarget],
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
                     )))
                 };
                 builder.instructions.push(fixed(src_bt));
@@ -13926,12 +14007,24 @@ pub(in super::super) fn lower_instruction_seq(
                         op,
                         Instruction::FixedTargetClause(_)
                             | Instruction::AffectPermanentTargets { .. }
-                            | Instruction::RememberPermanentTarget
+                    ) || matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            )
                     )
                 })
             {
                 let mut first_ops = std::mem::take(&mut builder.instructions);
-                prepend_instruction_at(&mut first_ops, 0, Instruction::RememberPermanentTarget);
+                prepend_instruction_at(
+                    &mut first_ops,
+                    0,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
+                );
                 let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
                 builder
                     .instructions
@@ -13941,7 +14034,13 @@ pub(in super::super) fn lower_instruction_seq(
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(dst_bt, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            dst_bt,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder.instructions.push(Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::creature_power_to_other(
@@ -14107,12 +14206,12 @@ pub(in super::super) fn lower_instruction_seq(
                     builder
                         .instructions
                         .push(Instruction::FixedTargetClause(Box::new(
-                            ExecutableBody::new(bt_a, vec![Instruction::RememberPermanentTarget]),
+                            ExecutableBody::new(bt_a, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     builder
                         .instructions
                         .push(Instruction::FixedTargetClause(Box::new(
-                            ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                            ExecutableBody::new(bt_b, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     if is_optional {
                         builder.instructions.push(Instruction::OptionalEffect {
@@ -14182,12 +14281,12 @@ pub(in super::super) fn lower_instruction_seq(
                     builder
                         .instructions
                         .push(Instruction::FixedTargetClause(Box::new(
-                            ExecutableBody::new(bt_a, vec![Instruction::RememberPermanentTarget]),
+                            ExecutableBody::new(bt_a, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     builder
                         .instructions
                         .push(Instruction::FixedTargetClause(Box::new(
-                            ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                            ExecutableBody::new(bt_b, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     if is_optional_attach {
                         builder.instructions.push(Instruction::OptionalEffect {
@@ -14246,7 +14345,13 @@ pub(in super::super) fn lower_instruction_seq(
                         op,
                         Instruction::FixedTargetClause(_)
                             | Instruction::AffectPermanentTargets { .. }
-                            | Instruction::RememberPermanentTarget
+                    ) || matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            )
                     )
                 })
             {
@@ -14257,7 +14362,14 @@ pub(in super::super) fn lower_instruction_seq(
                         rewrite_body_target_related_to_first_target_controller(&mut bt_b);
                     }
                     let mut first_ops = std::mem::take(&mut builder.instructions);
-                    prepend_instruction_at(&mut first_ops, 0, Instruction::RememberPermanentTarget);
+                    prepend_instruction_at(
+                        &mut first_ops,
+                        0,
+                        Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        )),
+                    );
                     let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
                     builder
                         .instructions
@@ -14267,7 +14379,7 @@ pub(in super::super) fn lower_instruction_seq(
                     builder
                         .instructions
                         .push(Instruction::FixedTargetClause(Box::new(
-                            ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                            ExecutableBody::new(bt_b, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     if is_optional_attach {
                         builder.instructions.push(Instruction::OptionalEffect {
@@ -14331,12 +14443,24 @@ pub(in super::super) fn lower_instruction_seq(
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(bt_a, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            bt_a,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            bt_b,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 if is_optional_fight {
                     builder.instructions.push(Instruction::OptionalEffect {
@@ -14383,7 +14507,13 @@ pub(in super::super) fn lower_instruction_seq(
                         op,
                         Instruction::FixedTargetClause(_)
                             | Instruction::AffectPermanentTargets { .. }
-                            | Instruction::RememberPermanentTarget
+                    ) || matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            )
                     )
                 })
                 && let Ok(mut bt_b) = lower_battlefield_body_target(fb, vocabulary)
@@ -14393,7 +14523,13 @@ pub(in super::super) fn lower_instruction_seq(
                     rewrite_body_target_related_to_first_target_controller(&mut bt_b);
                 }
                 let mut first_ops = std::mem::take(&mut builder.instructions);
-                prepend_instruction_at(&mut first_ops, 0, Instruction::RememberPermanentTarget);
+                prepend_instruction_at(
+                    &mut first_ops,
+                    0,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
+                );
                 let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
                 builder
                     .instructions
@@ -14403,7 +14539,13 @@ pub(in super::super) fn lower_instruction_seq(
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            bt_b,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 if is_optional_fight {
                     builder.instructions.push(Instruction::OptionalEffect {

@@ -33,7 +33,7 @@ pub use life_damage::{
     AdjustLifeSpec, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, LifeOp, MutatePlayerSpec,
     PlayerMutation,
 };
-pub use mutate::{DrawCardsSpec, MutateObjectSpec, ObjectMutation};
+pub use mutate::{DrawCardsSpec, MutateObjectSpec, ObjectMutation, TokenCopySpec};
 pub use query::{ObjectQuery, PlayerSelector, QuerySlice, QueryZone};
 pub use stack_op::{CounterDestination, StackOpKind, StackOpSpec, StackTargetSelector};
 pub use tags::{
@@ -42,6 +42,6 @@ pub use tags::{
     StateTrackValue, TagKey, TagValue,
 };
 pub use zone_op::{
-    GraveyardSemantics, LibraryOrderPos, SelectionConstraint, ZoneController, ZoneDest, ZoneOpSpec,
-    ZoneSelection,
+    DelayedZoneAction, GraveyardSemantics, LibraryOrderPos, SelectionConstraint, ZoneController,
+    ZoneDest, ZoneOpSpec, ZoneSelection,
 };

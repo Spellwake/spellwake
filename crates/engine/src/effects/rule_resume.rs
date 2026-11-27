@@ -1416,7 +1416,11 @@ impl EffectWindow {
                 next.revision = revision;
                 let mut journal = DamageJournal::default();
                 let mut append = RulesJournal::default();
-                if matches!(next.current_instruction()?, Instruction::CopyOnCast(_)) {
+                if matches!(
+                    next.current_instruction()?,
+                    Instruction::StackOp(spec)
+                        if matches!(spec.op, crate::toolbox::StackOpKind::CopyOnCast(_))
+                ) {
                     next.add_copy_choice(entry.id(), actor, choice)?;
                     return next.progress_rules(
                         journal,
@@ -1427,7 +1431,11 @@ impl EffectWindow {
                     );
                 }
                 let instruction = next.current_instruction()?.clone();
-                if instruction == Instruction::CopyCapturedAbility {
+                if matches!(
+                    &instruction,
+                    Instruction::StackOp(spec)
+                        if matches!(spec.op, crate::toolbox::StackOpKind::CopyCapturedAbility)
+                ) {
                     let source = next.delayed_ability_source(entry.id())?;
                     if let Some(changes) =
                         next.collect_delayed_target(entry.id(), &source, choice)?

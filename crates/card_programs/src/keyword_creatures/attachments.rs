@@ -820,9 +820,11 @@ fn bearer_trigger(keyword: &str, vocabulary: &CreatureTypeVocabulary) -> Option<
                 declined_destination: 2,
             });
         }
-        instructions.push(Instruction::CreateTokenAndAttach {
-            definition: Box::new(creation.definition),
-        });
+        instructions.push(Instruction::MutateObject(Box::new(
+            spellwake_engine::toolbox::MutateObjectSpec::create_token_and_attach(Box::new(
+                creation.definition,
+            )),
+        )));
         return Some(TriggeredAbility {
             id: TriggeredAbilityId(1),
             condition: spellwake_engine::program::TriggerSpec::enters(
@@ -860,9 +862,11 @@ fn bearer_trigger(keyword: &str, vocabulary: &CreatureTypeVocabulary) -> Option<
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::CreateTokenAndAttach {
-                definition: Box::new(definition),
-            }],
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::create_token_and_attach(Box::new(
+                    definition,
+                )),
+            ))],
         ),
     })
 }

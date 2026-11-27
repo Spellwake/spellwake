@@ -108,10 +108,12 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                 maximum: 1,
                 action: spellwake_engine::program::PermanentTargetAction::Exile,
             },
-            Instruction::ReturnExiledTargetCohort {
-                next_end_step: false,
-                owner_controls,
-            },
+            Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
+                    false,
+                    owner_controls,
+                ),
+            )),
         ];
         if draw {
             instructions.push(
@@ -158,10 +160,12 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                     maximum,
                     action: spellwake_engine::program::PermanentTargetAction::Exile,
                 },
-                Instruction::ReturnExiledTargetCohort {
-                    next_end_step,
-                    owner_controls: false,
-                },
+                Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
+                        next_end_step,
+                        false,
+                    ),
+                )),
             ],
         ));
     }
@@ -191,12 +195,14 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::PutHandPermanentsOntoBattlefield {
-                player: ResolvingPlayer::Controller,
-                types: [kind].into(),
-                maximum: 2,
-                tapped: false,
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::put_hand_permanents_onto_battlefield(
+                    ResolvingPlayer::Controller,
+                    [kind].into(),
+                    2,
+                    false,
+                ),
+            ))],
         ));
     }
     let lower = text.to_ascii_lowercase();
@@ -227,7 +233,10 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             _ => return None,
         };
         let fixed = |filter| Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(filter), vec![Instruction::RememberPermanentTarget],
+            BodyTarget::FilteredPermanent(filter),
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+            ))],
         )));
         return Some(ExecutableBody::new(BodyTarget::None, vec![
             fixed(ObjectFilter::creature().controlled()),
@@ -909,8 +918,12 @@ pub(in crate::keyword_creatures) fn exile_followup(
         return None;
     }
     if destroyed {
-        body.instructions
-            .insert(0, Instruction::RememberPermanentTarget);
+        body.instructions.insert(
+            0,
+            Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+            )),
+        );
     }
 
     if next

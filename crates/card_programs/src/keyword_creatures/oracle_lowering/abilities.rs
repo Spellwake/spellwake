@@ -1078,7 +1078,11 @@ pub(super) fn lower_ability(
                         prepend_instruction_at(
                             &mut opt_body.instructions,
                             0,
-                            Instruction::RequireCondition(cond),
+                            Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                                    cond,
+                                ),
+                            )),
                         );
                     }
                     options.push(opt_body);
@@ -1109,7 +1113,11 @@ pub(super) fn lower_ability(
                             prepend_instruction_at(
                                 &mut b.instructions,
                                 0,
-                                Instruction::RequireCondition(cond),
+                                Instruction::MutatePlayer(Box::new(
+                                    spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                                        cond,
+                                    ),
+                                )),
                             );
                         }
                         b
@@ -1283,7 +1291,9 @@ fn build_single_triggered_ability(
                 prepend_instruction_at(
                     &mut opt_body.instructions,
                     0,
-                    Instruction::RequireCondition(cond),
+                    Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::require_condition(cond),
+                    )),
                 );
             }
             options.push(opt_body);
@@ -1310,7 +1320,9 @@ fn build_single_triggered_ability(
                     prepend_instruction_at(
                         &mut b.instructions,
                         0,
-                        Instruction::RequireCondition(cond),
+                        Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::require_condition(cond),
+                        )),
                     );
                 }
                 b
@@ -1491,6 +1503,7 @@ fn rewrite_instructions_unique_related_player(
                     }
                     | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
                     | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent
                     | spellwake_engine::toolbox::DamageTargetQuery::Divided { .. } => {}
                 }
             }
@@ -1501,6 +1514,55 @@ fn rewrite_instructions_unique_related_player(
                     &|ap| rewrite_affected_players_if_unique(ap, replacement),
                     &|_| {},
                 );
+                match &mut spec.op {
+                    spellwake_engine::toolbox::PlayerMutation::OfferAnyPlayer {
+                        cost_body,
+                        paid_body,
+                        declined_body,
+                    } => {
+                        rewrite_instructions_unique_related_player(
+                            &mut cost_body.instructions,
+                            replacement,
+                        );
+                        rewrite_instructions_unique_related_player(
+                            &mut paid_body.instructions,
+                            replacement,
+                        );
+                        if let Some(dec) = declined_body {
+                            rewrite_instructions_unique_related_player(
+                                &mut dec.instructions,
+                                replacement,
+                            );
+                        }
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    } => {
+                        if let Some(wb) = win_body {
+                            rewrite_instructions_unique_related_player(
+                                &mut wb.instructions,
+                                replacement,
+                            );
+                        }
+                        if let Some(lb) = lose_body {
+                            rewrite_instructions_unique_related_player(
+                                &mut lb.instructions,
+                                replacement,
+                            );
+                        }
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                        for band in bands {
+                            rewrite_instructions_unique_related_player(
+                                &mut band.body.instructions,
+                                replacement,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
             }
             Instruction::ZoneOp(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(

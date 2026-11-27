@@ -1167,8 +1167,11 @@ impl EffectWindow {
     /// Rejects missing resolving ownership, an invalid captured player/amount,
     /// inconsistent bounded conversion or a failed characteristic evaluation.
     fn source_sacrifice_player(&self, entry: &StackEntry, instruction: &Instruction) -> SeatId {
-        if matches!(instruction, Instruction::SacrificeEvoked)
-            && let StackKind::TriggeredAbility { source } = entry.kind()
+        if matches!(
+            instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::SacrificeEvoked)
+        ) && let StackKind::TriggeredAbility { source } = entry.kind()
             && let Some(player) = self
                 .window
                 .cards()
@@ -1255,15 +1258,47 @@ impl EffectWindow {
                     Some(source.id())
                 }
                 StackKind::DelayedCopy { .. }
-                    if matches!(instruction, Instruction::SacrificeDelayedObjects(_)) =>
+                    if matches!(
+                        instruction,
+                        Instruction::ZoneOp(spec)
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Delayed(
+                                    crate::toolbox::DelayedZoneAction::SacrificeObjects(_)
+                                )
+                            )
+                    ) =>
                 {
                     None
                 }
                 _ => return Err(EffectError::InconsistentProgram),
             };
             let subjects = match instruction {
-                Instruction::SacrificeDelayedObjects(ids) => ids.as_slice(),
-                Instruction::EndStepCast { permanent, .. } => std::slice::from_ref(permanent),
+                Instruction::ZoneOp(spec)
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Delayed(
+                            crate::toolbox::DelayedZoneAction::SacrificeObjects(_)
+                        )
+                    ) =>
+                {
+                    let crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::SacrificeObjects(ids),
+                    ) = &spec.destination
+                    else {
+                        unreachable!();
+                    };
+                    ids.as_slice()
+                }
+                Instruction::StackOp(spec)
+                    if matches!(spec.op, crate::toolbox::StackOpKind::EndStepCast { .. }) =>
+                {
+                    let crate::toolbox::StackOpKind::EndStepCast { permanent, .. } = &spec.op
+                    else {
+                        unreachable!();
+                    };
+                    std::slice::from_ref(permanent)
+                }
                 _ => std::slice::from_ref(
                     source_id.as_ref().ok_or(EffectError::InconsistentProgram)?,
                 ),
@@ -1276,13 +1311,22 @@ impl EffectWindow {
         // the same replacement, physical-owner ordering and simultaneous commit.
         let all;
         let (players, amount, operation) = match instruction {
-            Instruction::ChooseRevealedHandCard {
-                minimum_mana_value,
-                nonland_only,
-                filter,
-                count,
-                action,
-            } => {
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
+                ) =>
+            {
+                let crate::toolbox::PlayerMutation::ChooseRevealedHandCard {
+                    minimum_mana_value,
+                    nonland_only,
+                    filter,
+                    count,
+                    action,
+                } = &spec.op
+                else {
+                    unreachable!();
+                };
                 let entry = self
                     .window
                     .resolving()
@@ -1322,15 +1366,30 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::ReturnDelayedPermanentToHand(object) => {
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnPermanentToHand(_)
+                    )
+                ) =>
+            {
+                let crate::toolbox::ZoneDest::Delayed(
+                    crate::toolbox::DelayedZoneAction::ReturnPermanentToHand(object),
+                ) = spec.destination
+                else {
+                    unreachable!();
+                };
                 all = ValueExpr::Literal(1.into());
                 (
                     AffectedPlayers::EachPlayer,
                     &all,
-                    ResolutionSelectionOperation::ReturnSingle { object: *object },
+                    ResolutionSelectionOperation::ReturnSingle { object },
                 )
             }
-            Instruction::ExileDefeatedSiege => {
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::ExileDefeatedSiege) =>
+            {
                 let entry = self
                     .window
                     .resolving()
@@ -1351,7 +1410,20 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::ExileDelayedObjects(ids) => {
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ExileObjects(_)
+                    )
+                ) =>
+            {
+                let crate::toolbox::ZoneDest::Delayed(
+                    crate::toolbox::DelayedZoneAction::ExileObjects(ids),
+                ) = &spec.destination
+                else {
+                    unreachable!();
+                };
                 let objects: BTreeSet<_> = ids
                     .iter()
                     .copied()
@@ -1390,7 +1462,12 @@ impl EffectWindow {
                 (AffectedPlayers::EachPlayer, &all, operation)
             }
             Instruction::AffectPermanentTargets { .. } => return Ok(false),
-            Instruction::ExileOnePerPlayerUntilSourceLeaves => {
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+                ) =>
+            {
                 let entry = self
                     .window
                     .resolving()
@@ -1544,7 +1621,12 @@ impl EffectWindow {
                     filter: filter.clone(),
                 },
             ),
-            Instruction::SacrificeRandomUntilLand => {
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                ) =>
+            {
                 let object = self
                     .resolution_cursor()
                     .and_then(|cursor| cursor.random_selection)
@@ -1611,12 +1693,7 @@ impl EffectWindow {
             | Instruction::ChooseOption { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::RollDie { .. }
-            | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Connive { .. }
-            | Instruction::ConniveFinalize { .. }
-            | Instruction::Discover { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
@@ -1630,63 +1707,17 @@ impl EffectWindow {
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
             | Instruction::StackOp(_)
-            | Instruction::BindResolutionX(_)
-            | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::ResolvePowerAbility(_)
-            | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ChooseCreatureType { .. }
-            | Instruction::RememberPermanentTarget
-            | Instruction::OfferSourceCounters { .. }
-            | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::FixedTargetClause(_)
-            | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::MayRevealLibraryTop
-            | Instruction::ChooseFoundSpell
-            | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::RequireCondition(_)
-            | Instruction::Encore
-            | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Ninjutsu
-            | Instruction::Unearth
-            | Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::Myriad
-            | Instruction::CopyCapturedAbility
-            | Instruction::CopyOnCast(_)
-            | Instruction::MadnessCast
-            | Instruction::MiracleCast(_)
-            | Instruction::CastDefeatedSiege
-            | Instruction::ReboundCast(_)
-            | Instruction::EndStepCast { .. }
-            | Instruction::SacrificeDelayedObjects(_)
-            | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedExileWithCounters(_)
-            | Instruction::ReturnDelayedExile(_)
-            | Instruction::ExileUnearthed(_)
-            | Instruction::ResolveTransfer(_)
-            | Instruction::ExtortDrain
-            | Instruction::ResolveGrowth(_)
-            | Instruction::ResolveCounterKeyword(_)
-            | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
             | Instruction::Attach(_)
-            | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::OfferAnyPlayer { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::ReturnEarthbentCard
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)
@@ -2148,7 +2179,11 @@ impl EffectWindow {
                             false,
                             Box::new(ExecutableBody::new(
                                 BodyTarget::None,
-                                vec![Instruction::ReturnDelayedExile(new_ids.clone())],
+                                vec![Instruction::ZoneOp(Box::new(
+                                    crate::toolbox::ZoneOpSpec::return_delayed_exile(
+                                        new_ids.clone(),
+                                    ),
+                                ))],
                             )),
                         );
                     }
@@ -3461,7 +3496,11 @@ impl EffectWindow {
             .and_then(StackPayload::instructions)
             .and_then(|body| body.get(cursor.instruction))
             .ok_or(EffectError::InconsistentSelectionWork)?;
-        let exile_siege = matches!(actual, Instruction::ExileDefeatedSiege);
+        let exile_siege = matches!(
+            actual,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::ExileDefeatedSiege)
+        );
         let exile_source = false;
         let delay_exile_return = false;
         let delay_cohort_return = false;
@@ -3479,26 +3518,32 @@ impl EffectWindow {
                     count,
                     action,
                 },
-                Instruction::ChooseRevealedHandCard {
+                Instruction::MutatePlayer(spec),
+            ) if matches!(
+                &spec.op,
+                crate::toolbox::PlayerMutation::ChooseRevealedHandCard {
                     minimum_mana_value: minimum,
                     nonland_only: nonland,
                     filter: expected_filter,
                     count: required,
                     action: expected,
-                },
-            ) if *chooser == entry.controller()
-                && minimum_mana_value == minimum
-                && nonland_only == nonland
-                && filter == expected_filter
-                && count == required
-                && action == expected =>
+                } if *chooser == entry.controller()
+                    && minimum_mana_value == minimum
+                    && nonland_only == nonland
+                    && filter == expected_filter
+                    && count == required
+                    && action == expected
+            ) =>
             {
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             }
             (
                 ResolutionSelectionOperation::ExileLinkedTargets { objects, source },
-                Instruction::ExileOnePerPlayerUntilSourceLeaves,
-            ) if *objects == self.legal_permanent_targets()?
+                Instruction::MutatePlayer(spec),
+            ) if matches!(
+                spec.op,
+                crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+            ) && *objects == self.legal_permanent_targets()?
                 && self
                     .execution_bindings(entry.id())
                     .and_then(|b| b.trigger.as_ref())
@@ -3508,18 +3553,23 @@ impl EffectWindow {
             }
             (
                 ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                Instruction::ExileDelayedObjects(ids),
-            ) if *objects
-                == ids
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        self.window
-                            .cards()
-                            .get(*id)
-                            .is_some_and(|p| p.zone() == ObjectZone::Battlefield)
-                    })
-                    .collect() =>
+                Instruction::ZoneOp(spec),
+            ) if matches!(
+                &spec.destination,
+                crate::toolbox::ZoneDest::Delayed(
+                    crate::toolbox::DelayedZoneAction::ExileObjects(ids)
+                ) if *objects
+                    == ids
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            self.window
+                                .cards()
+                                .get(*id)
+                                .is_some_and(|p| p.zone() == ObjectZone::Battlefield)
+                        })
+                        .collect()
+            ) =>
             {
                 AffectedPlayers::EachPlayer
             }
@@ -3544,45 +3594,86 @@ impl EffectWindow {
                     ..
                 },
             ) if *objects == self.legal_permanent_targets()? => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::ReturnSingle { object },
-                Instruction::ReturnDelayedPermanentToHand(expected),
-            ) if object == expected => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::Sacrifice { filter },
-                Instruction::SacrificeDelayedObjects(objects),
-            ) if filter.any_types.is_empty()
-                && filter.required_types.is_empty()
-                && filter.forbidden_types.is_empty()
-                && batch
-                    .logical
-                    .iter()
-                    .all(|selection| objects.contains(&selection.object)) =>
+            (ResolutionSelectionOperation::ReturnSingle { object }, Instruction::ZoneOp(spec))
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnPermanentToHand(expected)
+                    ) if *object == expected
+                ) =>
+            {
+                AffectedPlayers::EachPlayer
+            }
+            (ResolutionSelectionOperation::Sacrifice { filter }, Instruction::ZoneOp(spec))
+                if filter.any_types.is_empty()
+                    && filter.required_types.is_empty()
+                    && filter.forbidden_types.is_empty()
+                    && matches!(
+                        &spec.destination,
+                        crate::toolbox::ZoneDest::Delayed(
+                            crate::toolbox::DelayedZoneAction::SacrificeObjects(objects)
+                        ) if batch
+                            .logical
+                            .iter()
+                            .all(|selection| objects.contains(&selection.object))
+                    ) =>
+            {
+                AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
+            }
+            (ResolutionSelectionOperation::Sacrifice { filter }, Instruction::StackOp(spec))
+                if filter.required_types.is_empty()
+                    && filter.forbidden_types.is_empty()
+                    && matches!(
+                        spec.op,
+                        crate::toolbox::StackOpKind::EndStepCast {
+                            kind: crate::program::EndStepCast::Blitz,
+                            permanent,
+                            ..
+                        } if matches!(
+                            entry.kind(),
+                            StackKind::TriggeredAbility { .. } | StackKind::ActivatedAbility { .. }
+                        ) && batch
+                            .logical
+                            .iter()
+                            .all(|selection| selection.object == permanent)
+                    ) =>
             {
                 AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
             }
             (
                 ResolutionSelectionOperation::Sacrifice { filter },
-                Instruction::EndStepCast {
-                    kind: crate::program::EndStepCast::Blitz,
-                    ..
-                }
-                | Instruction::SacrificeEvoked
-                | Instruction::SacrificeStateTriggerSource
-                | Instruction::ResolveCounterKeyword(
-                    crate::program::CounterKeyword::Fading(_)
-                    | crate::program::CounterKeyword::VanishingLastCounter,
-                ),
+                Instruction::MutateObject(spec),
             ) if filter.required_types.is_empty()
                 && filter.forbidden_types.is_empty()
-                && matches!(entry.kind(),StackKind::TriggeredAbility{source} | StackKind::ActivatedAbility{source} if batch.logical.iter().all(|selection|selection.object==if let Instruction::EndStepCast{permanent,..}=actual{*permanent}else{source.id()})) =>
+                && matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::SacrificeEvoked
+                        | crate::toolbox::ObjectMutation::SacrificeStateTriggerSource
+                        | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                            crate::program::CounterKeyword::Fading(_)
+                                | crate::program::CounterKeyword::VanishingLastCounter
+                        )
+                )
+                && matches!(
+                    entry.kind(),
+                    StackKind::TriggeredAbility { source }
+                        | StackKind::ActivatedAbility { source }
+                        if batch
+                            .logical
+                            .iter()
+                            .all(|selection| selection.object == source.id())
+                ) =>
             {
                 AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
             }
             (
                 ResolutionSelectionOperation::RandomSacrifice { object },
-                Instruction::SacrificeRandomUntilLand,
-            ) if cursor.random_selection == Some(*object) => {
+                Instruction::MutatePlayer(spec),
+            ) if matches!(
+                spec.op,
+                crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+            ) && cursor.random_selection == Some(*object) =>
+            {
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             }
             (ResolutionSelectionOperation::Discard, Instruction::Discard { players, .. }) => {
@@ -3594,8 +3685,15 @@ impl EffectWindow {
                     source: None,
                     monarch_controller: None,
                 },
-                Instruction::ExileDefeatedSiege,
-            ) if matches!(entry.kind(), StackKind::TriggeredAbility {source} | StackKind::ActivatedAbility {source} if *object==source.id()) => {
+                Instruction::MutateObject(spec),
+            ) if matches!(spec.op, crate::toolbox::ObjectMutation::ExileDefeatedSiege)
+                && matches!(
+                    entry.kind(),
+                    StackKind::TriggeredAbility { source }
+                        | StackKind::ActivatedAbility { source }
+                        if *object == source.id()
+                ) =>
+            {
                 AffectedPlayers::EachPlayer
             }
             (
@@ -3609,7 +3707,13 @@ impl EffectWindow {
             _ => return Err(EffectError::InconsistentSelectionWork),
         };
         let players: BTreeSet<_> = match players {
-            AffectedPlayers::One(_) if matches!(actual, Instruction::SacrificeEvoked) => {
+            AffectedPlayers::One(_)
+                if matches!(
+                    actual,
+                    Instruction::MutateObject(spec)
+                        if matches!(spec.op, crate::toolbox::ObjectMutation::SacrificeEvoked)
+                ) =>
+            {
                 [self.source_sacrifice_player(entry, actual)].into()
             }
             players => self
@@ -3893,7 +3997,13 @@ impl EffectWindow {
                     .get(&cursor.entry)
                     .and_then(StackPayload::instructions)
                     .and_then(|ops| ops.get(cursor.instruction + 1)),
-                Some(Instruction::ReturnExiledTargetCohort { .. })
+                Some(Instruction::ZoneOp(spec))
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Delayed(
+                            crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
+                        )
+                    )
             )
         {
             cursor.impulse.flickered = ordered

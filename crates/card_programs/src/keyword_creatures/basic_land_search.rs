@@ -530,9 +530,11 @@ fn triggered(
             )?;
             body.instructions.insert(
                 0,
-                Instruction::RequireCondition(
-                    spellwake_engine::program::InterveningCondition::OpponentMoreLands,
-                ),
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                        spellwake_engine::program::InterveningCondition::OpponentMoreLands,
+                    ),
+                )),
             );
             program.triggered.push(ability(
                 0,

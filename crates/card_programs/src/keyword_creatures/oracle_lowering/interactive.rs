@@ -1037,7 +1037,7 @@ pub(super) fn unwrap_look_top_with_bind_x<'a>(
 
 /// Fuse `LookTopLibrary` (or `BindX([LookTopLibrary])`) + `SeparateIntoPiles(2)`
 /// (+ optional `ChoosePile`) + `ChooseAndKeep("one pile" | "that pile", keep_to, rest_to)`
-/// into [`Instruction::RevealTopTwoPiles`].
+/// into [`spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles`].
 pub(super) fn try_fuse_two_pile_split(
     ins: &[InstructionAst],
     i: usize,
@@ -1114,13 +1114,17 @@ pub(super) fn try_fuse_two_pile_split(
         probe.bind_target(BodyTarget::SingleOpponent).ok()?;
         *builder = probe;
     }
-    builder.instructions.push(Instruction::RevealTopTwoPiles {
-        count: cnt,
-        controller_divides,
-        target_opponent,
-        chosen_dest,
-        other_dest,
-    });
+    builder
+        .instructions
+        .push(Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::reveal_top_two_piles(
+                cnt,
+                controller_divides,
+                target_opponent,
+                chosen_dest,
+                other_dest,
+            ),
+        )));
     Some(cursor - i + 1)
 }
 
@@ -2101,7 +2105,8 @@ fn has_live_interactive_last_moved(
                 | spellwake_engine::toolbox::PlayerMutation::ManifestDread => {
                     return matches!(expected, InteractiveLastMovedKind::Any);
                 }
-                spellwake_engine::toolbox::PlayerMutation::AddMana(_) => continue,
+                spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_) => continue,
                 _ => return false,
             },
             Instruction::ExileTopPlay { .. } => {
@@ -2179,7 +2184,6 @@ fn has_live_interactive_last_moved(
             | Instruction::OptionalSequence { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::BindResolutionX(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::AdjustLife(_) => continue,
             _ => return false,

@@ -143,7 +143,9 @@ fn compile_face(
                 (
                     upkeep.clone(),
                     vec![
-                        MayRevealLibraryTop,
+                        Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::may_reveal_library_top(),
+                        )),
                         BranchIfFalse {
                             condition: ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::RevealedTop, spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Instant).union(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Sorcery)))),

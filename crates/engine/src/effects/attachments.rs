@@ -170,7 +170,11 @@ impl EffectWindow {
     ) -> Result<Option<ResolutionSelectionFrame>, EffectError> {
         if !matches!(
             self.current_instruction()?,
-            Instruction::CreateTokenAndAttach { .. }
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                )
         ) {
             return Err(EffectError::InconsistentProgram);
         }

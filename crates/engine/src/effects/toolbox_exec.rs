@@ -966,21 +966,35 @@ impl EffectWindow {
                 }
                 Ok(StepOutcome::Pending(EffectDecision::PromptChoice(frame)))
             }
+            Instruction::ZoneOp(spec) if spec.is_delayed_special_op() => {
+                Ok(StepOutcome::Next(Instruction::ZoneOp(spec)))
+            }
             Instruction::ZoneOp(spec) => self.execute_zone_op(ctx, entry, index, &spec),
             Instruction::ApplyContinuous(spec) => {
                 self.execute_apply_continuous(ctx, entry, index, &spec)
             }
             Instruction::DrawCards(spec) => self.execute_draw_cards(ctx, entry, index, &spec),
-            Instruction::MutateObject(spec) if spec.is_pass_c_op() => {
+            Instruction::MutateObject(spec) if spec.is_progress_or_choice_op() => {
                 Ok(StepOutcome::Next(Instruction::MutateObject(spec)))
             }
             Instruction::MutateObject(spec) => self.execute_mutate_object(ctx, entry, index, &spec),
             Instruction::AdjustLife(spec) => self.execute_adjust_life(ctx, entry, index, &spec),
+            Instruction::DealDamage(spec)
+                if matches!(
+                    spec.recipients,
+                    crate::toolbox::DamageTargetQuery::FromGrantingPermanent
+                ) =>
+            {
+                Ok(StepOutcome::Next(Instruction::DealDamage(spec)))
+            }
             Instruction::DealDamage(spec) => self.execute_deal_damage(ctx, entry, index, &spec),
-            Instruction::MutatePlayer(spec) if spec.is_pass_c_or_selection_op() => {
+            Instruction::MutatePlayer(spec) if spec.is_progress_or_choice_op() => {
                 Ok(StepOutcome::Next(Instruction::MutatePlayer(spec)))
             }
             Instruction::MutatePlayer(spec) => self.execute_mutate_player(ctx, entry, index, &spec),
+            Instruction::StackOp(spec) if spec.is_keyword_cast_or_copy_op() => {
+                Ok(StepOutcome::Next(Instruction::StackOp(spec)))
+            }
             Instruction::StackOp(spec) if !spec.requires_stack_target() => {
                 self.execute_non_targeted_stack_op(ctx, entry, index, &spec)
             }

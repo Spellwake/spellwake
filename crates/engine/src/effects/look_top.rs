@@ -221,6 +221,11 @@ impl EffectWindow {
         instruction: &Instruction,
         append: &mut RulesJournal,
     ) -> Result<bool, EffectError> {
+        let is_may_reveal_library_top = matches!(
+            instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, crate::toolbox::PlayerMutation::MayRevealLibraryTop)
+        );
         let (count, filter, required, reveal, battlefield_tapped, battlefield_else_hand): (
             u8,
             Option<LookTopFilter>,
@@ -229,7 +234,7 @@ impl EffectWindow {
             bool,
             bool,
         ) = match instruction {
-            Instruction::MayRevealLibraryTop => (1, None, false, true, false, false),
+            _ if is_may_reveal_library_top => (1, None, false, true, false, false),
             Instruction::MutateObject(spec)
                 if matches!(spec.op, crate::toolbox::ObjectMutation::Explore) =>
             {
@@ -239,7 +244,7 @@ impl EffectWindow {
         };
         self.resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?;
-        if *instruction == Instruction::MayRevealLibraryTop {
+        if is_may_reveal_library_top {
             let results = &mut self
                 .resolution_cursor_mut()
                 .ok_or(EffectError::WrongResolutionFrame)?
@@ -318,9 +323,7 @@ impl EffectWindow {
             }
         }
         if domain.is_empty() && !choose_land_kind {
-            if *instruction == Instruction::MayRevealLibraryTop
-                && let Some(cursor) = self.resolution_cursor_mut()
-            {
+            if is_may_reveal_library_top && let Some(cursor) = self.resolution_cursor_mut() {
                 cursor.results.last_action_succeeded = false;
                 cursor.results.last_action_count = Some(0.into());
             }
@@ -438,7 +441,7 @@ impl EffectWindow {
             self.explore_counter(source, &cursor, append)?;
         }
         let mut work = LookTopWork {
-            reveal_only: *instruction == Instruction::MayRevealLibraryTop,
+            reveal_only: is_may_reveal_library_top,
             exploring,
             explore_nonland,
             remaining_explores: extra_explores,
@@ -535,12 +538,17 @@ impl EffectWindow {
     pub(super) fn hand_entry_selection(
         &self,
     ) -> Result<Option<ResolutionSelectionFrame>, EffectError> {
-        let Instruction::PutHandPermanentsOntoBattlefield {
-            player,
-            types,
-            maximum,
-            ..
-        } = self.current_instruction()?
+        let Instruction::ZoneOp(spec) = self.current_instruction()? else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let crate::toolbox::ZoneDest::Delayed(
+            crate::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
+                player,
+                types,
+                maximum,
+                ..
+            },
+        ) = &spec.destination
         else {
             return Err(EffectError::InconsistentProgram);
         };
@@ -633,7 +641,16 @@ impl EffectWindow {
                     LinkedReturnOrigin::Hand {
                         tapped: matches!(
                             self.current_instruction()?,
-                            Instruction::PutHandPermanentsOntoBattlefield { tapped: true, .. }
+                            Instruction::ZoneOp(spec)
+                                if matches!(
+                                    spec.destination,
+                                    crate::toolbox::ZoneDest::Delayed(
+                                        crate::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
+                                            tapped: true,
+                                            ..
+                                        }
+                                    )
+                                )
                         ),
                         player: actor,
                         entry: frame.entry(),

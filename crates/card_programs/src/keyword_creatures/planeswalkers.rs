@@ -1000,9 +1000,11 @@ pub(super) fn loyalty_support(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::RequireCondition(
-                        spellwake_engine::program::InterveningCondition::NoLoyaltyActivation,
-                    ),
+                    Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                            spellwake_engine::program::InterveningCondition::NoLoyaltyActivation,
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::Controller,

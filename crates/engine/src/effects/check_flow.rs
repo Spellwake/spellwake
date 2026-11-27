@@ -1632,21 +1632,35 @@ impl EffectWindow {
                 use crate::occurrence::DelayedCopyAction;
                 let instructions = match &action {
                     DelayedCopyAction::ReturnExiled(objects) => {
-                        vec![Instruction::ReturnDelayedExile(objects.clone())]
+                        vec![Instruction::ZoneOp(Box::new(
+                            crate::toolbox::ZoneOpSpec::return_delayed_exile(objects.clone()),
+                        ))]
                     }
                     DelayedCopyAction::ReturnExiledWithCounters(objects) => {
-                        vec![Instruction::ReturnDelayedExileWithCounters(objects.clone())]
+                        vec![Instruction::ZoneOp(Box::new(
+                            crate::toolbox::ZoneOpSpec::return_delayed_exile_with_counters(
+                                objects.clone(),
+                            ),
+                        ))]
                     }
                     DelayedCopyAction::Sacrifice(objects) => {
-                        vec![Instruction::SacrificeDelayedObjects(objects.clone())]
+                        vec![Instruction::ZoneOp(Box::new(
+                            crate::toolbox::ZoneOpSpec::sacrifice_delayed_objects(objects.clone()),
+                        ))]
                     }
 
-                    DelayedCopyAction::SpellTwice(..) => vec![Instruction::CopyOnCast(
-                        crate::program::CastCopyKeyword::CopyObservedSpell,
-                    )],
+                    DelayedCopyAction::SpellTwice(..) => vec![Instruction::StackOp(Box::new(
+                        crate::toolbox::StackOpSpec::copy_on_cast(
+                            crate::program::CastCopyKeyword::CopyObservedSpell,
+                        ),
+                    ))],
                     DelayedCopyAction::AbilityTwice(..) => vec![
-                        Instruction::CopyCapturedAbility,
-                        Instruction::CopyCapturedAbility,
+                        Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::copy_captured_ability(),
+                        )),
+                        Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::copy_captured_ability(),
+                        )),
                     ],
                 };
                 let mut payload = StackPayload::from_body(

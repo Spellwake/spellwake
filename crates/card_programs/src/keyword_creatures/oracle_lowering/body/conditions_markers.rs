@@ -641,7 +641,11 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
         MatchObjectRef::LastMovedToGraveyard
             if matches!(
                 builder.instructions.last(),
-                Some(Instruction::SacrificeRandomUntilLand)
+                Some(Instruction::MutatePlayer(spec))
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                    )
             ) || builder.instructions.last().is_some_and(|op| {
                 matches!(
                     op,
@@ -5606,11 +5610,14 @@ pub(super) fn lower_marker_or_action_condition(
                 "it entered under your control" => {
                     let returned_to_bf = matches!(
                         builder.instructions.last(),
-                        Some(Instruction::ReturnDelayedExile(_))
-                    ) || matches!(
-                        builder.instructions.last(),
                         Some(Instruction::ZoneOp(spec))
-                            if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
+                            if matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                                    | spellwake_engine::toolbox::ZoneDest::Delayed(
+                                        spellwake_engine::toolbox::DelayedZoneAction::ReturnExile(_)
+                                    )
+                            )
                     );
                     if !returned_to_bf {
                         return Err("oracle:unsupported-if-condition");

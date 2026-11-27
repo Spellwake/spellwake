@@ -74,7 +74,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                 let x_val = lower_value_expr_in_context(x_ast, builder, in_trigger, vocabulary)?;
                 builder
                     .instructions
-                    .push(Instruction::BindResolutionX(x_val));
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(x_val),
+                    )));
             }
             builder
                 .instructions
@@ -3929,17 +3931,23 @@ pub(super) fn lower_restrictions_statics_instruction(
                     if matches!(
                         spec.destination,
                         spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                            | spellwake_engine::toolbox::ZoneDest::Delayed(
+                                spellwake_engine::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield { .. }
+                            )
                     ) =>
                 {
-                    if let spellwake_engine::toolbox::ZoneDest::Battlefield { tapped, .. } =
-                        &mut spec.destination
-                    {
-                        *tapped = true;
+                    match &mut spec.destination {
+                        spellwake_engine::toolbox::ZoneDest::Battlefield { tapped, .. }
+                        | spellwake_engine::toolbox::ZoneDest::Delayed(
+                            spellwake_engine::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
+                                tapped,
+                                ..
+                            },
+                        ) => {
+                            *tapped = true;
+                        }
+                        _ => {}
                     }
-                    Ok(())
-                }
-                Some(Instruction::PutHandPermanentsOntoBattlefield { tapped, .. }) => {
-                    *tapped = true;
                     Ok(())
                 }
                 Some(Instruction::SearchLibrary { filter }) => {
@@ -3956,8 +3964,17 @@ pub(super) fn lower_restrictions_statics_instruction(
                     }
                     Ok(())
                 }
-                Some(Instruction::CreateTokenCopyExt { enters_tapped, .. }) => {
-                    *enters_tapped = true;
+                Some(Instruction::MutateObject(spec))
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                    ) =>
+                {
+                    if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
+                        &mut spec.op
+                    {
+                        copy.enters_tapped = true;
+                    }
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-instruction"),
@@ -4426,13 +4443,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                 return Err("oracle:unsupported-instruction");
             };
             let sides = std::num::NonZeroU16::new(sides_num).ok_or("oracle:zero-die-sides")?;
-            builder.instructions.push(Instruction::RollDie {
-                player: ResolvingPlayer::Controller,
-                sides,
-                count,
-                mode: spellwake_engine::program::DieRollMode::Sum,
-                bands: Vec::new(),
-            });
+            builder.instructions.push(Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::roll_die(
+                    ResolvingPlayer::Controller,
+                    sides,
+                    count,
+                    spellwake_engine::program::DieRollMode::Sum,
+                    Vec::new(),
+                ),
+            )));
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -4492,16 +4511,20 @@ pub(super) fn lower_restrictions_statics_instruction(
             }
             if let Some(last) = builder.instructions.last_mut() {
                 match last {
-                    Instruction::CreateTokenCopyExt {
-                        recipients,
-                        enters_tapped,
-                        enters_attacking,
-                        defender_scope: ds,
-                        ..
-                    } if *recipients == TokenRecipients::Controller => {
-                        *enters_tapped = true;
-                        *enters_attacking = true;
-                        *ds = defender_scope;
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            &spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy)
+                                if copy.recipients == TokenRecipients::Controller
+                        ) =>
+                    {
+                        if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
+                            &mut spec.op
+                        {
+                            copy.enters_tapped = true;
+                            copy.enters_attacking = true;
+                            copy.defender_scope = defender_scope;
+                        }
                         return Ok(());
                     }
                     Instruction::ZoneOp(spec)
@@ -5981,7 +6004,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                         matches!(
                             op,
                             Instruction::DealDamage(_)
-                                | Instruction::DamageFromGrantingPermanent { .. }
                                 | Instruction::AffectPermanentTargets {
                                     action: PermanentTargetAction::Damage(_),
                                     ..
@@ -6720,7 +6742,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                 prepend_instruction_at(
                     &mut exec_body.instructions,
                     0,
-                    Instruction::RequireCondition(cond),
+                    Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(cond))),
                 );
             }
             apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, self_pron);
@@ -6918,7 +6940,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                 prepend_instruction_at(
                     &mut exec_body.instructions,
                     0,
-                    Instruction::RequireCondition(cond),
+                    Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(cond))),
                 );
             }
             apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, self_pron);
@@ -7096,7 +7118,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         prepend_instruction_at(
                             &mut exec_body.instructions,
                             0,
-                            Instruction::RequireCondition(cond),
+                            Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(cond))),
                         );
                     }
                     apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, false);
@@ -7792,7 +7814,6 @@ fn try_lower_temp_exile_replacement(
                 matches!(
                     op,
                     Instruction::DealDamage(_)
-                        | Instruction::DamageFromGrantingPermanent { .. }
                         | Instruction::AffectPermanentTargets {
                             action: PermanentTargetAction::Damage(_),
                             ..

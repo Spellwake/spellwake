@@ -2388,7 +2388,9 @@ impl TriggerState {
                     causes,
                     body: ExecutableBody::new(
                         crate::program::BodyTarget::None,
-                        vec![crate::program::Instruction::CopyCapturedAbility],
+                        vec![crate::program::Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::copy_captured_ability(),
+                        ))],
                     ),
                     upkeep_keyword: None,
                 };
@@ -3315,7 +3317,9 @@ impl TriggerState {
                     controller,
                     body: ExecutableBody::new(
                         crate::program::BodyTarget::None,
-                        vec![crate::program::Instruction::ReturnEarthbentCard],
+                        vec![crate::program::Instruction::MutateObject(Box::new(
+                            crate::toolbox::MutateObjectSpec::return_earthbent_card(),
+                        ))],
                     ),
                     upkeep_keyword: None,
                 };
@@ -3401,11 +3405,11 @@ impl TriggerState {
                         crate::program::BodyTarget::FilteredOwnGraveyardCard(
                             crate::program::ObjectFilter::creature(),
                         ),
-                        vec![
-                            crate::program::Instruction::ReturnGraveyardCreatureWithCorpse(
+                        vec![crate::program::Instruction::ZoneOp(Box::new(
+                            crate::toolbox::ZoneOpSpec::return_graveyard_creature_with_corpse(
                                 mana_value.clone(),
                             ),
-                        ],
+                        ))],
                     ),
                     upkeep_keyword: None,
                 };
@@ -3526,7 +3530,9 @@ impl TriggerState {
                     controller,
                     body: ExecutableBody::new(
                         crate::program::BodyTarget::None,
-                        vec![crate::program::Instruction::MiracleCast(object.object.id())],
+                        vec![crate::program::Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::miracle_cast(object.object.id()),
+                        ))],
                     ),
                     upkeep_keyword: None,
                 };
@@ -3570,7 +3576,9 @@ impl TriggerState {
                     controller,
                     body: ExecutableBody::new(
                         crate::program::BodyTarget::None,
-                        vec![crate::program::Instruction::MadnessCast],
+                        vec![crate::program::Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::madness_cast(),
+                        ))],
                     ),
                     upkeep_keyword: None,
                 };
@@ -3599,7 +3607,11 @@ impl TriggerState {
                                 controller,
                                 body: ExecutableBody::new(
                                     crate::program::BodyTarget::None,
-                                    vec![Instruction::ReturnDelayedGraveyardCard(object)],
+                                    vec![Instruction::ZoneOp(Box::new(
+                                        crate::toolbox::ZoneOpSpec::return_delayed_graveyard_card(
+                                            object,
+                                        ),
+                                    ))],
                                 ),
                                 trigger: None,
                             },
@@ -3667,32 +3679,52 @@ impl TriggerState {
                     } else {
                         let instructions = match action {
                             DelayedStepAction::Exile { objects, .. } => {
-                                vec![Instruction::ExileDelayedObjects(objects)]
+                                vec![Instruction::ZoneOp(Box::new(
+                                    crate::toolbox::ZoneOpSpec::exile_delayed_objects(objects),
+                                ))]
                             }
                             DelayedStepAction::Sacrifice { objects, .. } => {
-                                vec![Instruction::SacrificeDelayedObjects(objects)]
+                                vec![Instruction::ZoneOp(Box::new(
+                                    crate::toolbox::ZoneOpSpec::sacrifice_delayed_objects(objects),
+                                ))]
                             }
                             DelayedStepAction::Cast { object, kind } => {
-                                vec![Instruction::EndStepCast {
-                                    kind,
-                                    permanent: object,
-                                    turn: position.number,
-                                }]
+                                vec![Instruction::StackOp(Box::new(
+                                    crate::toolbox::StackOpSpec::end_step_cast(
+                                        kind,
+                                        object,
+                                        position.number,
+                                    ),
+                                ))]
                             }
                             DelayedStepAction::ReturnExiledWithCounters(objects) => {
-                                vec![Instruction::ReturnDelayedExileWithCounters(objects)]
+                                vec![Instruction::ZoneOp(Box::new(
+                                    crate::toolbox::ZoneOpSpec::return_delayed_exile_with_counters(
+                                        objects,
+                                    ),
+                                ))]
                             }
                             DelayedStepAction::ReturnPermanentToHand(object) => {
-                                vec![Instruction::ReturnDelayedPermanentToHand(object)]
+                                vec![Instruction::ZoneOp(Box::new(
+                                    crate::toolbox::ZoneOpSpec::return_delayed_permanent_to_hand(
+                                        object,
+                                    ),
+                                ))]
                             }
                             DelayedStepAction::ReturnFromExile(object) => {
-                                vec![Instruction::ReturnDelayedExile(object)]
+                                vec![Instruction::ZoneOp(Box::new(
+                                    crate::toolbox::ZoneOpSpec::return_delayed_exile(object),
+                                ))]
                             }
                             DelayedStepAction::Unearth(object) => {
-                                vec![Instruction::ExileUnearthed(object)]
+                                vec![Instruction::MutateObject(Box::new(
+                                    crate::toolbox::MutateObjectSpec::exile_unearthed(object),
+                                ))]
                             }
                             DelayedStepAction::Rebound(object) => {
-                                vec![Instruction::ReboundCast(object)]
+                                vec![Instruction::StackOp(Box::new(
+                                    crate::toolbox::StackOpSpec::rebound_cast(object),
+                                ))]
                             }
                             DelayedStepAction::ExecuteBody { .. } => unreachable!(),
                         };
@@ -3866,7 +3898,9 @@ impl TriggerState {
                         if change.before.object.zone() == ObjectZone::Battlefield
                             && change.before.types.contains(&CardType::Artifact) =>
                     {
-                        vec![Instruction::ScheduleArtifactReturn(object)]
+                        vec![Instruction::MutateObject(Box::new(
+                            crate::toolbox::MutateObjectSpec::schedule_artifact_return(object),
+                        ))]
                     }
                     EmblemDefinition::UnlimitedHandWithGraveyardReturn
                         if change.after.object.card_id().is_some() =>
@@ -3876,7 +3910,11 @@ impl TriggerState {
                                 chooser: ResolvingPlayer::Controller,
                                 instructions: 1,
                             },
-                            Instruction::ReturnDelayedGraveyardToHand(object),
+                            Instruction::ZoneOp(Box::new(
+                                crate::toolbox::ZoneOpSpec::return_delayed_graveyard_to_hand(
+                                    object,
+                                ),
+                            )),
                         ]
                     }
                     _ => continue,

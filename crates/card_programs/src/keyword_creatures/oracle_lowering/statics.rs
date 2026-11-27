@@ -2068,7 +2068,9 @@ pub(super) fn lower_static(
                     prepend_instruction_at(
                         &mut body.instructions,
                         0,
-                        Instruction::RequireCondition(g),
+                        Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::require_condition(g),
+                        )),
                     );
                 }
                 program.triggered.push(TriggeredAbility {
@@ -11429,7 +11431,9 @@ fn lower_single_granted_ability(
                 prepend_instruction_at(
                     &mut exec_body.instructions,
                     0,
-                    Instruction::RequireCondition(cond),
+                    Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::require_condition(cond),
+                    )),
                 );
             }
             apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, self_pronoun);
@@ -15052,7 +15056,9 @@ pub(super) fn lower_ability_change(
                     body: ExecutableBody::new(
                         BodyTarget::None,
                         vec![
-                            Instruction::Myriad,
+                            Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::myriad(),
+                            )),
                             Instruction::ScheduleDelayedStepTrigger {
                                 step: Step::EndCombat,
                                 own_step_only: false,

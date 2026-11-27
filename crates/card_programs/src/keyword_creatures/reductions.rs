@@ -56,9 +56,11 @@ pub(super) fn padeem(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::RequireCondition(
-                    spellwake_engine::program::InterveningCondition::GreatestArtifact,
-                ),
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                        spellwake_engine::program::InterveningCondition::GreatestArtifact,
+                    ),
+                )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),

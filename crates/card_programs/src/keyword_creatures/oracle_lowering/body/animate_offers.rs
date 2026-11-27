@@ -625,7 +625,8 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         ..
                     }
                     | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree => {}
+                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent => {}
                 }
                 if let spellwake_engine::program::DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_offer_chosen_to_loop_ve(e);
@@ -649,12 +650,43 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
                     | spellwake_engine::toolbox::PlayerMutation::CollectEvidence {
                         minimum: amount,
-                    } => {
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::RollDie {
+                        count: amount, ..
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
+                        count: amount,
+                        ..
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount) => {
                         rewrite_offer_chosen_to_loop_ve(amount);
                     }
                     spellwake_engine::toolbox::PlayerMutation::AddMana(yield_kind) => {
                         if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                             rewrite_offer_chosen_to_loop_ve(amount);
+                        }
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::OfferAnyPlayer {
+                        cost_body,
+                        paid_body,
+                        declined_body,
+                    } => {
+                        rewrite_offer_chosen_to_loop_ops(&mut cost_body.instructions);
+                        rewrite_offer_chosen_to_loop_ops(&mut paid_body.instructions);
+                        if let Some(dec) = declined_body {
+                            rewrite_offer_chosen_to_loop_ops(&mut dec.instructions);
+                        }
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    } => {
+                        if let Some(wb) = win_body {
+                            rewrite_offer_chosen_to_loop_ops(&mut wb.instructions);
+                        }
+                        if let Some(lb) = lose_body {
+                            rewrite_offer_chosen_to_loop_ops(&mut lb.instructions);
                         }
                     }
                     _ => {}
@@ -780,23 +812,12 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut br.body.instructions);
                 }
             }
-            Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. } => {
-                rewrite_offer_chosen_to_loop_rp(rp);
-            }
             Instruction::CreateTokens { creations } => {
                 for c in creations {
                     rewrite_offer_chosen_to_loop_ve(&mut c.amount);
                     if let TokenRecipients::Player(rp) = &mut c.recipients {
                         rewrite_offer_chosen_to_loop_rp(rp);
                     }
-                }
-            }
-            Instruction::CreateTokenCopyExt {
-                count, recipients, ..
-            } => {
-                rewrite_offer_chosen_to_loop_ve(count);
-                if let TokenRecipients::Player(rp) = recipients {
-                    rewrite_offer_chosen_to_loop_rp(rp);
                 }
             }
             Instruction::DrawCards(spec) => {
@@ -869,8 +890,15 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         amount, ..
                     }
                     | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
+                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
+                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
                         rewrite_offer_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                        rewrite_offer_chosen_to_loop_ve(&mut copy.count);
+                        if let TokenRecipients::Player(rp) = &mut copy.recipients {
+                            rewrite_offer_chosen_to_loop_rp(rp);
+                        }
                     }
                     spellwake_engine::toolbox::ObjectMutation::MoveCounters {
                         to, amount, ..
@@ -981,19 +1009,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_ve(count);
                 rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
             }
-            Instruction::OfferAnyPlayer {
-                players,
-                cost_body,
-                paid_body,
-                declined_body,
-            } => {
-                rewrite_offer_chosen_to_loop_ap(players);
-                rewrite_offer_chosen_to_loop_ops(&mut cost_body.instructions);
-                rewrite_offer_chosen_to_loop_ops(&mut paid_body.instructions);
-                if let Some(dec) = declined_body {
-                    rewrite_offer_chosen_to_loop_ops(&mut dec.instructions);
-                }
-            }
+
             Instruction::Exchange(spec) => match spec {
                 spellwake_engine::program::ExchangeSpec::LifeTotals { first, second } => {
                     rewrite_offer_chosen_to_loop_rp(first);
@@ -1005,28 +1021,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
                 spellwake_engine::program::ExchangeSpec::Control { .. } => {}
             },
-            Instruction::RollDie { player, count, .. } => {
-                rewrite_offer_chosen_to_loop_rp(player);
-                rewrite_offer_chosen_to_loop_ve(count);
-            }
-            Instruction::FlipCoins {
-                player,
-                win_body,
-                lose_body,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_rp(player);
-                if let Some(wb) = win_body {
-                    rewrite_offer_chosen_to_loop_ops(&mut wb.instructions);
-                }
-                if let Some(lb) = lose_body {
-                    rewrite_offer_chosen_to_loop_ops(&mut lb.instructions);
-                }
-            }
-            Instruction::BindResolutionX(amount) => {
-                rewrite_offer_chosen_to_loop_ve(amount);
-            }
-            Instruction::ReturnEarthbentCard => {}
+
             Instruction::SearchLibrary { filter } => {
                 rewrite_offer_chosen_to_loop_rp(&mut filter.searcher);
             }
@@ -2031,22 +2026,29 @@ pub(in super::super) fn lower_animate_or_set_pt(
             | BodyTarget::FilteredPermanent(_)
     );
     let has_created_tokens = builder.instructions.iter().any(|op| {
-        matches!(
-            op,
-            Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopyExt { .. }
-                | Instruction::CreateTokenAndAttach { .. }
-        )
+        matches!(op, Instruction::CreateTokens { .. })
+            || matches!(
+                op,
+                Instruction::MutateObject(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                            | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                    )
+            )
     });
     let has_last_moved = builder.instructions.iter().any(|op| {
         matches!(
             op,
             Instruction::ZoneOp(spec)
-                if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
-        ) || matches!(
-            op,
-            Instruction::ReturnChosenXGraveyardCreatures
-                | Instruction::ReturnExiledTargetCohort { .. }
+                if matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                        | spellwake_engine::toolbox::ZoneDest::Delayed(
+                            spellwake_engine::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                                | spellwake_engine::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
+                        )
+                )
         )
     });
     match subject {

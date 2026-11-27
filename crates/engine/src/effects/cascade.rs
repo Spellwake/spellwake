@@ -76,13 +76,27 @@ impl EffectWindow {
         }
 
         match op {
-            Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::SacrificeRandomUntilLand
-            | Instruction::RollDie { .. }
-            | Instruction::FlipCoins { .. }
-            | Instruction::Discover { .. }
-            | Instruction::SearchLibrary { .. }
+            Instruction::StackOp(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::StackOpKind::Cascade
+                        | crate::toolbox::StackOpKind::CascadeBottom
+                        | crate::toolbox::StackOpKind::Discover { .. }
+                ) =>
+            {
+                true
+            }
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                        | crate::toolbox::PlayerMutation::RollDie { .. }
+                        | crate::toolbox::PlayerMutation::FlipCoins { .. }
+                ) =>
+            {
+                true
+            }
+            Instruction::SearchLibrary { .. }
             | Instruction::LookTopChooseExt {
                 rest_dest: crate::program::LookTopRestDest::BottomRandom,
                 ..
@@ -275,7 +289,12 @@ impl EffectWindow {
     ) -> Result<Vec<ObjectId>, EffectError> {
         use crate::program::ResolvingPlayer;
         match instruction {
-            Instruction::SacrificeRandomUntilLand => {
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                ) =>
+            {
                 let player = self.resolving_player(ResolvingPlayer::TargetPlayer)?;
                 Ok(self
                     .evaluated_characteristics()?
@@ -311,18 +330,23 @@ impl EffectWindow {
         {
             return true;
         }
-        matches!(
-            self.payloads
-                .get(&work.cursor.entry)
-                .and_then(StackPayload::instructions)
-                .and_then(|body| body.get(work.cursor.instruction)),
-            Some(
-                Instruction::CascadeBottom
-                    | Instruction::SacrificeRandomUntilLand
-                    | Instruction::RollDie { .. }
-                    | Instruction::FlipCoins { .. }
-            )
-        )
+        match self
+            .payloads
+            .get(&work.cursor.entry)
+            .and_then(StackPayload::instructions)
+            .and_then(|body| body.get(work.cursor.instruction))
+        {
+            Some(Instruction::StackOp(spec)) => {
+                matches!(spec.op, crate::toolbox::StackOpKind::CascadeBottom)
+            }
+            Some(Instruction::MutatePlayer(spec)) => matches!(
+                spec.op,
+                crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                    | crate::toolbox::PlayerMutation::RollDie { .. }
+                    | crate::toolbox::PlayerMutation::FlipCoins { .. }
+            ),
+            _ => false,
+        }
     }
     pub(crate) fn finish_random_resolution(
         mut self,
@@ -393,12 +417,13 @@ impl EffectWindow {
                 entropy,
             ));
         }
-        if let Some(Instruction::RollDie { sides, count, .. }) = self
+        if let Some(Instruction::MutatePlayer(spec)) = self
             .payloads
             .get(&work.cursor.entry)
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(work.cursor.instruction))
             .cloned()
+            && let crate::toolbox::PlayerMutation::RollDie { sides, count, .. } = spec.op
         {
             let player = work.chooser;
             let cursor = work.cursor;
@@ -455,12 +480,13 @@ impl EffectWindow {
                 entropy,
             ));
         }
-        if let Some(Instruction::FlipCoins { mode, .. }) = self
+        if let Some(Instruction::MutatePlayer(spec)) = self
             .payloads
             .get(&work.cursor.entry)
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(work.cursor.instruction))
             .cloned()
+            && let crate::toolbox::PlayerMutation::FlipCoins { mode, .. } = spec.op
         {
             let player = work.chooser;
             let cursor = work.cursor;
@@ -579,12 +605,20 @@ impl EffectWindow {
                 entropy,
             ));
         }
-        if let Some(instruction @ Instruction::SacrificeRandomUntilLand) = self
+        if let Some(instruction) = self
             .payloads
             .get(&work.cursor.entry)
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(work.cursor.instruction))
             .cloned()
+            && matches!(
+                &instruction,
+                Instruction::MutatePlayer(spec)
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                    )
+            )
         {
             self.pending_work = Some(PendingWork::Resolution(work.cursor));
             let candidates = self.random_move_candidates(&instruction)?;

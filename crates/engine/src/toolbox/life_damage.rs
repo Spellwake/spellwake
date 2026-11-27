@@ -4,8 +4,10 @@ use crate::{
     day_night::DayNight,
     effects::CounterKind,
     program::{
-        CombatUntapGroup, DamageAmountSpec, DamageRecipientsRef, DefinitionError, EffectManaYield,
-        ExtremeLifeTieMode, ObjectFilter, PowerDamageSource, ValueExpr,
+        AffectedPlayers, ChosenHandAction, CoinFlipMode, CombatUntapGroup, DamageAmountSpec,
+        DamageRecipientsRef, DefinitionError, DieRollBand, DieRollMode, EffectManaYield,
+        ExecutableBody, ExtremeLifeTieMode, InterveningCondition, LookTopKeepDest, LookTopRestDest,
+        ObjectFilter, PowerDamageSource, ResolvingPlayer, ValueExpr,
     },
     toolbox::{
         env::BindingId,
@@ -204,6 +206,8 @@ pub enum DamageTargetQuery {
         total: Box<ValueExpr>,
         max_targets: Option<u16>,
     },
+    /// Triggered/activated ability granted by another permanent dealing damage from that permanent.
+    FromGrantingPermanent,
 }
 
 impl DamageTargetQuery {
@@ -218,6 +222,7 @@ impl DamageTargetQuery {
             | Self::DivideThree
             | Self::Divided { .. } => true,
             Self::FromPower(_) => true,
+            Self::FromGrantingPermanent => false,
             Self::Objects(q) => q.uses_target(),
             Self::Players(p) => p.uses_target(),
             Self::Both { objects, players } => objects.uses_target() || players.uses_target(),
@@ -253,7 +258,8 @@ impl DamageTargetQuery {
             | Self::CreaturePowerToOther { .. }
             | Self::TargetControllersCreatures { .. }
             | Self::OrderedTargets { .. }
-            | Self::DivideThree => Ok(()),
+            | Self::DivideThree
+            | Self::FromGrantingPermanent => Ok(()),
             Self::Divided { total, .. } => total
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
@@ -374,6 +380,15 @@ impl DealDamageSpec {
             DamageSourceQuery::EntrySource,
             DamageTargetQuery::DivideThree,
             DamageAmountSpec::Expr(ValueExpr::Literal(3.into())),
+        )
+    }
+
+    #[must_use]
+    pub fn from_granting_permanent(amount: spellwake_contracts::RulesInteger) -> Self {
+        Self::new(
+            DamageSourceQuery::EntrySource,
+            DamageTargetQuery::FromGrantingPermanent,
+            DamageAmountSpec::Expr(ValueExpr::Literal(amount)),
         )
     }
 
@@ -510,6 +525,60 @@ pub enum PlayerMutation {
     Surveil(ValueExpr),
     /// Mill N (CR 701.13).
     Mill(ValueExpr),
+    /// Extort (CR 702.101): optionally pay {W/B}, each opponent loses 1 life and you gain that much.
+    ExtortDrain,
+    /// Roll `count` dice with `sides` faces, combine via `mode`, and splice matching `bands` (CR 706).
+    RollDie {
+        sides: std::num::NonZeroU16,
+        count: ValueExpr,
+        mode: DieRollMode,
+        bands: Vec<DieRollBand>,
+    },
+    /// Flip coins using `mode` with optional win/lose bodies or lose jump destination (CR 705).
+    FlipCoins {
+        mode: CoinFlipMode,
+        win_body: Option<Box<ExecutableBody>>,
+        lose_body: Option<Box<ExecutableBody>>,
+        lose_destination: Option<usize>,
+    },
+    /// Optionally reveal the top card of controller's library.
+    MayRevealLibraryTop,
+    /// Offer controller to place `amount` counters on source, branching to `placed_destination` or `declined_destination`.
+    OfferSourceCounters {
+        amount: spellwake_contracts::RulesInteger,
+        placed_destination: usize,
+        declined_destination: usize,
+    },
+    /// Choose `count` cards matching filter from a revealed hand and apply `action`.
+    ChooseRevealedHandCard {
+        minimum_mana_value: u16,
+        nonland_only: bool,
+        filter: Option<Box<ObjectFilter>>,
+        count: std::num::NonZeroU8,
+        action: ChosenHandAction,
+    },
+    /// Reveal top `count` cards, divide into two piles, and move chosen/other piles to destinations.
+    RevealTopTwoPiles {
+        count: ValueExpr,
+        controller_divides: bool,
+        target_opponent: bool,
+        chosen_dest: LookTopKeepDest,
+        other_dest: LookTopRestDest,
+    },
+    /// Offer each player in `spec.players` (APNAP) to perform `cost_body`; first to accept runs `paid_body`, else `declined_body`.
+    OfferAnyPlayer {
+        cost_body: Box<ExecutableBody>,
+        paid_body: Box<ExecutableBody>,
+        declined_body: Option<Box<ExecutableBody>>,
+    },
+    /// Sacrifice permanents at random until a land is sacrificed.
+    SacrificeRandomUntilLand,
+    /// Exile one permanent per player until the resolving source leaves the battlefield.
+    ExileOnePerPlayerUntilSourceLeaves,
+    /// Bind X on the currently resolving stack entry to `ValueExpr`.
+    BindResolutionX(ValueExpr),
+    /// Check an intervening-if condition during resolution; abort if false.
+    RequireCondition(InterveningCondition),
 }
 
 impl PlayerMutation {
@@ -553,7 +622,66 @@ impl PlayerMutation {
             | Self::Clash
             | Self::Bolster(_)
             | Self::Populate
-            | Self::Amass { .. } => false,
+            | Self::Amass { .. }
+            | Self::ExtortDrain
+            | Self::MayRevealLibraryTop
+            | Self::OfferSourceCounters { .. }
+            | Self::RequireCondition(_) => false,
+            Self::SacrificeRandomUntilLand
+            | Self::ExileOnePerPlayerUntilSourceLeaves
+            | Self::ChooseRevealedHandCard { .. } => true,
+            Self::RollDie { count, bands, .. } => {
+                count.uses_target()
+                    || bands.iter().any(|b| {
+                        b.body
+                            .instructions
+                            .iter()
+                            .any(crate::program::Instruction::uses_mode_target)
+                    })
+            }
+            Self::FlipCoins {
+                mode,
+                win_body,
+                lose_body,
+                ..
+            } => {
+                matches!(mode, CoinFlipMode::Count(v) if v.uses_target())
+                    || win_body.as_deref().is_some_and(|b| {
+                        b.instructions
+                            .iter()
+                            .any(crate::program::Instruction::uses_mode_target)
+                    })
+                    || lose_body.as_deref().is_some_and(|b| {
+                        b.instructions
+                            .iter()
+                            .any(crate::program::Instruction::uses_mode_target)
+                    })
+            }
+            Self::RevealTopTwoPiles {
+                count,
+                target_opponent,
+                ..
+            } => *target_opponent || count.uses_target(),
+            Self::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+            } => {
+                cost_body
+                    .instructions
+                    .iter()
+                    .any(crate::program::Instruction::uses_mode_target)
+                    || paid_body
+                        .instructions
+                        .iter()
+                        .any(crate::program::Instruction::uses_mode_target)
+                    || declined_body.as_deref().is_some_and(|b| {
+                        b.instructions
+                            .iter()
+                            .any(crate::program::Instruction::uses_mode_target)
+                    })
+            }
+            Self::BindResolutionX(expr) => expr.uses_target(),
         }
     }
 
@@ -581,6 +709,17 @@ impl PlayerMutation {
                 Ok(())
             }
             Self::AddMana(yield_kind) => yield_kind.validate_vocabulary(vocabulary),
+            Self::RollDie { count, .. }
+            | Self::RevealTopTwoPiles { count, .. }
+            | Self::BindResolutionX(count) => count
+                .validate_vocabulary(vocabulary)
+                .map_err(|_| DefinitionError::InvalidInstruction),
+            Self::ChooseRevealedHandCard { filter, .. } => {
+                if let Some(f) = filter {
+                    f.validate_vocabulary(vocabulary)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -692,6 +831,26 @@ impl MutatePlayerSpec {
             | PlayerSelector::Group(crate::program::AffectedPlayers::One(p)) => Some(*p),
             _ => None,
         }
+    }
+
+    #[must_use]
+    pub fn is_progress_or_choice_op(&self) -> bool {
+        self.is_pass_c_or_selection_op()
+            || matches!(
+                self.op,
+                PlayerMutation::ExtortDrain
+                    | PlayerMutation::RollDie { .. }
+                    | PlayerMutation::FlipCoins { .. }
+                    | PlayerMutation::MayRevealLibraryTop
+                    | PlayerMutation::OfferSourceCounters { .. }
+                    | PlayerMutation::ChooseRevealedHandCard { .. }
+                    | PlayerMutation::RevealTopTwoPiles { .. }
+                    | PlayerMutation::OfferAnyPlayer { .. }
+                    | PlayerMutation::SacrificeRandomUntilLand
+                    | PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+                    | PlayerMutation::BindResolutionX(_)
+                    | PlayerMutation::RequireCondition(_)
+            )
     }
 
     #[must_use]
@@ -933,6 +1092,165 @@ impl MutatePlayerSpec {
         Self::new(
             PlayerSelector::Resolving(player),
             PlayerMutation::Mill(amount),
+        )
+    }
+
+    #[must_use]
+    pub fn extort_drain() -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::ExtortDrain,
+        )
+    }
+
+    #[must_use]
+    pub fn roll_die(
+        player: ResolvingPlayer,
+        sides: std::num::NonZeroU16,
+        count: ValueExpr,
+        mode: DieRollMode,
+        bands: Vec<DieRollBand>,
+    ) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(player),
+            PlayerMutation::RollDie {
+                sides,
+                count,
+                mode,
+                bands,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn flip_coins(
+        player: ResolvingPlayer,
+        mode: CoinFlipMode,
+        win_body: Option<Box<ExecutableBody>>,
+        lose_body: Option<Box<ExecutableBody>>,
+        lose_destination: Option<usize>,
+    ) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(player),
+            PlayerMutation::FlipCoins {
+                mode,
+                win_body,
+                lose_body,
+                lose_destination,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn may_reveal_library_top() -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::MayRevealLibraryTop,
+        )
+    }
+
+    #[must_use]
+    pub fn offer_source_counters(
+        amount: spellwake_contracts::RulesInteger,
+        placed_destination: usize,
+        declined_destination: usize,
+    ) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::OfferSourceCounters {
+                amount,
+                placed_destination,
+                declined_destination,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn choose_revealed_hand_card(
+        minimum_mana_value: u16,
+        nonland_only: bool,
+        filter: Option<Box<ObjectFilter>>,
+        count: std::num::NonZeroU8,
+        action: ChosenHandAction,
+    ) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::ChooseRevealedHandCard {
+                minimum_mana_value,
+                nonland_only,
+                filter,
+                count,
+                action,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn reveal_top_two_piles(
+        count: ValueExpr,
+        controller_divides: bool,
+        target_opponent: bool,
+        chosen_dest: LookTopKeepDest,
+        other_dest: LookTopRestDest,
+    ) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::RevealTopTwoPiles {
+                count,
+                controller_divides,
+                target_opponent,
+                chosen_dest,
+                other_dest,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn offer_any_player(
+        players: AffectedPlayers,
+        cost_body: ExecutableBody,
+        paid_body: ExecutableBody,
+        declined_body: Option<ExecutableBody>,
+    ) -> Self {
+        Self::new(
+            PlayerSelector::Group(players),
+            PlayerMutation::OfferAnyPlayer {
+                cost_body: Box::new(cost_body),
+                paid_body: Box::new(paid_body),
+                declined_body: declined_body.map(Box::new),
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn sacrifice_random_until_land() -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::SacrificeRandomUntilLand,
+        )
+    }
+
+    #[must_use]
+    pub fn exile_one_per_player_until_source_leaves() -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::ExileOnePerPlayerUntilSourceLeaves,
+        )
+    }
+
+    #[must_use]
+    pub fn bind_resolution_x(amount: ValueExpr) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::BindResolutionX(amount),
+        )
+    }
+
+    #[must_use]
+    pub fn require_condition(condition: InterveningCondition) -> Self {
+        Self::new(
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            PlayerMutation::RequireCondition(condition),
         )
     }
 

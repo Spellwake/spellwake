@@ -91,8 +91,12 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ExileDefeatedSiege,
-                    Instruction::CastDefeatedSiege,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::exile_defeated_siege(),
+                    )),
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::cast_defeated_siege(),
+                    )),
                 ],
             ),
         },

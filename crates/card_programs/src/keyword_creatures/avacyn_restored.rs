@@ -54,7 +54,9 @@ fn controlled_creature_pair(second: BodyTarget, effect: Instruction) -> Vec<Inst
     let clause = |target| {
         Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
             target,
-            vec![Instruction::RememberPermanentTarget],
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+            ))],
         )))
     };
     vec![
@@ -134,13 +136,15 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         "Target opponent reveals their hand. You choose a card from it with mana value 4 or greater and exile that card." => {
             (
                 BodyTarget::SingleOpponent,
-                vec![ChooseRevealedHandCard {
-                    count: std::num::NonZeroU8::MIN,
-                    nonland_only: false,
-                    minimum_mana_value: 4,
-                    filter: None,
-                    action: spellwake_engine::program::ChosenHandAction::Exile,
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
+                        4,
+                        false,
+                        None,
+                        std::num::NonZeroU8::MIN,
+                        spellwake_engine::program::ChosenHandAction::Exile,
+                    ),
+                ))],
             )
         }
         "Return target creature card from your graveyard to your hand. Target player sacrifices a creature of their choice." =>
@@ -728,7 +732,9 @@ fn aura(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Opt
                     },
                 ),
                 BodyTarget::None,
-                vec![Instruction::SacrificeStateTriggerSource],
+                vec![Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::sacrifice_state_trigger_source(),
+                ))],
             );
         }
 
@@ -831,9 +837,11 @@ fn enchantment(
                 .only_if(spellwake_engine::program::TriggerCondition::ControlledCreatureCount(1)),
                 BodyTarget::None,
                 vec![
-                    Instruction::RequireCondition(
-                        spellwake_engine::program::InterveningCondition::ControlledCreatureCount(1),
-                    ),
+                    Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                            spellwake_engine::program::InterveningCondition::ControlledCreatureCount(1),
+                        ),
+                    )),
                     ordinary_text::create_tokens(
                         "a 5/5 black Demon creature token with flying",
                         vocabulary,
@@ -997,10 +1005,9 @@ fn blink(optional: bool) -> Vec<Instruction> {
     }
     instructions.extend([
         affect(1, 1, PermanentTargetAction::Exile),
-        Instruction::ReturnExiledTargetCohort {
-            next_end_step: false,
-            owner_controls: false,
-        },
+        Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(false, false),
+        )),
     ]);
     instructions
 }
@@ -1067,7 +1074,9 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
             },
             BodyTarget::SingleCreature,
             vec![
-                Instruction::RememberPermanentTarget,
+                Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1507,13 +1516,15 @@ fn creature(
                     from_graveyard: false,
                 },
                 BodyTarget::SingleOpponent,
-                vec![ChooseRevealedHandCard {
-                count: std::num::NonZeroU8::MIN,
-                    nonland_only: false,
-                    minimum_mana_value: 0,
-                    filter: None,
-                    action: spellwake_engine::program::ChosenHandAction::Discard,
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
+                        0,
+                        false,
+                        None,
+                        std::num::NonZeroU8::MIN,
+                        spellwake_engine::program::ChosenHandAction::Discard,
+                    ),
+                ))],
             ));
             program.activation_restrictions.insert(
                 ActivatedAbilityId(0),
@@ -1529,7 +1540,11 @@ fn creature(
                     spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player().only_if(spellwake_engine::program::TriggerCondition::NoOtherControlledCreatures),
                     NoTarget,
                     vec![
-                        RequireCondition(spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures),
+                        Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                                spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures,
+                            ),
+                        )),
                         Instruction::LookTopChooseExt {
                             library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
                             chooser: spellwake_engine::program::ResolvingPlayer::Controller,
@@ -1612,7 +1627,9 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
                     BodyTarget::SingleOpponent,
-                    vec![SacrificeRandomUntilLand],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::sacrifice_random_until_land(),
+                    ))],
                 )],
             )
         }

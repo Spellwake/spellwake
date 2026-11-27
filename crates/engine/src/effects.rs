@@ -2608,7 +2608,7 @@ impl EffectWindow {
                 p.triggered.iter().any(|trigger|matches!(trigger.condition.event,crate::program::TriggerEvent::SpellCast {filter,..} if filter.ordinal_this_turn.is_some()))
             )).then(BTreeMap::new),
             departed_attack_defenders:programs.values().any(|program| entry_counters::definition_or_token_matches(program,|definition|
-                definition.triggered.iter().any(|trigger|trigger.body.instructions.contains(&Instruction::Myriad) || matches!(trigger.condition.event,crate::program::TriggerEvent::Attacks { mode: crate::program::AttackTriggerMode::OpponentsAtController { minimum: 2 } | crate::program::AttackTriggerMode::FirstThisTurn { highest_life: true }, .. }))
+                definition.triggered.iter().any(|trigger|trigger.body.instructions.iter().any(|op| matches!(op, Instruction::MutateObject(spec) if matches!(spec.op, crate::toolbox::ObjectMutation::Myriad))) || matches!(trigger.condition.event,crate::program::TriggerEvent::Attacks { mode: crate::program::AttackTriggerMode::OpponentsAtController { minimum: 2 } | crate::program::AttackTriggerMode::FirstThisTurn { highest_life: true }, .. }))
             )).then(BTreeMap::new),
             track_artifact_tapped_for_mana:programs.values().any(|program|entry_counters::definition_or_token_matches(program,|definition|
                 definition.triggered.iter().any(|trigger|matches!(trigger.condition.event,crate::program::TriggerEvent::PlayerAction { action: crate::program::PlayerTriggerAction::ArtifactTappedForMana | crate::program::PlayerTriggerAction::PermanentTappedForMana(_), .. })))),
@@ -2818,7 +2818,10 @@ impl EffectWindow {
     }
     pub(crate) fn miracle_reveals(&self) -> impl Iterator<Item = &GameObject> {
         let reveal = |body: &ExecutableBody| match body.instructions.as_slice() {
-            [Instruction::MiracleCast(object)] => Some(*object),
+            [Instruction::StackOp(spec)] => match &spec.op {
+                crate::toolbox::StackOpKind::MiracleCast(object) => Some(*object),
+                _ => None,
+            },
             _ => None,
         };
         self.waiting_triggers()
@@ -3436,7 +3439,14 @@ impl EffectWindow {
             return Err(EffectError::InconsistentProgram);
         }
         let mut target_controllers = BTreeMap::new();
-        if waiting.body.instructions == [Instruction::ExileOnePerPlayerUntilSourceLeaves] {
+        if matches!(
+            waiting.body.instructions.as_slice(),
+            [Instruction::MutatePlayer(spec)]
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+                )
+        ) {
             let current = self.evaluated_characteristics()?;
             let mut players = BTreeSet::new();
             for bound in actual.targets().targets() {
@@ -7681,92 +7691,31 @@ impl EffectWindow {
     ) -> Result<Option<(ObjectId, SeatId, crate::occurrence::ZoneReason)>, EffectError> {
         use crate::occurrence::ZoneReason;
         match instruction {
-            Instruction::Unearth | Instruction::Ninjutsu => {
-                let (StackKind::ActivatedAbility { source }
-                | StackKind::TriggeredAbility { source }) = entry.kind()
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let (zone, reason) = if *instruction == Instruction::Unearth {
-                    (
-                        ObjectZone::Graveyard(entry.controller()),
-                        ZoneReason::UnearthReturn,
-                    )
-                } else {
-                    (source.zone(), ZoneReason::NinjutsuEntry)
-                };
-                Ok(self
-                    .window
-                    .cards()
-                    .get(source.id())
-                    .filter(|object| object.zone() == zone)
-                    .map(|_| (source.id(), entry.controller(), reason)))
-            }
-            Instruction::ResolveCounterKeyword(
-                keyword @ (crate::program::CounterKeyword::Persist
-                | crate::program::CounterKeyword::Undying),
-            ) => {
-                let Some(binding) = self
-                    .execution_bindings(entry.id())
-                    .and_then(|b| b.trigger.as_ref())
-                else {
-                    return Ok(None);
-                };
-                let [cause] = binding.causes.members() else {
-                    return Ok(None);
-                };
-                let crate::occurrence::TriggerRelated::ZoneChange { before, after } =
-                    &cause.related
-                else {
-                    return Ok(None);
-                };
-                if !keyword.eligible_at_death(before) {
-                    return Ok(None);
-                }
-                let object = after.object.id();
-                let Some(card) = self.window.cards().get(object) else {
-                    return Ok(None);
-                };
-                let owner = card.owner();
-                if card.zone() != ObjectZone::Graveyard(owner) || card.card_id().is_none() {
-                    return Ok(None);
-                }
-                let reason = if *keyword == crate::program::CounterKeyword::Persist {
-                    ZoneReason::PersistReturn
-                } else {
-                    ZoneReason::UndyingReturn
-                };
-                Ok(Some((object, owner, reason)))
-            }
-            _ => Ok(None),
-        }
-    }
-    fn entry_choice_frame(&self) -> Result<Option<EntryChoiceFrame>, EffectError> {
-        let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
-        let (object, chooser) = if self.resolution_cursor().is_some() {
-            match self.current_instruction()? {
-                operation @ (Instruction::Unearth | Instruction::Ninjutsu) => {
+            Instruction::MutateObject(spec) => match &spec.op {
+                crate::toolbox::ObjectMutation::Unearth
+                | crate::toolbox::ObjectMutation::Ninjutsu => {
                     let (StackKind::ActivatedAbility { source }
                     | StackKind::TriggeredAbility { source }) = entry.kind()
                     else {
-                        return Ok(None);
+                        return Err(EffectError::InconsistentProgram);
                     };
-                    let zone = if matches!(operation, Instruction::Unearth) {
-                        ObjectZone::Graveyard(entry.controller())
-                    } else {
-                        ObjectZone::Hand(entry.controller())
-                    };
-                    if self
+                    let (zone, reason) =
+                        if matches!(spec.op, crate::toolbox::ObjectMutation::Unearth) {
+                            (
+                                ObjectZone::Graveyard(entry.controller()),
+                                ZoneReason::UnearthReturn,
+                            )
+                        } else {
+                            (source.zone(), ZoneReason::NinjutsuEntry)
+                        };
+                    Ok(self
                         .window
                         .cards()
                         .get(source.id())
-                        .is_none_or(|card| card.zone() != zone)
-                    {
-                        return Ok(None);
-                    }
-                    (source.id(), entry.controller())
+                        .filter(|object| object.zone() == zone)
+                        .map(|_| (source.id(), entry.controller(), reason)))
                 }
-                Instruction::ResolveCounterKeyword(
+                crate::toolbox::ObjectMutation::ResolveCounterKeyword(
                     keyword @ (crate::program::CounterKeyword::Persist
                     | crate::program::CounterKeyword::Undying),
                 ) => {
@@ -7792,11 +7741,81 @@ impl EffectWindow {
                         return Ok(None);
                     };
                     let owner = card.owner();
-                    if card.zone() != ObjectZone::Graveyard(owner) {
+                    if card.zone() != ObjectZone::Graveyard(owner) || card.card_id().is_none() {
                         return Ok(None);
                     }
-                    (object, owner)
+                    let reason = if *keyword == crate::program::CounterKeyword::Persist {
+                        ZoneReason::PersistReturn
+                    } else {
+                        ZoneReason::UndyingReturn
+                    };
+                    Ok(Some((object, owner, reason)))
                 }
+                _ => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+    fn entry_choice_frame(&self) -> Result<Option<EntryChoiceFrame>, EffectError> {
+        let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
+        let (object, chooser) = if self.resolution_cursor().is_some() {
+            match self.current_instruction()? {
+                Instruction::MutateObject(spec) => match &spec.op {
+                    operation @ (crate::toolbox::ObjectMutation::Unearth
+                    | crate::toolbox::ObjectMutation::Ninjutsu) => {
+                        let (StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source }) = entry.kind()
+                        else {
+                            return Ok(None);
+                        };
+                        let zone = if matches!(operation, crate::toolbox::ObjectMutation::Unearth) {
+                            ObjectZone::Graveyard(entry.controller())
+                        } else {
+                            ObjectZone::Hand(entry.controller())
+                        };
+                        if self
+                            .window
+                            .cards()
+                            .get(source.id())
+                            .is_none_or(|card| card.zone() != zone)
+                        {
+                            return Ok(None);
+                        }
+                        (source.id(), entry.controller())
+                    }
+                    crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                        keyword @ (crate::program::CounterKeyword::Persist
+                        | crate::program::CounterKeyword::Undying),
+                    ) => {
+                        let Some(binding) = self
+                            .execution_bindings(entry.id())
+                            .and_then(|b| b.trigger.as_ref())
+                        else {
+                            return Ok(None);
+                        };
+                        let [cause] = binding.causes.members() else {
+                            return Ok(None);
+                        };
+                        let crate::occurrence::TriggerRelated::ZoneChange { before, after } =
+                            &cause.related
+                        else {
+                            return Ok(None);
+                        };
+                        if !keyword.eligible_at_death(before) {
+                            return Ok(None);
+                        }
+                        let object = after.object.id();
+                        let Some(card) = self.window.cards().get(object) else {
+                            return Ok(None);
+                        };
+                        let owner = card.owner();
+                        if card.zone() != ObjectZone::Graveyard(owner) {
+                            return Ok(None);
+                        }
+                        (object, owner)
+                    }
+                    _ => return Ok(None),
+                },
                 _ => return Ok(None),
             }
         } else {
@@ -8073,9 +8092,17 @@ impl EffectWindow {
     }
     fn copy_resolution_frame(&self) -> Result<CopyResolution, EffectError> {
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
-        let original = if self.current_instruction()? == &Instruction::CopyCapturedAbility {
+        let original = if matches!(
+            self.current_instruction()?,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::CopyCapturedAbility)
+        ) {
             self.delayed_ability_source(entry.id())?.original()
-        } else if matches!(self.current_instruction()?, Instruction::CopyOnCast(_)) {
+        } else if matches!(
+            self.current_instruction()?,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::CopyOnCast(_))
+        ) {
             self.copying_original(entry.id())
                 .ok_or(EffectError::WrongResolutionFrame)?
         } else if matches!(
@@ -8797,13 +8824,16 @@ impl EffectWindow {
         source: TargetSourceContext<'_>,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
-        if let [Instruction::ReturnGraveyardCreatureWithCorpse(mana_value)] =
-            body.instructions.as_slice()
+        if let [Instruction::ZoneOp(spec)] = body.instructions.as_slice()
+            && let crate::toolbox::ZoneDest::Delayed(
+                crate::toolbox::DelayedZoneAction::ReturnGraveyardCreatureWithCorpse(mana_value),
+            ) = &spec.destination
             && !matches!(target,TargetRef::Object(id) if self.copiable_program(id).is_some_and(|p|p.mana_value()==*mana_value))
         {
             return false;
         }
-        if let [_, Instruction::ResolveTransfer(key)] = body.instructions.as_slice()
+        if let [_, Instruction::MutateObject(spec)] = body.instructions.as_slice()
+            && let crate::toolbox::ObjectMutation::ResolveTransfer(key) = &spec.op
             && !self.transfer_target(*key, target, evaluated)
         {
             return false;
@@ -10434,11 +10464,7 @@ impl EffectWindow {
         let evaluated = self.evaluated_characteristics()?;
         Ok(match instruction {
             Instruction::AffectPermanentTargets { .. }
-            | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::DamageFromGrantingPermanent { .. }
             | Instruction::Sacrifice { .. }
-            | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -10448,12 +10474,26 @@ impl EffectWindow {
                     crate::toolbox::PlayerMutation::Populate
                         | crate::toolbox::PlayerMutation::Bolster(_)
                         | crate::toolbox::PlayerMutation::Amass { .. }
+                        | crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+                        | crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                ) =>
+            {
+                return Err(EffectError::InconsistentProgram);
+            }
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnGraveyardToHand(_)
+                    )
                 ) =>
             {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::StackOp(spec) => {
-                if !spec.requires_stack_target() {
+                if spec.is_keyword_cast_or_copy_op() {
+                    false
+                } else if !spec.requires_stack_target() {
                     true
                 } else {
                     match &spec.op {
@@ -10492,6 +10532,7 @@ impl EffectWindow {
                             target,
                             TargetRef::Stack(id) if self.window.entries().iter().any(|entry| entry.id() == id)
                         ),
+                        _ => false,
                     }
                 }
             }
@@ -10518,6 +10559,9 @@ impl EffectWindow {
                 _ => false,
             },
             Instruction::DealDamage(spec) => match &spec.recipients {
+                crate::toolbox::DamageTargetQuery::FromGrantingPermanent => {
+                    return Err(EffectError::InconsistentProgram);
+                }
                 crate::toolbox::DamageTargetQuery::TargetControllersCreatures { .. } => {
                     match target {
                         TargetRef::Player(player) => self.window.participants().contains(&player),
@@ -10557,12 +10601,7 @@ impl EffectWindow {
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::RollDie { .. }
-            | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Connive { .. }
-            | Instruction::ConniveFinalize { .. }
-            | Instruction::Discover { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
@@ -10576,65 +10615,17 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::BindResolutionX(_)
-            | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::ResolvePowerAbility(_)
-            | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::OfferSourceCounters { .. }
-            | Instruction::RequireCondition(_)
-            | Instruction::Encore
-            | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ExileDelayedObjects(_)
-            | Instruction::ReturnEarthbentCard
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Ninjutsu
-            | Instruction::Unearth
-            | Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::Myriad
-            | Instruction::CopyCapturedAbility
-            | Instruction::CopyOnCast(_)
-            | Instruction::MadnessCast
-            | Instruction::MiracleCast(_)
-            | Instruction::CastDefeatedSiege
-            | Instruction::ReboundCast(_)
-            | Instruction::EndStepCast { .. }
-            | Instruction::SacrificeDelayedObjects(_)
-            | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedPermanentToHand(_)
-            | Instruction::ReturnDelayedExileWithCounters(_)
-            | Instruction::ReturnDelayedExile(_)
-            | Instruction::ExileUnearthed(_)
-            | Instruction::ResolveTransfer(_)
-            | Instruction::ExtortDrain
-            | Instruction::ResolveGrowth(_)
-            | Instruction::ResolveCounterKeyword(_)
-            | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
-            | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::FixedTargetClause(_)
-            | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::MayRevealLibraryTop
-            | Instruction::ChooseFoundSpell
-            | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ChooseCreatureType { .. }
-            | Instruction::RememberPermanentTarget
-            | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ExileDefeatedSiege
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::OfferAnyPlayer { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. }
             | Instruction::DrawCards(_) => false,
         })
     }

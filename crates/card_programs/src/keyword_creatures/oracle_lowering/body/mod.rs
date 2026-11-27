@@ -158,7 +158,14 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
             Instruction::LookTopChooseExt {
                 reveal_only: true,
                 ..
-            } | Instruction::MayRevealLibraryTop
+            }
+        ) || matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                )
         ) || matches!(
             op,
             Instruction::ZoneOp(spec)

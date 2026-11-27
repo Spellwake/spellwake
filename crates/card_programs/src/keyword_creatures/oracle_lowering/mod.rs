@@ -1758,8 +1758,12 @@ fn lower_face(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::ExileDefeatedSiege,
-                        Instruction::CastDefeatedSiege,
+                        Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::exile_defeated_siege(),
+                        )),
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::cast_defeated_siege(),
+                        )),
                     ],
                 ),
             });
@@ -2611,7 +2615,12 @@ fn body_has_empty_die_roll(body: &ExecutableBody) -> bool {
     body.instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::RollDie { bands, .. } if bands.is_empty()
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    &spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. }
+                        if bands.is_empty()
+                )
         )
     })
 }
@@ -2658,10 +2667,11 @@ fn attach_die_roll_bands_in_body(
 ) -> bool {
     let mut attached = false;
     for op in &mut body.instructions {
-        if let Instruction::RollDie {
-            bands: target_bands,
-            ..
-        } = op
+        if let Instruction::MutatePlayer(spec) = op
+            && let spellwake_engine::toolbox::PlayerMutation::RollDie {
+                bands: target_bands,
+                ..
+            } = &mut spec.op
             && target_bands.is_empty()
         {
             *target_bands = bands.to_vec();

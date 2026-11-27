@@ -743,7 +743,8 @@ impl EffectWindow {
             | DamageTargetQuery::TargetControllersCreatures { .. }
             | DamageTargetQuery::OrderedTargets { .. }
             | DamageTargetQuery::DivideThree
-            | DamageTargetQuery::Divided { .. } => unreachable!("handled above"),
+            | DamageTargetQuery::Divided { .. }
+            | DamageTargetQuery::FromGrantingPermanent => unreachable!("handled above"),
         };
 
         let fixed_amount = match &spec.amount {
@@ -1483,6 +1484,7 @@ impl EffectWindow {
             | PlayerMutation::Mill(_) => {
                 return Err(EffectError::InconsistentProgram);
             }
+            _ => return Err(EffectError::InconsistentProgram),
         }
         self.advance_instruction()?;
         Ok(StepOutcome::Continue)

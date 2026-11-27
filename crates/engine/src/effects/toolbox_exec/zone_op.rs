@@ -959,6 +959,7 @@ impl EffectWindow {
                     }
                 }
             }
+            ZoneDest::Delayed(_) => return Err(EffectError::InconsistentProgram),
         }
 
         if let Some((tag_key, tag_val)) = &spec.tag_moved {

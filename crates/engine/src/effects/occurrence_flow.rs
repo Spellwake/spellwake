@@ -1538,8 +1538,24 @@ impl EffectWindow {
         let refers_to = |source: ObjectId,
                          causes: &crate::occurrence::TriggerCauseSet,
                          body: &ExecutableBody| {
-            (source == object && body.instructions.iter().any(|op| matches!(op, Instruction::Myriad)))
-                || (body.instructions.iter().any(|op| matches!(op, Instruction::DamageFromGrantingPermanent { .. })) && causes.members().iter().any(|member| {
+            (source == object
+                && body.instructions.iter().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(spec.op, crate::toolbox::ObjectMutation::Myriad)
+                    )
+                }))
+                || (body.instructions.iter().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::DealDamage(spec)
+                            if matches!(
+                                spec.recipients,
+                                crate::toolbox::DamageTargetQuery::FromGrantingPermanent
+                            )
+                    )
+                }) && causes.members().iter().any(|member| {
                     matches!(&member.related, crate::occurrence::TriggerRelated::ZoneChange { after, .. }
                         | crate::occurrence::TriggerRelated::TokenCreated { after, .. } if after.object.id() == object)
                 }))
@@ -1604,11 +1620,36 @@ impl EffectWindow {
         {
             departed.insert(source_id, source);
         }
-        if let Some(count)=before.characteristics.quest_counters.get(&source_id)
-            && (self.triggers.waiting().values().any(|w|w.source.object.id()==source_id && w.body.instructions.iter().any(|op|matches!(op,Instruction::RequireCondition(crate::program::InterveningCondition::SourceQuestCounters(_)))))
-                || self.window.entries().iter().chain(self.window.resolving()).chain(self.window.checking_targets()).any(|entry|matches!(entry.kind(),StackKind::TriggeredAbility {source} if source.id()==source_id)
-                    && self.stack_body(entry.id()).is_some_and(|body|body.instructions.iter().any(|op|matches!(op,Instruction::RequireCondition(crate::program::InterveningCondition::SourceQuestCounters(_))))))) {
-            self.departed_quest_counts.insert(source_id,count.clone());
+        let is_source_quest_require = |op: &Instruction| {
+            matches!(
+                op,
+                Instruction::MutatePlayer(spec)
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::PlayerMutation::RequireCondition(
+                            crate::program::InterveningCondition::SourceQuestCounters(_)
+                        )
+                    )
+            )
+        };
+        if let Some(count) = before.characteristics.quest_counters.get(&source_id)
+            && (self.triggers.waiting().values().any(|w| {
+                w.source.object.id() == source_id
+                    && w.body.instructions.iter().any(is_source_quest_require)
+            }) || self
+                .window
+                .entries()
+                .iter()
+                .chain(self.window.resolving())
+                .chain(self.window.checking_targets())
+                .any(|entry| {
+                    matches!(entry.kind(), StackKind::TriggeredAbility { source } if source.id() == source_id)
+                        && self
+                            .stack_body(entry.id())
+                            .is_some_and(|body| body.instructions.iter().any(is_source_quest_require))
+                }))
+        {
+            self.departed_quest_counts.insert(source_id, count.clone());
         }
         for entry in self
             .window
@@ -3867,7 +3908,15 @@ impl EffectWindow {
                         .get(&entry.id())
                         .and_then(StackPayload::instructions)
                         .and_then(|ops| ops.get(instruction)),
-                    Some(Instruction::ReturnGraveyardCreatureWithCorpse(_))
+                    Some(Instruction::ZoneOp(spec))
+                        if matches!(
+                            spec.destination,
+                            crate::toolbox::ZoneDest::Delayed(
+                                crate::toolbox::DelayedZoneAction::ReturnGraveyardCreatureWithCorpse(
+                                    _
+                                )
+                            )
+                        )
                 ),
             },
             library_bottom: None,

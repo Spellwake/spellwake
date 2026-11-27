@@ -683,20 +683,23 @@ impl EffectWindow {
             || token_attacking_scope.is_some()
             || matches!(
                 current_inst,
-                Instruction::CreateTokenCopyExt {
-                    enters_attacking: true,
-                    ..
-                }
+                Instruction::MutateObject(spec)
+                    if matches!(
+                        &spec.op,
+                        crate::toolbox::ObjectMutation::CreateTokenCopy(copy)
+                            if copy.enters_attacking
+                    )
             );
         let defender_scope = match current_inst {
             Instruction::CreateTokens { .. } => {
                 token_attacking_scope.unwrap_or(crate::token::AttackingDefenderScope::AnyLegal)
             }
-            Instruction::CreateTokenCopyExt {
-                enters_attacking: true,
-                defender_scope,
-                ..
-            } => *defender_scope,
+            Instruction::MutateObject(spec) => match &spec.op {
+                crate::toolbox::ObjectMutation::CreateTokenCopy(copy) if copy.enters_attacking => {
+                    copy.defender_scope
+                }
+                _ => crate::token::AttackingDefenderScope::AnyLegal,
+            },
             _ => crate::token::AttackingDefenderScope::AnyLegal,
         };
         let defenders = if enters_attacking
@@ -793,7 +796,13 @@ impl EffectWindow {
             .try_reserve_exact(total)
             .map_err(|_| EffectError::TokenCapacity)?;
         let mut encore_defenders = Vec::new();
-        if !groups.is_empty() && self.current_instruction()? == &Instruction::Encore {
+        if !groups.is_empty()
+            && matches!(
+                self.current_instruction()?,
+                Instruction::StackOp(spec)
+                    if matches!(spec.op, crate::toolbox::StackOpKind::Encore)
+            )
+        {
             let opponents = self
                 .combat_rules
                 .opponents(self.window.participants(), controller)?;
@@ -1862,13 +1871,18 @@ impl EffectWindow {
                 }
             }
         }
-        if let Some(Instruction::CreateAuraTokenAttached { host, .. }) = self
+        if let Some(Instruction::MutateObject(spec)) = self
             .stack_body(entry)
             .and_then(|body| body.instructions.get(instruction))
             .cloned()
+            && matches!(
+                spec.op,
+                crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+            )
         {
+            let host = spec.source.to_move_subject();
             let entry_obj = self.window.resolving().filter(|e| e.id() == entry).cloned();
-            let host_target = entry_obj.as_ref().and_then(|resolving| match host {
+            let host_target = entry_obj.as_ref().and_then(|resolving| match host? {
                 crate::program::MoveSubjectRef::TargetObject => self
                     .instruction_target(resolving)
                     .ok()
@@ -1932,18 +1946,15 @@ impl EffectWindow {
                 }
             }
         }
-        if let Some(Instruction::CreateTokenCopyExt {
-            sacrifice_at_end_step,
-            exile_at_end_step,
-            ..
-        }) = self
+        if let Some(Instruction::MutateObject(spec)) = self
             .stack_body(entry)
             .and_then(|body| body.instructions.get(instruction))
-            && (*sacrifice_at_end_step || *exile_at_end_step)
+            && let crate::toolbox::ObjectMutation::CreateTokenCopy(copy) = &spec.op
+            && (copy.sacrifice_at_end_step || copy.exile_at_end_step)
             && !objects.is_empty()
         {
-            let sacrifice_at_end_step = *sacrifice_at_end_step;
-            let exile_at_end_step = *exile_at_end_step;
+            let sacrifice_at_end_step = copy.sacrifice_at_end_step;
+            let exile_at_end_step = copy.exile_at_end_step;
             let ids: Vec<ObjectId> = objects.iter().map(GameObject::id).collect();
             let resolving = self.window.resolving().cloned();
             if let Some(resolving) = resolving {

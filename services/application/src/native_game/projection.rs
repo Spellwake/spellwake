@@ -1408,7 +1408,11 @@ impl Projection<'_, '_> {
                     kind,
                 });
                 let label = match granted.body.instructions.as_slice() {
-                    [spellwake_engine::program::Instruction::Encore] => "Encore",
+                    [spellwake_engine::program::Instruction::StackOp(spec)]
+                        if matches!(spec.op, spellwake_engine::toolbox::StackOpKind::Encore) =>
+                    {
+                        "Encore"
+                    }
                     [spellwake_engine::program::Instruction::MutateObject(spec)]
                         if matches!(
                             spec.op,
@@ -1694,7 +1698,8 @@ impl Projection<'_, '_> {
                             .triggered
                             .iter()
                             .filter(|a| current.abilities.triggered.contains(&a.id))
-                            .filter_map(|a| match &a.condition.event {
+                            .filter_map(|a| {
+                                match &a.condition.event {
                                 spellwake_engine::program::TriggerEvent::Attacks {
                                     subject,
                                     mode:
@@ -1704,10 +1709,17 @@ impl Projection<'_, '_> {
                                 } if *subject
                                     == spellwake_engine::program::ObjectFilter::self_object() =>
                                 {
-                                    if a.body
-                                        .instructions
-                                        .contains(&spellwake_engine::program::Instruction::Myriad)
-                                    {
+                                    if a.body.instructions.iter().any(|op| {
+                                        matches!(
+                                            op,
+                                            spellwake_engine::program::Instruction::MutateObject(
+                                                spec
+                                            ) if matches!(
+                                                spec.op,
+                                                spellwake_engine::toolbox::ObjectMutation::Myriad
+                                            )
+                                        )
+                                    }) {
                                         Some(PlayerKeyword::Myriad)
                                     } else if a.body.instructions.iter().any(|op| {
                                         matches!(
@@ -1748,37 +1760,59 @@ impl Projection<'_, '_> {
                                     ),
                                 ) => Some(PlayerKeyword::CumulativeUpkeep),
                                 _ => match a.body.instructions.as_slice() {
-                                    [_, spellwake_engine::program::Instruction::ExtortDrain] => {
+                                    [
+                                        _,
+                                        spellwake_engine::program::Instruction::MutatePlayer(spec),
+                                    ] if matches!(
+                                        spec.op,
+                                        spellwake_engine::toolbox::PlayerMutation::ExtortDrain
+                                    ) =>
+                                    {
                                         Some(PlayerKeyword::Extort)
                                     }
                                     [
                                         _,
-                                        spellwake_engine::program::Instruction::ResolveTransfer(
+                                        spellwake_engine::program::Instruction::MutateObject(spec),
+                                    ] => match &spec.op {
+                                        spellwake_engine::toolbox::ObjectMutation::ResolveTransfer(
                                             key,
-                                        ),
-                                    ] => {
-                                        use spellwake_engine::program::TransferKeyword;
-                                        Some(match key {
-                                            TransferKeyword::Graft(_) => PlayerKeyword::Graft,
-                                            TransferKeyword::Modular(_) => PlayerKeyword::Modular,
-                                            TransferKeyword::Soulshift(_) => {
-                                                PlayerKeyword::Soulshift
-                                            }
-                                        })
-                                    }
+                                        ) => {
+                                            use spellwake_engine::program::TransferKeyword;
+                                            Some(match key {
+                                                TransferKeyword::Graft(_) => PlayerKeyword::Graft,
+                                                TransferKeyword::Modular(_) => {
+                                                    PlayerKeyword::Modular
+                                                }
+                                                TransferKeyword::Soulshift(_) => {
+                                                    PlayerKeyword::Soulshift
+                                                }
+                                            })
+                                        }
+                                        _ => None,
+                                    },
                                     [
-                                        spellwake_engine::program::Instruction::ResolveGrowth(key),
-                                    ] => {
-                                        use spellwake_engine::program::GrowthKeyword;
-                                        Some(match key {
-                                            GrowthKeyword::Mentor => PlayerKeyword::Mentor,
-                                            GrowthKeyword::Increment => PlayerKeyword::Increment,
-                                            GrowthKeyword::Evolve => PlayerKeyword::Evolve,
-                                            GrowthKeyword::Backup { .. } => PlayerKeyword::Backup,
-                                        })
-                                    }
+                                        spellwake_engine::program::Instruction::MutateObject(spec),
+                                    ] => match &spec.op {
+                                        spellwake_engine::toolbox::ObjectMutation::ResolveGrowth(
+                                            key,
+                                        ) => {
+                                            use spellwake_engine::program::GrowthKeyword;
+                                            Some(match key {
+                                                GrowthKeyword::Mentor => PlayerKeyword::Mentor,
+                                                GrowthKeyword::Increment => {
+                                                    PlayerKeyword::Increment
+                                                }
+                                                GrowthKeyword::Evolve => PlayerKeyword::Evolve,
+                                                GrowthKeyword::Backup { .. } => {
+                                                    PlayerKeyword::Backup
+                                                }
+                                            })
+                                        }
+                                        _ => None,
+                                    },
                                     _ => None,
                                 },
+                            }
                             }),
                     )
                     .chain((current.exalted_instances() > 0).then_some(PlayerKeyword::Exalted))

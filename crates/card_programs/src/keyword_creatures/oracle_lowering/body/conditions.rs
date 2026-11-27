@@ -184,9 +184,14 @@ pub(super) fn resolve_prev_anaphora_ref(
     let has_checked_top = instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::MayRevealLibraryTop
-                | Instruction::RevealUntilMatchExt { .. }
-                | Instruction::LookTopChooseExt { .. }
+            Instruction::RevealUntilMatchExt { .. } | Instruction::LookTopChooseExt { .. }
+        ) || matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                )
         ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
             matches!(
                 &spec.source,
@@ -202,9 +207,17 @@ pub(super) fn resolve_prev_anaphora_ref(
         })
     });
     instructions.iter().rev().find_map(|op| match op {
-        Instruction::MayRevealLibraryTop
-        | Instruction::RevealUntilMatchExt { .. }
-        | Instruction::LookTopChooseExt { .. } => Some(MatchObjectRef::RevealedTop),
+        Instruction::RevealUntilMatchExt { .. } | Instruction::LookTopChooseExt { .. } => {
+            Some(MatchObjectRef::RevealedTop)
+        }
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+            ) =>
+        {
+            Some(MatchObjectRef::RevealedTop)
+        }
         Instruction::Discard { .. } => Some(MatchObjectRef::DiscardedCard),
         Instruction::MutatePlayer(spec)
             if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
@@ -2618,12 +2631,11 @@ pub(in super::super) fn lower_resolution_condition(
                 .iter()
                 .rev()
                 .find_map(|op| match op {
-                    Instruction::MutatePlayer(spec)
-                        if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Clash) =>
-                    {
-                        Some(true)
-                    }
-                    Instruction::FlipCoins { .. } => Some(false),
+                    Instruction::MutatePlayer(spec) => match &spec.op {
+                        spellwake_engine::toolbox::PlayerMutation::Clash => Some(true),
+                        spellwake_engine::toolbox::PlayerMutation::FlipCoins { .. } => Some(false),
+                        _ => None,
+                    },
                     _ => None,
                 })
                 .unwrap_or(false);
@@ -3717,10 +3729,16 @@ pub(in super::super) fn lower_resolution_condition(
             }
         }
         ConditionAst::PlayerCoinFlipOutcome { player, outcome } => {
-            let prior_flip = builder
-                .instructions
-                .iter()
-                .any(|op| matches!(op, Instruction::FlipCoins { .. }));
+            let prior_flip = builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::FlipCoins { .. }
+                        )
+                )
+            });
             let player_ok =
                 *player == PlayerRefAst::You || (*player == PlayerRefAst::ThatPlayer && prior_flip);
             if !player_ok {

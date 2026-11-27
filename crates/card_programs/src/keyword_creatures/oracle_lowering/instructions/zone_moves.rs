@@ -10032,7 +10032,14 @@ pub(super) fn lower_zone_moves_instruction(
                             reveal_only: true,
                             ..
                         } => (*count == ValueExpr::literal(1)).then_some(Some(*library_owner)),
-                        Instruction::MayRevealLibraryTop => Some(Some(ResolvingPlayer::Controller)),
+                        Instruction::MutatePlayer(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                            ) =>
+                        {
+                            Some(Some(ResolvingPlayer::Controller))
+                        }
                         Instruction::ZoneOp(spec)
                             if matches!(
                                 spec.destination,
@@ -10148,7 +10155,6 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             | Instruction::MutatePlayer(_)
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::BindResolutionX(_)
             | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
@@ -10370,7 +10376,6 @@ pub(super) fn has_live_last_moved_producer(
             | Instruction::MutatePlayer(_)
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::BindResolutionX(_)
             | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
@@ -10633,8 +10638,14 @@ pub(super) fn has_checked_revealed_top(ops: &[Instruction]) -> bool {
             Instruction::LookTopChooseExt {
                 reveal_only: true,
                 ..
-            } | Instruction::MayRevealLibraryTop
-                | Instruction::RevealUntilMatchExt { .. }
+            } | Instruction::RevealUntilMatchExt { .. }
+        ) || matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                )
         ) || matches!(
             op,
             Instruction::ZoneOp(spec)
@@ -10661,7 +10672,14 @@ pub(super) fn has_checked_revealed_top_strict(ops: &[Instruction]) -> bool {
             Instruction::LookTopChooseExt {
                 reveal_only: true,
                 ..
-            } | Instruction::MayRevealLibraryTop
+            }
+        ) || matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                )
         ) || matches!(
             op,
             Instruction::ZoneOp(spec)
@@ -11034,7 +11052,8 @@ fn damage_no_regen_object_query(
             | DamageTargetQuery::FromPower(_)
             | DamageTargetQuery::TargetControllersCreatures { .. }
             | DamageTargetQuery::OrderedTargets { .. }
-            | DamageTargetQuery::DivideThree => None,
+            | DamageTargetQuery::DivideThree
+            | DamageTargetQuery::FromGrantingPermanent => None,
         },
         Instruction::AffectPermanentTargets {
             action: PermanentTargetAction::Damage(_),
@@ -11246,11 +11265,8 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::DrawCards(_)
             | Instruction::ChooseObjects { .. }
-            | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::Discard { .. }
             | Instruction::SearchLibrary { .. }
@@ -11264,6 +11280,7 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
                     | spellwake_engine::toolbox::PlayerMutation::Mill(_)
                     | spellwake_engine::toolbox::PlayerMutation::ManifestDread
                     | spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
             )
     )
 }
@@ -11422,7 +11439,6 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             | Instruction::MutatePlayer(_)
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::BindResolutionX(_)
             | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(

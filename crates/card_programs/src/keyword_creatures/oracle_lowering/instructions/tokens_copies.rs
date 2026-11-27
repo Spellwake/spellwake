@@ -242,27 +242,33 @@ pub(super) fn lower_tokens_copies_instruction(
                             } else {
                                 None
                             };
-                            trial.instructions.push(Instruction::CreateTokenCopyExt {
-                                source: src_ref,
-                                count: cnt,
-                                recipients,
-                                enters_tapped,
-                                enters_attacking,
-                                haste: false,
-                                sacrifice_at_end_step: parsed.sacrifice_at_end_step,
-                                exile_at_end_step: parsed.exile_at_end_step,
-                                nonlegendary: parsed.nonlegendary,
-                                extra_types: parsed.add_card_types,
-                                extra_subtypes: parsed.add_subtypes,
-                                extra_keywords: kws,
-                                override_pt: override_pt
-                                    .map(|(p, t)| (i64::from(p).into(), i64::from(t).into())),
-                                extra_colors: BTreeSet::new(),
-                                override_colors,
-                                strip_mana_cost: parsed.strip_mana_cost,
-                                defender_scope:
-                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                            });
+                            trial.instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                        src_ref,
+                                    ),
+                                    Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                                        count: cnt,
+                                        recipients,
+                                        enters_tapped,
+                                        enters_attacking,
+                                        haste: false,
+                                        sacrifice_at_end_step: parsed.sacrifice_at_end_step,
+                                        exile_at_end_step: parsed.exile_at_end_step,
+                                        nonlegendary: parsed.nonlegendary,
+                                        extra_types: parsed.add_card_types,
+                                        extra_subtypes: parsed.add_subtypes,
+                                        extra_keywords: kws,
+                                        override_pt: override_pt
+                                            .map(|(p, t)| (i64::from(p).into(), i64::from(t).into())),
+                                        extra_colors: BTreeSet::new(),
+                                        override_colors,
+                                        strip_mana_cost: parsed.strip_mana_cost,
+                                        defender_scope:
+                                            spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                                    }),
+                                ),
+                            )));
                             *builder = trial;
                             return Ok(());
                         }
@@ -280,47 +286,59 @@ pub(super) fn lower_tokens_copies_instruction(
                             let mut extra_keywords = parsed.grant_keywords;
                             let haste =
                                 parsed.haste || extra_keywords.remove(&KeywordAbility::Haste);
-                            trial.instructions.push(Instruction::CreateTokenCopyExt {
-                                source: src_ref,
-                                count: cnt,
-                                recipients,
-                                enters_tapped,
-                                enters_attacking,
-                                haste,
-                                sacrifice_at_end_step: parsed.sacrifice_at_end_step,
-                                exile_at_end_step: parsed.exile_at_end_step,
-                                nonlegendary: parsed.nonlegendary,
-                                extra_types: parsed.add_card_types,
-                                extra_subtypes: parsed.add_subtypes,
-                                extra_keywords,
-                                override_pt: parsed.override_pt,
-                                extra_colors: parsed.parsed_colors,
-                                defender_scope:
-                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                                override_colors: None,
-                                strip_mana_cost: false,
-                            });
+                            trial.instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                        src_ref,
+                                    ),
+                                    Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                                        count: cnt,
+                                        recipients,
+                                        enters_tapped,
+                                        enters_attacking,
+                                        haste,
+                                        sacrifice_at_end_step: parsed.sacrifice_at_end_step,
+                                        exile_at_end_step: parsed.exile_at_end_step,
+                                        nonlegendary: parsed.nonlegendary,
+                                        extra_types: parsed.add_card_types,
+                                        extra_subtypes: parsed.add_subtypes,
+                                        extra_keywords,
+                                        override_pt: parsed.override_pt,
+                                        extra_colors: parsed.parsed_colors,
+                                        defender_scope:
+                                            spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                                        override_colors: None,
+                                        strip_mana_cost: false,
+                                    }),
+                                ),
+                            )));
                         } else {
-                            trial.instructions.push(Instruction::CreateTokenCopyExt {
-                                source: src_ref,
-                                count: cnt,
-                                recipients,
-                                enters_tapped,
-                                enters_attacking,
-                                haste: false,
-                                sacrifice_at_end_step: false,
-                                exile_at_end_step: false,
-                                nonlegendary: false,
-                                extra_types: BTreeSet::new(),
-                                extra_subtypes: BTreeSet::new(),
-                                extra_keywords: BTreeSet::new(),
-                                override_pt: None,
-                                extra_colors: BTreeSet::new(),
-                                override_colors: None,
-                                strip_mana_cost: false,
-                                defender_scope:
-                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                            });
+                            trial.instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                        src_ref,
+                                    ),
+                                    Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                                        count: cnt,
+                                        recipients,
+                                        enters_tapped,
+                                        enters_attacking,
+                                        haste: false,
+                                        sacrifice_at_end_step: false,
+                                        exile_at_end_step: false,
+                                        nonlegendary: false,
+                                        extra_types: BTreeSet::new(),
+                                        extra_subtypes: BTreeSet::new(),
+                                        extra_keywords: BTreeSet::new(),
+                                        override_pt: None,
+                                        extra_colors: BTreeSet::new(),
+                                        override_colors: None,
+                                        strip_mana_cost: false,
+                                        defender_scope:
+                                            spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                                    }),
+                                ),
+                            )));
                         }
                         *builder = trial;
                         return Ok(());
@@ -374,11 +392,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     let def = predefined_token_def(&key, vocabulary, ids)?;
                     builder
                         .instructions
-                        .push(Instruction::CreateAuraTokenAttached {
-                            definition: Box::new(def),
-                            host,
-                            up_to_one,
-                        });
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::create_aura_token_attached(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(host),
+                                Box::new(def),
+                                up_to_one,
+                            ),
+                        )));
                     return Ok(());
                 }
             }
@@ -1099,12 +1119,24 @@ pub(super) fn lower_tokens_copies_instruction(
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(recv_bt, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            recv_bt,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(donor_bt, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            donor_bt,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder.instructions.push(Instruction::BecomeCopy {
                     receiver: Box::new(EffectSubject::LinkedFirst),
@@ -1491,12 +1523,18 @@ pub(super) fn lower_tokens_copies_instruction(
                         }
                         true
                     }
-                    Instruction::CreateTokenCopyExt {
-                        enters_attacking: true,
-                        defender_scope: ds,
-                        ..
-                    } => {
-                        *ds = defender_scope;
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            &spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy)
+                                if copy.enters_attacking
+                        ) =>
+                    {
+                        if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
+                            &mut spec.op
+                        {
+                            copy.defender_scope = defender_scope;
+                        }
                         true
                     }
                     _ => false,
@@ -1866,22 +1904,49 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                     return true;
                 }
             }
-            Instruction::FlipCoins {
-                win_body,
-                lose_body,
-                ..
-            } => {
-                if let Some(body) = lose_body
-                    && set_last_copy_may_choose_new_targets(&mut body.instructions)
-                {
-                    return true;
+            Instruction::MutatePlayer(spec) => match &mut spec.op {
+                spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                    win_body,
+                    lose_body,
+                    ..
+                } => {
+                    if let Some(body) = lose_body
+                        && set_last_copy_may_choose_new_targets(&mut body.instructions)
+                    {
+                        return true;
+                    }
+                    if let Some(body) = win_body
+                        && set_last_copy_may_choose_new_targets(&mut body.instructions)
+                    {
+                        return true;
+                    }
                 }
-                if let Some(body) = win_body
-                    && set_last_copy_may_choose_new_targets(&mut body.instructions)
-                {
-                    return true;
+                spellwake_engine::toolbox::PlayerMutation::OfferAnyPlayer {
+                    cost_body,
+                    paid_body,
+                    declined_body,
+                } => {
+                    if let Some(body) = declined_body
+                        && set_last_copy_may_choose_new_targets(&mut body.instructions)
+                    {
+                        return true;
+                    }
+                    if set_last_copy_may_choose_new_targets(&mut paid_body.instructions) {
+                        return true;
+                    }
+                    if set_last_copy_may_choose_new_targets(&mut cost_body.instructions) {
+                        return true;
+                    }
                 }
-            }
+                spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                    for band in bands.iter_mut().rev() {
+                        if set_last_copy_may_choose_new_targets(&mut band.body.instructions) {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            },
             Instruction::ScheduleDelayedEventTrigger { body, .. }
             | Instruction::ScheduleDelayedStepTrigger { body, .. }
             | Instruction::EmitReflexiveTrigger { body, .. }
@@ -1900,31 +1965,7 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                     }
                 }
             }
-            Instruction::OfferAnyPlayer {
-                cost_body,
-                paid_body,
-                declined_body,
-                ..
-            } => {
-                if let Some(body) = declined_body
-                    && set_last_copy_may_choose_new_targets(&mut body.instructions)
-                {
-                    return true;
-                }
-                if set_last_copy_may_choose_new_targets(&mut paid_body.instructions) {
-                    return true;
-                }
-                if set_last_copy_may_choose_new_targets(&mut cost_body.instructions) {
-                    return true;
-                }
-            }
-            Instruction::RollDie { bands, .. } => {
-                for band in bands.iter_mut().rev() {
-                    if set_last_copy_may_choose_new_targets(&mut band.body.instructions) {
-                        return true;
-                    }
-                }
-            }
+
             _ => {}
         }
     }

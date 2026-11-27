@@ -158,7 +158,16 @@ fn try_append_fixed_first_target_counters(
                 && first_body
                     .instructions
                     .iter()
-                    .any(|op| matches!(op, Instruction::RememberPermanentTarget))
+                    .any(|op| {
+                        matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                )
+                        )
+                    })
     );
     if !first_is_remembered_perm {
         return false;
@@ -4462,10 +4471,14 @@ pub(super) fn lower_counters_pt_instruction(
                 in_trigger,
                 self_pronoun_valid,
             )?;
-            builder.instructions.push(Instruction::Connive {
-                subject: subj,
-                count: amt,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::connive(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(subj),
+                        amt,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::Support { count } => {
@@ -5426,12 +5439,24 @@ pub(super) fn lower_counters_pt_instruction(
                 trial
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(from_bt, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            from_bt,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 trial
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(to_bt, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            to_bt,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 trial.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(

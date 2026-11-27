@@ -589,12 +589,16 @@ impl EffectWindow {
             }
         }
         if matches!(
-            instruction,
-            Instruction::Unearth
-                | Instruction::Ninjutsu
-                | Instruction::ResolveCounterKeyword(
-                    crate::program::CounterKeyword::Persist
-                        | crate::program::CounterKeyword::Undying
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::Unearth
+                        | crate::toolbox::ObjectMutation::Ninjutsu
+                        | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                            crate::program::CounterKeyword::Persist
+                                | crate::program::CounterKeyword::Undying
+                        )
                 )
         ) && let Some(frame) = self.entry_choice_frame()?
         {
@@ -613,19 +617,28 @@ impl EffectWindow {
             Instruction::OptionalSequence { .. } | Instruction::OptionalEffect { .. }
         ) && matches!(
             next_instruction,
-            Some(Instruction::ResolveTransfer(
-                crate::program::TransferKeyword::Graft(_)
-            ))
+            Some(Instruction::MutateObject(spec))
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::ResolveTransfer(
+                        crate::program::TransferKeyword::Graft(_)
+                    )
+                )
         ) && self.graft_pair(entry.id()).is_none()
         {
             self.set_instruction(index + 2)?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction
-            == Instruction::RequireCondition(
-                crate::program::InterveningCondition::CastFromGraveyard,
-            )
-        {
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::RequireCondition(
+                        crate::program::InterveningCondition::CastFromGraveyard
+                    )
+                )
+        ) {
             if entry.cast_from_graveyard {
                 self.advance_instruction()?;
             } else {
@@ -633,7 +646,11 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::CopyCapturedAbility {
+        if matches!(
+            &instruction,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::CopyCapturedAbility)
+        ) {
             let source = self.delayed_ability_source(entry.id())?;
             if !source.entry.targets().targets().is_empty() {
                 let frame = EffectDecision::CopyTargets(self.copy_resolution_frame()?);
@@ -642,7 +659,17 @@ impl EffectWindow {
             self.finish_delayed_ability_copy(entry, &source, vec![], ctx.append)?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CopyOnCast(kind) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::CopyOnCast(_))
+        ) {
+            let Instruction::StackOp(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::StackOpKind::CopyOnCast(kind) = spec.op else {
+                unreachable!();
+            };
             if let Some(frame) = self.progress_cast_copies(entry, kind, index, ctx.append)? {
                 return Ok(StepOutcome::Pending(frame));
             }
@@ -660,7 +687,9 @@ impl EffectWindow {
         if self.begin_library_top(&instruction)? {
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ScheduleArtifactReturn(object) = instruction {
+        if let Instruction::MutateObject(ref spec) = instruction
+            && let crate::toolbox::ObjectMutation::ScheduleArtifactReturn(object) = spec.op
+        {
             let StackKind::Emblem { emblem } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
             };
@@ -669,11 +698,16 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction
-            == Instruction::RequireCondition(
-                crate::program::InterveningCondition::ReturnSourceOnBattlefield,
-            )
-        {
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::RequireCondition(
+                        crate::program::InterveningCondition::ReturnSourceOnBattlefield
+                    )
+                )
+        ) {
             let StackKind::TriggeredAbility { source } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
             };
@@ -689,7 +723,11 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ReturnDelayedGraveyardCard(object) = instruction {
+        if let Instruction::ZoneOp(ref spec) = instruction
+            && let crate::toolbox::ZoneDest::Delayed(
+                crate::toolbox::DelayedZoneAction::ReturnGraveyardCard(object),
+            ) = spec.destination
+        {
             if let Some(player) = self.delayed_graveyard_return_player(object) {
                 self.begin_graveyard_returns(
                     entry,
@@ -703,10 +741,13 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ReturnExiledTargetCohort {
-            next_end_step,
-            owner_controls,
-        } = instruction
+        if let Instruction::ZoneOp(ref spec) = instruction
+            && let crate::toolbox::ZoneDest::Delayed(
+                crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort {
+                    next_end_step,
+                    owner_controls,
+                },
+            ) = spec.destination
         {
             let Some(PendingWork::Resolution(cursor)) = &mut self.pending_work else {
                 return Err(EffectError::WrongResolutionFrame);
@@ -726,7 +767,25 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ReturnDelayedExileWithCounters(objects) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnExileWithCounters(_)
+                    )
+                )
+        ) {
+            let Instruction::ZoneOp(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::ZoneDest::Delayed(
+                crate::toolbox::DelayedZoneAction::ReturnExileWithCounters(objects),
+            ) = spec.destination
+            else {
+                unreachable!();
+            };
             self.begin_linked_cohort_return(
                 LinkedReturnOrigin::ExileWithCounters {
                     entry: entry.id(),
@@ -738,7 +797,25 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ReturnDelayedExile(objects) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnExile(_)
+                    )
+                )
+        ) {
+            let Instruction::ZoneOp(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::ZoneDest::Delayed(crate::toolbox::DelayedZoneAction::ReturnExile(
+                objects,
+            )) = spec.destination
+            else {
+                unreachable!();
+            };
             self.begin_linked_cohort_return(LinkedReturnOrigin::Exile, objects, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -754,7 +831,11 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if instruction == Instruction::ChooseFoundSpell {
+        if matches!(
+            &instruction,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::ChooseFoundSpell)
+        ) {
             if let Some(frame) = self.found_spell_selection()? {
                 return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
                     frame,
@@ -764,8 +845,14 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if matches!(
-            instruction,
-            Instruction::PutHandPermanentsOntoBattlefield { .. }
+            &instruction,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield { .. }
+                    )
+                )
         ) {
             if let Some(frame) = self.hand_entry_selection()? {
                 return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
@@ -775,7 +862,11 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ReturnEarthbentCard {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::ReturnEarthbentCard)
+        ) {
             let binding = self
                 .execution_bindings(entry.id())
                 .and_then(|bindings| bindings.trigger.as_ref())
@@ -828,7 +919,16 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ReturnChosenXGraveyardCreatures {
+        if matches!(
+            &instruction,
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                    )
+                )
+        ) {
             if self.linked_return_work.is_some() {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -866,10 +966,16 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if matches!(instruction, Instruction::SacrificeRandomUntilLand)
-            && self
-                .resolution_cursor()
-                .is_some_and(|cursor| cursor.random_selection.is_none())
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                )
+        ) && self
+            .resolution_cursor()
+            .is_some_and(|cursor| cursor.random_selection.is_none())
         {
             let objects = self.random_move_candidates(&instruction)?;
             match objects.as_slice() {
@@ -980,13 +1086,25 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::OfferAnyPlayer {
-            players,
-            cost_body,
-            paid_body,
-            declined_body,
-        } = instruction
-        {
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, crate::toolbox::PlayerMutation::OfferAnyPlayer { .. })
+        ) {
+            let Instruction::MutatePlayer(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::PlayerSelector::Group(players) = spec.players else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            let crate::toolbox::PlayerMutation::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+            } = spec.op
+            else {
+                unreachable!();
+            };
             let initialized = self
                 .resolution_cursor()
                 .ok_or(EffectError::WrongResolutionFrame)?
@@ -1075,8 +1193,11 @@ impl EffectWindow {
                 } else {
                     if let Some(StackPayload::Instructions(payload)) =
                         self.payloads.get_mut(&entry.id())
-                        && let Some(Instruction::OfferAnyPlayer { declined_body, .. }) =
+                        && let Some(Instruction::MutatePlayer(spec)) =
                             payload.body.instructions.get_mut(index)
+                        && let crate::toolbox::PlayerMutation::OfferAnyPlayer {
+                            declined_body, ..
+                        } = &mut spec.op
                     {
                         *declined_body = None;
                     }
@@ -1089,23 +1210,36 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CreateTokenCopyExt {
-            source,
-            count,
-            recipients,
-            enters_tapped,
-            haste,
-            nonlegendary,
-            extra_types,
-            extra_subtypes,
-            extra_keywords,
-            override_pt,
-            extra_colors,
-            override_colors,
-            strip_mana_cost,
-            ..
-        } = instruction
-        {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::CreateTokenCopy(_))
+        ) {
+            let Instruction::MutateObject(spec) = instruction else {
+                unreachable!();
+            };
+            let source = spec
+                .source
+                .to_move_subject()
+                .ok_or(EffectError::InconsistentProgram)?;
+            let crate::toolbox::ObjectMutation::CreateTokenCopy(copy) = spec.op else {
+                unreachable!();
+            };
+            let crate::toolbox::TokenCopySpec {
+                count,
+                recipients,
+                enters_tapped,
+                haste,
+                nonlegendary,
+                extra_types,
+                extra_subtypes,
+                extra_keywords,
+                override_pt,
+                extra_colors,
+                override_colors,
+                strip_mana_cost,
+                ..
+            } = *copy;
             let resolved_count = self
                 .resolve_value_expr(entry.controller(), &count)?
                 .max(0.into())
@@ -1237,7 +1371,17 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::BindResolutionX(expr) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, crate::toolbox::PlayerMutation::BindResolutionX(_))
+        ) {
+            let Instruction::MutatePlayer(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::PlayerMutation::BindResolutionX(expr) = spec.op else {
+                unreachable!();
+            };
             let value = self
                 .resolve_value_expr(entry.controller(), &expr)?
                 .max(0.into());
@@ -1245,12 +1389,28 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CreateAuraTokenAttached {
-            definition,
-            host,
-            up_to_one,
-        } = instruction
-        {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                )
+        ) {
+            let Instruction::MutateObject(spec) = instruction else {
+                unreachable!();
+            };
+            let host = spec
+                .source
+                .to_move_subject()
+                .ok_or(EffectError::InconsistentProgram)?;
+            let crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
+                definition,
+                up_to_one,
+            } = spec.op
+            else {
+                unreachable!();
+            };
             if up_to_one
                 && host == crate::program::MoveSubjectRef::TargetObject
                 && self.instruction_target(entry).is_err()
@@ -1360,12 +1520,26 @@ impl EffectWindow {
             let frame = EffectDecision::CreatureType(self.creature_type_frame()?);
             return Ok(StepOutcome::Pending(frame));
         }
-        if instruction == Instruction::ExtortDrain {
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, crate::toolbox::PlayerMutation::ExtortDrain)
+        ) {
             self.drain_opponents(entry.id(), index, entry.controller(), &1.into(), ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::RequireCondition(cond) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, crate::toolbox::PlayerMutation::RequireCondition(_))
+        ) {
+            let Instruction::MutatePlayer(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::PlayerMutation::RequireCondition(cond) = spec.op else {
+                unreachable!();
+            };
             use crate::program::InterveningCondition as IC;
             let holds = match cond {
                 IC::Monarch { opponent } => self.characteristics.monarch.is_some_and(|monarch| {
@@ -1448,7 +1622,17 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ResolveTransfer(key) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::ResolveTransfer(_))
+        ) {
+            let Instruction::MutateObject(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::ObjectMutation::ResolveTransfer(key) = spec.op else {
+                unreachable!();
+            };
             self.resolve_transfer(key, entry, index, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -1561,10 +1745,15 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if matches!(
-            instruction,
-            Instruction::LookTopChooseExt { .. }
-                | Instruction::RevealTopTwoPiles { .. }
-                | Instruction::RevealUntilMatchExt { .. }
+            &instruction,
+            Instruction::LookTopChooseExt { .. } | Instruction::RevealUntilMatchExt { .. }
+        ) || matches!(
+            &instruction,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
+                )
         ) {
             let look_top_reveal_only_count = match &instruction {
                 Instruction::LookTopChooseExt {
@@ -1622,7 +1811,11 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::Myriad {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::Myriad)
+        ) {
             if let Some(frame) = self.progress_myriad(entry)? {
                 return Ok(StepOutcome::Pending(EffectDecision::MyriadDefender(frame)));
             }
@@ -1639,7 +1832,11 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::ReturnDelayedGraveyardToHand(object) = instruction {
+        if let Instruction::ZoneOp(ref spec) = instruction
+            && let crate::toolbox::ZoneDest::Delayed(
+                crate::toolbox::DelayedZoneAction::ReturnGraveyardToHand(object),
+            ) = spec.destination
+        {
             if self
                 .window
                 .cards()
@@ -1825,7 +2022,11 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if instruction == Instruction::Ninjutsu {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::Ninjutsu)
+        ) {
             if let Some((object, _, _)) = self.keyword_entry_candidate(&instruction, entry)? {
                 self.settled_entry_destinations.remove(&object);
             }
@@ -1833,32 +2034,58 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::EndStepCast {
-            kind,
-            permanent,
-            turn,
-        } = instruction
-        {
+        if matches!(
+            &instruction,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::EndStepCast { .. })
+        ) {
+            let Instruction::StackOp(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::StackOpKind::EndStepCast {
+                kind,
+                permanent,
+                turn,
+            } = spec.op
+            else {
+                unreachable!();
+            };
             self.resolve_end_step_cast(entry, index, kind, permanent, turn, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ResolveGrowth(ref keyword) = instruction {
+        if let Instruction::MutateObject(ref spec) = instruction
+            && let crate::toolbox::ObjectMutation::ResolveGrowth(ref keyword) = spec.op
+        {
             self.resolve_growth(keyword, entry, index, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ResolveCounterKeyword(keyword) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::ResolveCounterKeyword(_)
+                )
+        ) {
             if let Some((object, _, _)) = self.keyword_entry_candidate(&instruction, entry)? {
                 self.settled_entry_destinations.remove(&object);
             }
+            let Instruction::MutateObject(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::ObjectMutation::ResolveCounterKeyword(keyword) = spec.op else {
+                unreachable!();
+            };
             self.resolve_counter_keyword(keyword, entry, index, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ResolveKeywordTrigger(crate::program::CombatTriggerKeyword::Mobilize(
-            amount,
-        )) = &instruction
+        if let Instruction::MutateObject(ref spec) = instruction
+            && let crate::toolbox::ObjectMutation::ResolveKeywordTrigger(
+                crate::program::CombatTriggerKeyword::Mobilize(amount),
+            ) = &spec.op
         {
             let warrior = crate::program::mobilize_warrior(&self.creature_vocabulary)
                 .map_err(|_| EffectError::InconsistentProgram)?;
@@ -1868,14 +2095,21 @@ impl EffectWindow {
             self.begin_token_entries(&[creation], None, true)?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ResolveKeywordTrigger(keyword) = &instruction {
+        if let Instruction::MutateObject(ref spec) = instruction
+            && let crate::toolbox::ObjectMutation::ResolveKeywordTrigger(keyword) = &spec.op
+        {
             self.resolve_keyword_trigger(keyword, entry.id(), index, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if matches!(
-            instruction,
-            Instruction::Unearth | Instruction::ExileUnearthed(_)
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::Unearth
+                        | crate::toolbox::ObjectMutation::ExileUnearthed(_)
+                )
         ) {
             if let Some((object, _, _)) = self.keyword_entry_candidate(&instruction, entry)? {
                 self.settled_entry_destinations.remove(&object);
@@ -1884,7 +2118,14 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::RememberPermanentTarget {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::RememberPermanentTarget
+                )
+        ) {
             let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target else {
                 return Err(EffectError::InconsistentProgram);
             };
@@ -1912,7 +2153,20 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::ResolvePowerAbility(kind) = instruction {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::ResolvePowerAbility(_)
+                )
+        ) {
+            let Instruction::MutateObject(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::ObjectMutation::ResolvePowerAbility(kind) = spec.op else {
+                unreachable!();
+            };
             self.resolve_power_ability(entry, kind, index, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -2367,7 +2621,21 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CreateTokenAndAttach { definition } = instruction {
+        if matches!(
+            &instruction,
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                )
+        ) {
+            let Instruction::MutateObject(spec) = instruction else {
+                unreachable!();
+            };
+            let crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition } = spec.op
+            else {
+                unreachable!();
+            };
             if self
                 .resolution_cursor()
                 .is_some_and(|cursor| cursor.chosen_token_equipment.is_some())
@@ -2396,7 +2664,10 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         // CollectEvidence and Blight are handled interactively via `begin_resolution_selection`.
-        if instruction == Instruction::Encore {
+        if matches!(
+            &instruction,
+            Instruction::StackOp(spec) if matches!(spec.op, crate::toolbox::StackOpKind::Encore)
+        ) {
             let StackKind::ActivatedAbility { source } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
             };

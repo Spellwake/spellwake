@@ -259,9 +259,11 @@ pub(super) fn upkeep(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::RequireCondition(
-                    spellwake_engine::program::InterveningCondition::Monarch { opponent },
-                ),
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                        spellwake_engine::program::InterveningCondition::Monarch { opponent },
+                    ),
+                )),
                 Instruction::CreateTokens {
                     creations: vec![TokenCreation::one(definition)],
                 },

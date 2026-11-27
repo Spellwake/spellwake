@@ -5,16 +5,45 @@
 //! macros with two orthogonal, query-driven primitives.
 
 use crate::{
-    characteristics::ResolvedDuration,
+    characteristics::{Color, KeywordAbility, ResolvedDuration},
     effects::CounterKind,
-    program::{DefinitionError, SplitHalf, ValueExpr},
+    object_identity::ObjectId,
+    program::{
+        CardType, CombatTriggerKeyword, CounterKeyword, DefinitionError, GrowthKeyword, SplitHalf,
+        TransferKeyword, ValueExpr,
+    },
     toolbox::{
         env::BindingId,
         query::{ObjectQuery, PlayerSelector},
         zone_op::ZoneSelection,
     },
 };
-use spellwake_contracts::creature_types::CreatureTypeVocabulary;
+use spellwake_contracts::{
+    RulesInteger,
+    creature_types::{CreatureTypeId, CreatureTypeVocabulary},
+};
+use std::collections::BTreeSet;
+
+/// Configuration for creating token copies of selected object(s).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenCopySpec {
+    pub count: ValueExpr,
+    pub recipients: crate::token::TokenRecipients,
+    pub enters_tapped: bool,
+    pub enters_attacking: bool,
+    pub haste: bool,
+    pub sacrifice_at_end_step: bool,
+    pub exile_at_end_step: bool,
+    pub nonlegendary: bool,
+    pub extra_types: BTreeSet<CardType>,
+    pub extra_subtypes: BTreeSet<CreatureTypeId>,
+    pub extra_keywords: BTreeSet<KeywordAbility>,
+    pub override_pt: Option<(RulesInteger, RulesInteger)>,
+    pub extra_colors: BTreeSet<Color>,
+    pub override_colors: Option<BTreeSet<Color>>,
+    pub strip_mana_cost: bool,
+    pub defender_scope: crate::token::AttackingDefenderScope,
+}
 
 /// Universal card-draw specification (`players` each draw `amount` cards).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +168,51 @@ pub enum ObjectMutation {
     SoulbondPair { entrant_only: bool },
     /// Explore (CR 701.40) on each selected permanent.
     Explore,
+    /// Connive N (CR 701.47) on each selected object.
+    Connive { count: ValueExpr },
+    /// Finalize a connive discard (+1/+1 counters per nonland discarded).
+    ConniveFinalize,
+    /// Resolve a counter-based keyword trigger (modular, graft, bloodthirst, etc.).
+    ResolveCounterKeyword(CounterKeyword),
+    /// Resolve a growth keyword trigger (evolve, bolster-like growth, mentor, training, etc.).
+    ResolveGrowth(GrowthKeyword),
+    /// Resolve a transfer keyword trigger (soulshift, recover, etc.).
+    ResolveTransfer(TransferKeyword),
+    /// Resolve a combat trigger keyword (battle cry, exalted, mobilize, melee, etc.).
+    ResolveKeywordTrigger(CombatTriggerKeyword),
+    /// Resolve a power-related activated ability (crew, saddle, station, etc.).
+    ResolvePowerAbility(crate::activated::PowerAbility),
+    /// Sacrifice the resolving evoked permanent if it was cast for its evoke cost.
+    SacrificeEvoked,
+    /// Sacrifice the resolving source of a state-triggered ability.
+    SacrificeStateTriggerSource,
+    /// Myriad trigger (CR 702.116): create attacking tapped token copies for each other opponent.
+    Myriad,
+    /// Unearth activation (CR 702.84): return source from graveyard with haste and exile delayed trigger.
+    Unearth,
+    /// Ninjutsu activation (CR 702.49): put source from hand onto battlefield tapped and attacking.
+    Ninjutsu,
+    /// Exile a defeated Siege battle before casting it transformed.
+    ExileDefeatedSiege,
+    /// Exile an unearthed permanent at end of turn or when leaving.
+    ExileUnearthed(ObjectId),
+    /// Schedule delayed artifact return at next end step.
+    ScheduleArtifactReturn(ObjectId),
+    /// Return an earthbent card from graveyard or exile to battlefield tapped.
+    ReturnEarthbentCard,
+    /// Create an Aura token attached to selected host(s).
+    CreateAuraTokenAttached {
+        definition: Box<crate::token::TokenDefinition>,
+        up_to_one: bool,
+    },
+    /// Create a token and attach the resolving source (e.g. Living Weapon, For Mirrodin!, Job Select).
+    CreateTokenAndAttach {
+        definition: Box<crate::token::TokenDefinition>,
+    },
+    /// Create token copies of selected object(s) using `TokenCopySpec`.
+    CreateTokenCopy(Box<TokenCopySpec>),
+    /// Remember the targeted permanent in resolution cursor state for later instructions.
+    RememberPermanentTarget,
 }
 
 impl ObjectMutation {
@@ -180,7 +254,40 @@ impl ObjectMutation {
             | Self::AdvanceClassLevel(_)
             | Self::ReselectAttackDefender
             | Self::SoulbondPair { .. }
-            | Self::Explore => false,
+            | Self::Explore
+            | Self::ConniveFinalize
+            | Self::ResolveCounterKeyword(_)
+            | Self::ResolveGrowth(_)
+            | Self::ResolveTransfer(_)
+            | Self::ResolveKeywordTrigger(_)
+            | Self::ResolvePowerAbility(_)
+            | Self::SacrificeEvoked
+            | Self::SacrificeStateTriggerSource
+            | Self::Myriad
+            | Self::Unearth
+            | Self::Ninjutsu
+            | Self::ExileDefeatedSiege
+            | Self::ExileUnearthed(_)
+            | Self::ScheduleArtifactReturn(_)
+            | Self::ReturnEarthbentCard
+            | Self::CreateAuraTokenAttached { .. }
+            | Self::CreateTokenAndAttach { .. } => false,
+            Self::Connive { count } => count.uses_target(),
+            Self::CreateTokenCopy(copy) => {
+                copy.count.uses_target()
+                    || matches!(
+                        copy.recipients,
+                        crate::token::TokenRecipients::Player(p)
+                            if PlayerSelector::Resolving(p).uses_target()
+                    )
+                    || matches!(
+                        copy.defender_scope,
+                        crate::token::AttackingDefenderScope::Player(p)
+                            | crate::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(p)
+                            if PlayerSelector::Resolving(p).uses_target()
+                    )
+            }
+            Self::RememberPermanentTarget => true,
         }
     }
 
@@ -231,7 +338,43 @@ impl ObjectMutation {
             | Self::AdvanceClassLevel(_)
             | Self::ReselectAttackDefender
             | Self::SoulbondPair { .. }
-            | Self::Explore => Ok(()),
+            | Self::Explore
+            | Self::ConniveFinalize
+            | Self::ResolveCounterKeyword(_)
+            | Self::ResolveGrowth(_)
+            | Self::ResolveTransfer(_)
+            | Self::ResolveKeywordTrigger(_)
+            | Self::ResolvePowerAbility(_)
+            | Self::SacrificeEvoked
+            | Self::SacrificeStateTriggerSource
+            | Self::Myriad
+            | Self::Unearth
+            | Self::Ninjutsu
+            | Self::ExileDefeatedSiege
+            | Self::ExileUnearthed(_)
+            | Self::ScheduleArtifactReturn(_)
+            | Self::ReturnEarthbentCard
+            | Self::RememberPermanentTarget => Ok(()),
+            Self::Connive { count } => count
+                .validate_vocabulary(vocabulary)
+                .map_err(|_| DefinitionError::InvalidInstruction),
+            Self::CreateAuraTokenAttached { definition, .. }
+            | Self::CreateTokenAndAttach { definition } => definition
+                .validate(vocabulary)
+                .map_err(|_| DefinitionError::TokenDefinition),
+            Self::CreateTokenCopy(copy) => {
+                copy.count
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                if copy
+                    .extra_subtypes
+                    .iter()
+                    .any(|s| vocabulary.label(*s).is_none())
+                {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -350,6 +493,168 @@ impl MutateObjectSpec {
     #[must_use]
     pub fn explore(source: ObjectQuery) -> Self {
         Self::all(source, ObjectMutation::Explore)
+    }
+
+    #[must_use]
+    pub fn is_progress_or_choice_op(&self) -> bool {
+        self.is_pass_c_op()
+            || matches!(
+                self.op,
+                ObjectMutation::Connive { .. }
+                    | ObjectMutation::ConniveFinalize
+                    | ObjectMutation::ResolveCounterKeyword(_)
+                    | ObjectMutation::ResolveGrowth(_)
+                    | ObjectMutation::ResolveTransfer(_)
+                    | ObjectMutation::ResolveKeywordTrigger(_)
+                    | ObjectMutation::ResolvePowerAbility(_)
+                    | ObjectMutation::SacrificeEvoked
+                    | ObjectMutation::SacrificeStateTriggerSource
+                    | ObjectMutation::Myriad
+                    | ObjectMutation::Unearth
+                    | ObjectMutation::Ninjutsu
+                    | ObjectMutation::ExileDefeatedSiege
+                    | ObjectMutation::ExileUnearthed(_)
+                    | ObjectMutation::ScheduleArtifactReturn(_)
+                    | ObjectMutation::ReturnEarthbentCard
+                    | ObjectMutation::CreateAuraTokenAttached { .. }
+                    | ObjectMutation::CreateTokenAndAttach { .. }
+                    | ObjectMutation::CreateTokenCopy(_)
+                    | ObjectMutation::RememberPermanentTarget
+            )
+    }
+
+    #[must_use]
+    pub fn connive(source: ObjectQuery, count: ValueExpr) -> Self {
+        Self::all(source, ObjectMutation::Connive { count })
+    }
+
+    #[must_use]
+    pub fn connive_finalize(source: ObjectQuery) -> Self {
+        Self::all(source, ObjectMutation::ConniveFinalize)
+    }
+
+    #[must_use]
+    pub fn resolve_counter_keyword(kw: CounterKeyword) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::ResolveCounterKeyword(kw),
+        )
+    }
+
+    #[must_use]
+    pub fn resolve_growth(kw: GrowthKeyword) -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::ResolveGrowth(kw))
+    }
+
+    #[must_use]
+    pub fn resolve_transfer(kw: TransferKeyword) -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::ResolveTransfer(kw))
+    }
+
+    #[must_use]
+    pub fn resolve_keyword_trigger(kw: CombatTriggerKeyword) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::ResolveKeywordTrigger(kw),
+        )
+    }
+
+    #[must_use]
+    pub fn resolve_power_ability(ability: crate::activated::PowerAbility) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::ResolvePowerAbility(ability),
+        )
+    }
+
+    #[must_use]
+    pub fn sacrifice_evoked() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::SacrificeEvoked)
+    }
+
+    #[must_use]
+    pub fn sacrifice_state_trigger_source() -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::SacrificeStateTriggerSource,
+        )
+    }
+
+    #[must_use]
+    pub fn myriad() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::Myriad)
+    }
+
+    #[must_use]
+    pub fn unearth() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::Unearth)
+    }
+
+    #[must_use]
+    pub fn ninjutsu() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::Ninjutsu)
+    }
+
+    #[must_use]
+    pub fn exile_defeated_siege() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::ExileDefeatedSiege)
+    }
+
+    #[must_use]
+    pub fn exile_unearthed(object: ObjectId) -> Self {
+        Self::all(
+            ObjectQuery::Fixed(vec![object]),
+            ObjectMutation::ExileUnearthed(object),
+        )
+    }
+
+    #[must_use]
+    pub fn schedule_artifact_return(object: ObjectId) -> Self {
+        Self::all(
+            ObjectQuery::Fixed(vec![object]),
+            ObjectMutation::ScheduleArtifactReturn(object),
+        )
+    }
+
+    #[must_use]
+    pub fn return_earthbent_card() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::ReturnEarthbentCard)
+    }
+
+    #[must_use]
+    pub fn create_aura_token_attached(
+        host: ObjectQuery,
+        definition: Box<crate::token::TokenDefinition>,
+        up_to_one: bool,
+    ) -> Self {
+        Self::all(
+            host,
+            ObjectMutation::CreateAuraTokenAttached {
+                definition,
+                up_to_one,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn create_token_and_attach(definition: Box<crate::token::TokenDefinition>) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::CreateTokenAndAttach { definition },
+        )
+    }
+
+    #[must_use]
+    pub fn create_token_copy(source: ObjectQuery, copy: Box<TokenCopySpec>) -> Self {
+        Self::all(source, ObjectMutation::CreateTokenCopy(copy))
+    }
+
+    #[must_use]
+    pub fn remember_permanent_target() -> Self {
+        Self::all(
+            ObjectQuery::Targets,
+            ObjectMutation::RememberPermanentTarget,
+        )
     }
 
     #[must_use]
