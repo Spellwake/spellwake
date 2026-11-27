@@ -72,7 +72,11 @@ fn push_damage_group(instructions: &mut Vec<Instruction>, group: DamageGroup, am
 }
 
 fn rewrite_bt_related_to_first_target_controller(bt: &mut BodyTarget) {
-    if let BodyTarget::FilteredPermanent(obj) = bt {
+    if let BodyTarget::Object {
+        zone: TargetZone::Battlefield,
+        filter: obj,
+    } = bt
+    {
         let rewrite_clause = |c: &mut ObjectClause| {
             if c.controller == ControllerFilter::RelatedPlayer {
                 c.controller = ControllerFilter::FirstTargetController;
@@ -212,12 +216,10 @@ pub(super) fn lower_combat_damage_instruction(
             );
             let target_is_returned_gy_card = matches!(
                 builder.target,
-                BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                }
             ) && builder.instructions.iter().any(|op| {
                 matches!(
                     op,
@@ -296,12 +298,13 @@ pub(super) fn lower_combat_damage_instruction(
                     } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
                 );
                 let bt_is_creature = |bt: BodyTarget| {
-                    matches!(bt, BodyTarget::SingleCreature)
-                        || matches!(
-                            bt,
-                            BodyTarget::FilteredPermanent(ObjectFilter::Clause(c))
-                                if c.any_types == CardTypeMask::CREATURE
-                        )
+                    matches!(
+                        bt,
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            filter: ObjectFilter::Clause(c),
+                        } if c.any_types == CardTypeMask::CREATURE
+                    )
                 };
                 let eff_source = match source.as_ref() {
                     SubjectRefAst::InZone {
@@ -391,26 +394,26 @@ pub(super) fn lower_combat_damage_instruction(
                          b: &BodyBuilder|
                          -> Result<Option<BodyTarget>, &'static str> {
                             let bt_opt = match t {
-                                SubjectRefAst::AnyTarget => Some(BodyTarget::SingleAnyTarget),
+                                SubjectRefAst::AnyTarget => Some(BodyTarget::SINGLE_ANY_TARGET),
                                 SubjectRefAst::TargetPlayerOrPlaneswalker {
                                     opponent_only: false,
-                                } => Some(BodyTarget::SinglePlayerOrPlaneswalker),
+                                } => Some(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
                                 SubjectRefAst::TargetPlayerOrPlaneswalker {
                                     opponent_only: true,
-                                } => Some(BodyTarget::SingleOpponentOrPlaneswalker),
+                                } => Some(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
                                 SubjectRefAst::TargetPlayer {
                                     opponent_only,
                                     count: TargetCountAst::Exact(1),
                                 } => Some(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 }),
                                 SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                                    Some(BodyTarget::SinglePlayer)
+                                    Some(BodyTarget::SINGLE_PLAYER)
                                 }
                                 SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                                    Some(BodyTarget::SingleOpponent)
+                                    Some(BodyTarget::SINGLE_OPPONENT)
                                 }
                                 SubjectRefAst::TargetObject {
                                     filter: dst_f,
@@ -455,16 +458,16 @@ pub(super) fn lower_combat_damage_instruction(
                             Ok(bt_opt.filter(|bt| {
                                 matches!(
                                     bt,
-                                    BodyTarget::SingleCreature
-                                        | BodyTarget::SinglePlaneswalker
-                                        | BodyTarget::SinglePermanent
-                                        | BodyTarget::FilteredPermanent(_)
-                                        | BodyTarget::SinglePlayer
-                                        | BodyTarget::SingleOpponent
-                                        | BodyTarget::SingleAnyTarget
-                                        | BodyTarget::SingleCreatureOrPlayer
-                                        | BodyTarget::SinglePlayerOrPlaneswalker
-                                        | BodyTarget::SingleOpponentOrPlaneswalker
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } | BodyTarget::Player { .. }
+                                        | BodyTarget::AnyTarget(
+                                            AnyTargetKind::Any
+                                                | AnyTargetKind::CreatureOrPlayer
+                                                | AnyTargetKind::PlayerOrPlaneswalker
+                                                | AnyTargetKind::OpponentOrPlaneswalker
+                                        )
                                 )
                             }))
                         };
@@ -817,11 +820,11 @@ pub(super) fn lower_combat_damage_instruction(
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                            builder.bind_target(BodyTarget::SinglePlayer)?;
+                            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                            builder.bind_target(BodyTarget::SingleOpponent)?;
+                            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Anaphora(a)
@@ -851,7 +854,13 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         SubjectRefAst::Anaphora(raw)
                             if is_player_anaphora_label(raw)
-                                && matches!(builder.target, BodyTarget::SingleSpell(_)) =>
+                                && matches!(
+                                    builder.target,
+                                    BodyTarget::Spell {
+                                        include_abilities: false,
+                                        ..
+                                    }
+                                ) =>
                         {
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::TargetSpellController),
@@ -951,15 +960,18 @@ pub(super) fn lower_combat_damage_instruction(
                             Some(DamageRecipientsRef::TargetController)
                         }
                         SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
-                            if matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) =>
+                            if matches!(builder.target, BodyTarget::Player { .. }) =>
                         {
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
-                            if matches!(builder.target, BodyTarget::SingleSpell(_)) =>
+                            if matches!(
+                                builder.target,
+                                BodyTarget::Spell {
+                                    include_abilities: false,
+                                    ..
+                                }
+                            ) =>
                         {
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::TargetSpellController),
@@ -1751,9 +1763,9 @@ pub(super) fn lower_combat_damage_instruction(
                         _ => return Err("oracle:unsupported-damage-target"),
                     };
                     builder.bind_target(if *opponent_only {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     if is_x {
                         builder.x_target_count = true;
@@ -1877,7 +1889,13 @@ pub(super) fn lower_combat_damage_instruction(
                 }
                 SubjectRefAst::Anaphora(raw)
                     if is_player_anaphora_label(raw)
-                        && matches!(builder.target, BodyTarget::SingleSpell(_)) =>
+                        && matches!(
+                            builder.target,
+                            BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            }
+                        ) =>
                 {
                     let amt_expr = lower_amt(builder)?;
                     push_damage_group(
@@ -2112,13 +2130,13 @@ pub(super) fn lower_combat_damage_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     let amt_expr = lower_amt(builder)?;
                     push_damage_target(&mut builder.instructions, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     let amt_expr = lower_amt(builder)?;
                     push_damage_target(&mut builder.instructions, amt_expr);
                     Ok(())
@@ -2165,10 +2183,7 @@ pub(super) fn lower_combat_damage_instruction(
                         in_trigger,
                     )?;
                     if rp == ResolvingPlayer::TargetPlayer
-                        && matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        )
+                        && matches!(builder.target, BodyTarget::Player { .. })
                     {
                         push_damage_target(&mut builder.instructions, amt_expr);
                     } else {
@@ -2203,9 +2218,9 @@ pub(super) fn lower_combat_damage_instruction(
                         )
                     {
                         let bt = if f.controller == Some(ControllerRelation::TargetOpponent) {
-                            BodyTarget::SingleOpponent
+                            BodyTarget::SINGLE_OPPONENT
                         } else {
-                            BodyTarget::SinglePlayer
+                            BodyTarget::SINGLE_PLAYER
                         };
                         builder.bind_target(bt)?;
                         let amt_expr = lower_amt(builder)?;
@@ -2380,11 +2395,8 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         for it in target_items.into_iter().chain(non_target_items) {
                             let mut adj_it = it.clone();
-                            if matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) {
-                                let tgt_ctrl = if builder.target == BodyTarget::SingleOpponent {
+                            if matches!(builder.target, BodyTarget::Player { .. }) {
+                                let tgt_ctrl = if builder.target == BodyTarget::SINGLE_OPPONENT {
                                     ControllerRelation::TargetOpponent
                                 } else {
                                     ControllerRelation::TargetPlayer
@@ -2555,7 +2567,7 @@ pub(super) fn lower_combat_damage_instruction(
                                                 )) => {
                                                     adj.controller = Some(
                                                         if builder.target
-                                                            == BodyTarget::SingleOpponent
+                                                            == BodyTarget::SINGLE_OPPONENT
                                                         {
                                                             ControllerRelation::TargetOpponent
                                                         } else {
@@ -3225,10 +3237,11 @@ pub(super) fn lower_combat_damage_instruction(
             }
             let had_perm_target = matches!(
                 builder.target,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
-            );
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && builder.target != BodyTarget::SINGLE_PLANESWALKER;
             let first = lower_fight_or_exchange_subject(
                 a,
                 builder,
@@ -3380,9 +3393,9 @@ pub(super) fn lower_combat_damage_instruction(
                             filter, builder, in_trigger, vocabulary,
                         )?
                     }
-                    SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => BodyTarget::SinglePlayer,
+                    SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => BodyTarget::SINGLE_PLAYER,
                     SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     }
                     _ => lower_target_subject(target, vocabulary)?,
                 };
@@ -3412,12 +3425,13 @@ pub(super) fn lower_combat_damage_instruction(
                     StaticDamageRecipient::TargetObject
                 } else if matches!(
                     bt,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::SinglePlayer
-                        | BodyTarget::SingleOpponent
+                    BodyTarget::Player { .. }
+                        | BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker
+                        )
                 ) {
                     StaticDamageRecipient::TargetAny
                 } else {
@@ -3449,12 +3463,13 @@ pub(super) fn lower_combat_damage_instruction(
                     StaticDamageRecipient::TargetObject
                 } else if matches!(
                     builder.target,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::SinglePlayer
-                        | BodyTarget::SingleOpponent
+                    BodyTarget::Player { .. }
+                        | BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker
+                        )
                 ) {
                     StaticDamageRecipient::TargetAny
                 } else {
@@ -4250,9 +4265,9 @@ pub(super) fn lower_combat_damage_instruction(
                         count: TargetCountAst::Exact(1),
                     } => {
                         builder.bind_target(if *opponent_only {
-                            BodyTarget::SingleOpponent
+                            BodyTarget::SINGLE_OPPONENT
                         } else {
-                            BodyTarget::SinglePlayer
+                            BodyTarget::SINGLE_PLAYER
                         })?;
                         AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                     }
@@ -4508,9 +4523,9 @@ pub(super) fn lower_combat_damage_instruction(
                             count: TargetCountAst::Exact(1),
                         } => {
                             builder.bind_target(if *opponent_only {
-                                BodyTarget::SingleOpponent
+                                BodyTarget::SINGLE_OPPONENT
                             } else {
-                                BodyTarget::SinglePlayer
+                                BodyTarget::SINGLE_PLAYER
                             })?;
                             AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                         }
@@ -4679,7 +4694,7 @@ pub(super) fn lower_combat_damage_instruction(
                 "reselect which player or permanent target attacking creature is attacking",
             ) || low == "reselect_attack_defender"
             {
-                builder.bind_target(BodyTarget::FilteredPermanent(
+                builder.bind_target(BodyTarget::filtered_permanent(
                     ObjectFilter::creature().attacking(),
                 ))?;
                 builder
@@ -4794,9 +4809,9 @@ pub(super) fn lower_combat_damage_instruction(
                         count: TargetCountAst::Exact(1),
                     } => {
                         builder.bind_target(if *opponent_only {
-                            BodyTarget::SingleOpponent
+                            BodyTarget::SINGLE_OPPONENT
                         } else {
-                            BodyTarget::SinglePlayer
+                            BodyTarget::SINGLE_PLAYER
                         })?;
                         AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                     }
@@ -5871,10 +5886,12 @@ pub(super) fn lower_combat_damage_instruction(
                         if is_permanent_body_target(builder.target)
                             || matches!(
                                 builder.target,
-                                BodyTarget::SingleAnyTarget
-                                    | BodyTarget::SingleCreatureOrPlayer
-                                    | BodyTarget::SinglePlayerOrPlaneswalker
-                                    | BodyTarget::SingleOpponentOrPlaneswalker
+                                BodyTarget::AnyTarget(
+                                    AnyTargetKind::Any
+                                        | AnyTargetKind::CreatureOrPlayer
+                                        | AnyTargetKind::PlayerOrPlaneswalker
+                                        | AnyTargetKind::OpponentOrPlaneswalker
+                                )
                             ) =>
                     {
                         let parts =
@@ -5927,7 +5944,7 @@ pub(super) fn lower_combat_damage_instruction(
                         let obj = lower_object_filter_in_context(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
-                        builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+                        builder.bind_target(BodyTarget::filtered_permanent(obj))?;
                         builder
                             .instructions
                             .push(Instruction::ApplyContinuous(Box::new(
@@ -6455,19 +6472,19 @@ pub(super) fn lower_combat_damage_instruction(
                 | "any target or targets"
                 | "creatures, planeswalkers, and/or players"
                 | "creatures, planeswalkers, or players"
-                | "creatures, planeswalkers, and players" => Some(BodyTarget::SingleAnyTarget),
+                | "creatures, planeswalkers, and players" => Some(BodyTarget::SINGLE_ANY_TARGET),
                 "creatures and/or players" | "creatures or players" | "creatures and players" => {
-                    Some(BodyTarget::SingleCreatureOrPlayer)
+                    Some(BodyTarget::SINGLE_CREATURE_OR_PLAYER)
                 }
                 "players and/or planeswalkers" | "players or planeswalkers" => {
-                    Some(BodyTarget::SinglePlayerOrPlaneswalker)
+                    Some(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER)
                 }
                 "opponents and/or planeswalkers" | "opponents or planeswalkers" => {
-                    Some(BodyTarget::SingleOpponentOrPlaneswalker)
+                    Some(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER)
                 }
                 "creatures and/or planeswalkers"
                 | "creatures or planeswalkers"
-                | "creatures and planeswalkers" => Some(BodyTarget::FilteredPermanent(
+                | "creatures and planeswalkers" => Some(BodyTarget::filtered_permanent(
                     ObjectFilter::Clause(ObjectClause {
                         any_types: CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER),
                         ..ObjectClause::any()
@@ -6479,7 +6496,7 @@ pub(super) fn lower_combat_damage_instruction(
                 | "creatures or planeswalkers you don't control"
                 | "creatures and/or planeswalkers an opponent controls"
                 | "creatures or planeswalkers an opponent controls" => Some(
-                    BodyTarget::FilteredPermanent(ObjectFilter::Clause(ObjectClause {
+                    BodyTarget::filtered_permanent(ObjectFilter::Clause(ObjectClause {
                         any_types: CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER),
                         controller: ControllerFilter::Opponent,
                         ..ObjectClause::any()
@@ -6505,14 +6522,15 @@ pub(super) fn lower_combat_damage_instruction(
             if let Some(bt) = bt
                 && matches!(
                     bt,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreature
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::CreatureOrPlayer
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                    )
                 )
             {
                 builder.bind_target(bt)?;
@@ -6527,7 +6545,7 @@ pub(super) fn lower_combat_damage_instruction(
                 {
                     if in_trigger
                         && total == 3
-                        && bt == BodyTarget::SingleAnyTarget
+                        && bt == BodyTarget::SINGLE_ANY_TARGET
                         && !x_exact
                         && !x_up_to
                     {
@@ -6801,10 +6819,11 @@ pub(super) fn lower_fight_or_exchange_subject(
             let bt = lower_battlefield_body_target(&f_clean, vocabulary)?;
             let valid_bt = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
-            ) || (allow_planeswalker && bt == BodyTarget::SinglePlaneswalker);
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && (allow_planeswalker || bt != BodyTarget::SINGLE_PLANESWALKER);
             if !valid_bt {
                 return Err("oracle:unsupported-fight");
             }
@@ -6823,10 +6842,11 @@ pub(super) fn lower_fight_or_exchange_subject(
             )?;
             let valid_bt = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
-            ) || (allow_planeswalker && bt == BodyTarget::SinglePlaneswalker);
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && (allow_planeswalker || bt != BodyTarget::SINGLE_PLANESWALKER);
             if !valid_bt {
                 return Err("oracle:unsupported-fight");
             }
@@ -6865,9 +6885,9 @@ pub(super) fn extract_resolving_player_from_subject(
             count: TargetCountAst::Exact(1),
         } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             })?;
             Ok(ResolvingPlayer::TargetPlayer)
         }
@@ -6922,7 +6942,7 @@ pub(super) fn parse_next_time_source_with_target(
         if matches!(filter_clean, "source" | "permanent") {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SinglePermanent)
+                    .bind_target(BodyTarget::SINGLE_PERMANENT)
                     .map(|()| (None, false, false, true)),
             );
         }
@@ -6967,35 +6987,35 @@ pub(super) fn parse_damage_recipient_phrase_with_target(
         "any target" | "target creature, planeswalker, or player" | "target creature or player" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SingleAnyTarget)
+                    .bind_target(BodyTarget::SINGLE_ANY_TARGET)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target player or planeswalker" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SinglePlayerOrPlaneswalker)
+                    .bind_target(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target opponent or planeswalker" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SingleOpponentOrPlaneswalker)
+                    .bind_target(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target player" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SinglePlayer)
+                    .bind_target(BodyTarget::SINGLE_PLAYER)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target opponent" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SingleOpponent)
+                    .bind_target(BodyTarget::SINGLE_OPPONENT)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
@@ -7005,11 +7025,12 @@ pub(super) fn parse_damage_recipient_phrase_with_target(
         "that player"
             if matches!(
                 builder.target,
-                BodyTarget::SinglePlayer
-                    | BodyTarget::SingleOpponent
-                    | BodyTarget::SingleAnyTarget
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker
+                BodyTarget::Player { .. }
+                    | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                    )
             ) =>
         {
             return Some(Ok(StaticDamageRecipient::TargetAny));
@@ -7132,28 +7153,28 @@ pub(super) fn parse_damage_redirect_target(
         "any target" | "target creature, planeswalker, or player" | "target creature or player" => {
             Some(
                 builder
-                    .bind_target(BodyTarget::SingleAnyTarget)
+                    .bind_target(BodyTarget::SINGLE_ANY_TARGET)
                     .map(|()| DamageRedirectTarget::TargetAny),
             )
         }
         "target player or planeswalker" => Some(
             builder
-                .bind_target(BodyTarget::SinglePlayerOrPlaneswalker)
+                .bind_target(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "target opponent or planeswalker" => Some(
             builder
-                .bind_target(BodyTarget::SingleOpponentOrPlaneswalker)
+                .bind_target(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "target player" => Some(
             builder
-                .bind_target(BodyTarget::SinglePlayer)
+                .bind_target(BodyTarget::SINGLE_PLAYER)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "target opponent" => Some(
             builder
-                .bind_target(BodyTarget::SingleOpponent)
+                .bind_target(BodyTarget::SINGLE_OPPONENT)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "that creature" | "that permanent" | "it" if is_permanent_body_target(builder.target) => {
@@ -7191,14 +7212,14 @@ pub(super) fn lower_redirect_from_subject_with_target(
 ) -> Result<StaticDamageRecipient, &'static str> {
     match subj {
         SubjectRefAst::AnyTarget => {
-            builder.bind_target(BodyTarget::SingleAnyTarget)?;
+            builder.bind_target(BodyTarget::SINGLE_ANY_TARGET)?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::TargetPlayerOrPlaneswalker { opponent_only } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponentOrPlaneswalker
+                BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER
             } else {
-                BodyTarget::SinglePlayerOrPlaneswalker
+                BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER
             })?;
             Ok(StaticDamageRecipient::TargetAny)
         }
@@ -7207,18 +7228,18 @@ pub(super) fn lower_redirect_from_subject_with_target(
             count: TargetCountAst::Exact(1),
         } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             })?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::TargetObject {
@@ -7331,14 +7352,14 @@ pub(super) fn lower_redirect_to_subject(
             Ok(DamageRedirectTarget::DamageSourceController)
         }
         SubjectRefAst::AnyTarget => {
-            builder.bind_target(BodyTarget::SingleAnyTarget)?;
+            builder.bind_target(BodyTarget::SINGLE_ANY_TARGET)?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::TargetPlayerOrPlaneswalker { opponent_only } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponentOrPlaneswalker
+                BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER
             } else {
-                BodyTarget::SinglePlayerOrPlaneswalker
+                BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER
             })?;
             Ok(DamageRedirectTarget::TargetAny)
         }
@@ -7347,18 +7368,18 @@ pub(super) fn lower_redirect_to_subject(
             count: TargetCountAst::Exact(1),
         } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             })?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::TargetObject {
@@ -8001,7 +8022,7 @@ pub(super) fn lower_target_one_of_damage_body_target(
                 has_non_perm_special = true;
             }
             SubjectRefAst::AnyTarget => {
-                return Ok(BodyTarget::SingleAnyTarget);
+                return Ok(BodyTarget::SINGLE_ANY_TARGET);
             }
             SubjectRefAst::TargetObject { filter, .. }
                 if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
@@ -8040,12 +8061,12 @@ pub(super) fn lower_target_one_of_damage_body_target(
             return Err("oracle:unsupported-damage-target");
         }
         return match (has_any_player, has_opponent, has_creature, has_planeswalker) {
-            (true, false, true, true) => Ok(BodyTarget::SingleAnyTarget),
-            (true, false, true, false) => Ok(BodyTarget::SingleCreatureOrPlayer),
-            (true, false, false, true) => Ok(BodyTarget::SinglePlayerOrPlaneswalker),
-            (false, true, false, true) => Ok(BodyTarget::SingleOpponentOrPlaneswalker),
-            (true, false, false, false) => Ok(BodyTarget::SinglePlayer),
-            (false, true, false, false) => Ok(BodyTarget::SingleOpponent),
+            (true, false, true, true) => Ok(BodyTarget::SINGLE_ANY_TARGET),
+            (true, false, true, false) => Ok(BodyTarget::SINGLE_CREATURE_OR_PLAYER),
+            (true, false, false, true) => Ok(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
+            (false, true, false, true) => Ok(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
+            (true, false, false, false) => Ok(BodyTarget::SINGLE_PLAYER),
+            (false, true, false, false) => Ok(BodyTarget::SINGLE_OPPONENT),
             _ => Err("oracle:unsupported-damage-target"),
         };
     }
@@ -8053,14 +8074,14 @@ pub(super) fn lower_target_one_of_damage_body_target(
         1 => {
             let f = ObjectFilter::Clause(perm_clauses[0]);
             if f == ObjectFilter::creature() {
-                Ok(BodyTarget::SingleCreature)
+                Ok(BodyTarget::SINGLE_CREATURE)
             } else if f == ObjectFilter::planeswalker() {
-                Ok(BodyTarget::SinglePlaneswalker)
+                Ok(BodyTarget::SINGLE_PLANESWALKER)
             } else {
-                Ok(BodyTarget::FilteredPermanent(f))
+                Ok(BodyTarget::filtered_permanent(f))
             }
         }
-        2 => Ok(BodyTarget::FilteredPermanent(ObjectFilter::Either(
+        2 => Ok(BodyTarget::filtered_permanent(ObjectFilter::Either(
             perm_clauses[0],
             perm_clauses[1],
         ))),

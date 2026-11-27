@@ -221,7 +221,7 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
                 id: ActivatedAbilityId(land.activated.len().try_into().ok()?),
                 mana_cost: fixed_cost(cost)?,
                 source_cost: spellwake_engine::activated::SourceCost::Tap,
-                body: ExecutableBody::new(BodyTarget::SingleCreature, vec![super::static_grants::unblockable_effect()]),
+                body: ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![super::static_grants::unblockable_effect()]),
             });
         } else if let Some(effect) = line.strip_prefix("When this land enters, ") {
             land.triggered.push(TriggeredAbility {
@@ -250,7 +250,7 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
                 id: ActivatedAbilityId(land.activated.len().try_into().ok()?),
                 mana_cost: ManaCost::free(),
                 source_cost: spellwake_engine::activated::SourceCost::Tap,
-                body: ExecutableBody::new(BodyTarget::FilteredPermanent(filter), ops),
+                body: ExecutableBody::new(BodyTarget::filtered_permanent(filter), ops),
             });
         } else if let Some(price) = line.strip_suffix(", {T}, Pay life equal to the number of colors in your commanders' color identity: Draw a card.") {
             land.activated.push(ActivatedAbility {

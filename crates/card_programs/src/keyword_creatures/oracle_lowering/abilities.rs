@@ -20,12 +20,9 @@ fn strip_each_mode_different_player(ops: &[InstructionAst]) -> (Vec<InstructionA
 
 fn all_modes_target_single_player(modes: &[ExecutableBody]) -> bool {
     !modes.is_empty()
-        && modes.iter().all(|b| {
-            matches!(
-                b.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            )
-        })
+        && modes
+            .iter()
+            .all(|b| matches!(b.target, BodyTarget::Player { .. }))
 }
 
 fn modal_choice_requests_distinct(choice: &str) -> bool {

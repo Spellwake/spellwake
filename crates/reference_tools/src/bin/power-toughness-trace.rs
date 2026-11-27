@@ -270,7 +270,10 @@ fn run_scenario(
             destination: ObjectDestination::Hand,
             program: Program::instant(
                 ManaCost::one(ManaType::Red),
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![source.instruction.clone()]),
+                ExecutableBody::new(
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![source.instruction.clone()],
+                ),
             ),
         });
     }

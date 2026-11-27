@@ -371,16 +371,14 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             body(change, option);
         }
     }
-    if let crate::program::BodyTarget::FilteredPermanent(filter)
-    | crate::program::BodyTarget::FilteredOwnGraveyardCard(filter)
-    | crate::program::BodyTarget::FilteredAnyGraveyardCard { filter, .. }
-    | crate::program::BodyTarget::FilteredExiledCard(filter) = &mut value.target
-    {
-        filter.rewrite_creature_type(change.from, change.to);
-    } else if let crate::program::BodyTarget::SingleSpell(filter)
-    | crate::program::BodyTarget::SingleStackObject(filter) = &mut value.target
-    {
-        filter.rewrite_creature_type(change.from, change.to);
+    match &mut value.target {
+        crate::program::BodyTarget::Object { filter, .. } => {
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        crate::program::BodyTarget::Spell { filter, .. } => {
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        _ => {}
     }
     for instruction in &mut value.instructions {
         let rewrite_amount = |amount: &mut crate::program::ValueExpr| {

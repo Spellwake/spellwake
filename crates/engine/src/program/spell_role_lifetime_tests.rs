@@ -3,7 +3,7 @@ use super::*;
 use crate::test_support::creature_types;
 
 fn spell_target() -> BodyTarget {
-    BodyTarget::SingleSpell(crate::program::SpellFilter::any())
+    BodyTarget::single_spell(crate::program::SpellFilter::any())
 }
 
 fn gain() -> Instruction {
@@ -362,7 +362,7 @@ fn exact_target_capability_and_unreachable_context_errors_remain_precise() {
 fn independent_departed_permanent_donor_guard_still_rejects_copy_lki() {
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(

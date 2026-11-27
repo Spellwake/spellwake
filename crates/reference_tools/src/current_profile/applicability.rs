@@ -275,19 +275,40 @@ native!(StaticContinuousAbility, self, {
     Ok(())
 });
 native!(ExecutableBody, self, {
-    if matches!(self.target,spellwake_engine::program::BodyTarget::ControlledAbility {..} | spellwake_engine::program::BodyTarget::SinglePlayerOrPlaneswalker | spellwake_engine::program::BodyTarget::StackEntryTargetingControlledPermanent | spellwake_engine::program::BodyTarget::SingleStackEntry | spellwake_engine::program::BodyTarget::SinglePlaneswalker | spellwake_engine::program::BodyTarget::SingleAnyTarget | spellwake_engine::program::BodyTarget::FilteredPermanent(_)
-        | spellwake_engine::program::BodyTarget::AnyGraveyardCreature
-        | spellwake_engine::program::BodyTarget::AnyGraveyardCard
-        | spellwake_engine::program::BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-        | spellwake_engine::program::BodyTarget::FilteredOwnGraveyardCard(_)
-        | spellwake_engine::program::BodyTarget::FilteredAnyGraveyardCard { .. }
-        | spellwake_engine::program::BodyTarget::FilteredExiledCard(_)
-        | spellwake_engine::program::BodyTarget::SingleOpponentOrPlaneswalker
-        | spellwake_engine::program::BodyTarget::SingleSpell(_)
-            if !matches!(self.target, spellwake_engine::program::BodyTarget::SingleSpell(f)
-                if f != spellwake_engine::program::SpellFilter::creature()
-                    && f != spellwake_engine::program::SpellFilter::noncreature()))
-    {
+    let target_rejected = {
+        use spellwake_engine::program::{
+            AnyTargetKind, BodyTarget, ObjectFilter, SpellFilter, TargetZone,
+        };
+        match self.target {
+            BodyTarget::None | BodyTarget::Player { .. } => false,
+            BodyTarget::Object { zone, filter } => match zone {
+                TargetZone::Battlefield => {
+                    filter != ObjectFilter::any() && filter != ObjectFilter::creature()
+                }
+                TargetZone::OwnGraveyard => filter != ObjectFilter::any(),
+                TargetZone::AnyGraveyard { .. } => true,
+                TargetZone::Exile {
+                    owned_flashback_only,
+                } => !owned_flashback_only || filter != ObjectFilter::any(),
+                TargetZone::RecentlyDiscardedOrFromLibrary => false,
+            },
+            BodyTarget::AnyTarget(kind) => matches!(
+                kind,
+                AnyTargetKind::Any
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker
+            ),
+            BodyTarget::Spell {
+                filter,
+                include_abilities,
+            } => {
+                !include_abilities
+                    && (filter == SpellFilter::creature() || filter == SpellFilter::noncreature())
+            }
+            BodyTarget::StackEntry(_) => true,
+        }
+    };
+    if target_rejected {
         return Err(ApplicabilityError);
     }
     if self.triggered_modes().is_some() || self.permanent_target_bounds.is_some() {
@@ -345,7 +366,7 @@ native!(ExecutableBody, self, {
                 )
                 && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
                 && spec.shuffle_library.is_none()
-                && self.target != spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard)
+                && self.target != spellwake_engine::program::BodyTarget::SINGLE_OWN_GRAVEYARD_CARD)
                 || (matches!(
                     &spec.source,
                     spellwake_engine::toolbox::ObjectQuery::ZoneScan {
@@ -396,8 +417,11 @@ native!(ExecutableBody, self, {
                 spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { .. } => {
                     if matches!(
                         self.target,
-                        spellwake_engine::program::BodyTarget::SinglePlayer
-                            | spellwake_engine::program::BodyTarget::SingleCreatureOrPlayer
+                        spellwake_engine::program::BodyTarget::Player {
+                            opponents_only: false
+                        } | spellwake_engine::program::BodyTarget::AnyTarget(
+                            spellwake_engine::program::AnyTargetKind::CreatureOrPlayer
+                        )
                     ) {
                         Err(ApplicabilityError)
                     } else {

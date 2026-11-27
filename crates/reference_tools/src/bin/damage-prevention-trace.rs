@@ -829,7 +829,7 @@ fn run_scenario(
             destination: ObjectDestination::Hand,
             program: Program::instant(
                 ManaCost::one(ManaType::Red),
-                ExecutableBody::new(BodyTarget::SingleCreature, source.instructions.clone()),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, source.instructions.clone()),
             ),
         });
         mana = mana.plus(&1.into());

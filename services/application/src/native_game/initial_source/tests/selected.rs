@@ -575,7 +575,7 @@ fn assert_different_rules_copy_mechanism(provenance: &NativeInitialProvenance) {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(

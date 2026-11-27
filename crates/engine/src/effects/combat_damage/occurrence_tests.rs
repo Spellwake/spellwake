@@ -36,7 +36,7 @@ fn prepared(power: i64, shield: bool) -> (EffectWindow, TurnScheduler) {
             program: Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::ApplyContinuous(Box::new(
                         crate::toolbox::ApplyContinuousSpec {
                             selector: None,

@@ -1224,7 +1224,7 @@ fn cmm_endless_one_and_stonecoil_serpent_enter_with_exactly_their_chosen_x_and_p
     };
     for (name, serpent) in [("Endless One", false), ("Stonecoil Serpent", true)] {
         let mut colored = free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1354,7 +1354,7 @@ fn cmm_lifeblood_hydra_gains_and_draws_using_final_power_including_effects_other
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
                     spellwake_engine::program::EffectSubject::TargetObject,
                     spellwake_engine::program::ValueExpr::literal(2),
@@ -1445,7 +1445,7 @@ fn cmm_yargle_casts_for_four_and_black_and_attacks_as_a_nine_three_legendary_fro
 
 pub(super) fn plus_counters_spell(count: i64) -> Program {
     free_instant(
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
             spellwake_engine::effects::CounterKind::PlusOne,
             spellwake_engine::program::ValueExpr::Literal(count.into()),
@@ -1635,7 +1635,7 @@ fn cmm_rishkar_targets_zero_to_two_creatures_and_grants_green_mana_to_each_contr
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         spellwake_engine::effects::CounterKind::Indestructible,
                         spellwake_engine::program::ValueExpr::literal(1),
@@ -1727,7 +1727,7 @@ fn cmm_omarthis_optionally_grows_once_per_counter_placement_on_another_colorless
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::Indestructible,
                     spellwake_engine::program::ValueExpr::literal(1),

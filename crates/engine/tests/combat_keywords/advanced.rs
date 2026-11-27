@@ -33,7 +33,7 @@ fn lose_life(id: u64) -> SeedCard {
     spell.program = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![spellwake_engine::program::Instruction::AdjustLife(
                 Box::new(spellwake_engine::toolbox::AdjustLifeSpec::lose(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(

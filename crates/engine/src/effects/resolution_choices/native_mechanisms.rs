@@ -587,7 +587,7 @@ fn creature_optional(operation: Instruction) -> GameState {
         vec![A, B],
         A,
         vec![
-            hand(1, A, BodyTarget::SingleCreature, wrapped(operation)),
+            hand(1, A, BodyTarget::SINGLE_CREATURE, wrapped(operation)),
             seed(
                 2,
                 B,
@@ -620,7 +620,7 @@ fn optional_target_life_runs_once_or_skips_before_the_shared_tail() {
                 crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
                 crate::program::ValueExpr::Literal(3.into()),
             ))),
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             TargetRef::Player(B),
         );
         let result = take_or_decline(&state, choice);
@@ -881,7 +881,7 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
             hand(
                 1,
                 A,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::program::Instruction::ZoneOp(Box::new(
                         crate::toolbox::ZoneOpSpec::move_all(
@@ -1193,7 +1193,7 @@ fn captured_after_source_change(control: bool, body: Vec<Instruction>) -> GameSt
         C,
         vec![
             original,
-            hand(2, B, BodyTarget::SinglePermanent, vec![response]),
+            hand(2, B, BodyTarget::SINGLE_PERMANENT, vec![response]),
             seed(
                 10,
                 A,
@@ -1764,7 +1764,7 @@ fn spell_optional(operation: Instruction) -> (GameState, StackEntryId) {
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 wrapped(operation),
             ),
         ],
@@ -1854,7 +1854,7 @@ fn optional_copy_preserves_actual_copy_targets_child_and_rejects_reused_or_forei
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::counter_targeted(
                         crate::toolbox::CounterDestination::Graveyard,
@@ -1864,7 +1864,7 @@ fn optional_copy_preserves_actual_copy_targets_child_and_rejects_reused_or_forei
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 wrapped(Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))),
@@ -1962,7 +1962,7 @@ fn copy_receiver(source_cost: SourceCost) -> Program {
             mana_cost: ManaCost::free(),
             source_cost,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 wrapped(Instruction::ApplyContinuous(Box::new(
                     crate::toolbox::ApplyContinuousSpec::become_copy(
                         crate::toolbox::ObjectQuery::Source,
@@ -2189,7 +2189,7 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
             hand(
                 2,
                 B,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -2197,7 +2197,7 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![
                     Instruction::PromptChoice(Box::new(
                         crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
@@ -2463,7 +2463,7 @@ fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() 
         vec![A, B],
         A,
         vec![
-            hand(1, A, BodyTarget::SingleCreature, body),
+            hand(1, A, BodyTarget::SINGLE_CREATURE, body),
             seed(
                 2,
                 B,

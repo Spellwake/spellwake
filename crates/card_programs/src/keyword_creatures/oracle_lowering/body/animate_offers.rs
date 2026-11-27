@@ -1124,7 +1124,7 @@ pub(in super::super) fn lower_animate_or_set_pt(
             return Err("oracle:unsupported-earthbend-count");
         };
         let watch_land = ObjectFilter::land().controlled();
-        builder.bind_target(BodyTarget::FilteredPermanent(watch_land))?;
+        builder.bind_target(BodyTarget::filtered_permanent(watch_land))?;
         builder.instructions.push(
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2005,10 +2005,10 @@ pub(in super::super) fn lower_animate_or_set_pt(
     let spec = ResolvedPartsSpec(parts);
     let has_perm_target = matches!(
         builder.target,
-        BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
     );
     let has_created_tokens = builder.instructions.iter().any(|op| {
         matches!(op, Instruction::CreateTokens { .. })
@@ -2162,7 +2162,7 @@ pub(in super::super) fn lower_animate_or_set_pt(
             let mut inner = filter.as_ref().clone();
             inner.zone = None;
             let obj = lower_object_filter(&inner, vocabulary)?;
-            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder.bind_target(BodyTarget::filtered_permanent(obj))?;
             builder
                 .instructions
                 .push(Instruction::ApplyContinuous(Box::new(

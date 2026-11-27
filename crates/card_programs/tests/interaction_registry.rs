@@ -270,7 +270,7 @@ fn assert_complete_programs(registry: &Registry, vocabulary: &CreatureTypeVocabu
                     assert_eq!(spell.cost, cost);
                     let body = match card["name"].as_str().unwrap() {
                         "Unsummon" => ExecutableBody::new(
-                            BodyTarget::SingleCreature,
+                            BodyTarget::SINGLE_CREATURE,
                             vec![spellwake_engine::program::Instruction::ZoneOp(Box::new(
                                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -279,7 +279,7 @@ fn assert_complete_programs(registry: &Registry, vocabulary: &CreatureTypeVocabu
                             ))],
                         ),
                         "Cancel" | "Counterspell" => ExecutableBody::new(
-                            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                             vec![Instruction::StackOp(Box::new(
                                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                     spellwake_engine::toolbox::CounterDestination::Graveyard,

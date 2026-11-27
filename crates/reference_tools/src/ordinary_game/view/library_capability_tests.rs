@@ -94,7 +94,7 @@ fn initialize_control(
             program: Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![Instruction::StackOp(Box::new(

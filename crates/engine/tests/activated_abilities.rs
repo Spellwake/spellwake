@@ -388,7 +388,7 @@ fn huge_cost_debit_and_receipt_are_exact() {
                     SourceCost::Tap,
                     cost.clone(),
                     vec![damage(1)],
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                 )],
             ),
             creature(TARGET, B, B, 100),
@@ -453,7 +453,7 @@ fn source_cost_requires_actual_battlefield_placement() {
                     source_cost,
                     ManaCost::free(),
                     vec![damage(1)],
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                 )],
             );
             source.destination = destination;
@@ -481,7 +481,7 @@ fn nonactive_controller_sacrifices_to_owners_graveyard_and_keeps_priority() {
                     SourceCost::Sacrifice,
                     ManaCost::one(ManaType::Red),
                     vec![damage(2)],
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                 )],
             ),
             creature(TARGET, B, B, 100),
@@ -547,14 +547,14 @@ fn tapped_source_can_be_sacrificed_and_both_frozen_entries_resolve_independently
                         SourceCost::Tap,
                         ManaCost::one(ManaType::Blue),
                         vec![damage(1)],
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                     ),
                     ability(
                         8,
                         SourceCost::Sacrifice,
                         ManaCost::one(ManaType::Red),
                         vec![damage(4)],
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                     ),
                 ],
             ),
@@ -637,7 +637,7 @@ fn direct_executor_rejects_stale_checks_pending_and_closed_step() {
                     SourceCost::Tap,
                     ManaCost::free(),
                     vec![damage(1)],
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                 )],
             ),
             creature(TARGET, B, B, 100),
@@ -759,7 +759,7 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                     ))],
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                 )],
@@ -777,7 +777,7 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
                         ),
                     ))],
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 )],
             ),
             instant(
@@ -785,7 +785,7 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                 A,
                 ManaCost::one(ManaType::Red),
                 vec![damage(3)],
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
             ),
             creature(TARGET, B, B, 100),
         ],
@@ -855,7 +855,7 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                     ))],
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                 )],
@@ -871,7 +871,7 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                     ))],
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                 )],
@@ -881,7 +881,7 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                 A,
                 ManaCost::one(ManaType::Red),
                 vec![damage(3)],
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
             ),
             creature(TARGET, B, B, 100),
         ],

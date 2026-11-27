@@ -117,7 +117,7 @@ fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
         )));
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 branch(2),
                 crate::program::Instruction::ZoneOp(Box::new(
@@ -133,7 +133,7 @@ fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 branch(3),
                 crate::program::Instruction::ZoneOp(Box::new(
@@ -303,14 +303,14 @@ fn nested_continuous_effect_slot_reads_use_the_same_definite_join() {
     };
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![branch(2), choose(), effect()]
         ),
         Err(DefinitionError::UndefinedCreatureTypeSlot)
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 branch(3),
                 choose(),

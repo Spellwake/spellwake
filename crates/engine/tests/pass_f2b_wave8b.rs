@@ -259,7 +259,7 @@ fn damage_any_instant(amount: i64) -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -278,7 +278,7 @@ fn destroy_permanent_instant() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -713,7 +713,7 @@ fn prohibit_casting_chosen_color_and_name_and_blocking_compare_anchor() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(2, 2))],
                     ResolvedDuration::UntilEndOfTurn,

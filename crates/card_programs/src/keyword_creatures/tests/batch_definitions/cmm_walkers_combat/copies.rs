@@ -147,7 +147,7 @@ fn cmm_repeated_reverberation_copies_the_next_instant_sorcery_or_loyalty_twice_w
     use ManaType::*;
     use spellwake_engine::effects::CopyTargetChoice;
     let bolt = ExecutableBody::new(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,

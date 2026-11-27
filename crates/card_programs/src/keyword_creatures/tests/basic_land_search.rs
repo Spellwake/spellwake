@@ -572,7 +572,7 @@ fn cmm_omen_scry_and_solemn_death_draw() {
             program: Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(

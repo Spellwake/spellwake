@@ -1630,7 +1630,7 @@ impl ValueExpr {
         &self,
         target: super::BodyTarget,
     ) -> Result<Option<super::OperandFamily>, super::DefinitionError> {
-        use super::{BodyTarget, DefinitionError, OperandFamily};
+        use super::{AnyTargetKind, BodyTarget, DefinitionError, OperandFamily, TargetZone};
         let merge = |acc: &mut Option<OperandFamily>, next: Option<OperandFamily>| {
             if let Some(f) = next {
                 if let Some(existing) = *acc
@@ -1645,66 +1645,67 @@ impl ValueExpr {
         let role_family = |r: ResolvingPlayer| -> Result<Option<OperandFamily>, DefinitionError> {
             match r {
                 ResolvingPlayer::TargetPlayer => match target {
-                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                        Ok(Some(OperandFamily::Player))
-                    }
-                    BodyTarget::SingleAnyTarget
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker => {
-                        Ok(Some(OperandFamily::DamageRecipient))
-                    }
+                    BodyTarget::Player { .. } => Ok(Some(OperandFamily::Player)),
+                    BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    ) => Ok(Some(OperandFamily::DamageRecipient)),
                     _ => Err(DefinitionError::OperandFamily),
                 },
                 ResolvingPlayer::TargetController => match target {
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
-                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                        Ok(Some(OperandFamily::Player))
-                    }
-                    BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                    BodyTarget::SingleAnyTarget
-                    | BodyTarget::SingleCreatureOrPlayer
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker => {
-                        Ok(Some(OperandFamily::DamageRecipient))
-                    }
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } => Ok(Some(OperandFamily::Permanent)),
+                    BodyTarget::Player { .. } => Ok(Some(OperandFamily::Player)),
+                    BodyTarget::Spell {
+                        include_abilities: false,
+                        ..
+                    } => Ok(Some(OperandFamily::Spell)),
+                    BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    ) => Ok(Some(OperandFamily::DamageRecipient)),
                     _ => Err(DefinitionError::OperandFamily),
                 },
                 ResolvingPlayer::TargetOwner => match target {
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
-                    BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. } => {
-                        Ok(Some(OperandFamily::GraveyardCard))
-                    }
-                    BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
-                        Ok(Some(OperandFamily::ExiledCard))
-                    }
-                    BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                    BodyTarget::SingleAnyTarget
-                    | BodyTarget::SingleCreatureOrPlayer
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker => {
-                        Ok(Some(OperandFamily::DamageRecipient))
-                    }
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } => Ok(Some(OperandFamily::Permanent)),
+                    BodyTarget::Object {
+                        zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                        ..
+                    } => Ok(Some(OperandFamily::GraveyardCard)),
+                    BodyTarget::Object {
+                        zone: TargetZone::Exile { .. },
+                        ..
+                    } => Ok(Some(OperandFamily::ExiledCard)),
+                    BodyTarget::Spell {
+                        include_abilities: false,
+                        ..
+                    } => Ok(Some(OperandFamily::Spell)),
+                    BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    ) => Ok(Some(OperandFamily::DamageRecipient)),
                     _ => Err(DefinitionError::OperandFamily),
                 },
                 ResolvingPlayer::TargetSpellController => match target {
-                    BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                    BodyTarget::SingleStackObject(_)
-                    | BodyTarget::SingleStackEntry
-                    | BodyTarget::ControlledAbility { .. }
-                    | BodyTarget::StackEntryTargetingControlledPermanent => {
-                        Ok(Some(OperandFamily::StackEntry))
+                    BodyTarget::Spell {
+                        include_abilities: false,
+                        ..
+                    } => Ok(Some(OperandFamily::Spell)),
+                    BodyTarget::Spell {
+                        include_abilities: true,
+                        ..
                     }
+                    | BodyTarget::StackEntry(_) => Ok(Some(OperandFamily::StackEntry)),
                     _ => Err(DefinitionError::OperandFamily),
                 },
                 _ => Ok(None),
@@ -1821,16 +1822,16 @@ impl ValueExpr {
                     subject: ValueObjectRef::TargetObject,
                     ..
                 } => match target {
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
-                    BodyTarget::SingleAnyTarget
-                    | BodyTarget::SingleCreatureOrPlayer
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker => {
-                        Ok(Some(OperandFamily::DamageRecipient))
-                    }
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } => Ok(Some(OperandFamily::Permanent)),
+                    BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    ) => Ok(Some(OperandFamily::DamageRecipient)),
                     _ => Err(DefinitionError::OperandFamily),
                 },
                 _ => Ok(None),
@@ -1855,28 +1856,28 @@ impl ValueExpr {
                 subject: CounterSubjectRef::TargetObject,
                 ..
             } => match target {
-                BodyTarget::SingleCreature
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
-                BodyTarget::SingleAnyTarget
-                | BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker => {
-                    Ok(Some(OperandFamily::DamageRecipient))
-                }
-                BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                BodyTarget::SingleOwnGraveyardCard
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                | BodyTarget::FilteredOwnGraveyardCard(_)
-                | BodyTarget::FilteredAnyGraveyardCard { .. } => {
-                    Ok(Some(OperandFamily::GraveyardCard))
-                }
-                BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
-                    Ok(Some(OperandFamily::ExiledCard))
-                }
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                } => Ok(Some(OperandFamily::Permanent)),
+                BodyTarget::AnyTarget(
+                    AnyTargetKind::Any
+                    | AnyTargetKind::CreatureOrPlayer
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker,
+                ) => Ok(Some(OperandFamily::DamageRecipient)),
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                } => Ok(Some(OperandFamily::Spell)),
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                } => Ok(Some(OperandFamily::GraveyardCard)),
+                BodyTarget::Object {
+                    zone: TargetZone::Exile { .. },
+                    ..
+                } => Ok(Some(OperandFamily::ExiledCard)),
                 _ => Err(DefinitionError::OperandFamily),
             },
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {

@@ -277,7 +277,7 @@ fn fixture(
                     mana_cost: ManaCost::generic(3.into()),
                     source_cost: SourceCost::Tap,
                     body: ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![Instruction::DealDamage(Box::new(
                             spellwake_engine::toolbox::DealDamageSpec {
                                 source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -314,7 +314,7 @@ fn fixture(
             Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,

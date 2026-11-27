@@ -396,7 +396,7 @@ fn huge_discard_clamps_to_real_hand_and_orders_without_creating_a_failed_draw() 
         seed(11, B, ObjectDestination::Hand, creature()),
     ];
     let state = fixture(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![Instruction::ZoneOp(Box::new(
             crate::toolbox::ZoneOpSpec::discard(
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
@@ -612,7 +612,7 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
             cards.push(seed(10, A, ObjectDestination::Hand, creature()));
         }
         let state = fixture(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
@@ -994,7 +994,7 @@ fn current_evaluated_type_filter_is_independent_of_printed_types_and_zone_contro
     let prefix = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,

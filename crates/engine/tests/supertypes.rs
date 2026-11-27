@@ -38,7 +38,7 @@ fn change(
 ) -> spellwake_engine::effects::SeedCard {
     spell(
         id,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![effect(vec![part(operation)], duration)],
     )
 }
@@ -53,7 +53,7 @@ fn copier() -> Program {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(

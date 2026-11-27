@@ -1257,16 +1257,11 @@ fn bind_filter_player_target_local(
         }
     }
     if needs_opponent {
-        if builder.target != BodyTarget::SingleOpponent {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+        if builder.target != BodyTarget::SINGLE_OPPONENT {
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
         }
-    } else if needs_player
-        && !matches!(
-            builder.target,
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        )
-    {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+    } else if needs_player && !matches!(builder.target, BodyTarget::Player { .. }) {
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
     }
     Ok(())
 }
@@ -1274,10 +1269,10 @@ fn bind_filter_player_target_local(
 fn is_permanent_body_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
     )
 }
 
@@ -1424,7 +1419,10 @@ fn lower_battlefield_body_target_in_context_local(
         && builder.target == BodyTarget::None
         && builder.instructions.is_empty()
         && f.controller == Some(ControllerRelation::ThatPlayer)
-        && let BodyTarget::FilteredPermanent(ref mut obj) = bt
+        && let BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter: ref mut obj,
+        } = bt
     {
         rewrite_object_filter_controller_local(
             obj,
@@ -1512,13 +1510,13 @@ fn lower_target_one_of_permanent_body_target_local(
     let filter =
         lower_target_one_of_permanent_filter_local(options, builder, in_trigger, vocabulary)?;
     if filter == ObjectFilter::creature() {
-        Ok(BodyTarget::SingleCreature)
+        Ok(BodyTarget::SINGLE_CREATURE)
     } else if filter == ObjectFilter::planeswalker() {
-        Ok(BodyTarget::SinglePlaneswalker)
+        Ok(BodyTarget::SINGLE_PLANESWALKER)
     } else if filter == ObjectFilter::any() {
-        Ok(BodyTarget::SinglePermanent)
+        Ok(BodyTarget::SINGLE_PERMANENT)
     } else {
-        Ok(BodyTarget::FilteredPermanent(filter))
+        Ok(BodyTarget::filtered_permanent(filter))
     }
 }
 
@@ -1868,7 +1866,7 @@ pub(super) fn lower_modify_pt_part(
         } if filter.zone.is_none() => {
             let obj =
                 lower_object_filter_in_context_local(filter, builder, in_trigger, vocabulary)?;
-            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder.bind_target(BodyTarget::filtered_permanent(obj))?;
             builder
                 .instructions
                 .push(Instruction::ApplyContinuous(Box::new(
@@ -1965,7 +1963,7 @@ pub(super) fn lower_modify_pt_part(
             let obj = lower_target_one_of_permanent_filter_local(
                 options, builder, in_trigger, vocabulary,
             )?;
-            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder.bind_target(BodyTarget::filtered_permanent(obj))?;
             builder
                 .instructions
                 .push(Instruction::ApplyContinuous(Box::new(
@@ -2926,12 +2924,12 @@ pub(super) fn bind_search_target(
     search: &LibrarySearch,
 ) -> Result<(), &'static str> {
     if search.source == SearchSource::TargetOpponentLibrary {
-        builder.bind_target(BodyTarget::SingleOpponent)?;
+        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
     } else if search.source == SearchSource::TargetPlayerLibrary
         || search.searcher == ResolvingPlayer::TargetPlayer
         || search.curse_host() == Some(spellwake_engine::program::AuraSearchHost::TargetPlayer)
     {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
     }
     Ok(())
 }
@@ -5080,7 +5078,7 @@ pub(super) fn predefined_token_def(
                     mana_cost: ManaCost::generic(1.into()),
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
-                        BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
+                        BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()),
                         vec![Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::explore(
                                 spellwake_engine::toolbox::ObjectQuery::from_move_subject(
@@ -5113,7 +5111,7 @@ pub(super) fn predefined_token_def(
                     mana_cost: ManaCost::generic(1.into()),
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![super::toolbox_emit::put_counters_on_target(
                             CounterKind::PlusOne,
                             ValueExpr::literal(1),

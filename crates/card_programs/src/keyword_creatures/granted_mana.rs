@@ -48,7 +48,7 @@ pub(super) fn rishkar(
         ),
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,

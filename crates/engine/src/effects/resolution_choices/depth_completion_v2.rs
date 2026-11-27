@@ -217,7 +217,7 @@ fn retain_copy_reply_rejects_wrong_actor_and_both_reuse_forms_before_real_retain
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::counter_targeted(
                         crate::toolbox::CounterDestination::Graveyard,
@@ -227,7 +227,7 @@ fn retain_copy_reply_rejects_wrong_actor_and_both_reuse_forms_before_real_retain
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 wrapped(Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))),

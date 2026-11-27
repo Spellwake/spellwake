@@ -134,7 +134,7 @@ fn cmm_boon_gains_blessing_from_its_own_and_allied_enchantment_entries() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -744,7 +744,7 @@ fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss()
             id,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::SinglePlayer, instruction),
+            free_instant(BodyTarget::SINGLE_PLAYER, instruction),
         )
     };
     let initial = game(
@@ -843,7 +843,7 @@ fn cmm_gisela_doubles_opponent_damage_and_prevents_the_rounded_up_half_of_friend
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(3),

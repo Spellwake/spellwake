@@ -1112,7 +1112,7 @@ fn cmm_geode_golem_casts_the_chosen_commander_during_the_combat_damage_trigger()
             A,
             ObjectDestination::LibraryBottom,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
             ),
         ),

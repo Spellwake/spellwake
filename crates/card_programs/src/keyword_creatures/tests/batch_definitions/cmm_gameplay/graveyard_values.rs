@@ -99,7 +99,7 @@ fn cmm_zones_corpse_augur_counts_the_target_players_creature_cards_on_resolution
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -457,7 +457,7 @@ fn cmm_zones_shelter_restricts_the_target_and_protects_it_from_the_chosen_color_
                 Program::instant(
                     ManaCost::one(Red),
                     ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                                 spellwake_engine::toolbox::ZoneOpSpec::move_all(

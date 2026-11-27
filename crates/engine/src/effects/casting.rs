@@ -1492,7 +1492,7 @@ impl EffectWindow {
                 })
         };
         let target_contract = if cast_mutating {
-            BodyTarget::SingleCreature
+            BodyTarget::SINGLE_CREATURE
         } else {
             payload
                 .body()
@@ -1583,7 +1583,7 @@ impl EffectWindow {
         {
             return Err(EffectError::InvalidCastResource);
         }
-        let one_per_opponent = matches!(target_contract, BodyTarget::FilteredPermanent(filter) if filter.is_opposing_even_mana_value());
+        let one_per_opponent = matches!(target_contract, BodyTarget::Object { zone: crate::program::TargetZone::Battlefield, filter } if filter.is_opposing_even_mana_value());
         let target_bounds = payload
             .body()
             .and_then(ExecutableBody::permanent_target_bounds)
@@ -4528,7 +4528,10 @@ impl EffectWindow {
             if let Instruction::FixedTargetClause(clause) = op {
                 let target = *choices.next().ok_or(EffectError::TargetRequired)?;
                 let mut bound_clause = (**clause).clone();
-                if let BodyTarget::FilteredPermanent(filter) = &mut bound_clause.target
+                if let BodyTarget::Object {
+                    zone: crate::program::TargetZone::Battlefield,
+                    filter,
+                } = &mut bound_clause.target
                     && filter.uses_first_target_controller()
                 {
                     let seat = first_target_controller.ok_or(EffectError::IllegalTarget)?;

@@ -10,7 +10,7 @@ fn source(instructions: Vec<Instruction>) -> Program {
             id: ActivatedAbilityId(1),
             source_cost: SourceCost::None,
             mana_cost: ManaCost::free(),
-            body: ExecutableBody::new(BodyTarget::SinglePermanent, instructions),
+            body: ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, instructions),
         }],
     )
 }
@@ -51,7 +51,7 @@ fn copy_origin_and_lki_composition_are_admitted_explicitly() {
         .validate(&v),
         Err(DefinitionError::InvalidInstruction)
     );
-    let body = ExecutableBody::new(BodyTarget::SinglePermanent, vec![copy()]);
+    let body = ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, vec![copy()]);
     for spell in [
         Program::instant(ManaCost::free(), body.clone()),
         Program::sorcery(ManaCost::free(), body),
@@ -59,7 +59,7 @@ fn copy_origin_and_lki_composition_are_admitted_explicitly() {
         assert_eq!(spell.validate(&v), Err(DefinitionError::InvalidInstruction));
     }
     let mut invalid = source(vec![copy()]);
-    invalid.activated[0].body.target = BodyTarget::SinglePlayer;
+    invalid.activated[0].body.target = BodyTarget::SINGLE_PLAYER;
     assert_eq!(invalid.validate(&v), Err(DefinitionError::OperandFamily));
 }
 #[test]

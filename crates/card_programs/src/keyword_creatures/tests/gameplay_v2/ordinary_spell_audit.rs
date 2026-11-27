@@ -49,7 +49,7 @@ impl Outcome {
 
     pub(super) fn target(&self) -> BodyTarget {
         match self {
-            Self::DamageCreature(_) | Self::ChangeStats(_, _) => BodyTarget::SingleCreature,
+            Self::DamageCreature(_) | Self::ChangeStats(_, _) => BodyTarget::SINGLE_CREATURE,
             _ => BodyTarget::None,
         }
     }

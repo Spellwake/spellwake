@@ -397,7 +397,7 @@ fn locator_bijections_reject_aliases_wrong_types_and_invalid_indices() {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreatureOrPlayer,
+                    BodyTarget::SINGLE_CREATURE_OR_PLAYER,
                     vec![Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec {
                             source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

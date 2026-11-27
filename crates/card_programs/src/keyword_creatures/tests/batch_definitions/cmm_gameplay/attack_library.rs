@@ -44,7 +44,7 @@ fn cmm_zones_narset_exiles_four_restricts_free_casts_and_survives_by_first_strik
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

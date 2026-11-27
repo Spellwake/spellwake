@@ -565,7 +565,7 @@ pub(crate) fn land_source() -> Program {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::Tap,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![effect(
                 vec![ResolvedPartSpec::ModifyPT(pt(1, 1))],
                 ResolvedDuration::UntilEndOfTurn,
@@ -632,8 +632,8 @@ pub(crate) fn new_tap(mana: bool) {
                 permanent(&v, &[CardType::Creature], Some((3, 5)), &["Elf"]),
                 true,
             ),
-            spell(3, BodyTarget::SinglePermanent, vec![animate_land()]),
-            spell(4, BodyTarget::SinglePermanent, vec![animate_land()]),
+            spell(3, BodyTarget::SINGLE_PERMANENT, vec![animate_land()]),
+            spell(4, BodyTarget::SINGLE_PERMANENT, vec![animate_land()]),
             library(5, P0, &v),
             library(6, P1, &v),
         ],
@@ -1066,7 +1066,7 @@ pub(crate) fn cleanup_simultaneous() {
     cards.extend([
         spell(
             10,
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![effect(
                 vec![ResolvedPartSpec::ModifyPT(pt(0, 2))],
                 ResolvedDuration::UntilEndOfTurn,
@@ -1074,7 +1074,7 @@ pub(crate) fn cleanup_simultaneous() {
         ),
         spell(
             11,
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![effect(
                 vec![type_part(
                     TypeOperation::Add(BTreeSet::from([CardType::Artifact])),
@@ -1085,7 +1085,7 @@ pub(crate) fn cleanup_simultaneous() {
         ),
         spell(
             12,
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -1244,7 +1244,7 @@ pub(crate) fn chosen_count_draw_cuts() {
             library(4, P0, &v),
             library(5, P0, &v),
             library(6, P0, &v),
-            spell(7, BodyTarget::SingleCreature, body),
+            spell(7, BodyTarget::SINGLE_CREATURE, body),
         ],
         vec![CardId(1), CardId(2), CardId(3)],
     );
@@ -1455,12 +1455,12 @@ pub(crate) fn type_restore() {
             ),
             spell(
                 2,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![remove_creature(ResolvedDuration::UntilEndOfTurn)],
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![add_creature(ResolvedDuration::NoStatedDuration)],
             ),
         ],
@@ -1525,7 +1525,7 @@ pub(crate) fn tap_old(mana: bool) {
                 permanent(&v, &[CardType::Creature], Some((3, 5)), &["Elf"]),
                 true,
             ),
-            spell(3, BodyTarget::SinglePermanent, vec![animate_land()]),
+            spell(3, BodyTarget::SINGLE_PERMANENT, vec![animate_land()]),
         ],
         vec![CardId(1), CardId(2)],
     );
@@ -1696,7 +1696,7 @@ pub(crate) fn latent_damage(shield: bool, multiplier: bool, shield_first: bool) 
                 ),
                 true,
             ),
-            spell(2, BodyTarget::SingleCreature, body),
+            spell(2, BodyTarget::SINGLE_CREATURE, body),
         ],
         vec![CardId(1)],
     );
@@ -1924,7 +1924,7 @@ pub(crate) fn cleanup_noncreature_marks() {
             ),
             spell(
                 2,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![spellwake_engine::program::Instruction::DealDamage(
                     Box::new(spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -1938,12 +1938,12 @@ pub(crate) fn cleanup_noncreature_marks() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![remove_creature(ResolvedDuration::NoStatedDuration)],
             ),
             spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(0, 2))],
                     ResolvedDuration::UntilEndOfTurn,
@@ -2242,8 +2242,8 @@ pub(crate) fn success_not_intent(grant_first: bool) {
                 permanent(&v, &[CardType::Artifact], Some((2, 3)), &[]),
                 true,
             ),
-            spell(2, BodyTarget::SinglePermanent, vec![first]),
-            spell(3, BodyTarget::SinglePermanent, vec![second]),
+            spell(2, BodyTarget::SINGLE_PERMANENT, vec![first]),
+            spell(3, BodyTarget::SINGLE_PERMANENT, vec![second]),
         ],
         vec![CardId(1)],
     );
@@ -2333,7 +2333,7 @@ pub(crate) fn additive_not_totals() {
             ),
             spell(
                 2,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(1, 2))],
                     ResolvedDuration::NoStatedDuration,
@@ -2341,7 +2341,7 @@ pub(crate) fn additive_not_totals() {
             ),
             spell(
                 3,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(3, 4))],
                     ResolvedDuration::NoStatedDuration,
@@ -2488,8 +2488,8 @@ pub(crate) fn disappearing(first_is_c: bool) {
                 true,
             ),
             card(2, a, false),
-            spell(3, BodyTarget::SinglePermanent, vec![add.clone()]),
-            spell(4, BodyTarget::SinglePermanent, vec![add]),
+            spell(3, BodyTarget::SINGLE_PERMANENT, vec![add.clone()]),
+            spell(4, BodyTarget::SINGLE_PERMANENT, vec![add]),
         ],
         vec![CardId(1)],
     );
@@ -2703,7 +2703,7 @@ pub(crate) fn static_count_controller() {
             ),
             spell(
                 5,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Keep,
@@ -2884,7 +2884,7 @@ pub(crate) fn type_explicit_remove() {
             ),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Keep,
@@ -2895,7 +2895,7 @@ pub(crate) fn type_explicit_remove() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![add_creature(ResolvedDuration::NoStatedDuration)],
             ),
         ],
@@ -2932,7 +2932,7 @@ pub(crate) fn type_replace() {
             ),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Keep,
@@ -2946,7 +2946,7 @@ pub(crate) fn type_replace() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![add_creature(ResolvedDuration::NoStatedDuration)],
             ),
         ],
@@ -2981,7 +2981,7 @@ pub(crate) fn pt_zero() {
             card(1, permanent(&v, &[CardType::Artifact], None, &[]), true),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![add_creature(ResolvedDuration::NoStatedDuration)],
             ),
         ],
@@ -3069,7 +3069,7 @@ pub(crate) fn pt_multipart() {
             card(1, permanent(&v, &[CardType::Artifact], None, &[]), true),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![
                         type_part(
@@ -3163,7 +3163,7 @@ pub(crate) fn pt_core() {
             ),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::SetPT(pt(4, 5))],
                     ResolvedDuration::NoStatedDuration,
@@ -3171,16 +3171,16 @@ pub(crate) fn pt_core() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(1, 2))],
                     ResolvedDuration::NoStatedDuration,
                 )],
             ),
-            spell(4, BodyTarget::SinglePermanent, vec![counters()]),
+            spell(4, BodyTarget::SINGLE_PERMANENT, vec![counters()]),
             spell(
                 5,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::SwitchPT],
                     ResolvedDuration::NoStatedDuration,
@@ -3281,7 +3281,7 @@ pub(crate) fn target_later_bounce() {
             ),
             spell(
                 2,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     remove_creature(ResolvedDuration::NoStatedDuration),
                     spellwake_engine::program::Instruction::ZoneOp(Box::new(

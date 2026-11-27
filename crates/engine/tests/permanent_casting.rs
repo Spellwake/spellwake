@@ -78,7 +78,7 @@ fn tap_ability() -> ActivatedAbility {
         mana_cost: ManaCost::one(ManaType::Green),
         source_cost: SourceCost::Tap,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -683,7 +683,7 @@ fn seeds() -> Vec<SeedCard> {
                 },
             )),
             ManaCost::one(ManaType::Red),
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ),
         spell(
             11,
@@ -694,7 +694,7 @@ fn seeds() -> Vec<SeedCard> {
                 ),
             )),
             ManaCost::specific(ManaType::Blue, 2.into()),
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         ),
         spell(
             12,
@@ -703,7 +703,9 @@ fn seeds() -> Vec<SeedCard> {
                 spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
             )),
             ManaCost::specific(ManaType::Blue, 2.into()),
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
+            BodyTarget::single_spell(
+                spellwake_engine::program::SpellFilter::copyable_instruction(),
+            ),
         ),
         spell(
             13,
@@ -713,7 +715,7 @@ fn seeds() -> Vec<SeedCard> {
                 spellwake_engine::toolbox::ZoneDest::Hand,
             ))),
             ManaCost::one(ManaType::Blue),
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ),
         SeedCard {
             card: CardId(14),
@@ -722,7 +724,7 @@ fn seeds() -> Vec<SeedCard> {
             program: Program::sorcery(
                 ManaCost::one(ManaType::Green),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![spellwake_engine::program::Instruction::DealDamage(
                         Box::new(spellwake_engine::toolbox::DealDamageSpec {
                             source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -743,7 +745,9 @@ fn seeds() -> Vec<SeedCard> {
                 spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
             )),
             ManaCost::specific(ManaType::Blue, 2.into()),
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
+            BodyTarget::single_spell(
+                spellwake_engine::program::SpellFilter::copyable_instruction(),
+            ),
         ),
         creature(
             90,

@@ -28,7 +28,7 @@ fn same_source_pending() -> GameState {
         condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![crate::program::Instruction::AdjustLife(Box::new(
                 crate::toolbox::AdjustLifeSpec::gain(
                     crate::toolbox::PlayerSelector::Resolving(
@@ -263,7 +263,7 @@ fn cleanup_pending(no_targets: bool) -> GameState {
     let mut watcher = Program::artifact(None, vec![]);
     let (target, body) = if no_targets {
         (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![crate::program::Instruction::DealDamage(Box::new(
                 crate::toolbox::DealDamageSpec {
                     source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -277,7 +277,7 @@ fn cleanup_pending(no_targets: bool) -> GameState {
         )
     } else {
         (
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![crate::program::Instruction::AdjustLife(Box::new(
                 crate::toolbox::AdjustLifeSpec::gain(
                     crate::toolbox::PlayerSelector::Resolving(

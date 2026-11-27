@@ -184,7 +184,7 @@ fn compile_face(
                 program.activated.push(activation(
                     spellwake_engine::mana::ManaCost::free(),
                     SourceCost::Tap,
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -202,7 +202,7 @@ fn compile_face(
                 add_trigger(
                     &mut program,
                     spellwake_engine::program::TriggerSpec::status_changed(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::StatusTriggerKind::Transforms),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::artifact(),
                     ),
                     vec![
@@ -387,7 +387,7 @@ fn compile_face(
                 let ability = activation(
                     ManaCost::free(),
                     SourceCost::Tap,
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature()
                             .with_keyword(spellwake_engine::characteristics::KeywordAbility::Flying),
                     ),
@@ -443,7 +443,7 @@ fn compile_face(
                 program.activated.push(activation(
                     fixed_cost("{R}")?,
                     SourceCost::Tap,
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::fight(spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::AbilitySource), spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::TargetObject))))],
                 ));
                 continue;
@@ -550,7 +550,7 @@ fn compile_face(
                 transforms = true;
                 add_trigger(
                     &mut program, spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
-                    BodyTarget::FilteredPermanent(spellwake_engine::program::ObjectFilter::creature().of_related_player()),
+                    BodyTarget::filtered_permanent(spellwake_engine::program::ObjectFilter::creature().of_related_player()),
                     vec![
                         OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
@@ -616,7 +616,7 @@ fn compile_face(
             "Whenever this creature transforms into Ravager of the Fells, it deals 2 damage to target opponent or planeswalker and 2 damage to up to one target creature that player or that planeswalker's controller controls." if reverse => {
                 add_trigger(
                     &mut program, spellwake_engine::program::TriggerSpec::status_changed(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::StatusTriggerKind::Transforms),
-                    BodyTarget::OpponentOrPlaneswalkerThenCreature,
+                    BodyTarget::OPPONENT_OR_PLANESWALKER_THEN_CREATURE,
                     vec![Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec::ordered_targets(2.into(), 2.into()),
                     ))],

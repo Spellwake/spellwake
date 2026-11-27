@@ -5437,7 +5437,7 @@ pub(super) fn lower_static(
                 id: ids.activated(),
                 mana_cost: ManaCost::free(),
                 source_cost: SourceCost::None,
-                body: ExecutableBody::new(BodyTarget::FilteredPermanent(nonland_controlled), ops),
+                body: ExecutableBody::new(BodyTarget::filtered_permanent(nonland_controlled), ops),
             });
             Ok(())
         }
@@ -15625,7 +15625,7 @@ fn parse_granted_equip_or_crew_part(
                 mana_cost,
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
                             AttachAbility::Equip,
@@ -15673,7 +15673,7 @@ fn parse_granted_equip_or_crew_part(
                     mana_cost,
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
-                        BodyTarget::FilteredPermanent(obj),
+                        BodyTarget::filtered_permanent(obj),
                         vec![Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
                                 AttachAbility::Equip,
@@ -16074,7 +16074,7 @@ pub(super) fn lower_ability_change(
                     ),
                     grouping: TriggerGrouping::EachOccurrence,
                     body: ExecutableBody::new(
-                        BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+                        BodyTarget::filtered_permanent(ObjectFilter::creature().opposing()),
                         vec![
                             Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,

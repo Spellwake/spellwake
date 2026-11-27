@@ -71,7 +71,7 @@ fn land_count() -> DefiningPart {
 fn removals(id: u64) -> SeedCard {
     spell(
         id,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![effect(
             vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                 AbilityRemoval::All,
@@ -227,7 +227,7 @@ fn text_rewrites_defining_literal_types_and_pt_count_predicates() {
             card(5, literal, true),
             spell(
                 6,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Text(change)],
                     ResolvedDuration::UntilEndOfTurn,
@@ -235,7 +235,7 @@ fn text_rewrites_defining_literal_types_and_pt_count_predicates() {
             ),
             spell(
                 7,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Text(change)],
                     ResolvedDuration::UntilEndOfTurn,
@@ -304,7 +304,7 @@ fn noncreature_printed_pt_is_visible_in_hand_and_stack_but_absent_on_battlefield
 fn ordinary_loss_of_creature_type_clears_creature_subtypes_and_pt_until_cleanup() {
     let change = spell(
         4,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![effect(
             vec![ResolvedPartSpec::Type(TypeChangeSpec {
                 land_subtypes: SubtypeOperation::Keep,

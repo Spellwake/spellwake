@@ -217,10 +217,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use token_entry_flow::TokenEntryWork;
 
+use crate::program::{
+    AnyTargetKind, CardType, CreatureTypeSlot, EventValueKind, StackTargetKind, TargetZone,
+    ValueExpr,
+};
 pub use crate::program::{
     BodyTarget, ExecutableBody, Instruction, Program, ProgramKind, SpellFilter,
 };
-use crate::program::{CardType, CreatureTypeSlot, EventValueKind, ValueExpr};
 /// One trusted resolution-time choice: retaining is distinct from fresh capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyTargetChoice {
@@ -2531,7 +2534,22 @@ impl EffectWindow {
                 .any(entry_counters::needs_damage_history)
                 .then(BTreeMap::new),
             track_combat_prices: programs.values().any(|program| matches!(program.conditional_cost, Some(crate::program::ConditionalCastCost::Freerunning(_) | crate::program::ConditionalCastCost::Prowl(_)))),
-            recent_graveyard_cards:programs.values().any(|p|entry_counters::definition_or_token_matches(p,|definition|definition.triggered.iter().any(|trigger|trigger.body.target==BodyTarget::RecentlyDiscardedOrFromLibrary))).then(BTreeSet::new),
+            recent_graveyard_cards: programs
+                .values()
+                .any(|p| {
+                    entry_counters::definition_or_token_matches(p, |definition| {
+                        definition.triggered.iter().any(|trigger| {
+                            matches!(
+                                trigger.body.target,
+                                BodyTarget::Object {
+                                    zone: TargetZone::RecentlyDiscardedOrFromLibrary,
+                                    ..
+                                }
+                            )
+                        })
+                    })
+                })
+                .then(BTreeSet::new),
             track_discard_prices: programs.values().any(|program| matches!(program.conditional_cost, Some(crate::program::ConditionalCastCost::Mayhem(_)))),
             spells_cast_by_player: BTreeMap::new(),
             previous_turn_casts: None,
@@ -2564,7 +2582,7 @@ impl EffectWindow {
                 .then(CastTurnHistory::default),
             spell_cast_positions: programs.values().any(|program| entry_counters::definition_or_token_matches(program, |p| {
                 matches!(&p.kind, ProgramKind::Spell(spell) if matches!(spell.body.target,
-                    BodyTarget::SingleSpell(filter) if filter.ordinal_this_turn.is_some()))
+                    BodyTarget::Spell { filter, .. } if filter.ordinal_this_turn.is_some()))
             })).then(SpellCastPositions::default),
             spell_ordinals:programs.values().any(|p|entry_counters::definition_or_token_matches(p,|p|
                 p.triggered.iter().any(|trigger|matches!(trigger.condition.event,crate::program::TriggerEvent::SpellCast {filter,..} if filter.ordinal_this_turn.is_some()))
@@ -8610,7 +8628,7 @@ impl EffectWindow {
             ));
         }
         if let Some(kind) = self.mode_target_contract(entry.id(), choice.id) {
-            if matches!(kind, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+            if matches!(kind, BodyTarget::Object { zone: TargetZone::Battlefield, filter } if filter.excludes_ability_source())
                 && entry_source.is_some_and(|src| target == TargetRef::Object(src))
             {
                 return Ok(false);
@@ -8645,7 +8663,7 @@ impl EffectWindow {
         {
             return Ok(false);
         }
-        if matches!(body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+        if matches!(body.target, BodyTarget::Object { zone: TargetZone::Battlefield, filter } if filter.excludes_ability_source())
             && matches!((target,entry.kind()),(TargetRef::Object(id), StackKind::ActivatedAbility {source} | StackKind::TriggeredAbility {source}) if source.id() == id)
         {
             return Ok(false);
@@ -10074,194 +10092,235 @@ impl EffectWindow {
         }
         match kind {
             BodyTarget::None => false,
-            BodyTarget::FilteredPermanent(filter) => {
-                let TargetRef::Object(id) = target else {
-                    return false;
-                };
-                let Some(p) = evaluated
-                    .get(id)
-                    .filter(|p| p.zone == ObjectZone::Battlefield)
-                else {
-                    return false;
-                };
-                let excluded = BTreeSet::new();
-                if source.id.is_some() || source.names.is_some() {
+            BodyTarget::Object { zone, filter } => match zone {
+                TargetZone::Battlefield => {
+                    let TargetRef::Object(id) = target else {
+                        return false;
+                    };
+                    let Some(p) = evaluated
+                        .get(id)
+                        .filter(|p| p.zone == ObjectZone::Battlefield)
+                    else {
+                        return false;
+                    };
+                    let excluded = BTreeSet::new();
+                    if source.id.is_some() || source.names.is_some() {
+                        self.matches_object_filter_with_source(
+                            filter, p, controller, source, &excluded, evaluated,
+                        )
+                    } else if BodyTarget::filtered_permanent(filter) == same_name_ability_target() {
+                        // Legacy callers such as ability activation check target_shares_ability_source_name
+                        // before delegating to legal_body_target_in without a source context.
+                        self.matches_object_filter(
+                            crate::program::ObjectFilter::creature(),
+                            p,
+                            controller,
+                            None,
+                            &excluded,
+                            evaluated,
+                        )
+                    } else {
+                        self.matches_object_filter(
+                            filter, p, controller, None, &excluded, evaluated,
+                        )
+                    }
+                }
+                TargetZone::OwnGraveyard => {
+                    let TargetRef::Object(id) = target else {
+                        return false;
+                    };
+                    if !self.window.cards().get(id).is_some_and(|o| {
+                        o.zone() == ObjectZone::Graveyard(controller) && o.card_id().is_some()
+                    }) {
+                        return false;
+                    }
+                    if filter == crate::program::ObjectFilter::any() {
+                        return true;
+                    }
+                    let Some(p) = evaluated.get(id) else {
+                        return false;
+                    };
+                    self.matches_graveyard_card(filter, p)
+                }
+                TargetZone::AnyGraveyard { opponents_only } => {
+                    let TargetRef::Object(id) = target else {
+                        return false;
+                    };
+                    let Some(card) = self.window.cards().get(id) else {
+                        return false;
+                    };
+                    let ObjectZone::Graveyard(owner) = card.zone() else {
+                        return false;
+                    };
+                    if card.card_id().is_none() {
+                        return false;
+                    }
+                    if opponents_only
+                        && !self
+                            .combat_rules
+                            .opponents(self.window.participants(), controller)
+                            .is_ok_and(|opponents| opponents.contains(&owner))
+                    {
+                        return false;
+                    }
+                    if filter == crate::program::ObjectFilter::any() {
+                        return true;
+                    }
+                    let Some(p) = evaluated.get(id) else {
+                        return false;
+                    };
+                    self.matches_graveyard_card(filter, p)
+                }
+                TargetZone::Exile {
+                    owned_flashback_only,
+                } => {
+                    let TargetRef::Object(id) = target else {
+                        return false;
+                    };
+                    if !self.window.cards().get(id).is_some_and(|card| {
+                        card.card_id().is_some()
+                            && card.zone() == ObjectZone::Exile
+                            && (!owned_flashback_only || card.owner() == controller)
+                    }) {
+                        return false;
+                    }
+                    if owned_flashback_only {
+                        if self.face_down_exile_viewer(id).is_some()
+                            || !self
+                                .copiable_program(id)
+                                .is_some_and(|program| program.flashback.is_some())
+                        {
+                            return false;
+                        }
+                        if filter == crate::program::ObjectFilter::any() {
+                            return true;
+                        }
+                    }
+                    let Some(p) = evaluated.get(id) else {
+                        return false;
+                    };
+                    let excluded = BTreeSet::new();
                     self.matches_object_filter_with_source(
                         filter, p, controller, source, &excluded, evaluated,
                     )
-                } else if BodyTarget::FilteredPermanent(filter) == same_name_ability_target() {
-                    // Legacy callers such as ability activation check target_shares_ability_source_name
-                    // before delegating to legal_body_target_in without a source context.
-                    self.matches_object_filter(
-                        crate::program::ObjectFilter::creature(),
-                        p,
-                        controller,
-                        None,
-                        &excluded,
-                        evaluated,
-                    )
-                } else {
-                    self.matches_object_filter(filter, p, controller, None, &excluded, evaluated)
                 }
-            }
-            BodyTarget::AnyGraveyardCreature => {
-                matches!(target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|object| object.card_id().is_some() && matches!(object.zone(), ObjectZone::Graveyard(_))) && evaluated.get(id).is_some_and(|object| object.is_creature()))
-            }
-            BodyTarget::RecentlyDiscardedOrFromLibrary => {
-                matches!(target,TargetRef::Object(id) if self.recent_graveyard_cards.as_ref().is_some_and(|cards|cards.contains(&id)) && self.window.cards().get(id).is_some_and(|card|card.card_id().is_some() && matches!(card.zone(),ObjectZone::Graveyard(_))))
-            }
-            BodyTarget::OwnedExiledFlashbackCard => matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|card| {
-                    card.card_id().is_some() && card.owner() == controller && card.zone() == ObjectZone::Exile
-                }) && self.face_down_exile_viewer(id).is_none()
-                    && self.copiable_program(id).is_some_and(|program| program.flashback.is_some())),
-            BodyTarget::FilteredExiledCard(filter) => {
-                let TargetRef::Object(id) = target else {
-                    return false;
-                };
-                if !self.window.cards().get(id).is_some_and(|card| {
-                    card.card_id().is_some() && card.zone() == ObjectZone::Exile
-                }) {
-                    return false;
+                TargetZone::RecentlyDiscardedOrFromLibrary => {
+                    let TargetRef::Object(id) = target else {
+                        return false;
+                    };
+                    if !(self
+                        .recent_graveyard_cards
+                        .as_ref()
+                        .is_some_and(|cards| cards.contains(&id))
+                        && self.window.cards().get(id).is_some_and(|card| {
+                            card.card_id().is_some()
+                                && matches!(card.zone(), ObjectZone::Graveyard(_))
+                        }))
+                    {
+                        return false;
+                    }
+                    if filter == crate::program::ObjectFilter::any() {
+                        return true;
+                    }
+                    let Some(p) = evaluated.get(id) else {
+                        return false;
+                    };
+                    self.matches_graveyard_card(filter, p)
                 }
-                let Some(p) = evaluated.get(id) else {
-                    return false;
-                };
-                let excluded = BTreeSet::new();
-                self.matches_object_filter_with_source(
-                    filter, p, controller, source, &excluded, evaluated,
-                )
-            }
-            BodyTarget::AnyGraveyardCard => {
-                matches!(target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|object| object.card_id().is_some() && matches!(object.zone(), ObjectZone::Graveyard(_))))
-            }
-            BodyTarget::AnyGraveyardCreatureOrPlaneswalker => {
-                matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|card| card.card_id().is_some() && matches!(card.zone(), ObjectZone::Graveyard(_)))
-                    && evaluated.get(id).is_some_and(|current| current.is_creature() || current.has_type(CardType::Planeswalker)))
-            }
-            BodyTarget::FilteredOwnGraveyardCard(filter) => {
-                let TargetRef::Object(id) = target else {
-                    return false;
-                };
-                if !self.window.cards().get(id).is_some_and(|o| {
-                    o.zone() == ObjectZone::Graveyard(controller) && o.card_id().is_some()
-                }) {
-                    return false;
-                }
-                let Some(p) = evaluated.get(id) else {
-                    return false;
-                };
-                self.matches_graveyard_card(filter, p)
-            }
-            BodyTarget::FilteredAnyGraveyardCard {
-                filter,
-                opponents_only,
-            } => {
-                let TargetRef::Object(id) = target else {
-                    return false;
-                };
-                let Some(card) = self.window.cards().get(id) else {
-                    return false;
-                };
-                let ObjectZone::Graveyard(owner) = card.zone() else {
-                    return false;
-                };
-                if card.card_id().is_none() {
-                    return false;
-                }
-                if opponents_only
-                    && !self
-                        .combat_rules
-                        .opponents(self.window.participants(), controller)
-                        .is_ok_and(|opponents| opponents.contains(&owner))
-                {
-                    return false;
-                }
-                let Some(p) = evaluated.get(id) else {
-                    return false;
-                };
-                self.matches_graveyard_card(filter, p)
-            }
-            BodyTarget::SingleOwnGraveyardCard => {
-                matches!(target,TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|o|o.zone()==ObjectZone::Graveyard(controller) && o.card_id().is_some()))
-            }
-            BodyTarget::SingleCreature => matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                    && evaluated.get(id).is_some_and(ObjectCharacteristics::is_creature)),
-            BodyTarget::SingleOpponent => {
-                matches!(target, TargetRef::Player(seat) if self.combat_rules.opponents(self.window.participants(), controller).is_ok_and(|opponents| opponents.contains(&seat)))
-            }
-            BodyTarget::SinglePlayer => {
-                matches!(target, TargetRef::Player(player) if self.window.participants().contains(&player))
-            }
-            BodyTarget::SinglePlayerOrPlaneswalker if matches!(target, TargetRef::Player(_)) => {
-                matches!(target, TargetRef::Player(player) if self.window.participants().contains(&player))
-            }
-            BodyTarget::SingleOpponentOrPlaneswalker if matches!(target, TargetRef::Player(_)) => {
-                matches!(target, TargetRef::Player(player) if self.combat_rules.opponents(self.window.participants(), controller).is_ok_and(|opponents| opponents.contains(&player)))
-            }
-            BodyTarget::OpponentOrPlaneswalkerThenCreature => match target {
-                TargetRef::Player(player) => self
+            },
+            BodyTarget::Player { opponents_only } => match target {
+                TargetRef::Player(seat) if opponents_only => self
                     .combat_rules
                     .opponents(self.window.participants(), controller)
-                    .is_ok_and(|opponents| opponents.contains(&player)),
-                TargetRef::Object(id) => evaluated.get(id).is_some_and(|object| {
-                    object.zone == ObjectZone::Battlefield
-                        && object.has_type(CardType::Planeswalker)
-                }),
-                TargetRef::Stack(_) => false,
-            },
-            BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SinglePlaneswalker => {
-                matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                    && evaluated.get(id).is_some_and(|view| view.has_type(CardType::Planeswalker)))
-            }
-            BodyTarget::SingleAnyTarget => match target {
+                    .is_ok_and(|opponents| opponents.contains(&seat)),
                 TargetRef::Player(player) => self.window.participants().contains(&player),
-                TargetRef::Object(id) => evaluated
-                    .get(id)
-                    .and_then(ObjectCharacteristics::damage_recipient)
-                    .is_some(),
-                TargetRef::Stack(_) => false,
+                _ => false,
             },
-            BodyTarget::SingleCreatureOrPlayer => match target {
-                TargetRef::Player(player) => self.window.participants().contains(&player),
-                TargetRef::Object(id) => {
-                    self.window
-                        .cards()
+            BodyTarget::AnyTarget(any_kind) => match any_kind {
+                AnyTargetKind::Any => match target {
+                    TargetRef::Player(player) => self.window.participants().contains(&player),
+                    TargetRef::Object(id) => evaluated
                         .get(id)
-                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                        && evaluated
+                        .and_then(ObjectCharacteristics::damage_recipient)
+                        .is_some(),
+                    TargetRef::Stack(_) => false,
+                },
+                AnyTargetKind::CreatureOrPlayer => match target {
+                    TargetRef::Player(player) => self.window.participants().contains(&player),
+                    TargetRef::Object(id) => {
+                        self.window
+                            .cards()
                             .get(id)
-                            .is_some_and(ObjectCharacteristics::is_creature)
-                }
-                TargetRef::Stack(_) => false,
+                            .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                            && evaluated
+                                .get(id)
+                                .is_some_and(ObjectCharacteristics::is_creature)
+                    }
+                    TargetRef::Stack(_) => false,
+                },
+                AnyTargetKind::PlayerOrPlaneswalker => match target {
+                    TargetRef::Player(player) => self.window.participants().contains(&player),
+                    TargetRef::Object(id) => {
+                        self.window
+                            .cards()
+                            .get(id)
+                            .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                            && evaluated
+                                .get(id)
+                                .is_some_and(|view| view.has_type(CardType::Planeswalker))
+                    }
+                    TargetRef::Stack(_) => false,
+                },
+                AnyTargetKind::OpponentOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalkerThenCreature => match target {
+                    TargetRef::Player(player) => self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)
+                        .is_ok_and(|opponents| opponents.contains(&player)),
+                    TargetRef::Object(id) => evaluated.get(id).is_some_and(|object| {
+                        object.zone == ObjectZone::Battlefield
+                            && object.has_type(CardType::Planeswalker)
+                    }),
+                    TargetRef::Stack(_) => false,
+                },
             },
-            BodyTarget::SinglePermanent => matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|card| card.zone() == ObjectZone::Battlefield)),
-            BodyTarget::ControlledAbility { colorless_source } => {
-                matches!(target,TargetRef::Stack(id) if self.window.entries().iter().any(|ability|
-                ability.id()==id && ability.controller()==controller && !matches!(ability.kind(),StackKind::CardSpell(_) | StackKind::SpellCopy {..})
-                    && (!colorless_source || self.targeting_entry_colors(ability,evaluated).is_empty())))
-            }
-            BodyTarget::StackEntryTargetingControlledPermanent => {
-                self.stack_entry_targets_controlled_permanent(target, controller, evaluated, None)
-            }
-            BodyTarget::SingleStackEntry => {
-                matches!(target, TargetRef::Stack(id) if self.window.entries().iter().chain(self.window.resolving()).any(|entry| entry.id() == id))
-            }
-            BodyTarget::SingleStackObject(filter) => match target {
+            BodyTarget::StackEntry(stack_kind) => match stack_kind {
+                StackTargetKind::ControlledAbility { colorless_source } => {
+                    matches!(target, TargetRef::Stack(id) if self.window.entries().iter().any(|ability| {
+                        ability.id() == id
+                            && ability.controller() == controller
+                            && !matches!(
+                                ability.kind(),
+                                StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
+                            )
+                            && (!colorless_source
+                                || self.targeting_entry_colors(ability, evaluated).is_empty())
+                    }))
+                }
+                StackTargetKind::TargetingControlledPermanent => self
+                    .stack_entry_targets_controlled_permanent(target, controller, evaluated, None),
+                StackTargetKind::AnyEntry => {
+                    matches!(target, TargetRef::Stack(id) if self.window.entries().iter().chain(self.window.resolving()).any(|entry| entry.id() == id))
+                }
+            },
+            BodyTarget::Spell {
+                filter,
+                include_abilities,
+            } => match target {
                 TargetRef::Stack(id) => self
                     .window
                     .entries()
                     .iter()
                     .chain(self.window.resolving())
                     .find(|entry| entry.id() == id)
-                    .is_some_and(|entry| match entry.kind() {
-                        StackKind::ActivatedAbility { .. } | StackKind::TriggeredAbility { .. } => {
+                    .is_some_and(|entry| {
+                        if include_abilities
+                            && matches!(
+                                entry.kind(),
+                                StackKind::ActivatedAbility { .. }
+                                    | StackKind::TriggeredAbility { .. }
+                            )
+                        {
                             let target_ok = match filter.target_shape {
                                 crate::program::SpellTargetShape::Any => true,
                                 crate::program::SpellTargetShape::SingleTarget => {
@@ -10291,31 +10350,8 @@ impl EffectWindow {
                                 },
                                 crate::program::ObjectFilter::Either(_, _) => true,
                             };
-                            target_ok && controller_ok
+                            return target_ok && controller_ok;
                         }
-                        StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => self
-                            .legal_target_kind_with_source(
-                                BodyTarget::SingleSpell(filter),
-                                target,
-                                controller,
-                                source,
-                                evaluated,
-                            ),
-                        StackKind::Speed
-                        | StackKind::Monarch
-                        | StackKind::DelayedCopy { .. }
-                        | StackKind::Emblem { .. } => false,
-                    }),
-                _ => false,
-            },
-            BodyTarget::SingleSpell(filter) => match target {
-                TargetRef::Stack(id) => self
-                    .window
-                    .entries()
-                    .iter()
-                    .chain(self.window.resolving())
-                    .find(|entry| entry.id() == id)
-                    .is_some_and(|entry| {
                         let from_owners_hand = match entry.kind() {
                             StackKind::CardSpell(object) => self
                                 .window
@@ -10828,7 +10864,7 @@ mod revision_tests {
                     program: Program::instant(
                         ManaCost::free(),
                         ExecutableBody::new(
-                            BodyTarget::SingleCreature,
+                            BodyTarget::SINGLE_CREATURE,
                             vec![Instruction::DealDamage(Box::new(
                                 crate::toolbox::DealDamageSpec {
                                     source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -11063,7 +11099,7 @@ mod revision_tests {
                             mana_cost: ManaCost::one(ManaType::Red),
                             source_cost,
                             body: ExecutableBody::new(
-                                BodyTarget::SingleCreature,
+                                BodyTarget::SINGLE_CREATURE,
                                 vec![Instruction::DealDamage(Box::new(
                                     crate::toolbox::DealDamageSpec {
                                         source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -11527,7 +11563,7 @@ mod revision_tests {
                     program: Program::instant(
                         ManaCost::one(ManaType::Red),
                         ExecutableBody::new(
-                            BodyTarget::SingleCreature,
+                            BodyTarget::SINGLE_CREATURE,
                             vec![Instruction::DealDamage(Box::new(
                                 crate::toolbox::DealDamageSpec {
                                     source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -11652,7 +11688,7 @@ mod revision_tests {
                                 exile_if_dies: false,
                             },
                         ))],
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                     ),
                     instant(
                         2,
@@ -11665,7 +11701,7 @@ mod revision_tests {
                                 crate::toolbox::StackOpSpec::copy_targeted_spell(),
                             )),
                         ],
-                        BodyTarget::SingleSpell(SpellFilter::copyable_instruction()),
+                        BodyTarget::single_spell(SpellFilter::copyable_instruction()),
                     ),
                     SeedCard {
                         card: CardId(3),
@@ -11871,7 +11907,7 @@ pub(super) struct TargetSourceContext<'a> {
 }
 
 const fn same_name_ability_target() -> BodyTarget {
-    BodyTarget::FilteredPermanent(
+    BodyTarget::filtered_permanent(
         crate::program::ObjectFilter::creature().sharing_name_with_source(),
     )
 }

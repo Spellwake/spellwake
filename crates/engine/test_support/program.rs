@@ -28,17 +28,18 @@ use spellwake_engine::{
     life::{LifeAdjustment, LifeChangeKind},
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaType},
     program::{
-        AffectedPlayers, ArtifactSubtype, AttachedCountKind, AttackTriggerMode, BlockTriggerKind,
-        BodyTarget, CardType, CardTypeMask, CastEntryKind, CombatTriggerKeyword, Comparison,
-        ControllerFilter, CounterSubjectRef, CounterTriggerKind, DamageTriggerRecipient,
-        DiesTriggerMode, EventValueKind, ExecutableBody, Instruction, MatchObjectRef,
-        ObjectColorFilter, ObjectFilter, ObjectFilterFlags, ObjectStatKind, PermanentDefinition,
-        PermanentTypeFilter, PlayerRelation, PlayerStatExpr, PlayerTriggerAction, PowerFilter,
-        Program, ProgramKind, ResolutionCondition, ResolvingPlayer, SourceRelation,
-        SpellDefinition, SpellFilter, StatAggregate, StateThresholdKind, StatusTriggerKind,
-        SubtypeFilter, Supertype, TriggerCondition, TriggerEvent, TriggerFromZone,
-        TriggerKeywordEvent, TriggerPlayerScope, TriggerSpec, TriggerZone, TriggeredAbility,
-        TriggeredAbilityId, ValueExpr, ValueObjectRef, ValueZone,
+        AffectedPlayers, AnyTargetKind, ArtifactSubtype, AttachedCountKind, AttackTriggerMode,
+        BlockTriggerKind, BodyTarget, CardType, CardTypeMask, CastEntryKind, CombatTriggerKeyword,
+        Comparison, ControllerFilter, CounterSubjectRef, CounterTriggerKind,
+        DamageTriggerRecipient, DiesTriggerMode, EventValueKind, ExecutableBody, Instruction,
+        MatchObjectRef, ObjectColorFilter, ObjectFilter, ObjectFilterFlags, ObjectStatKind,
+        PermanentDefinition, PermanentTypeFilter, PlayerRelation, PlayerStatExpr,
+        PlayerTriggerAction, PowerFilter, Program, ProgramKind, ResolutionCondition,
+        ResolvingPlayer, SourceRelation, SpellDefinition, SpellFilter, StackTargetKind,
+        StatAggregate, StateThresholdKind, StatusTriggerKind, SubtypeFilter, Supertype, TargetZone,
+        TriggerCondition, TriggerEvent, TriggerFromZone, TriggerKeywordEvent, TriggerPlayerScope,
+        TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueObjectRef,
+        ValueZone,
     },
     program::{
         PublicZoneDestination, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
@@ -4125,51 +4126,51 @@ impl Body {
             ));
         }
         let target = match self.target {
-            Target::CreatureOfSubtype { subtype } => BodyTarget::FilteredPermanent(
+            Target::CreatureOfSubtype { subtype } => BodyTarget::filtered_permanent(
                 spellwake_engine::program::ObjectFilter::creature()
                     .with_subtype(creature_types::id(subtype, vocabulary)?),
             ),
-            Target::PermanentOfCreatureSubtype { subtype } => BodyTarget::FilteredPermanent(
+            Target::PermanentOfCreatureSubtype { subtype } => BodyTarget::filtered_permanent(
                 spellwake_engine::program::ObjectFilter::any()
                     .with_subtype(creature_types::id(subtype, vocabulary)?),
             ),
             Target::FilteredPermanent { filter } => {
-                BodyTarget::FilteredPermanent(battlefield_filter_from_label(&filter)?)
+                BodyTarget::filtered_permanent(battlefield_filter_from_label(&filter)?)
             }
-            Target::OwnGraveyardCardWithSubtype { subtype } => {
-                BodyTarget::FilteredOwnGraveyardCard(
-                    spellwake_engine::program::ObjectFilter::any()
-                        .with_subtype(creature_types::id(subtype, vocabulary)?),
-                )
-            }
+            Target::OwnGraveyardCardWithSubtype { subtype } => BodyTarget::filtered_own_graveyard(
+                spellwake_engine::program::ObjectFilter::any()
+                    .with_subtype(creature_types::id(subtype, vocabulary)?),
+            ),
             Target::FilteredOwnGraveyardCard { filter } => {
-                BodyTarget::FilteredOwnGraveyardCard(graveyard_filter_from_label(&filter)?)
+                BodyTarget::filtered_own_graveyard(graveyard_filter_from_label(&filter)?)
             }
             Target::AnyGraveyardCreatureOrPlaneswalker {} => {
-                BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
             }
-            Target::RecentlyDiscardedOrFromLibrary {} => BodyTarget::RecentlyDiscardedOrFromLibrary,
-            Target::AnyGraveyardCard {} => BodyTarget::AnyGraveyardCard,
-            Target::AnyGraveyardCreature {} => BodyTarget::AnyGraveyardCreature,
-            Target::SingleOwnGraveyardCard {} => BodyTarget::SingleOwnGraveyardCard,
+            Target::RecentlyDiscardedOrFromLibrary {} => {
+                BodyTarget::RECENTLY_DISCARDED_OR_FROM_LIBRARY
+            }
+            Target::AnyGraveyardCard {} => BodyTarget::ANY_GRAVEYARD_CARD,
+            Target::AnyGraveyardCreature {} => BodyTarget::ANY_GRAVEYARD_CREATURE,
+            Target::SingleOwnGraveyardCard {} => BodyTarget::SINGLE_OWN_GRAVEYARD_CARD,
             Target::None {} => BodyTarget::None,
-            Target::SinglePermanent {} => BodyTarget::SinglePermanent,
-            Target::SingleCreature {} => BodyTarget::SingleCreature,
-            Target::SingleOpponent {} => BodyTarget::SingleOpponent,
-            Target::SinglePlayer {} => BodyTarget::SinglePlayer,
-            Target::SingleCreatureOrPlayer {} => BodyTarget::SingleCreatureOrPlayer,
-            Target::SinglePlayerOrPlaneswalker {} => BodyTarget::SinglePlayerOrPlaneswalker,
-            Target::SinglePlaneswalker {} => BodyTarget::SinglePlaneswalker,
+            Target::SinglePermanent {} => BodyTarget::SINGLE_PERMANENT,
+            Target::SingleCreature {} => BodyTarget::SINGLE_CREATURE,
+            Target::SingleOpponent {} => BodyTarget::SINGLE_OPPONENT,
+            Target::SinglePlayer {} => BodyTarget::SINGLE_PLAYER,
+            Target::SingleCreatureOrPlayer {} => BodyTarget::SINGLE_CREATURE_OR_PLAYER,
+            Target::SinglePlayerOrPlaneswalker {} => BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
+            Target::SinglePlaneswalker {} => BodyTarget::SINGLE_PLANESWALKER,
             Target::ControlledAbility { colorless_source } => {
-                BodyTarget::ControlledAbility { colorless_source }
+                BodyTarget::controlled_ability(colorless_source)
             }
             Target::StackEntryTargetingControlledPermanent {} => {
-                BodyTarget::StackEntryTargetingControlledPermanent
+                BodyTarget::STACK_ENTRY_TARGETING_CONTROLLED_PERMANENT
             }
-            Target::SingleStackEntry {} => BodyTarget::SingleStackEntry,
-            Target::SingleAnyTarget {} => BodyTarget::SingleAnyTarget,
+            Target::SingleStackEntry {} => BodyTarget::SINGLE_STACK_ENTRY,
+            Target::SingleAnyTarget {} => BodyTarget::SINGLE_ANY_TARGET,
             Target::SingleSpell { support_gate } => {
-                BodyTarget::SingleSpell(match support_gate.as_str() {
+                BodyTarget::single_spell(match support_gate.as_str() {
                     "NotCastFromOwnersHand" => SpellFilter::any().not_from_owners_hand(),
                     "AnySpell" => SpellFilter::any(),
                     "SpellWithSingleTarget" => SpellFilter::any().single_target(),
@@ -10636,105 +10637,125 @@ pub fn resolution_condition(value: &ResolutionCondition) -> Value {
 pub fn body(value: &ExecutableBody) -> Value {
     let target = match value.target {
         BodyTarget::None => json!({"tag":"None"}),
-        BodyTarget::FilteredPermanent(filter) => {
-            use spellwake_engine::program::{CardTypeMask, ObjectFilter, SubtypeFilter};
-            if let ObjectFilter::Clause(c) = filter
-                && let SubtypeFilter::Has(kind) = c.subtypes
-                && filter == ObjectFilter::creature().with_subtype(kind)
-            {
-                json!({"tag":"CreatureOfSubtype","subtype":projection::creature_type_id(kind)})
-            } else if let ObjectFilter::Clause(c) = filter
-                && let SubtypeFilter::Has(kind) = c.subtypes
-                && c.any_types == CardTypeMask::EMPTY
-                && filter == ObjectFilter::any().with_subtype(kind)
-            {
-                json!({"tag":"PermanentOfCreatureSubtype","subtype":projection::creature_type_id(kind)})
+        BodyTarget::Object { zone, filter } => match zone {
+            TargetZone::Battlefield => {
+                if filter == ObjectFilter::any() {
+                    json!({"tag":"SinglePermanent"})
+                } else if filter == ObjectFilter::creature() {
+                    json!({"tag":"SingleCreature"})
+                } else if filter == ObjectFilter::planeswalker() {
+                    json!({"tag":"SinglePlaneswalker"})
+                } else if let ObjectFilter::Clause(c) = filter
+                    && let SubtypeFilter::Has(kind) = c.subtypes
+                    && filter == ObjectFilter::creature().with_subtype(kind)
+                {
+                    json!({"tag":"CreatureOfSubtype","subtype":projection::creature_type_id(kind)})
+                } else if let ObjectFilter::Clause(c) = filter
+                    && let SubtypeFilter::Has(kind) = c.subtypes
+                    && c.any_types == CardTypeMask::EMPTY
+                    && filter == ObjectFilter::any().with_subtype(kind)
+                {
+                    json!({"tag":"PermanentOfCreatureSubtype","subtype":projection::creature_type_id(kind)})
+                } else {
+                    json!({"tag":"FilteredPermanent","filter":battlefield_filter_label(filter)})
+                }
+            }
+            TargetZone::OwnGraveyard => {
+                if filter == ObjectFilter::any() {
+                    json!({"tag":"SingleOwnGraveyardCard"})
+                } else if let ObjectFilter::Clause(c) = filter
+                    && let SubtypeFilter::Has(kind) = c.subtypes
+                    && filter == ObjectFilter::any().with_subtype(kind)
+                {
+                    json!({"tag":"OwnGraveyardCardWithSubtype","subtype":projection::creature_type_id(kind)})
+                } else {
+                    json!({"tag":"FilteredOwnGraveyardCard","filter":graveyard_filter_label(filter)})
+                }
+            }
+            TargetZone::AnyGraveyard { opponents_only } => {
+                if !opponents_only && filter == ObjectFilter::any() {
+                    json!({"tag":"AnyGraveyardCard"})
+                } else if !opponents_only && filter == ObjectFilter::creature() {
+                    json!({"tag":"AnyGraveyardCreature"})
+                } else if !opponents_only && filter == ObjectFilter::creature_or_planeswalker() {
+                    json!({"tag":"AnyGraveyardCreatureOrPlaneswalker"})
+                } else {
+                    json!({"tag":"FilteredAnyGraveyardCard","filter":permanent_group_wire(filter),"opponents_only":opponents_only})
+                }
+            }
+            TargetZone::Exile {
+                owned_flashback_only,
+            } => {
+                if owned_flashback_only && filter == ObjectFilter::any() {
+                    json!({"tag":"OwnedExiledFlashbackCard"})
+                } else {
+                    json!({"tag":"FilteredExiledCard","filter":permanent_group_wire(filter)})
+                }
+            }
+            TargetZone::RecentlyDiscardedOrFromLibrary => {
+                json!({"tag":"RecentlyDiscardedOrFromLibrary"})
+            }
+        },
+        BodyTarget::Player { opponents_only } => {
+            if opponents_only {
+                json!({"tag":"SingleOpponent"})
             } else {
-                json!({"tag":"FilteredPermanent","filter":battlefield_filter_label(filter)})
+                json!({"tag":"SinglePlayer"})
             }
         }
-        BodyTarget::AnyGraveyardCreatureOrPlaneswalker => {
-            json!({"tag":"AnyGraveyardCreatureOrPlaneswalker"})
-        }
-        BodyTarget::RecentlyDiscardedOrFromLibrary => {
-            json!({"tag":"RecentlyDiscardedOrFromLibrary"})
-        }
-        BodyTarget::OwnedExiledFlashbackCard => json!({"tag":"OwnedExiledFlashbackCard"}),
-        BodyTarget::FilteredExiledCard(filter) => {
-            json!({"tag":"FilteredExiledCard","filter":permanent_group_wire(filter)})
-        }
-        BodyTarget::AnyGraveyardCard => json!({"tag":"AnyGraveyardCard"}),
-        BodyTarget::AnyGraveyardCreature => json!({"tag":"AnyGraveyardCreature"}),
-        BodyTarget::FilteredOwnGraveyardCard(filter) => {
-            use spellwake_engine::program::{ObjectFilter, SubtypeFilter};
-            if let ObjectFilter::Clause(c) = filter
-                && let SubtypeFilter::Has(kind) = c.subtypes
-                && filter == ObjectFilter::any().with_subtype(kind)
-            {
-                json!({"tag":"OwnGraveyardCardWithSubtype","subtype":projection::creature_type_id(kind)})
-            } else {
-                json!({"tag":"FilteredOwnGraveyardCard","filter":graveyard_filter_label(filter)})
+        BodyTarget::AnyTarget(kind) => match kind {
+            AnyTargetKind::Any => json!({"tag":"SingleAnyTarget"}),
+            AnyTargetKind::CreatureOrPlayer => json!({"tag":"SingleCreatureOrPlayer"}),
+            AnyTargetKind::PlayerOrPlaneswalker => json!({"tag":"SinglePlayerOrPlaneswalker"}),
+            AnyTargetKind::OpponentOrPlaneswalker => json!({"tag":"SingleOpponentOrPlaneswalker"}),
+            AnyTargetKind::OpponentOrPlaneswalkerThenCreature => {
+                json!({"tag":"OpponentOrPlaneswalkerThenCreature"})
             }
-        }
-        BodyTarget::FilteredAnyGraveyardCard {
-            filter,
-            opponents_only,
+        },
+        BodyTarget::Spell {
+            filter: gate,
+            include_abilities,
         } => {
-            json!({"tag":"FilteredAnyGraveyardCard","filter":permanent_group_wire(filter),"opponents_only":opponents_only})
-        }
-        BodyTarget::SinglePermanent => json!({"tag":"SinglePermanent"}),
-        BodyTarget::SingleCreature => json!({"tag":"SingleCreature"}),
-        BodyTarget::SingleOpponent => json!({"tag":"SingleOpponent"}),
-        BodyTarget::SinglePlayer => json!({"tag":"SinglePlayer"}),
-        BodyTarget::SingleOwnGraveyardCard => json!({"tag":"SingleOwnGraveyardCard"}),
-        BodyTarget::SingleCreatureOrPlayer => json!({"tag":"SingleCreatureOrPlayer"}),
-        BodyTarget::SinglePlayerOrPlaneswalker => json!({"tag":"SinglePlayerOrPlaneswalker"}),
-        BodyTarget::SingleOpponentOrPlaneswalker => {
-            json!({"tag":"SingleOpponentOrPlaneswalker"})
-        }
-        BodyTarget::OpponentOrPlaneswalkerThenCreature => {
-            json!({"tag":"OpponentOrPlaneswalkerThenCreature"})
-        }
-        BodyTarget::SinglePlaneswalker => json!({"tag":"SinglePlaneswalker"}),
-        BodyTarget::ControlledAbility { colorless_source } => {
-            json!({"tag":"ControlledAbility","colorless_source":colorless_source})
-        }
-        BodyTarget::StackEntryTargetingControlledPermanent => {
-            json!({"tag":"StackEntryTargetingControlledPermanent"})
-        }
-        BodyTarget::SingleStackEntry => json!({"tag":"SingleStackEntry"}),
-        BodyTarget::SingleAnyTarget => json!({"tag":"SingleAnyTarget"}),
-        BodyTarget::SingleSpell(gate) => {
-            let support_gate = if gate == SpellFilter::any() {
-                "AnySpell".to_owned()
-            } else if gate == SpellFilter::any().not_from_owners_hand() {
-                "NotCastFromOwnersHand".to_owned()
-            } else if gate == SpellFilter::any().single_target() {
-                "SpellWithSingleTarget".to_owned()
-            } else if gate == SpellFilter::any().targeting_player() {
-                "SpellTargetingPlayer".to_owned()
-            } else if let Some(ordinal) = gate.ordinal_this_turn
-                && gate == SpellFilter::any().ordinal_this_turn(ordinal)
-            {
-                format!("CastNumberThisTurn({})", ordinal.get())
-            } else if gate == SpellFilter::of_type(CardType::Sorcery) {
-                "SorcerySpell".to_owned()
-            } else if gate == SpellFilter::noncreature() {
-                "NoncreatureSpell".to_owned()
-            } else if gate == SpellFilter::creature() {
-                "CreatureSpell".to_owned()
-            } else if gate == SpellFilter::instant_or_sorcery().controlled() {
-                "ControlledInstantOrSorcery".to_owned()
-            } else if gate == SpellFilter::copyable_instruction() {
-                "CopyableInstructionSpell".to_owned()
+            if include_abilities {
+                json!({"tag":"SingleStackObject","filter":format!("{gate:?}")})
             } else {
-                format!("{gate:?}")
-            };
-            json!({"tag":"SingleSpell","support_gate":support_gate})
+                let support_gate = if gate == SpellFilter::any() {
+                    "AnySpell".to_owned()
+                } else if gate == SpellFilter::any().not_from_owners_hand() {
+                    "NotCastFromOwnersHand".to_owned()
+                } else if gate == SpellFilter::any().single_target() {
+                    "SpellWithSingleTarget".to_owned()
+                } else if gate == SpellFilter::any().targeting_player() {
+                    "SpellTargetingPlayer".to_owned()
+                } else if let Some(ordinal) = gate.ordinal_this_turn
+                    && gate == SpellFilter::any().ordinal_this_turn(ordinal)
+                {
+                    format!("CastNumberThisTurn({})", ordinal.get())
+                } else if gate == SpellFilter::of_type(CardType::Sorcery) {
+                    "SorcerySpell".to_owned()
+                } else if gate == SpellFilter::noncreature() {
+                    "NoncreatureSpell".to_owned()
+                } else if gate == SpellFilter::creature() {
+                    "CreatureSpell".to_owned()
+                } else if gate == SpellFilter::instant_or_sorcery().controlled() {
+                    "ControlledInstantOrSorcery".to_owned()
+                } else if gate == SpellFilter::copyable_instruction() {
+                    "CopyableInstructionSpell".to_owned()
+                } else {
+                    format!("{gate:?}")
+                };
+                json!({"tag":"SingleSpell","support_gate":support_gate})
+            }
         }
-        BodyTarget::SingleStackObject(filter) => {
-            json!({"tag":"SingleStackObject","filter":format!("{filter:?}")})
-        }
+        BodyTarget::StackEntry(kind) => match kind {
+            StackTargetKind::AnyEntry => json!({"tag":"SingleStackEntry"}),
+            StackTargetKind::TargetingControlledPermanent => {
+                json!({"tag":"StackEntryTargetingControlledPermanent"})
+            }
+            StackTargetKind::ControlledAbility { colorless_source } => {
+                json!({"tag":"ControlledAbility","colorless_source":colorless_source})
+            }
+        },
     };
     let instructions = value
         .instructions
@@ -13964,9 +13985,9 @@ mod tests {
         ] {
             let target = match role {
                 ResolvingPlayer::TargetSpellController => {
-                    BodyTarget::SingleSpell(SpellFilter::any())
+                    BodyTarget::single_spell(SpellFilter::any())
                 }
-                ResolvingPlayer::TargetPlayer => BodyTarget::SinglePlayer,
+                ResolvingPlayer::TargetPlayer => BodyTarget::SINGLE_PLAYER,
                 ResolvingPlayer::HighestEntrantController
                 | ResolvingPlayer::TriggeringAttackerController
                 | ResolvingPlayer::CombatDamageSourceController
@@ -14304,9 +14325,11 @@ mod tests {
         for players in scopes {
             for amount in &amounts {
                 let target = match players {
-                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer) => BodyTarget::SinglePlayer,
+                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer) => {
+                        BodyTarget::SINGLE_PLAYER
+                    }
                     AffectedPlayers::One(ResolvingPlayer::TargetSpellController) => {
-                        BodyTarget::SingleSpell(SpellFilter::any())
+                        BodyTarget::single_spell(SpellFilter::any())
                     }
                     AffectedPlayers::One(
                         ResolvingPlayer::HighestEntrantController
@@ -14417,7 +14440,7 @@ mod tests {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::discard(
                         AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
@@ -14836,7 +14859,7 @@ mod tests {
         let p = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: Some(spellwake_engine::toolbox::ObjectQuery::Targets),

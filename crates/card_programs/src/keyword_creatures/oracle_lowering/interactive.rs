@@ -1095,7 +1095,7 @@ pub(super) fn try_fuse_two_pile_split(
     .ok()?;
     if target_opponent {
         let mut probe = builder.clone();
-        probe.bind_target(BodyTarget::SingleOpponent).ok()?;
+        probe.bind_target(BodyTarget::SINGLE_OPPONENT).ok()?;
         *builder = probe;
     }
     builder
@@ -1214,19 +1214,18 @@ pub(super) fn lower_choose_from_group(
                 };
                 let bt = lower_target_subject(&single, vocabulary)?;
                 match bt {
-                    BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                    BodyTarget::Object {
+                        zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                        ..
+                    } if bt != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER => {
                         builder.bind_target(bt)?;
                         builder.graveyard_target_bounds = Some((0, 1));
                         return Ok(());
                     }
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_) => {
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } => {
                         builder.bind_target(bt)?;
                         builder.up_to_one_target = true;
                         return Ok(());
@@ -1253,12 +1252,12 @@ pub(super) fn lower_choose_from_group(
                 let bt = lower_target_subject(&single, vocabulary)?;
                 if matches!(
                     bt,
-                    BodyTarget::SingleOwnGraveyardCard
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::FilteredAnyGraveyardCard { .. }
-                ) {
+                    BodyTarget::Object {
+                        zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                        ..
+                    }
+                ) && bt != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
+                {
                     builder.bind_target(bt)?;
                     builder.graveyard_target_bounds = Some((min_t, max_t));
                     return Ok(());
@@ -1276,10 +1275,10 @@ pub(super) fn lower_choose_from_group(
                 let bt = lower_target_subject(&single, vocabulary)?;
                 if matches!(
                     bt,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
                 ) {
                     builder.bind_target(bt)?;
                     builder.up_to_one_target = true;
@@ -1572,10 +1571,7 @@ fn lower_group_choose_spec(
             }
             Some(ZoneFilter::ThatPlayerHand)
                 if chooser == PlayerRefAst::You
-                    && matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 (SourceZoneFilter::TargetPlayerHand, false)
             }
@@ -1583,11 +1579,11 @@ fn lower_group_choose_spec(
                 (SourceZoneFilter::Hand, false)
             }
             Some(ZoneFilter::TargetPlayerHand) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 (SourceZoneFilter::TargetPlayerHand, false)
             }
             Some(ZoneFilter::TargetOpponentHand) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 (SourceZoneFilter::TargetPlayerHand, false)
             }
             Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
@@ -1598,10 +1594,7 @@ fn lower_group_choose_spec(
             }
             Some(ZoneFilter::ThatPlayerGraveyard)
                 if chooser == PlayerRefAst::You
-                    && matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 (SourceZoneFilter::TargetPlayerGraveyard, false)
             }
@@ -1609,11 +1602,11 @@ fn lower_group_choose_spec(
                 (SourceZoneFilter::Graveyard, false)
             }
             Some(ZoneFilter::TargetPlayerGraveyard) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 (SourceZoneFilter::TargetPlayerGraveyard, false)
             }
             Some(ZoneFilter::TargetOpponentGraveyard) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 (SourceZoneFilter::TargetPlayerGraveyard, false)
             }
             Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
@@ -1880,10 +1873,7 @@ fn parse_interactive_choose_objects(
         .or_else(|| body_phrase.strip_suffix(" from that player's graveyard"))
     {
         if chooser == PlayerRefAst::You {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
             } else {
                 return None;
@@ -1898,7 +1888,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SinglePlayer);
+        req_target = Some(BodyTarget::SINGLE_PLAYER);
         (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in target opponent's graveyard")
@@ -1907,7 +1897,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SingleOpponent);
+        req_target = Some(BodyTarget::SINGLE_OPPONENT);
         (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in an opponent's graveyard")
@@ -1938,10 +1928,7 @@ fn parse_interactive_choose_objects(
         .or_else(|| body_phrase.strip_suffix(" from that player's hand"))
     {
         if chooser == PlayerRefAst::You {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 (SourceZoneFilter::TargetPlayerHand, p.trim())
             } else {
                 return None;
@@ -1956,7 +1943,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SinglePlayer);
+        req_target = Some(BodyTarget::SINGLE_PLAYER);
         (SourceZoneFilter::TargetPlayerHand, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in target opponent's hand")
@@ -1965,7 +1952,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SingleOpponent);
+        req_target = Some(BodyTarget::SINGLE_OPPONENT);
         (SourceZoneFilter::TargetPlayerHand, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in an opponent's hand")
@@ -2771,19 +2758,17 @@ fn try_bind_choose_target_phrase(
             };
             let is_gy = matches!(
                 bt,
-                BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                }
             );
             let is_perm = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             );
             if !is_gy && !is_perm {
                 return false;
@@ -2823,19 +2808,17 @@ fn try_bind_choose_target_phrase(
             };
             let is_gy = matches!(
                 bt,
-                BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                }
             );
             let is_perm = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             );
             if !is_gy && !is_perm {
                 return false;
@@ -3255,16 +3238,16 @@ pub(super) fn lower_prevent_all_damage(
 fn is_valid_prevention_recipient_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleAnyTarget
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::SinglePlayer
-            | BodyTarget::SingleOpponent
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        } | BodyTarget::Player { .. }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker
+                    | AnyTargetKind::CreatureOrPlayer
+            )
     )
 }
 
@@ -3484,7 +3467,13 @@ pub(super) fn lower_prevent_all_damage_from(
             return Err("oracle:unsupported-prevention-source");
         }
         let bt = lower_target_subject(source, vocabulary)?;
-        if !matches!(bt, BodyTarget::SingleSpell(_)) {
+        if !matches!(
+            bt,
+            BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            }
+        ) {
             return Err("oracle:unsupported-prevention-source");
         }
         builder.bind_target(bt)?;
@@ -3505,10 +3494,10 @@ pub(super) fn lower_prevent_all_damage_from(
         };
         if !matches!(
             target,
-            BodyTarget::SingleCreature
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
         ) {
             return Err("oracle:unsupported-prevention-source");
         }

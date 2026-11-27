@@ -936,7 +936,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -954,7 +954,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1021,7 +1021,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1034,7 +1034,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1364,7 +1364,7 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ApplyContinuous(Box::new(
                 spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
                     spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -1397,7 +1397,7 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1414,7 +1414,7 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1433,7 +1433,7 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -1626,7 +1626,7 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1728,7 +1728,7 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(
@@ -1998,7 +1998,7 @@ fn check_triggered_exile_cast(rebound: bool) {
         stack_window::WindowPhase,
     };
     let mut spell = instant(
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2248,7 +2248,7 @@ fn both_seats_see_player_speed_and_its_sourceless_stack_ability() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::AdjustLife(Box::new(
                     spellwake_engine::toolbox::AdjustLifeSpec::lose(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -2397,7 +2397,7 @@ fn live_priority_holder_projects_authoritative_cast_offers_and_validates_invaria
     let burn = Program::instant(
         ManaCost::one(ManaType::Red),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::AdjustLife(Box::new(
                 spellwake_engine::toolbox::AdjustLifeSpec::lose(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(

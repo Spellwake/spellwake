@@ -9,7 +9,7 @@ fn copy_source() -> Program {
             source_cost: SourceCost::None,
             mana_cost: ManaCost::free(),
             body: body(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     Instruction::ApplyContinuous(Box::new(
                         crate::toolbox::ApplyContinuousSpec::become_copy(

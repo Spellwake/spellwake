@@ -213,7 +213,7 @@ fn run_probe(
                     program: Program::instant(
                         probe.cost,
                         ExecutableBody::new(
-                            BodyTarget::SingleCreature,
+                            BodyTarget::SINGLE_CREATURE,
                             vec![Instruction::ZoneOp(Box::new(
                                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,

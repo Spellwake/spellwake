@@ -53,7 +53,7 @@ fn reject_input(state: &GameState, input: GameInput, expected: GameError) {
 fn selected_body() -> ExecutableBody {
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     ExecutableBody::new(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
             Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
                 chooser: crate::toolbox::PlayerSelector::Resolving(
@@ -101,7 +101,7 @@ fn setup() -> GameState {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                     vec![
                         // A real live parent local has the same slot ordinal as
                         // the donor, but must not become a copied-body local.
@@ -135,7 +135,7 @@ fn setup() -> GameState {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         crate::toolbox::StackOpSpec::counter_targeted(
                             crate::toolbox::CounterDestination::Graveyard,

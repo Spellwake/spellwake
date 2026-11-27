@@ -202,7 +202,7 @@ fn fixture() -> Fixture {
             },
         ),
         (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 spellwake_engine::toolbox::ObjectMutation::Counters(
@@ -214,7 +214,7 @@ fn fixture() -> Fixture {
             ))),
         ),
         (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
                 source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
                 recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -225,7 +225,7 @@ fn fixture() -> Fixture {
             })),
         ),
         (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 spellwake_engine::toolbox::ZoneDest::Hand,

@@ -12,7 +12,7 @@ use spellwake_engine::{
 #[ignore = "requires retained source-qualified vocabulary"]
 fn madness_projects_private_replacement_choices_and_replays_the_paid_exile_cast() {
     let mut madness = instant(
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,

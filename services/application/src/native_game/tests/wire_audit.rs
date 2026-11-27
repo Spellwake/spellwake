@@ -758,11 +758,19 @@ fn gate3_headless_four_player_corpus_execution_smoke() {
         let simple_target = match &candidate.kind {
             ProgramKind::Spell(sp) if sp.modes.is_none() => match sp.body.target {
                 BodyTarget::None => Some(None),
-                BodyTarget::SingleCreature
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SingleAnyTarget => Some(Some(CardId(20))),
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => Some(Some(CardId(0))),
+                BodyTarget::Object {
+                    zone: spellwake_engine::program::TargetZone::Battlefield,
+                    filter,
+                } if filter == spellwake_engine::program::ObjectFilter::creature()
+                    || filter == spellwake_engine::program::ObjectFilter::any() =>
+                {
+                    Some(Some(CardId(20)))
+                }
+                BodyTarget::AnyTarget(
+                    spellwake_engine::program::AnyTargetKind::CreatureOrPlayer
+                    | spellwake_engine::program::AnyTargetKind::Any,
+                ) => Some(Some(CardId(20))),
+                BodyTarget::Player { .. } => Some(Some(CardId(0))),
                 _ => None,
             },
             ProgramKind::Permanent(def) if !is_land && def.attachment.is_none() => Some(None),

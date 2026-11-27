@@ -116,7 +116,7 @@ fn action_state() -> GameState {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreatureOrPlayer,
+                BodyTarget::SINGLE_CREATURE_OR_PLAYER,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -152,7 +152,7 @@ fn action_state() -> GameState {
                     mana_cost: ManaCost::free(),
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
-                        BodyTarget::SingleCreatureOrPlayer,
+                        BodyTarget::SINGLE_CREATURE_OR_PLAYER,
                         vec![Instruction::DealDamage(Box::new(
                             spellwake_engine::toolbox::DealDamageSpec {
                                 source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

@@ -170,7 +170,7 @@ fn world() -> GameState {
                         exile_if_dies: false,
                     }),
                 )],
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
             ),
             creature(),
         ],
@@ -1104,7 +1104,7 @@ fn copy_pending() -> GameState {
                         exile_if_dies: false,
                     }),
                 )],
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
             ),
             instant(
                 91,
@@ -1113,7 +1113,7 @@ fn copy_pending() -> GameState {
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
             ),
@@ -1155,7 +1155,7 @@ fn damage_pending() -> GameState {
                         },
                     )),
                 ],
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
             ),
             creature(),
         ],

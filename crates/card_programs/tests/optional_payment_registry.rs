@@ -251,7 +251,7 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Mana Leak" => Program::instant(
             blue_cost(1.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![
                     Instruction::PromptChoice(Box::new(
                         spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
@@ -313,7 +313,7 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Twincast" => Program::instant(
             ManaCost::specific(ManaType::Blue, 2.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(

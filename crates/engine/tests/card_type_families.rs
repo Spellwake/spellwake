@@ -72,7 +72,7 @@ fn losing_one_family_carrier_retains_subtypes_and_losing_the_last_clears_them() 
     let change = |id, types, subtypes| {
         spell(
             id,
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![effect(
                 vec![type_part(types, subtypes)],
                 ResolvedDuration::UntilEndOfTurn,
@@ -143,7 +143,7 @@ fn noncreature_kindred_uses_the_same_add_remove_and_set_subtype_operations() {
     let change = |id, subtypes| {
         spell(
             id,
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![effect(
                 vec![type_part(TypeOperation::Keep, subtypes)],
                 ResolvedDuration::NoStatedDuration,
@@ -209,7 +209,7 @@ fn later_current_types_may_be_kindred_only_or_typeless_without_readmitting_the_d
     let change = |id, types, subtypes| {
         spell(
             id,
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![effect(
                 vec![type_part(types, subtypes)],
                 ResolvedDuration::NoStatedDuration,
@@ -299,7 +299,7 @@ fn live_kindred_source_subtypes_regenerate_when_family_eligibility_changes() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Remove(BTreeSet::from([CardType::Kindred])),
@@ -310,7 +310,7 @@ fn live_kindred_source_subtypes_regenerate_when_family_eligibility_changes() {
             ),
             spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Add(BTreeSet::from([CardType::Kindred])),
@@ -416,7 +416,7 @@ fn kindred_text_changes_rewrite_current_family_and_printed_mana_selector_togethe
             ),
             spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Text(CreatureTypeTextChangeSpec {
                         from: CreatureTypeWord::Literal(elf),

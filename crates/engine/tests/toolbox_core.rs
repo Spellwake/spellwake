@@ -943,7 +943,7 @@ fn pinger_creature(vocab: &CreatureTypeVocabulary) -> Program {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                 source: DamageSourceQuery::EntrySource,
                 recipients: DamageTargetQuery::Targets,
@@ -2069,7 +2069,7 @@ fn deal_damage_sources_targets_and_exile_if_dies() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                     source: DamageSourceQuery::EntrySource,
                     recipients: DamageTargetQuery::Targets,
@@ -2178,7 +2178,7 @@ fn phase5_custom_player_counters_and_exile_with_counters() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     Instruction::MutatePlayer(Box::new(MutatePlayerSpec::add_counter(
                         PlayerSelector::Resolving(ResolvingPlayer::Controller),
@@ -2262,7 +2262,7 @@ fn phase5_prevent_damage_forbidden_subtypes_and_sticker_tag() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                     source: DamageSourceQuery::Objects(ObjectQuery::Targets),
                     recipients: DamageTargetQuery::Players(PlayerSelector::Group(
@@ -2369,7 +2369,7 @@ fn stack_op_counter_targeted_graveyard_and_exile() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -2383,7 +2383,7 @@ fn stack_op_counter_targeted_graveyard_and_exile() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Exile,
@@ -2589,7 +2589,7 @@ fn stack_op_retarget_and_copy_spell() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                     source: DamageSourceQuery::EntrySource,
                     recipients: DamageTargetQuery::Targets,
@@ -2606,7 +2606,7 @@ fn stack_op_retarget_and_copy_spell() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::retarget(false),
                 ))],
@@ -2618,7 +2618,7 @@ fn stack_op_retarget_and_copy_spell() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -2864,7 +2864,7 @@ fn phase9_apply_continuous_damage_multiplier_doubles_from_power_damage() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     ApplyContinuousSpec::damage_multiplier(2.into()),
                 ))],
@@ -2878,7 +2878,7 @@ fn phase9_apply_continuous_damage_multiplier_doubles_from_power_damage() {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::DealDamage(Box::new(
                 DealDamageSpec::from_power(
                     spellwake_engine::program::PowerDamageSource::AbilitySource,
@@ -3025,7 +3025,7 @@ fn phase10_mutate_object_create_token_copy_clones_target_creature() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     MutateObjectSpec::create_token_copy(
                         ObjectQuery::Targets,
@@ -3109,7 +3109,7 @@ fn phase10_mutate_object_remember_target_and_destroy_gives_controller_token() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     Instruction::MutateObject(Box::new(
                         MutateObjectSpec::remember_permanent_target(),
@@ -3577,7 +3577,7 @@ fn phase14_mutate_object_goad_permanent_persists_across_turns() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     MutateObjectSpec::goad_permanently(
                         ObjectQuery::Targets,
@@ -3666,7 +3666,7 @@ fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
     let mut strive_spell = Program::sorcery(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature()),
+            BodyTarget::filtered_permanent(ObjectFilter::creature()),
             vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::Targets,
                 ObjectMutation::TapState(TapStateOp::Set(true)),
@@ -3955,7 +3955,7 @@ fn phase16_fuse_split_card_casts_both_halves_from_hand_and_rejects_non_hand() {
     let left = Program::sorcery(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::DealDamage(Box::new(DealDamageSpec::new(
                 DamageSourceQuery::EntrySource,
                 DamageTargetQuery::Targets,

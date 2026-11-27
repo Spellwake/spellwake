@@ -35,7 +35,7 @@ fn fixture() -> GameState {
         program: Program::sorcery(
             ManaCost::one(ManaType::Red),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![crate::program::Instruction::DealDamage(Box::new(
                     crate::toolbox::DealDamageSpec {
                         source: crate::toolbox::DamageSourceQuery::EntrySource,

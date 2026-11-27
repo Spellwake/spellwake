@@ -110,7 +110,7 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
     let mut divide_x = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec::divided(ValueExpr::chosen_x(), Some(2)),
             ))],
@@ -122,7 +122,7 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
     let mut up_to_x = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::MutateObject(Box::new(
                 spellwake_engine::toolbox::MutateObjectSpec::all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,

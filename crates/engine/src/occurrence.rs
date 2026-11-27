@@ -3094,7 +3094,10 @@ impl TriggerState {
                     }),
                 ) {
                     *target = target.with_ability_source(source.object.id());
-                    if let BodyTarget::FilteredPermanent(filter) = target
+                    if let BodyTarget::Object {
+                        zone: crate::program::TargetZone::Battlefield,
+                        filter,
+                    } = target
                         && filter.has_related_player()
                     {
                         let player = causes
@@ -3396,7 +3399,7 @@ impl TriggerState {
                     source: source.as_ref().clone(),
                     controller: *controller,
                     body: ExecutableBody::new(
-                        crate::program::BodyTarget::FilteredOwnGraveyardCard(
+                        crate::program::BodyTarget::filtered_own_graveyard(
                             crate::program::ObjectFilter::creature(),
                         ),
                         vec![crate::program::Instruction::ZoneOp(Box::new(
@@ -3476,7 +3479,7 @@ impl TriggerState {
                     source: source.as_ref().clone(),
                     controller: *controller,
                     body: ExecutableBody::new(
-                        crate::program::BodyTarget::FilteredPermanent(
+                        crate::program::BodyTarget::filtered_permanent(
                             crate::program::ObjectFilter::creature_or_planeswalker(),
                         ),
                         vec![crate::program::Instruction::DealDamage(Box::new(
@@ -3963,7 +3966,7 @@ impl TriggerState {
                         controller: emblem.controller,
                         emblem: emblem.id,
                         body: ExecutableBody::new(
-                            crate::program::BodyTarget::SingleAnyTarget,
+                            crate::program::BodyTarget::SINGLE_ANY_TARGET,
                             vec![crate::program::Instruction::DealDamage(Box::new(
                                 crate::toolbox::DealDamageSpec {
                                     source: crate::toolbox::DamageSourceQuery::EntrySource,

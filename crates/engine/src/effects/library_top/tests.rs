@@ -133,7 +133,7 @@ fn fixture_with_sources(
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                     vec![Instruction::StackOp(Box::new(
                         crate::toolbox::StackOpSpec::copy_targeted_spell(),
                     ))],
@@ -320,7 +320,7 @@ fn huge_targeted_mill_clamps_before_conversion_and_empty_library_is_not_failed_d
             ),
             gain(2),
         ],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         B,
         3,
         None,

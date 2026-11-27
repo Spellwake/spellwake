@@ -333,7 +333,7 @@ fn lab_rats_uses_printed_buyback_and_only_successful_resolution_creates_a_rat() 
                     B,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -591,7 +591,7 @@ fn wurmcoil_larva_death_uses_last_controller_and_creates_both_tokens_together() 
     });
     for exile in [false, true] {
         let seize = free_instant(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
@@ -768,7 +768,7 @@ fn wurmcoil_larva_applies_deathtouch_and_lifelink_to_the_same_damage() {
         ];
         if prevented {
             let shield = free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -924,7 +924,7 @@ fn cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure() {
         let peer = || Program::creature(None, 4.into(), 4.into(), [sliver].into());
         let other = Program::creature(None, 4.into(), 4.into(), BTreeSet::new());
         let removal = free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,

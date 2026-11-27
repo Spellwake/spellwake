@@ -460,12 +460,14 @@ fn is_shuffle_target_graveyard_zone_op(op: &Instruction) -> bool {
 }
 
 fn body_has_dependent_targets(body: &ExecutableBody) -> bool {
-    matches!(body.target, BodyTarget::OpponentOrPlaneswalkerThenCreature)
-        || (body.target == BodyTarget::SinglePlayer
-            && body
-                .instructions
-                .first()
-                .is_some_and(is_shuffle_target_graveyard_zone_op))
+    matches!(
+        body.target,
+        BodyTarget::AnyTarget(AnyTargetKind::OpponentOrPlaneswalkerThenCreature)
+    ) || (body.target == BodyTarget::SINGLE_PLAYER
+        && body
+            .instructions
+            .first()
+            .is_some_and(is_shuffle_target_graveyard_zone_op))
 }
 
 fn body_safe_for_synthesized_mode(body: &ExecutableBody) -> bool {
@@ -1650,13 +1652,17 @@ pub(in super::super) fn rewrite_body_anaphora_stats(
     let allow_rewrite = matches!(
         body.target,
         BodyTarget::None
-            | BodyTarget::SinglePlayer
-            | BodyTarget::SingleOpponent
-            | BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleAnyTarget
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
+            | BodyTarget::Player { .. }
+            | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                    | AnyTargetKind::CreatureOrPlayer
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker
+            )
     );
     if !allow_rewrite {
         return;

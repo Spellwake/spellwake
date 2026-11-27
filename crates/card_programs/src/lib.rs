@@ -608,7 +608,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
         program: Program::instant(
             ManaCost::one(ManaType::Red),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -632,7 +632,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.program = Program::instant(
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::ZoneOp(Box::new(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -651,7 +651,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.program = Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -670,7 +670,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.program = Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![Instruction::StackOp(Box::new(

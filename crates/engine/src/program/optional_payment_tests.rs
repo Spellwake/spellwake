@@ -256,8 +256,8 @@ fn each_current_condition_proves_related_participant_only_with_singular_grouping
 #[test]
 fn spell_controller_requires_single_spell_and_consumes_the_target() {
     for target in [
-        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-        BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+        BodyTarget::single_spell(crate::program::SpellFilter::any()),
+        BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
     ] {
         assert_eq!(
             check(
@@ -280,10 +280,10 @@ fn spell_controller_requires_single_spell_and_consumes_the_target() {
     }
     for target in [
         BodyTarget::None,
-        BodyTarget::SinglePermanent,
-        BodyTarget::SingleCreature,
-        BodyTarget::SinglePlayer,
-        BodyTarget::SingleCreatureOrPlayer,
+        BodyTarget::SINGLE_PERMANENT,
+        BodyTarget::SINGLE_CREATURE,
+        BodyTarget::SINGLE_PLAYER,
+        BodyTarget::SINGLE_CREATURE_OR_PLAYER,
     ] {
         for instructions in [
             vec![optional(ResolvingPlayer::TargetSpellController), gain()],
@@ -361,7 +361,7 @@ fn unreachable_new_instructions_still_validate_context_syntax_and_cost() {
     );
     assert_eq!(
         check(
-            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+            BodyTarget::single_spell(crate::program::SpellFilter::any()),
             vec![
                 Instruction::Jump { destination: 2 },
                 offer(ResolvingPlayer::TargetSpellController, 2, 2)
@@ -479,7 +479,7 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
     };
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 optional(ResolvingPlayer::Controller),
                 crate::program::Instruction::ZoneOp(Box::new(
@@ -496,7 +496,7 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
     for (paid, declined) in [(1, 2), (2, 1)] {
         assert_eq!(
             check(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     offer(ResolvingPlayer::Controller, paid, declined),
                     crate::program::Instruction::ZoneOp(Box::new(
@@ -513,7 +513,7 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
     }
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 offer(ResolvingPlayer::Controller, 1, 3),
                 crate::program::Instruction::ZoneOp(Box::new(

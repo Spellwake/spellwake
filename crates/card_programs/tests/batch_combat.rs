@@ -361,14 +361,14 @@ fn knighthood_tracks_current_controller_types_and_source_departure() {
             creature(2, ALICE, 2, &[]),
             creature(3, BOB, 2, &[]),
             creature(4, ALICE, 2, &[]),
-            instant(5, ALICE, BodyTarget::SinglePermanent, gain.clone()),
-            instant(6, BOB, BodyTarget::SinglePermanent, gain.clone()),
-            instant(7, ALICE, BodyTarget::SinglePermanent, type_change),
-            instant(8, BOB, BodyTarget::SinglePermanent, gain),
+            instant(5, ALICE, BodyTarget::SINGLE_PERMANENT, gain.clone()),
+            instant(6, BOB, BodyTarget::SINGLE_PERMANENT, gain.clone()),
+            instant(7, ALICE, BodyTarget::SINGLE_PERMANENT, type_change),
+            instant(8, BOB, BodyTarget::SINGLE_PERMANENT, gain),
             instant(
                 9,
                 ALICE,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 spellwake_engine::program::Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -443,7 +443,7 @@ fn knighthood_leaving_between_damage_steps_does_not_let_its_attacker_strike_twic
             instant(
                 4,
                 ALICE,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 spellwake_engine::program::Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -537,7 +537,7 @@ fn defiant_elf_tramples_after_lethal_even_with_prevention_and_when_all_blockers_
             instant(
                 3,
                 ALICE,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 continuous(
                     ResolvedPartSpec::ModifyPT(PowerToughness {
                         power: 2.into(),
@@ -549,7 +549,7 @@ fn defiant_elf_tramples_after_lethal_even_with_prevention_and_when_all_blockers_
             instant(
                 4,
                 ALICE,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -569,7 +569,7 @@ fn defiant_elf_tramples_after_lethal_even_with_prevention_and_when_all_blockers_
             instant(
                 5,
                 ALICE,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 spellwake_engine::program::Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

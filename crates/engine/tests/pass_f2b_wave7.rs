@@ -218,7 +218,7 @@ fn damage_any_instant(amount: i64) -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -510,7 +510,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::announced_targets(
                         ValueExpr::literal(2),
@@ -526,7 +526,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -846,7 +846,7 @@ fn exile_library_top_linked_and_exile_matching_ext_nightveil_specter_flow() {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::ZoneScan {
@@ -1228,7 +1228,7 @@ fn create_token_copy_ext_applies_nonlegendary_pt_keywords_and_colors() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
                         spellwake_engine::toolbox::ObjectQuery::from_move_subject(
@@ -1555,7 +1555,7 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::discard(
                         AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
@@ -1658,7 +1658,7 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOwnGraveyardCard,
+                BodyTarget::SINGLE_OWN_GRAVEYARD_CARD,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

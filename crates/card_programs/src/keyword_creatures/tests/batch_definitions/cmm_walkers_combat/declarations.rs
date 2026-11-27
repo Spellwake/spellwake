@@ -758,7 +758,7 @@ fn cmm_scourge_of_the_throne_dethrones_at_a_tie_and_adds_combat_only_on_its_firs
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(1),

@@ -4374,12 +4374,9 @@ pub(super) fn lower_marker_or_action_condition(
                 ZoneFilter::YourLibrary => ResolvingPlayer::Controller,
                 ZoneFilter::TargetPlayerLibrary => {
                     if builder.target == BodyTarget::None {
-                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     }
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) {
+                    if matches!(builder.target, BodyTarget::Player { .. }) {
                         ResolvingPlayer::TargetPlayer
                     } else {
                         return Err("oracle:unsupported-if-condition");
@@ -4387,12 +4384,9 @@ pub(super) fn lower_marker_or_action_condition(
                 }
                 ZoneFilter::TargetOpponentLibrary => {
                     if builder.target == BodyTarget::None {
-                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     }
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) {
+                    if matches!(builder.target, BodyTarget::Player { .. }) {
                         ResolvingPlayer::TargetPlayer
                     } else {
                         return Err("oracle:unsupported-if-condition");
@@ -5559,10 +5553,10 @@ pub(super) fn lower_marker_or_action_condition(
                 "another permanent with the same name is on the battlefield" => {
                     if !matches!(
                         builder.target,
-                        BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) {
                         return Err("oracle:unsupported-if-condition");
                     }

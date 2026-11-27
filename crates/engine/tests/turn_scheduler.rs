@@ -490,7 +490,7 @@ fn instant(card: u64, owner: SeatId) -> SeedCard {
         program: Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![spellwake_engine::program::Instruction::DealDamage(
                     Box::new(spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

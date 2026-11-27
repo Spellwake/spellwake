@@ -124,7 +124,7 @@ fn accepted_first_choice() -> GameState {
     let program = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
                     chooser: crate::toolbox::PlayerSelector::Resolving(

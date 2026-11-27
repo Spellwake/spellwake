@@ -467,7 +467,7 @@ fn moved_donor_definition() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,

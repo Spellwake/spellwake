@@ -136,7 +136,7 @@ fn protected_player_receives_only_unprevented_infect_and_one_toxic_amount_on_a_h
         else {
             unreachable!()
         };
-        spell.body.target = BodyTarget::SinglePlayer;
+        spell.body.target = BodyTarget::SINGLE_PLAYER;
         let mut seeds = vec![source, protection];
         add(&mut seeds, 1, &[Poisonous(1.into())]);
         let game = blocks(seeds, &[]);

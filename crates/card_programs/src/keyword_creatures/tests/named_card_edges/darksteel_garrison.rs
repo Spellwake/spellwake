@@ -42,7 +42,7 @@ fn cast_garrison(extra: impl IntoIterator<Item = SeedCard>) -> GameState {
                 program: Program::instant(
                     ManaCost::free(),
                     ExecutableBody::new(
-                        BodyTarget::SinglePermanent,
+                        BodyTarget::SINGLE_PERMANENT,
                         vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             ResolvedPartsSpec(vec![ResolvedPartSpec::Control(

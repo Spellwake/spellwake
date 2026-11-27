@@ -27,9 +27,9 @@ pub enum EnchantRestriction {
 impl EnchantRestriction {
     pub(crate) fn target(self) -> BodyTarget {
         match self {
-            Self::Player => BodyTarget::SinglePlayer,
-            Self::Matching(filter) => BodyTarget::FilteredPermanent(filter),
-            _ => BodyTarget::SinglePermanent,
+            Self::Player => BodyTarget::SINGLE_PLAYER,
+            Self::Matching(filter) => BodyTarget::filtered_permanent(filter),
+            _ => BodyTarget::SINGLE_PERMANENT,
         }
     }
     pub(crate) fn permits(self, object: &ObjectCharacteristics, controller: SeatId) -> bool {
@@ -128,8 +128,8 @@ impl AttachAbility {
     }
     pub(crate) fn target(self) -> BodyTarget {
         match self {
-            Self::Equip | Self::Reconfigure => BodyTarget::SingleCreature,
-            Self::Fortify => BodyTarget::SinglePermanent,
+            Self::Equip | Self::Reconfigure => BodyTarget::SINGLE_CREATURE,
+            Self::Fortify => BodyTarget::SINGLE_PERMANENT,
         }
     }
     pub(crate) fn host_type(self) -> CardType {

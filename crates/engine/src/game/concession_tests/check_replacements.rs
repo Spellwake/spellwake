@@ -411,7 +411,7 @@ fn concession_combined_instruction_frame_uses_v2_real_cause_and_key() {
                 crate::program::ValueExpr::Literal(2.into()),
             ),
         ))],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         cards,
     );
     let mut run = ChecksRun::new(state);

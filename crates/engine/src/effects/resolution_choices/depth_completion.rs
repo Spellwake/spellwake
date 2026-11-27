@@ -1007,7 +1007,7 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
             hand(
                 1,
                 A,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
                         chooser: crate::toolbox::PlayerSelector::Resolving(

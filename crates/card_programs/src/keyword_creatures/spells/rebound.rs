@@ -9,10 +9,10 @@ use spellwake_engine::{
 pub(super) fn body(text: &str, vocabulary: &CreatureTypeVocabulary) -> Option<ExecutableBody> {
     let (target, instructions) = match text {
         "Target creature gets +2/+2 until end of turn." => {
-            (BodyTarget::SingleCreature, vec![pump(2, 2, None)])
+            (BodyTarget::SINGLE_CREATURE, vec![pump(2, 2, None)])
         }
         "Target creature gets +2/+0 and gains deathtouch until end of turn." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![pump(2, 0, Some(KeywordAbility::Deathtouch))],
         ),
         "Discard a card, then draw a card." => (

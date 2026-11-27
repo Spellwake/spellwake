@@ -603,7 +603,7 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ApplyContinuous(Box::new(
                 crate::toolbox::ApplyContinuousSpec::become_copy(
                     crate::toolbox::ObjectQuery::Source,
@@ -620,7 +620,7 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
     cards.push(bf(300, A, A, holder));
     cards.push(instant(
         2,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![crate::program::Instruction::ZoneOp(Box::new(
             crate::toolbox::ZoneOpSpec::move_all(
                 crate::toolbox::ObjectQuery::Targets,
@@ -847,7 +847,7 @@ fn complete_pass_run() -> Run {
     .unwrap();
     let main = instant(
         1,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![
             Instruction::CreateTokens {
                 creations: vec![TokenCreation::one(token)],
@@ -901,7 +901,7 @@ fn complete_pass_run() -> Run {
     let copier = |card| {
         instant(
             card,
-            BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+            BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
             vec![Instruction::StackOp(Box::new(
                 crate::toolbox::StackOpSpec::copy_targeted_spell(),
             ))],
@@ -1597,7 +1597,7 @@ fn cleanup_sba_after_real_expiry_uses_pass_one_and_the_actual_turn_work_parent()
             ),
             instant(
                 1,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     {
                         struct _Tmp {

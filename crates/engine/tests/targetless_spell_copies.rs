@@ -79,14 +79,14 @@ fn setup(filter: SpellFilter, source: Vec<Instruction>, copier: Vec<Instruction>
         hand(
             2,
             P1,
-            ExecutableBody::new(BodyTarget::SingleSpell(filter), copier),
+            ExecutableBody::new(BodyTarget::single_spell(filter), copier),
             true,
         ),
         hand(
             3,
             P0,
             ExecutableBody::new(
-                BodyTarget::SingleSpell(filter),
+                BodyTarget::single_spell(filter),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -97,7 +97,7 @@ fn setup(filter: SpellFilter, source: Vec<Instruction>, copier: Vec<Instruction>
             4,
             P0,
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,

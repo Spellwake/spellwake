@@ -355,17 +355,17 @@ fn first_shield_and_multiplier_have_distinct_typed_options_and_order_changes_dam
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(4)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![prevention(4)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
         ],
     );
@@ -486,17 +486,17 @@ fn two_multipliers_each_apply_once_and_keep_the_original_attempt_amount() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(3)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(5)]),
             ),
         ],
     );
@@ -554,17 +554,17 @@ fn factor_one_is_an_application_even_without_numeric_change_and_terminates() {
                 (
                     1,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(1)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(1)]),
                 ),
                 (
                     2,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(1)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(1)]),
                 ),
                 (
                     3,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(7)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(7)]),
                 ),
             ],
         );
@@ -604,22 +604,22 @@ fn fully_prevented_event_does_not_consume_multiplier_for_a_new_attempt() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(4)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![prevention(4)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
             (
                 4,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
         ],
     );
@@ -666,17 +666,17 @@ fn persistent_multiplier_applies_again_to_a_later_positive_attempt() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
         ],
     );
@@ -728,37 +728,37 @@ fn mixed(toughness: i64) -> Mixed {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(4)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![prevention(4)]),
             ),
             (
                 4,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(5)]),
             ),
             (
                 5,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(7)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(7)]),
             ),
             (
                 6,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(9)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![prevention(9)]),
             ),
             (
                 7,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1)]),
             ),
         ],
     );
@@ -1075,7 +1075,7 @@ fn huge_factor_is_persistent_exact_data_rather_than_a_machine_integer() {
                 1,
                 A,
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::ApplyContinuous(Box::new(
                         spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(exact(
                             HUGE,
@@ -1086,7 +1086,7 @@ fn huge_factor_is_persistent_exact_data_rather_than_a_machine_integer() {
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
         ],
         100,
@@ -1120,22 +1120,22 @@ fn fixed_target_multipliers_do_not_modify_another_live_creature() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(9)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(9)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![prevention(2)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(5)]),
             ),
             (
                 4,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1)]),
             ),
         ],
     );
@@ -1171,13 +1171,13 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                 (
                     1,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(3)]),
                 ),
                 (
                     2,
                     B,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(
+                        BodyTarget::single_spell(
                             spellwake_engine::program::SpellFilter::copyable_instruction(),
                         ),
                         vec![Instruction::StackOp(Box::new(
@@ -1189,7 +1189,7 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                     3,
                     A,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1200,7 +1200,7 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                 (
                     4,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(2)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(2)]),
                 ),
             ],
         );
@@ -1338,7 +1338,7 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
                 vec![(
                     1,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(factor)])
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(factor)])
                 )],
                 100
             ),
@@ -1351,17 +1351,17 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 2,
                 B,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1)]),
             ),
         ],
     );
@@ -1408,7 +1408,7 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
         vec![(
             1,
             A,
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![multiplier(2)]),
         )],
         0,
     )

@@ -44,7 +44,7 @@ fn shared_mutate_dreamtail_heron_chooses_either_order_retains_host_and_draws_onl
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
                 ),
@@ -54,7 +54,7 @@ fn shared_mutate_dreamtail_heron_chooses_either_order_retains_host_and_draws_onl
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
                 ),

@@ -232,7 +232,7 @@ impl AuthoredEffect {
     fn body(&self, vocabulary: &CreatureTypeVocabulary) -> Result<ExecutableBody, RegistryError> {
         Ok(match self {
             Self::BounceCreature => ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -241,7 +241,7 @@ impl AuthoredEffect {
                 ))],
             ),
             Self::CounterUnlessPaidThree => ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![
                     Instruction::PromptChoice(Box::new(
                         spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
@@ -260,7 +260,7 @@ impl AuthoredEffect {
                 ],
             ),
             Self::CopySpell => ExecutableBody::new(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(
@@ -268,7 +268,7 @@ impl AuthoredEffect {
                 ))],
             ),
             Self::CounterSpell => ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -389,7 +389,7 @@ impl AuthoredTrigger {
                 ],
             ),
             AuthoredTriggerEffect::TargetLoseOneGainOne => (
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![
                     Instruction::AdjustLife(Box::new(
                         spellwake_engine::toolbox::AdjustLifeSpec::lose(

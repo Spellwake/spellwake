@@ -50,7 +50,7 @@ fn sorcery() -> Program {
             required: BTreeMap::from([(ManaType::Red, 1.into())]),
         },
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -68,7 +68,7 @@ fn instant() -> Program {
     Program::instant(
         ManaCost::one(ManaType::Red),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

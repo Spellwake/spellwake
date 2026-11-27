@@ -5,7 +5,7 @@ use crate::program::{AffectedPlayers, PermanentTypeFilter};
 #[test]
 fn target_player_role_uses_the_bound_player_for_optional_and_payment_choices() {
     let mut state = initialize_for_target(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
             Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::TargetPlayer,

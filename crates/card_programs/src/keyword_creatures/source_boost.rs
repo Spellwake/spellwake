@@ -554,7 +554,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::FilteredPermanent(
+                BodyTarget::filtered_permanent(
                     ObjectFilter::creature()
                         .other_than_ability_source()
                         .with_power(PowerFilter::AtMost(limit)),
@@ -576,7 +576,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::mill(
                         spellwake_engine::program::ResolvingPlayer::TargetPlayer,
@@ -638,7 +638,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
                         spellwake_engine::program::EffectSubject::TargetObject,
@@ -706,7 +706,7 @@ pub(super) fn parse(
         .strip_prefix("Regenerate target ")
         .and_then(|s| s.strip_suffix('.'))
     {
-        let target = BodyTarget::FilteredPermanent(
+        let target = BodyTarget::filtered_permanent(
             ObjectFilter::any().with_subtype(vocabulary.resolve_label(kind)?),
         );
         return Some((
@@ -748,7 +748,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -776,7 +776,7 @@ pub(super) fn parse(
             &format!("Target creature gets {modifier}"),
             name,
         )?;
-        if body.target != BodyTarget::SingleCreature
+        if body.target != BodyTarget::SINGLE_CREATURE
             || !matches!(
                 body.instructions.as_slice(),
                 [Instruction::ApplyContinuous(spec)]
@@ -788,7 +788,8 @@ pub(super) fn parse(
         {
             return None;
         }
-        body.target = BodyTarget::FilteredPermanent(ObjectFilter::creature().with_subtype(subtype));
+        body.target =
+            BodyTarget::filtered_permanent(ObjectFilter::creature().with_subtype(subtype));
         return Some((mana_cost, source_cost, body, restriction));
     }
     if let Some((subject, amount)) = rest
@@ -801,7 +802,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -857,7 +858,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::FilteredPermanent(
+                BodyTarget::filtered_permanent(
                     ObjectFilter::creature().with_power(PowerFilter::AtMostX),
                 ),
                 vec![
@@ -881,7 +882,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()),
+                BodyTarget::filtered_permanent(ObjectFilter::artifact_or_enchantment()),
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -911,7 +912,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -977,7 +978,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -994,7 +995,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::from_power(
                         spellwake_engine::program::PowerDamageSource::AbilitySource,
@@ -1098,7 +1099,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::ControlledAbility { colorless_source },
+                BodyTarget::controlled_ability(colorless_source),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_ability(),
                 ))],
@@ -1113,7 +1114,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::instant_or_sorcery().controlled(),
                 ),
                 vec![Instruction::StackOp(Box::new(
@@ -1142,7 +1143,7 @@ pub(super) fn parse(
             )),
         };
         let body = ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature().legendary()),
+            BodyTarget::filtered_permanent(ObjectFilter::creature().legendary()),
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1166,7 +1167,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::FilteredPermanent(target),
+                BodyTarget::filtered_permanent(target),
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         spellwake_engine::effects::CounterKind::Indestructible,
@@ -1258,7 +1259,7 @@ pub(super) fn parse(
             mana_cost,
             source_cost,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![super::static_grants::unblockable_effect()],
             ),
             restriction,

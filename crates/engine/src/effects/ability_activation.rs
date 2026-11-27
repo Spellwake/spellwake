@@ -274,11 +274,14 @@ impl EffectWindow {
             };
             let count = objects.len();
             selected_tap_count = Some(RulesInteger::from_usize(count));
-            if let BodyTarget::FilteredPermanent(filter) = selected.body.target
+            if let BodyTarget::Object {
+                zone: crate::program::TargetZone::Battlefield,
+                filter,
+            } = selected.body.target
                 && filter.has_power_at_most_x()
             {
                 bound_ability = selected.clone();
-                bound_ability.body.target = BodyTarget::FilteredPermanent(
+                bound_ability.body.target = BodyTarget::filtered_permanent(
                     filter.bind_power_at_most_x(u16::try_from(count).unwrap_or(u16::MAX)),
                 );
                 &bound_ability
@@ -311,7 +314,7 @@ impl EffectWindow {
                     } else {
                         self.legal_target_kind_in(bound, target, actor, &evaluated)
                     };
-                    !(matches!(mode_body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+                    !(matches!(mode_body.target, BodyTarget::Object { zone: crate::program::TargetZone::Battlefield, filter } if filter.excludes_ability_source())
                         && target == TargetRef::Object(source))
                         && !Self::protected_target(
                             target,
@@ -1012,7 +1015,7 @@ impl EffectWindow {
                         .ok_or(EffectError::InconsistentProgram)?;
                     let bound_target = selected.body.target.with_ability_source(source);
                     if !(min..=max).contains(&targets.len()) || targets.iter().any(|target|
-                        (matches!(selected.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source()) && *target == TargetRef::Object(source)) ||
+                        (matches!(selected.body.target, BodyTarget::Object { zone: crate::program::TargetZone::Battlefield, filter } if filter.excludes_ability_source()) && *target == TargetRef::Object(source)) ||
                         Self::protected_target(*target,&protection::ProtectionSource::from(current).with_ability_controller(actor),&evaluated)
                         || if bound_target == selected.body.target {
                             !self.legal_body_target_in(&selected.body, *target, actor, &evaluated)
@@ -1093,7 +1096,7 @@ impl EffectWindow {
             } else {
                 self.legal_target_kind_in(bound_target, target, actor, &evaluated)
             };
-            if (matches!(selected.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+            if (matches!(selected.body.target, BodyTarget::Object { zone: crate::program::TargetZone::Battlefield, filter } if filter.excludes_ability_source())
                 && target == TargetRef::Object(source))
                 || Self::protected_target(
                     target,

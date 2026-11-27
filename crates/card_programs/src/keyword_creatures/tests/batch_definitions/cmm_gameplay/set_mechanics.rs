@@ -6,7 +6,7 @@ use spellwake_engine::land::EntryChoice;
 fn cmm_multiplayer_sower_links_exactly_two_seats_and_loses_life_only_once() {
     let bolt = || {
         free_instant(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(3),
@@ -611,7 +611,7 @@ fn cmm_shirei_restores_its_owners_small_creature_only_if_same_source_survives() 
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1351,7 +1351,7 @@ fn cmm_heartless_hidetsugu_deals_rounded_down_damage_to_all_players_simultaneous
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(3),

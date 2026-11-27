@@ -241,13 +241,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     PlayerRefAst::EachOpponent => Some(TokenRecipients::EachOpponent),
                     PlayerRefAst::EachPlayer => Some(TokenRecipients::EachPlayer),
                     PlayerRefAst::TargetPlayer if trial.target == BodyTarget::None => {
-                        match trial.bind_target(BodyTarget::SinglePlayer) {
+                        match trial.bind_target(BodyTarget::SINGLE_PLAYER) {
                             Ok(()) => Some(TokenRecipients::Player(ResolvingPlayer::TargetPlayer)),
                             Err(_) => None,
                         }
                     }
                     PlayerRefAst::TargetOpponent if trial.target == BodyTarget::None => {
-                        match trial.bind_target(BodyTarget::SingleOpponent) {
+                        match trial.bind_target(BodyTarget::SINGLE_OPPONENT) {
                             Ok(()) => Some(TokenRecipients::Player(ResolvingPlayer::TargetPlayer)),
                             Err(_) => None,
                         }
@@ -493,11 +493,11 @@ pub(super) fn lower_tokens_copies_instruction(
                     TokenRecipients::Player(ResolvingPlayer::LoopPlayer)
                 }
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     TokenRecipients::Player(ResolvingPlayer::TargetPlayer)
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     TokenRecipients::Player(ResolvingPlayer::TargetPlayer)
                 }
                 PlayerRefAst::ThatPlayer
@@ -531,23 +531,19 @@ pub(super) fn lower_tokens_copies_instruction(
                                 return Err("oracle:unbound-that-player");
                             }
                         }
-                        BodyTarget::SingleSpell(_)
-                        | BodyTarget::SingleStackObject(_)
-                        | BodyTarget::SingleStackEntry
-                        | BodyTarget::ControlledAbility { .. }
-                        | BodyTarget::StackEntryTargetingControlledPermanent => {
+                        BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                             TokenRecipients::Player(ResolvingPlayer::TargetSpellController)
                         }
-                        BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::FilteredPermanent(_) => {
-                            TokenRecipients::Player(ResolvingPlayer::TargetController)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
                         }
+                        | BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                            | AnyTargetKind::CreatureOrPlayer
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker,
+                        ) => TokenRecipients::Player(ResolvingPlayer::TargetController),
                         _ => return Err("oracle:unsupported-token-controller"),
                     }
                 }
@@ -566,23 +562,23 @@ pub(super) fn lower_tokens_copies_instruction(
                         TokenRecipients::DestroyedPermanentControllers
                     }
                     BodyTarget::None => return Err("oracle:unbound-that-player"),
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::SingleAnyTarget
-                    | BodyTarget::SingleCreatureOrPlayer
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
-                    | BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
-                    | BodyTarget::SingleSpell(_) => {
-                        TokenRecipients::Player(ResolvingPlayer::TargetOwner)
+                    BodyTarget::Object {
+                        zone:
+                            TargetZone::Battlefield
+                            | TargetZone::OwnGraveyard
+                            | TargetZone::AnyGraveyard { .. },
+                        ..
                     }
+                    | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    )
+                    | BodyTarget::Spell {
+                        include_abilities: false,
+                        ..
+                    } => TokenRecipients::Player(ResolvingPlayer::TargetOwner),
                     _ => return Err("oracle:unsupported-token-controller"),
                 },
                 _ => return Err("oracle:unsupported-token-controller"),
@@ -1017,10 +1013,8 @@ pub(super) fn lower_tokens_copies_instruction(
                             | "that revealed card"
                     ) {
                         let q = if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) {
+                            && !matches!(builder.target, BodyTarget::Player { .. })
+                        {
                             spellwake_engine::toolbox::ObjectQuery::Targets
                         } else if last_instruction_moved_object(&builder.instructions)
                             || has_prior_moved_object(&builder.instructions)
@@ -1226,7 +1220,13 @@ pub(super) fn lower_tokens_copies_instruction(
                 }
                 SubjectRefAst::Anaphora(raw) => {
                     let low_raw = raw.trim().to_ascii_lowercase();
-                    let copy_target = if matches!(builder.target, BodyTarget::SingleSpell(_)) {
+                    let copy_target = if matches!(
+                        builder.target,
+                        BodyTarget::Spell {
+                            include_abilities: false,
+                            ..
+                        }
+                    ) {
                         StackCopyTarget::TargetSpell
                     } else if is_stack_body_target(builder.target) {
                         if low_raw.contains("ability") && !low_raw.contains("spell") {
@@ -1346,10 +1346,10 @@ pub(super) fn lower_tokens_copies_instruction(
             && matches!(source.as_ref(), SubjectRefAst::Anaphora(_))
             && matches!(
                 builder.target,
-                BodyTarget::SinglePermanent
-                    | BodyTarget::SingleCreature
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             ) =>
         {
             let dur = lower_duration(duration)?;
@@ -1477,10 +1477,10 @@ pub(super) fn lower_tokens_copies_instruction(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) =>
                 {
                     EffectSubject::TargetObject
@@ -1752,9 +1752,9 @@ pub(super) fn lower_tokens_copies_instruction(
                     count: TargetCountAst::Exact(1),
                 } => {
                     builder.bind_target(if *opponent_only {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
@@ -2022,7 +2022,7 @@ pub(super) fn lower_tokens_copies_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.bind_target(BodyTarget::FilteredPermanent(
+            builder.bind_target(BodyTarget::filtered_permanent(
                 ObjectFilter::land().controlled(),
             ))?;
             builder
@@ -4184,7 +4184,7 @@ mod wave12_token_ability_tests {
                 ),
                 spell(
                     2,
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(

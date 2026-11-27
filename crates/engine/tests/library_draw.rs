@@ -281,7 +281,7 @@ fn card(id: u64, owner: SeatId, destination: ObjectDestination) -> SeedCard {
         program: Program::instant(
             spellwake_engine::mana::ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![spellwake_engine::program::Instruction::DealDamage(
                     Box::new(spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

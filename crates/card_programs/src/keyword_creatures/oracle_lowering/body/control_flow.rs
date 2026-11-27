@@ -1227,16 +1227,14 @@ pub(super) fn resolve_stack_copy_target(
                         Some(ControllerRelation::You | ControllerRelation::YourTeam)
                             if matches!(filter.color_arity, None | Some(ColorArity::Colorless)) =>
                         {
-                            builder.bind_target(BodyTarget::ControlledAbility {
-                                colorless_source: matches!(
-                                    filter.color_arity,
-                                    Some(ColorArity::Colorless)
-                                ),
-                            })?;
+                            builder.bind_target(BodyTarget::controlled_ability(matches!(
+                                filter.color_arity,
+                                Some(ColorArity::Colorless)
+                            )))?;
                             return Ok(StackCopyTarget::TargetAbility);
                         }
                         None if filter.color_arity.is_none() => {
-                            builder.bind_target(BodyTarget::SingleStackEntry)?;
+                            builder.bind_target(BodyTarget::SINGLE_STACK_ENTRY)?;
                             return Ok(StackCopyTarget::TargetAbility);
                         }
                         _ => {}
@@ -1245,10 +1243,11 @@ pub(super) fn resolve_stack_copy_target(
                 let bt = lower_target_subject(subject, vocabulary)?;
                 if !matches!(
                     bt,
-                    BodyTarget::ControlledAbility { .. }
-                        | BodyTarget::SingleStackEntry
-                        | BodyTarget::SingleStackObject(_)
-                        | BodyTarget::StackEntryTargetingControlledPermanent
+                    BodyTarget::StackEntry(_)
+                        | BodyTarget::Spell {
+                            include_abilities: true,
+                            ..
+                        }
                 ) {
                     return Err("oracle:unsupported-copy");
                 }
@@ -1260,15 +1259,13 @@ pub(super) fn resolve_stack_copy_target(
                 inner.any_spell = false;
                 inner.zone = None;
                 let sf = lower_spell_filter(&inner, vocabulary)?;
-                builder.bind_target(BodyTarget::SingleStackObject(sf))?;
+                builder.bind_target(BodyTarget::single_stack_object(sf))?;
                 Ok(StackCopyTarget::TargetSpellOrAbility)
             } else if filter.any_spell || filter.zone == Some(ZoneFilter::Stack) {
                 let bt = lower_target_subject(subject, vocabulary)?;
                 if !matches!(
                     bt,
-                    BodyTarget::SingleSpell(_)
-                        | BodyTarget::SingleStackObject(_)
-                        | BodyTarget::SingleStackEntry
+                    BodyTarget::Spell { .. } | BodyTarget::StackEntry(StackTargetKind::AnyEntry)
                 ) {
                     return Err("oracle:unsupported-copy");
                 }
@@ -1279,13 +1276,20 @@ pub(super) fn resolve_stack_copy_target(
             }
         }
         SubjectRefAst::Anaphora(a) => match builder.target {
-            BodyTarget::SingleSpell(_) => Ok(StackCopyTarget::TargetSpell),
-            BodyTarget::ControlledAbility { .. } => Ok(StackCopyTarget::TargetAbility),
-            BodyTarget::SingleStackEntry
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
-                Ok(StackCopyTarget::TargetSpellOrAbility)
+            BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            } => Ok(StackCopyTarget::TargetSpell),
+            BodyTarget::StackEntry(StackTargetKind::ControlledAbility { .. }) => {
+                Ok(StackCopyTarget::TargetAbility)
             }
+            BodyTarget::StackEntry(
+                StackTargetKind::AnyEntry | StackTargetKind::TargetingControlledPermanent,
+            )
+            | BodyTarget::Spell {
+                include_abilities: true,
+                ..
+            } => Ok(StackCopyTarget::TargetSpellOrAbility),
             BodyTarget::None if in_trigger => {
                 let alow = a.trim().to_ascii_lowercase();
                 if alow.contains("ability") && !alow.contains("spell") {
@@ -1491,11 +1495,11 @@ pub(super) fn bind_search_target_local(
     search: &LibrarySearch,
 ) -> Result<(), &'static str> {
     if search.source == SearchSource::TargetOpponentLibrary {
-        builder.bind_target(BodyTarget::SingleOpponent)
+        builder.bind_target(BodyTarget::SINGLE_OPPONENT)
     } else if search.source == SearchSource::TargetPlayerLibrary
         || search.searcher == ResolvingPlayer::TargetPlayer
     {
-        builder.bind_target(BodyTarget::SinglePlayer)
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)
     } else {
         Ok(())
     }
@@ -1742,15 +1746,19 @@ pub(super) fn logical_unit_len(ins: &[InstructionAst], i: usize) -> usize {
 pub(super) fn is_permanent_body_target(bt: BodyTarget) -> bool {
     matches!(
         bt,
-        BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
     )
 }
 
 pub(super) fn rewrite_body_target_related_to_first_target_controller(bt: &mut BodyTarget) {
-    if let BodyTarget::FilteredPermanent(obj) = bt {
+    if let BodyTarget::Object {
+        zone: TargetZone::Battlefield,
+        filter: obj,
+    } = bt
+    {
         let rewrite_clause = |c: &mut ObjectClause| {
             if c.controller == ControllerFilter::RelatedPlayer {
                 c.controller = ControllerFilter::FirstTargetController;
@@ -3145,20 +3153,12 @@ pub(super) fn resolve_their_library_owner(
     in_trigger: bool,
 ) -> Option<ResolvingPlayer> {
     match builder.target {
-        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-            Some(ResolvingPlayer::TargetPlayer)
-        }
-        BodyTarget::SinglePermanent
-        | BodyTarget::SingleCreature
-        | BodyTarget::SinglePlaneswalker
-        | BodyTarget::FilteredPermanent(_)
-        | BodyTarget::SingleOwnGraveyardCard
-        | BodyTarget::FilteredOwnGraveyardCard(_)
-        | BodyTarget::FilteredAnyGraveyardCard { .. }
-        | BodyTarget::AnyGraveyardCard
-        | BodyTarget::AnyGraveyardCreature
-        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-            if builder.instructions.iter().any(|op| {
+        BodyTarget::Player { .. } => Some(ResolvingPlayer::TargetPlayer),
+        BodyTarget::Object {
+            zone:
+                TargetZone::Battlefield | TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+            ..
+        } if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
                     Instruction::ZoneOp(spec)
@@ -3169,26 +3169,25 @@ pub(super) fn resolve_their_library_owner(
         {
             Some(ResolvingPlayer::TargetOwner)
         }
-        BodyTarget::SinglePermanent
-        | BodyTarget::SingleCreature
-        | BodyTarget::SinglePlaneswalker
-        | BodyTarget::FilteredPermanent(_)
-        | BodyTarget::SinglePlayerOrPlaneswalker
-        | BodyTarget::SingleOpponentOrPlaneswalker
-        | BodyTarget::SingleCreatureOrPlayer
-        | BodyTarget::SingleAnyTarget => Some(ResolvingPlayer::TargetController),
-        BodyTarget::SingleOwnGraveyardCard | BodyTarget::FilteredOwnGraveyardCard(_) => {
-            Some(ResolvingPlayer::Controller)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
         }
-        BodyTarget::FilteredAnyGraveyardCard { .. }
-        | BodyTarget::AnyGraveyardCard
-        | BodyTarget::AnyGraveyardCreature
-        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Some(ResolvingPlayer::TargetOwner),
-        BodyTarget::SingleSpell(_)
-        | BodyTarget::SingleStackObject(_)
-        | BodyTarget::SingleStackEntry
-        | BodyTarget::ControlledAbility { .. }
-        | BodyTarget::StackEntryTargetingControlledPermanent => {
+        | BodyTarget::AnyTarget(
+            AnyTargetKind::Any
+            | AnyTargetKind::CreatureOrPlayer
+            | AnyTargetKind::PlayerOrPlaneswalker
+            | AnyTargetKind::OpponentOrPlaneswalker,
+        ) => Some(ResolvingPlayer::TargetController),
+        BodyTarget::Object {
+            zone: TargetZone::OwnGraveyard,
+            ..
+        } => Some(ResolvingPlayer::Controller),
+        BodyTarget::Object {
+            zone: TargetZone::AnyGraveyard { .. },
+            ..
+        } => Some(ResolvingPlayer::TargetOwner),
+        BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
             Some(ResolvingPlayer::TargetSpellController)
         }
         _ if builder.instructions.iter().any(|op| {
@@ -3224,55 +3223,46 @@ pub(super) fn parse_look_top_library_owner(
             Some((None, ResolvingPlayer::Controller))
         }
         "target player" | "target player's" | "targetplayer" => Some((
-            Some(BodyTarget::SinglePlayer),
+            Some(BodyTarget::SINGLE_PLAYER),
             ResolvingPlayer::TargetPlayer,
         )),
         "target opponent" | "target opponent's" | "targetopponent" => Some((
-            Some(BodyTarget::SingleOpponent),
+            Some(BodyTarget::SINGLE_OPPONENT),
             ResolvingPlayer::TargetPlayer,
         )),
-        "target"
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) =>
-        {
+        "target" if matches!(builder.target, BodyTarget::Player { .. }) => {
             Some((None, ResolvingPlayer::TargetPlayer))
         }
         "their" | "their library" | "that player" | "that player's" | "thatplayer" => {
             resolve_their_library_owner(builder, in_trigger).map(|rp| (None, rp))
         }
         "its controller" | "its controller's" | "itscontroller" => match builder.target {
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Some((None, ResolvingPlayer::TargetController)),
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Some((None, ResolvingPlayer::TargetController)),
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Some((None, ResolvingPlayer::TargetSpellController))
             }
             _ if in_trigger => Some((None, ResolvingPlayer::TriggerSubjectController)),
             _ => None,
         },
         "its owner" | "its owner's" | "itsowner" => match builder.target {
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SingleOwnGraveyardCard
-            | BodyTarget::FilteredOwnGraveyardCard(_)
-            | BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-            | BodyTarget::SingleSpell(_) => Some((None, ResolvingPlayer::TargetOwner)),
+            BodyTarget::Object {
+                zone:
+                    TargetZone::Battlefield | TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                ..
+            }
+            | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            } => Some((None, ResolvingPlayer::TargetOwner)),
             _ if in_trigger => Some((None, ResolvingPlayer::TriggerSubjectOwner)),
             _ => None,
         },
@@ -5064,8 +5054,8 @@ fn rewrite_single_target_player_to_that_player(
     ins: &InstructionAst,
 ) -> Option<(BodyTarget, InstructionAst)> {
     let bt_for = |p: PlayerRefAst| match p {
-        PlayerRefAst::TargetPlayer => Some(BodyTarget::SinglePlayer),
-        PlayerRefAst::TargetOpponent => Some(BodyTarget::SingleOpponent),
+        PlayerRefAst::TargetPlayer => Some(BodyTarget::SINGLE_PLAYER),
+        PlayerRefAst::TargetOpponent => Some(BodyTarget::SINGLE_OPPONENT),
         _ => None,
     };
     match ins {
@@ -9422,11 +9412,11 @@ pub(in super::super) fn lower_instruction_seq(
                     Some((None, AffectedPlayers::One(ResolvingPlayer::Controller)))
                 }
                 "target player" | "target player's" => Some((
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 )),
                 "target opponent" | "target opponent's" => Some((
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 )),
                 "each opponent" | "each opponent's" => Some((None, AffectedPlayers::EachOpponent)),
@@ -9606,11 +9596,11 @@ pub(in super::super) fn lower_instruction_seq(
                     Some((None, AffectedPlayers::One(ResolvingPlayer::Controller)))
                 }
                 "target player" | "target player's" => Some((
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 )),
                 "target opponent" | "target opponent's" => Some((
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 )),
                 "each opponent" | "each opponent's" => Some((None, AffectedPlayers::EachOpponent)),
@@ -9989,10 +9979,7 @@ pub(in super::super) fn lower_instruction_seq(
                         }
                         SubjectRefAst::Anaphora(a)
                             if (builder.target == BodyTarget::None
-                                || matches!(
-                                    builder.target,
-                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                ))
+                                || matches!(builder.target, BodyTarget::Player { .. }))
                                 && matches!(
                                     a.trim().to_ascii_lowercase().as_str(),
                                     "it" | "them"
@@ -10110,7 +10097,7 @@ pub(in super::super) fn lower_instruction_seq(
                     continue;
                 }
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::drain_life(
@@ -10127,7 +10114,7 @@ pub(in super::super) fn lower_instruction_seq(
                     continue;
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::drain_life(
@@ -13308,9 +13295,9 @@ pub(in super::super) fn lower_instruction_seq(
                         if let Ok(obj_filter) = obj_res {
                             builder.bind_target(
                                 if reveal_player == PlayerRefAst::TargetOpponent {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 },
                             )?;
                             builder
@@ -13486,9 +13473,9 @@ pub(in super::super) fn lower_instruction_seq(
                     };
                 if let Ok((nonland_only, minimum_mana_value, filter)) = lowered_filter {
                     builder.bind_target(if reveal_player == PlayerRefAst::TargetOpponent {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     if optional_choose {
                         let inspect_dest = if matches!(&ins[i], InstructionAst::RevealHand { .. }) {
@@ -13947,10 +13934,10 @@ pub(in super::super) fn lower_instruction_seq(
             && let Ok(mut dst_bt) = lower_battlefield_body_target(dst_f, vocabulary)
             && matches!(
                 dst_bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             )
         {
             if !in_trigger && dst_f.controller == Some(ControllerRelation::ThatPlayer) {
@@ -14335,10 +14322,10 @@ pub(in super::super) fn lower_instruction_seq(
             if let Some((fb, swapped)) = prefix_attach
                 && matches!(
                     builder.target,
-                    BodyTarget::SinglePermanent
-                        | BodyTarget::SingleCreature
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
                 )
                 && !builder.instructions.is_empty()
                 && builder.graveyard_target_bounds.is_none()

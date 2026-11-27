@@ -158,7 +158,7 @@ fn disclosed_combat_preparation_uses_live_epoch_and_prunes_departed_membership()
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
                         crate::toolbox::ObjectQuery::Targets,

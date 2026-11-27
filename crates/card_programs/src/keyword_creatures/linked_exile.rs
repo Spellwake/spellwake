@@ -27,7 +27,7 @@ pub(super) fn compile(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::FilteredPermanent(ObjectFilter::nonland().opposing()),
+                BodyTarget::filtered_permanent(ObjectFilter::nonland().opposing()),
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::exile_one_per_player_until_source_leaves(),
                 ))],
@@ -64,7 +64,7 @@ pub(super) fn compile(
         ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::nonland().opposing()),
+            BodyTarget::filtered_permanent(ObjectFilter::nonland().opposing()),
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target_until_source_leaves()],
         ),
     });

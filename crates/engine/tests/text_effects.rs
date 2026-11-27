@@ -48,7 +48,7 @@ fn text_spell(
 ) -> SeedCard {
     spell(
         id,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![effect(vec![text(v, from, to)], duration)],
     )
 }
@@ -240,7 +240,7 @@ fn chosen_text_and_control_are_one_owned_effect_with_separate_layer_components()
             target,
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     Instruction::PromptChoice(Box::new(
                         spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
@@ -308,7 +308,7 @@ fn text_changes_do_not_rewrite_the_literal_operands_of_already_created_effects()
             ),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![
                         text(&v, "Elf", "Vampire"),
@@ -342,7 +342,7 @@ fn type_ability(v: &CreatureTypeVocabulary, source_cost: SourceCost) -> Program 
             mana_cost: ManaCost::free(),
             source_cost,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Keep,
@@ -652,7 +652,7 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     Instruction::PromptChoice(Box::new(
                         spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
@@ -671,7 +671,7 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
             ),
             spell(
                 4,
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(

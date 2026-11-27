@@ -116,7 +116,7 @@ fn cmm_bloodchief_ascension_counts_each_end_step_and_at_three_quests_offers_a_li
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,

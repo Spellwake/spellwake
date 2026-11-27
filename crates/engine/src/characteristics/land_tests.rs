@@ -75,7 +75,7 @@ fn printed_land() -> Program {
         mana_cost: ManaCost::free(),
         source_cost: crate::activated::SourceCost::None,
         body: crate::program::ExecutableBody::new(
-            crate::program::BodyTarget::SinglePermanent,
+            crate::program::BodyTarget::SINGLE_PERMANENT,
             vec![crate::program::Instruction::ZoneOp(Box::new(
                 crate::toolbox::ZoneOpSpec::move_all(
                     crate::toolbox::ObjectQuery::Targets,

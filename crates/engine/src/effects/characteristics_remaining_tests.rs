@@ -45,7 +45,7 @@ fn activation(source_cost: SourceCost) -> ActivatedAbility {
         mana_cost: ManaCost::free(),
         source_cost,
         body: body(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::ZoneOp(Box::new(
                 crate::toolbox::ZoneOpSpec::move_all(
                     crate::toolbox::ObjectQuery::Targets,
@@ -101,7 +101,7 @@ fn tap_self() -> Program {
 fn staff() -> Program {
     let mut a = activation(SourceCost::Tap);
     a.body = body(
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![crate::program::Instruction::DealDamage(Box::new(
             crate::toolbox::DealDamageSpec {
                 source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -189,7 +189,7 @@ fn historical_roles() -> Vec<(&'static str, Program, bool)> {
             Program::instant(
                 ManaCost::one(ManaType::Blue),
                 body(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         crate::toolbox::StackOpSpec::counter_targeted(
                             crate::toolbox::CounterDestination::Graveyard,
@@ -277,7 +277,7 @@ fn historical_roles() -> Vec<(&'static str, Program, bool)> {
     rows.push(("DA-N19", p, false));
     let mut p = tap_self();
     p.triggered[0].body = body(
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![crate::program::Instruction::DealDamage(Box::new(
             crate::toolbox::DealDamageSpec {
                 source: crate::toolbox::DamageSourceQuery::EntrySource,

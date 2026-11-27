@@ -893,7 +893,7 @@ fn cmm_exsanguinate_batches_opponent_losses_before_applying_the_linked_gain() {
 }
 
 fn change_one_permanent(instruction: Instruction) -> Program {
-    free_instant(BodyTarget::SingleCreature, instruction)
+    free_instant(BodyTarget::SINGLE_CREATURE, instruction)
 }
 
 fn respond_to_creature(state: &GameState, spell: u64, creature: u64) -> GameState {
@@ -1034,7 +1034,7 @@ fn cmm_rise_of_the_eldrazi_survives_a_counter_destroys_draws_four_and_gives_an_e
             B,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,

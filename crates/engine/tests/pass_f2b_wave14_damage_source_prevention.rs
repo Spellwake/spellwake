@@ -37,7 +37,7 @@ fn colored_pinger(color: Option<Color>, keywords: BTreeSet<KeywordAbility>) -> P
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -222,7 +222,7 @@ fn chosen_color_and_filtered_source_recipient_scopes_match_exact_subsets() {
             card(2, colored_pinger(Some(Color::Green), BTreeSet::new()), true),
             spell(
                 10,
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
                         TurnPreventionSpec {
@@ -462,7 +462,7 @@ fn multi_target_permanent_prevention_prevents_announced_targets_only() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
                         TurnPreventionSpec {

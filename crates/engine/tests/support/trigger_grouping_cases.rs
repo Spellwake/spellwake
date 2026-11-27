@@ -105,7 +105,7 @@ fn copied_grouping_uses_current_text_and_excludes_retained_removed_roster_entrie
                 mana_cost: ManaCost::free(),
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![Instruction::ApplyContinuous(Box::new(
                         spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
                             spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -142,7 +142,7 @@ fn copied_grouping_uses_current_text_and_excludes_retained_removed_roster_entrie
                 card(3, donor, true),
                 spell(
                     4,
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![trajectories::effect(
                         vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                             AbilityRemoval::All,

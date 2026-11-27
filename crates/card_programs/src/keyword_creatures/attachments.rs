@@ -143,7 +143,7 @@ pub(super) fn compile_rules(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -314,7 +314,7 @@ pub(super) fn compile_rules(
                             )
                             .or_self(),
                     ),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().controlled(),
                     ),
                     vec![
@@ -380,7 +380,7 @@ pub(super) fn compile_rules(
                             linked_player: false,
                         },
                     ),
-                    BodyTarget::SinglePlayerOrPlaneswalker,
+                    BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
                     vec![Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec::from_power(
                             spellwake_engine::program::PowerDamageSource::CreatureDealtDamage,
@@ -393,7 +393,7 @@ pub(super) fn compile_rules(
                     spellwake_engine::program::TriggerSpec::dies(
                         spellwake_engine::program::ObjectFilter::any().attached_to_self(),
                     ),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().controlled(),
                     ),
                     vec![Instruction::MutateObject(Box::new(
@@ -411,7 +411,7 @@ pub(super) fn compile_rules(
                             capture_defender: false,
                         },
                     ),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().of_related_player(),
                     ),
                     vec![

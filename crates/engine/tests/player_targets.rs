@@ -51,8 +51,8 @@ fn damage_world() -> GameState {
                 Program::creature(None, 4.into(), 4.into(), BTreeSet::new()),
                 true,
             ),
-            spell(2, BodyTarget::SingleCreatureOrPlayer, vec![damage()]),
-            spell(3, BodyTarget::SingleCreatureOrPlayer, vec![damage()]),
+            spell(2, BodyTarget::SINGLE_CREATURE_OR_PLAYER, vec![damage()]),
+            spell(3, BodyTarget::SINGLE_CREATURE_OR_PLAYER, vec![damage()]),
             card(4, Program::artifact(None, vec![]), true),
         ],
         vec![CardId(1), CardId(4)],
@@ -121,10 +121,10 @@ fn copied_player_target_spell_can_retarget_a_creature_independently() {
                 Program::creature(None, 4.into(), 4.into(), BTreeSet::new()),
                 true,
             ),
-            spell(2, BodyTarget::SingleCreatureOrPlayer, vec![damage()]),
+            spell(2, BodyTarget::SINGLE_CREATURE_OR_PLAYER, vec![damage()]),
             spell(
                 3,
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -177,7 +177,7 @@ fn targeted_activated_ability_can_deal_damage_to_a_player() {
             id: ActivatedAbilityId(1),
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Tap,
-            body: ExecutableBody::new(BodyTarget::SinglePlayer, vec![damage()]),
+            body: ExecutableBody::new(BodyTarget::SINGLE_PLAYER, vec![damage()]),
         }],
     );
     let game = world(vocabulary(), vec![card(1, source, true)], vec![CardId(1)]);

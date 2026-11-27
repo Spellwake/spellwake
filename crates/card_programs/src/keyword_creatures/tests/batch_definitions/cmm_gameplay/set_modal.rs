@@ -211,7 +211,7 @@ fn cmm_zones_mystic_confluence_taxes_the_spell_controller_bounces_to_owner_and_d
             B,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

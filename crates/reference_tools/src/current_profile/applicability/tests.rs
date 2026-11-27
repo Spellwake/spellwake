@@ -596,7 +596,7 @@ fn applicability_real_activation_sacrifice_cost_remains_admissible() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Sacrifice,
             body: ExecutableBody::new(
-                spellwake_engine::program::BodyTarget::SingleCreature,
+                spellwake_engine::program::BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -783,7 +783,7 @@ fn current10_refuses_printed_keywords_and_new_grants() {
         let program = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                spellwake_engine::program::BodyTarget::SinglePermanent,
+                spellwake_engine::program::BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

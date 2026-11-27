@@ -51,7 +51,7 @@ fn cmm_darksteel_mutation_and_song_of_the_dryads_replace_the_hosts_characteristi
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -292,7 +292,7 @@ fn cmm_fiendlash_gives_power_and_reach_and_the_equipped_creature_damages_the_cho
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),

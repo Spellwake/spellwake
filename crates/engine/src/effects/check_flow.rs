@@ -956,7 +956,10 @@ impl EffectWindow {
         for op in &mut bound.instructions {
             if let Instruction::FixedTargetClause(clause) = op {
                 clause.target = clause.target.with_ability_source(src.object.id());
-                if let BodyTarget::FilteredPermanent(filter) = &mut clause.target
+                if let BodyTarget::Object {
+                    zone: crate::program::TargetZone::Battlefield,
+                    filter,
+                } = &mut clause.target
                     && filter.has_related_player()
                 {
                     let player = related_player.ok_or(EffectError::InconsistentProgram)?;
@@ -978,7 +981,10 @@ impl EffectWindow {
         for op in &body.instructions {
             if let Instruction::FixedTargetClause(clause) = op {
                 let domain = if !per_clause.is_empty()
-                    && let BodyTarget::FilteredPermanent(filter) = clause.target
+                    && let BodyTarget::Object {
+                        zone: crate::program::TargetZone::Battlefield,
+                        filter,
+                    } = clause.target
                     && filter.uses_first_target_controller()
                 {
                     let mut seats = BTreeSet::new();
@@ -998,7 +1004,7 @@ impl EffectWindow {
                     let mut union = BTreeSet::new();
                     for seat in seats {
                         let mut bound_clause = (**clause).clone();
-                        bound_clause.target = BodyTarget::FilteredPermanent(
+                        bound_clause.target = BodyTarget::filtered_permanent(
                             filter.bind_first_target_controller(seat),
                         );
                         for target in
@@ -1230,7 +1236,7 @@ impl EffectWindow {
         let secondary_targets = if let Some(relation) = body.dependent_targets() {
             let current = self.evaluated_characteristics()?;
             let objects = self.trigger_target_domain(
-                &ExecutableBody::new(BodyTarget::SingleCreature, Vec::new()),
+                &ExecutableBody::new(BodyTarget::SINGLE_CREATURE, Vec::new()),
                 placement.controller,
                 source,
             )?;

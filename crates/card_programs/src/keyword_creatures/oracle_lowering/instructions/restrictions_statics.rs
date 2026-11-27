@@ -16,13 +16,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     ResolvingPlayer::Controller,
                 ),
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     )
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     )
@@ -746,9 +746,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 count: TargetCountAst::Exact(1),
                             } => {
                                 builder.bind_target(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
@@ -1062,11 +1062,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     )?
                                 }
                                 Some(ControllerRelation::TargetPlayer) => {
-                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 }
                                 Some(ControllerRelation::TargetOpponent) => {
-                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 }
                                 None => AffectedPlayers::EachPlayer,
@@ -1615,9 +1615,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 count: TargetCountAst::Exact(1),
                             }) => {
                                 builder.bind_target(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
@@ -1636,10 +1636,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         in_trigger,
                                     )?
                                 } else if rule_no_turn.starts_with("target player ") {
-                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else if rule_no_turn.starts_with("target opponent ") {
-                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
                                     AffectedPlayers::EachPlayer
@@ -1680,9 +1680,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     count: TargetCountAst::Exact(1),
                                 }) => {
                                     builder.bind_target(if *opponent_only {
-                                        BodyTarget::SingleOpponent
+                                        BodyTarget::SINGLE_OPPONENT
                                     } else {
-                                        BodyTarget::SinglePlayer
+                                        BodyTarget::SINGLE_PLAYER
                                     })?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 }
@@ -1723,11 +1723,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         {
                             let players = match who_ref {
                                 PlayerRefAst::TargetPlayer => {
-                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 }
                                 PlayerRefAst::TargetOpponent => {
-                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 }
                                 p => lower_affected_players_in_context(p, builder, in_trigger)?,
@@ -1824,9 +1824,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 count: TargetCountAst::Exact(1),
                             }) => {
                                 builder.bind_target(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
@@ -1848,10 +1848,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     )?;
                                     AffectedPlayers::One(rp)
                                 } else if rule_low.starts_with("target opponent ") {
-                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else if rule_low.starts_with("target player ") {
-                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
                                     AffectedPlayers::EachPlayer
@@ -1885,9 +1885,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     count: TargetCountAst::Exact(1),
                                 }) => {
                                     builder.bind_target(if *opponent_only {
-                                        BodyTarget::SingleOpponent
+                                        BodyTarget::SINGLE_OPPONENT
                                     } else {
-                                        BodyTarget::SinglePlayer
+                                        BodyTarget::SINGLE_PLAYER
                                     })?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 }
@@ -2034,9 +2034,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 count: TargetCountAst::Exact(1),
                             }) => {
                                 builder.bind_target(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
@@ -2070,9 +2070,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 count: TargetCountAst::Exact(1),
                             }) => {
                                 builder.bind_target(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
@@ -2132,9 +2132,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 count: TargetCountAst::Exact(1),
                             }) => {
                                 builder.bind_target(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
@@ -2160,10 +2160,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         in_trigger,
                                     )?
                                 } else if rule_low.starts_with("target player ") {
-                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else if rule_low.starts_with("target opponent ") {
-                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
                                     return Err("oracle:unsupported-temp-static");
@@ -3603,10 +3603,10 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else if r_low.starts_with("opponents ") || r_low.starts_with("your opponents ") {
                 AffectedPlayers::EachOpponent
             } else if r_low.starts_with("target opponent ") {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             } else if r_low.starts_with("target player ") {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             } else {
                 let rp = lower_resolving_player_in_context(
@@ -4920,9 +4920,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                 return Ok(());
             }
             let target = if r_low.starts_with("target opponent ") {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             };
             builder.bind_target(target)?;
             let players = AffectedPlayers::One(ResolvingPlayer::TargetPlayer);
@@ -5416,11 +5416,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                             Some(AffectedPlayers::EachOpponent)
                         }
                         "target player" => trial
-                            .bind_target(BodyTarget::SinglePlayer)
+                            .bind_target(BodyTarget::SINGLE_PLAYER)
                             .ok()
                             .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
                         "target opponent" => trial
-                            .bind_target(BodyTarget::SingleOpponent)
+                            .bind_target(BodyTarget::SINGLE_OPPONENT)
                             .ok()
                             .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
                         "that player" | "they" => lower_resolving_player_in_context(
@@ -5470,11 +5470,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         Some(AffectedPlayers::EachOpponent)
                     }
                     "target player" => trial
-                        .bind_target(BodyTarget::SinglePlayer)
+                        .bind_target(BodyTarget::SINGLE_PLAYER)
                         .ok()
                         .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
                     "target opponent" => trial
-                        .bind_target(BodyTarget::SingleOpponent)
+                        .bind_target(BodyTarget::SINGLE_OPPONENT)
                         .ok()
                         .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
                     "that player" | "they" => lower_resolving_player_in_context(
@@ -5545,11 +5545,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         Some(AffectedPlayers::EachOpponent)
                     }
                     "target player" => trial
-                        .bind_target(BodyTarget::SinglePlayer)
+                        .bind_target(BodyTarget::SINGLE_PLAYER)
                         .ok()
                         .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
                     "target opponent" => trial
-                        .bind_target(BodyTarget::SingleOpponent)
+                        .bind_target(BodyTarget::SINGLE_OPPONENT)
                         .ok()
                         .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
                     "that player" | "they" => lower_resolving_player_in_context(
@@ -5984,7 +5984,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     f_clean.zone = None;
                     let obj =
                         lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
-                    builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+                    builder.bind_target(BodyTarget::filtered_permanent(obj))?;
                     builder
                         .instructions
                         .push(Instruction::ApplyContinuous(Box::new(
@@ -6204,7 +6204,7 @@ pub(super) fn lower_restrictions_statics_instruction(
             });
             let is_exile = rep_low.contains("exile") || body_exiles;
             if is_exile
-                && matches!(builder.target, BodyTarget::SingleSpell(_))
+                && matches!(builder.target, BodyTarget::Spell { include_abilities: false, .. })
                 && (ev_low.contains("counter")
                     || ev_low.contains("graveyard")
                     || subj_low.contains("spell"))
@@ -6228,7 +6228,7 @@ pub(super) fn lower_restrictions_statics_instruction(
             let to_bottom_of_library =
                 rep_low == "bottom_of_library" || rep_low.contains("bottom of its owner's library");
             if (to_top_of_library || to_bottom_of_library)
-                && matches!(builder.target, BodyTarget::SingleSpell(_))
+                && matches!(builder.target, BodyTarget::Spell { include_abilities: false, .. })
                 && (ev_low.contains("counter")
                     || ev_low.contains("graveyard")
                     || subj_low.contains("spell"))
@@ -7451,7 +7451,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                 low.is_empty() || low.contains("graveyard")
             });
             if instead_ok
-                && matches!(builder.target, BodyTarget::SingleSpell(_))
+                && matches!(builder.target, BodyTarget::Spell { include_abilities: false, .. })
                 && builder.instructions.last()
                     == Some(&Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
@@ -8251,10 +8251,8 @@ pub(super) fn has_unconditional_mill_one(ops: &[Instruction]) -> bool {
 }
 
 pub(super) fn rewrite_milled_card_mana_value(expr: ValueExpr, builder: &BodyBuilder) -> ValueExpr {
-    if !matches!(
-        builder.target,
-        BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-    ) || !has_unconditional_mill_one(&builder.instructions)
+    if !matches!(builder.target, BodyTarget::None | BodyTarget::Player { .. })
+        || !has_unconditional_mill_one(&builder.instructions)
     {
         return expr;
     }
@@ -10182,9 +10180,9 @@ pub(super) fn try_lower_cant_cast_from_zone(
                 count: TargetCountAst::Exact(1),
             }) => {
                 b.bind_target(if *opponent_only {
-                    BodyTarget::SingleOpponent
+                    BodyTarget::SINGLE_OPPONENT
                 } else {
-                    BodyTarget::SinglePlayer
+                    BodyTarget::SINGLE_PLAYER
                 })?;
                 Ok(AffectedPlayers::One(ResolvingPlayer::TargetPlayer))
             }
@@ -10199,11 +10197,11 @@ pub(super) fn try_lower_cant_cast_from_zone(
                     lower_affected_players_in_context(PlayerRefAst::ThatPlayer, b, in_trigger)
                 }
                 Some("target player") => {
-                    b.bind_target(BodyTarget::SinglePlayer)?;
+                    b.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     Ok(AffectedPlayers::One(ResolvingPlayer::TargetPlayer))
                 }
                 Some("target opponent") => {
-                    b.bind_target(BodyTarget::SingleOpponent)?;
+                    b.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     Ok(AffectedPlayers::One(ResolvingPlayer::TargetPlayer))
                 }
                 _ => Err("oracle:unsupported-temp-static"),
@@ -10474,9 +10472,9 @@ fn try_parse_cast_max_more_spells_this_turn(
                 count: TargetCountAst::Exact(1),
             }) => {
                 builder.bind_target(if *opponent_only {
-                    BodyTarget::SingleOpponent
+                    BodyTarget::SINGLE_OPPONENT
                 } else {
-                    BodyTarget::SinglePlayer
+                    BodyTarget::SINGLE_PLAYER
                 })?;
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             }
@@ -10707,7 +10705,7 @@ mod wave10_static_tests {
             filter,
         ))
         .expect("filtered casting restriction");
-        assert_eq!(builder.target, BodyTarget::SinglePlayer);
+        assert_eq!(builder.target, BodyTarget::SINGLE_PLAYER);
         let [Instruction::ApplyContinuous(spec)] = builder.instructions.as_slice() else {
             panic!("expected one temporary rule");
         };
@@ -10753,7 +10751,7 @@ mod wave10_static_tests {
             },
         ))
         .expect("opponent casting restriction");
-        assert_eq!(builder.target, BodyTarget::SingleOpponent);
+        assert_eq!(builder.target, BodyTarget::SINGLE_OPPONENT);
         assert!(matches!(builder.instructions.as_slice(),
             [Instruction::ApplyContinuous(spec)]
                 if matches!(&spec.payload, spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule) if matches!(rule.as_ref(), TemporaryRuleKind::CantCastSpells {

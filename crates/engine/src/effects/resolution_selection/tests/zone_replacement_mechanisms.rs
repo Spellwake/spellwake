@@ -453,7 +453,7 @@ fn copied_sources_keep_recipient_instance_identity_after_donor_departure() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     crate::toolbox::ApplyContinuousSpec::become_copy(
                         crate::toolbox::ObjectQuery::Source,
@@ -471,7 +471,7 @@ fn copied_sources_keep_recipient_instance_identity_after_donor_departure() {
     let bounce = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![crate::program::Instruction::ZoneOp(Box::new(
                 crate::toolbox::ZoneOpSpec::move_all(
                     crate::toolbox::ObjectQuery::Targets,
@@ -559,7 +559,7 @@ fn removed_replacement_abilities_do_not_execute_retained_printed_text() {
             sacrifice(AffectedPlayers::One(ResolvingPlayer::Controller), 1.into()),
         ];
         let mut t = Trace::new(fixture(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             body,
             vec![A, B],
             A,
@@ -1054,7 +1054,7 @@ fn captured_activated_body_replaces_sacrifice_after_its_real_source_cost() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Sacrifice,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     {
                         struct _Tmp {

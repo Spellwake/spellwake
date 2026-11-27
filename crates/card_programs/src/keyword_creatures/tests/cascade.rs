@@ -127,7 +127,10 @@ fn all_real_cascade_cards_resolve_each_printed_cast_trigger_before_the_original_
         .into_state();
         let target = match &bound.instruction.kind {
             ProgramKind::Spell(spell) => match spell.body.target {
-                BodyTarget::SingleSpell(_) => {
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                } => {
                     g = advance(
                         &g,
                         a,
@@ -140,7 +143,7 @@ fn all_real_cascade_cards_resolve_each_printed_cast_trigger_before_the_original_
                         g.execution().window().entries().last().unwrap().id(),
                     ))
                 }
-                BodyTarget::SinglePermanent | BodyTarget::SingleCreature => {
+                BodyTarget::SINGLE_PERMANENT | BodyTarget::SINGLE_CREATURE => {
                     Some(TargetRef::Object(obj(&g, 2)))
                 }
                 BodyTarget::None => None,

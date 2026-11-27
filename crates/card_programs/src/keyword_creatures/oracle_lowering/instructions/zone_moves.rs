@@ -587,8 +587,8 @@ pub(super) fn lower_zone_moves_instruction(
                     if filter.zone.is_some() && filter.zone != Some(ZoneFilter::Battlefield) {
                         if matches!(
                             bt,
-                            BodyTarget::SingleOwnGraveyardCard
-                                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                            BodyTarget::SINGLE_OWN_GRAVEYARD_CARD
+                                | BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
                         ) {
                             builder.bind_target(bt)?;
                             builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Exile {
@@ -596,17 +596,23 @@ pub(super) fn lower_zone_moves_instruction(
                             }));
                         } else if matches!(
                             bt,
-                            BodyTarget::AnyGraveyardCard
-                                | BodyTarget::AnyGraveyardCreature
-                                | BodyTarget::FilteredOwnGraveyardCard(_)
-                                | BodyTarget::FilteredAnyGraveyardCard { .. }
+                            BodyTarget::Object {
+                                zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                                ..
+                            }
                         ) {
                             builder.bind_target(bt)?;
                             builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target());
                         } else {
                             return Err("oracle:unsupported-exile-gy-target");
                         }
-                    } else if matches!(bt, BodyTarget::SingleSpell(_)) {
+                    } else if matches!(
+                        bt,
+                        BodyTarget::Spell {
+                            include_abilities: false,
+                            ..
+                        }
+                    ) {
                         builder.bind_target(bt)?;
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
@@ -793,13 +799,10 @@ pub(super) fn lower_zone_moves_instruction(
                         },
                         vocabulary,
                     )? {
-                        BodyTarget::SingleOwnGraveyardCard => {
-                            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
-                        }
-                        other @ (BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
+                        other @ BodyTarget::Object {
+                            zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                            ..
+                        } if other != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER => other,
                         _ => return Err("oracle:unsupported-exile-gy-target"),
                     };
                     builder.bind_target(bt)?;
@@ -820,13 +823,10 @@ pub(super) fn lower_zone_moves_instruction(
                         },
                         vocabulary,
                     )? {
-                        BodyTarget::SingleOwnGraveyardCard => {
-                            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
-                        }
-                        other @ (BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
+                        other @ BodyTarget::Object {
+                            zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                            ..
+                        } if other != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER => other,
                         _ => return Err("oracle:unsupported-exile-gy-target"),
                     };
                     builder.bind_target(bt)?;
@@ -849,13 +849,10 @@ pub(super) fn lower_zone_moves_instruction(
                         },
                         vocabulary,
                     )? {
-                        BodyTarget::SingleOwnGraveyardCard => {
-                            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any())
-                        }
-                        other @ (BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::FilteredAnyGraveyardCard { .. }) => other,
+                        other @ BodyTarget::Object {
+                            zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                            ..
+                        } if other != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER => other,
                         _ => return Err("oracle:unsupported-exile-gy-target"),
                     };
                     builder.bind_target(bt)?;
@@ -1188,10 +1185,10 @@ pub(super) fn lower_zone_moves_instruction(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) =>
                 {
                     builder.instructions.push(
@@ -1232,11 +1229,12 @@ pub(super) fn lower_zone_moves_instruction(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::AnyGraveyardCard
-                            | BodyTarget::AnyGraveyardCreature
-                            | BodyTarget::FilteredOwnGraveyardCard(_)
-                            | BodyTarget::FilteredAnyGraveyardCard { .. }
-                    ) =>
+                        BodyTarget::Object {
+                            zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                            ..
+                        }
+                    ) && builder.target != BodyTarget::SINGLE_OWN_GRAVEYARD_CARD
+                        && builder.target != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER =>
                 {
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
@@ -1246,9 +1244,12 @@ pub(super) fn lower_zone_moves_instruction(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SingleOwnGraveyardCard
-                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                            | BodyTarget::SingleSpell(_)
+                        BodyTarget::SINGLE_OWN_GRAVEYARD_CARD
+                            | BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
+                            | BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            }
                     ) =>
                 {
                     builder.instructions.push(
@@ -1758,25 +1759,25 @@ pub(super) fn lower_zone_moves_instruction(
                                 |z: &mut Option<ZoneFilter>| match (*z, bound_player_bt) {
                                     (
                                         Some(ZoneFilter::TargetPlayerHand),
-                                        BodyTarget::SinglePlayer,
+                                        BodyTarget::SINGLE_PLAYER,
                                     ) => {
                                         *z = Some(ZoneFilter::ThatPlayerHand);
                                     }
                                     (
                                         Some(ZoneFilter::TargetPlayerGraveyard),
-                                        BodyTarget::SinglePlayer,
+                                        BodyTarget::SINGLE_PLAYER,
                                     ) => {
                                         *z = Some(ZoneFilter::ThatPlayerGraveyard);
                                     }
                                     (
                                         Some(ZoneFilter::TargetOpponentHand),
-                                        BodyTarget::SingleOpponent,
+                                        BodyTarget::SINGLE_OPPONENT,
                                     ) => {
                                         *z = Some(ZoneFilter::ThatPlayerHand);
                                     }
                                     (
                                         Some(ZoneFilter::TargetOpponentGraveyard),
-                                        BodyTarget::SingleOpponent,
+                                        BodyTarget::SINGLE_OPPONENT,
                                     ) => {
                                         *z = Some(ZoneFilter::ThatPlayerGraveyard);
                                     }
@@ -1788,19 +1789,19 @@ pub(super) fn lower_zone_moves_instruction(
                                 | SubjectRefAst::Group(f) => rewrite_zone(&mut f.zone),
                                 SubjectRefAst::Anaphora(raw) => {
                                     let l = raw.trim().to_ascii_lowercase();
-                                    if bound_player_bt == BodyTarget::SinglePlayer
+                                    if bound_player_bt == BodyTarget::SINGLE_PLAYER
                                         && l == "target player's graveyard"
                                     {
                                         *raw = "that player's graveyard".to_string();
-                                    } else if bound_player_bt == BodyTarget::SinglePlayer
+                                    } else if bound_player_bt == BodyTarget::SINGLE_PLAYER
                                         && l == "target player's hand"
                                     {
                                         *raw = "that player's hand".to_string();
-                                    } else if bound_player_bt == BodyTarget::SingleOpponent
+                                    } else if bound_player_bt == BodyTarget::SINGLE_OPPONENT
                                         && l == "target opponent's graveyard"
                                     {
                                         *raw = "that player's graveyard".to_string();
-                                    } else if bound_player_bt == BodyTarget::SingleOpponent
+                                    } else if bound_player_bt == BodyTarget::SINGLE_OPPONENT
                                         && l == "target opponent's hand"
                                     {
                                         *raw = "that player's hand".to_string();
@@ -1826,10 +1827,7 @@ pub(super) fn lower_zone_moves_instruction(
                         )?;
                         if idx == 0
                             && prev_target == BodyTarget::None
-                            && matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            )
+                            && matches!(builder.target, BodyTarget::Player { .. })
                         {
                             shared_player_target = Some(builder.target);
                         }
@@ -2105,10 +2103,7 @@ pub(super) fn lower_zone_moves_instruction(
                             );
                             Ok(())
                         } else if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            )
+                            && !matches!(builder.target, BodyTarget::Player { .. })
                         {
                             builder.instructions.push(
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
@@ -2758,7 +2753,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target player" | "target player's" => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder
                         .instructions
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
@@ -2767,7 +2762,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target opponent" | "target opponent's" => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     builder
                         .instructions
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(
@@ -2776,21 +2771,21 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target card from a" => {
-                    builder.bind_target(BodyTarget::AnyGraveyardCard)?;
+                    builder.bind_target(BodyTarget::ANY_GRAVEYARD_CARD)?;
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                     );
                     Ok(())
                 }
                 "target creature card from a" => {
-                    builder.bind_target(BodyTarget::AnyGraveyardCreature)?;
+                    builder.bind_target(BodyTarget::ANY_GRAVEYARD_CREATURE)?;
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                     );
                     Ok(())
                 }
                 "target creature card from your" => {
-                    builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
+                    builder.bind_target(BodyTarget::filtered_own_graveyard(
                         ObjectFilter::creature(),
                     ))?;
                     builder.instructions.push(
@@ -2799,15 +2794,14 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target card from your" => {
-                    builder
-                        .bind_target(BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::any()))?;
+                    builder.bind_target(BodyTarget::filtered_own_graveyard(ObjectFilter::any()))?;
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                     );
                     Ok(())
                 }
                 "target noncreature, nonland card from your" => {
-                    builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
+                    builder.bind_target(BodyTarget::filtered_own_graveyard(
                         ObjectFilter::from_clause(
                             ObjectClause::any()
                                 .forbid_types(CardTypeMask::CREATURE.union(CardTypeMask::LAND)),
@@ -2819,7 +2813,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target instant or sorcery card from your" => {
-                    builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
+                    builder.bind_target(BodyTarget::filtered_own_graveyard(
                         ObjectFilter::instant_or_sorcery(),
                     ))?;
                     builder.instructions.push(
@@ -2828,7 +2822,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target artifact card from your" => {
-                    builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
+                    builder.bind_target(BodyTarget::filtered_own_graveyard(
                         ObjectFilter::artifact(),
                     ))?;
                     builder.instructions.push(
@@ -2837,7 +2831,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "target enchantment card from your" => {
-                    builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(
+                    builder.bind_target(BodyTarget::filtered_own_graveyard(
                         ObjectFilter::enchantment(),
                     ))?;
                     builder.instructions.push(
@@ -2881,10 +2875,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "that player" | "that player's"
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                 {
                     builder
                         .instructions
@@ -2950,7 +2941,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "the bottom card of target player's" | "the bottom card of target player" => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::zone_op(
@@ -2974,7 +2965,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "the bottom card of target opponent's" | "the bottom card of target opponent" => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::zone_op(
@@ -3051,7 +3042,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "the top card of target player's" | "the top card of target player" => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::zone_op(
@@ -3075,7 +3066,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "the top card of target opponent's" | "the top card of target opponent" => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::zone_op(
@@ -3129,10 +3120,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "a creature they control and their"
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                 {
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
@@ -3150,7 +3138,7 @@ pub(super) fn lower_zone_moves_instruction(
                     Ok(())
                 }
                 "all cards from target player's hand and" | "target player's hand and" => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_from_zone(
                             AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
@@ -3232,7 +3220,7 @@ pub(super) fn lower_zone_moves_instruction(
                             .or_else(|| after_all.strip_suffix(" from target player"))
                         {
                             Some((
-                                Some(BodyTarget::SinglePlayer),
+                                Some(BodyTarget::SINGLE_PLAYER),
                                 ResolvingPlayer::TargetPlayer,
                                 r.trim(),
                             ))
@@ -3242,7 +3230,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 .or_else(|| after_all.strip_suffix(" from target opponent"))
                                 .map(|r| {
                                     (
-                                        Some(BodyTarget::SingleOpponent),
+                                        Some(BodyTarget::SINGLE_OPPONENT),
                                         ResolvingPlayer::TargetPlayer,
                                         r.trim(),
                                     )
@@ -3346,15 +3334,11 @@ pub(super) fn lower_zone_moves_instruction(
                         return Err("oracle:unsupported-exile-gy");
                     };
                     let bt = match zone {
-                        ZoneFilter::YourGraveyard => BodyTarget::FilteredOwnGraveyardCard(obj),
-                        ZoneFilter::OpponentGraveyard => BodyTarget::FilteredAnyGraveyardCard {
-                            filter: obj,
-                            opponents_only: true,
-                        },
-                        ZoneFilter::AnyGraveyard => BodyTarget::FilteredAnyGraveyardCard {
-                            filter: obj,
-                            opponents_only: false,
-                        },
+                        ZoneFilter::YourGraveyard => BodyTarget::filtered_own_graveyard(obj),
+                        ZoneFilter::OpponentGraveyard => {
+                            BodyTarget::filtered_any_graveyard(obj, true)
+                        }
+                        ZoneFilter::AnyGraveyard => BodyTarget::filtered_any_graveyard(obj, false),
                         _ => return Err("oracle:unsupported-exile-gy"),
                     };
                     builder.bind_target(bt)?;
@@ -3811,19 +3795,13 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         let bt = match eff_zone {
                             Some(ZoneFilter::YourGraveyard) => {
-                                BodyTarget::FilteredOwnGraveyardCard(obj)
+                                BodyTarget::filtered_own_graveyard(obj)
                             }
                             Some(ZoneFilter::OpponentGraveyard) => {
-                                BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: true,
-                                }
+                                BodyTarget::filtered_any_graveyard(obj, true)
                             }
                             Some(ZoneFilter::AnyGraveyard | ZoneFilter::SingleGraveyard) => {
-                                BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: false,
-                                }
+                                BodyTarget::filtered_any_graveyard(obj, false)
                             }
                             _ => return Err("oracle:unsupported-return-dest"),
                         };
@@ -4193,7 +4171,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 } else {
                                     lower_object_filter(&inner, vocabulary)?
                                 };
-                                builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
+                                builder.bind_target(BodyTarget::filtered_own_graveyard(obj))?;
                                 builder
                                     .instructions
                                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
@@ -4219,10 +4197,10 @@ pub(super) fn lower_zone_moves_instruction(
                                             | ZoneFilter::OpponentsGraveyards
                                     )
                                 );
-                                builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
+                                builder.bind_target(BodyTarget::filtered_any_graveyard(
+                                    obj,
                                     opponents_only,
-                                })?;
+                                ))?;
                                 builder
                                     .instructions
                                     .push(super::super::toolbox_emit::return_to_owners_hand());
@@ -4277,17 +4255,17 @@ pub(super) fn lower_zone_moves_instruction(
                                 lower_object_filter(&inner, vocabulary)?
                             };
                             if gy_zone == Some(ZoneFilter::YourGraveyard) {
-                                builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
+                                builder.bind_target(BodyTarget::filtered_own_graveyard(obj))?;
                                 builder.graveyard_target_bounds =
                                     Some((usize::from(*n), usize::from(*n)));
                                 builder
                                     .instructions
                                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             } else {
-                                builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: gy_zone == Some(ZoneFilter::OpponentGraveyard),
-                                })?;
+                                builder.bind_target(BodyTarget::filtered_any_graveyard(
+                                    obj,
+                                    gy_zone == Some(ZoneFilter::OpponentGraveyard),
+                                ))?;
                                 builder.graveyard_target_bounds =
                                     Some((usize::from(*n), usize::from(*n)));
                                 builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Hand));
@@ -4343,16 +4321,16 @@ pub(super) fn lower_zone_moves_instruction(
                                 lower_object_filter(&inner, vocabulary)?
                             };
                             if gy_zone == Some(ZoneFilter::YourGraveyard) {
-                                builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
+                                builder.bind_target(BodyTarget::filtered_own_graveyard(obj))?;
                                 builder.graveyard_target_bounds = Some((0, usize::from(*max)));
                                 builder
                                     .instructions
                                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             } else {
-                                builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: gy_zone == Some(ZoneFilter::OpponentGraveyard),
-                                })?;
+                                builder.bind_target(BodyTarget::filtered_any_graveyard(
+                                    obj,
+                                    gy_zone == Some(ZoneFilter::OpponentGraveyard),
+                                ))?;
                                 builder.graveyard_target_bounds = Some((0, usize::from(*max)));
                                 builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, SubjectDestination::Hand));
                             }
@@ -4412,7 +4390,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 lower_object_filter(&inner, vocabulary)?
                             };
                             if gy_zone == Some(ZoneFilter::YourGraveyard) {
-                                builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
+                                builder.bind_target(BodyTarget::filtered_own_graveyard(obj))?;
                                 builder.graveyard_target_bounds = Some((0, usize::MAX));
                                 if *count == TargetCountAst::ChosenX {
                                     builder.x_target_count = true;
@@ -4423,10 +4401,10 @@ pub(super) fn lower_zone_moves_instruction(
                                     .instructions
                                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand());
                             } else {
-                                builder.bind_target(BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: gy_zone == Some(ZoneFilter::OpponentGraveyard),
-                                })?;
+                                builder.bind_target(BodyTarget::filtered_any_graveyard(
+                                    obj,
+                                    gy_zone == Some(ZoneFilter::OpponentGraveyard),
+                                ))?;
                                 builder.graveyard_target_bounds = Some((0, usize::MAX));
                                 if *count == TargetCountAst::ChosenX {
                                     builder.x_target_count = true;
@@ -4456,13 +4434,10 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                     SubjectRefAst::Anaphora(_)
                         if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) =>
+                            && !matches!(builder.target, BodyTarget::Player { .. }) =>
                     {
                         if is_permanent_body_target(builder.target)
-                            || builder.target == BodyTarget::OwnedExiledFlashbackCard
+                            || builder.target == BodyTarget::OWNED_EXILED_FLASHBACK_CARD
                         {
                             builder
                                 .instructions
@@ -4915,7 +4890,7 @@ pub(super) fn lower_zone_moves_instruction(
                                 if !has_extra_bf_mods
                                     && !enters_tapped
                                     && bt
-                                        == BodyTarget::FilteredOwnGraveyardCard(
+                                        == BodyTarget::filtered_own_graveyard(
                                             ObjectFilter::creature(),
                                         )
                                 {
@@ -4925,8 +4900,10 @@ pub(super) fn lower_zone_moves_instruction(
                                 } else if !has_extra_bf_mods
                                     && matches!(
                                         bt,
-                                        BodyTarget::FilteredOwnGraveyardCard(f)
-                                            if !f.allows_instant_or_sorcery()
+                                        BodyTarget::Object {
+                                            zone: TargetZone::OwnGraveyard,
+                                            filter: f,
+                                        } if !f.allows_instant_or_sorcery()
                                     )
                                 {
                                     builder.instructions.push(
@@ -4951,19 +4928,21 @@ pub(super) fn lower_zone_moves_instruction(
                                 if has_extra_bf_mods {
                                     builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, bf_dest));
                                 } else if !enters_tapped
-                                    && bt == BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                                    && bt == BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
                                 {
                                     builder.instructions.push(
                                         crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                                     );
                                 } else if matches!(
                                     bt,
-                                    BodyTarget::FilteredAnyGraveyardCard { filter: f, .. }
-                                        if !f.allows_instant_or_sorcery()
+                                    BodyTarget::Object {
+                                        zone: TargetZone::AnyGraveyard { .. },
+                                        filter: f,
+                                    } if !f.allows_instant_or_sorcery()
                                 ) || matches!(
                                     bt,
-                                    BodyTarget::AnyGraveyardCreature
-                                        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                                    BodyTarget::ANY_GRAVEYARD_CREATURE
+                                        | BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
                                 ) {
                                     builder.instructions.push(
                                         crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(enters_tapped),
@@ -5007,19 +4986,13 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         let bt = match effective_zone {
                             Some(ZoneFilter::YourGraveyard) => {
-                                BodyTarget::FilteredOwnGraveyardCard(obj)
+                                BodyTarget::filtered_own_graveyard(obj)
                             }
                             Some(ZoneFilter::OpponentGraveyard) => {
-                                BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: true,
-                                }
+                                BodyTarget::filtered_any_graveyard(obj, true)
                             }
                             Some(ZoneFilter::AnyGraveyard | ZoneFilter::SingleGraveyard) => {
-                                BodyTarget::FilteredAnyGraveyardCard {
-                                    filter: obj,
-                                    opponents_only: false,
-                                }
+                                BodyTarget::filtered_any_graveyard(obj, false)
                             }
                             _ => return Err("oracle:unsupported-reanimate-zone"),
                         };
@@ -5167,10 +5140,8 @@ pub(super) fn lower_zone_moves_instruction(
                             return Ok(());
                         }
                         let subj_ref = if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) {
+                            && !matches!(builder.target, BodyTarget::Player { .. })
+                        {
                             MoveSubjectRef::TargetObject
                         } else if last_instruction_moved_object(&builder.instructions) {
                             MoveSubjectRef::LastMoved
@@ -5775,7 +5746,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.bind_target(BodyTarget::FilteredExiledCard(obj))?;
+                        builder.bind_target(BodyTarget::filtered_exiled(obj))?;
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
                                 MoveSubjectRef::TargetObject,
@@ -5884,22 +5855,16 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         let bt = match filter.zone {
                             Some(ZoneFilter::YourGraveyard) => {
-                                BodyTarget::FilteredOwnGraveyardCard(obj)
+                                BodyTarget::filtered_own_graveyard(obj)
                             }
                             Some(
                                 ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
-                            ) => BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: true,
-                            },
+                            ) => BodyTarget::filtered_any_graveyard(obj, true),
                             Some(
                                 ZoneFilter::AnyGraveyard
                                 | ZoneFilter::AllGraveyards
                                 | ZoneFilter::SingleGraveyard,
-                            ) => BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: false,
-                            },
+                            ) => BodyTarget::filtered_any_graveyard(obj, false),
                             _ => return Err("oracle:unsupported-move-zone"),
                         };
                         builder.bind_target(bt)?;
@@ -6013,10 +5978,8 @@ pub(super) fn lower_zone_moves_instruction(
                             return Ok(());
                         }
                         let subj_ref = if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) {
+                            && !matches!(builder.target, BodyTarget::Player { .. })
+                        {
                             MoveSubjectRef::TargetObject
                         } else if is_last_moved_card_anaphora(raw)
                             && (last_instruction_moved_object(&builder.instructions)
@@ -6738,22 +6701,16 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         let bt = match filter.zone {
                             Some(ZoneFilter::YourGraveyard) => {
-                                BodyTarget::FilteredOwnGraveyardCard(obj)
+                                BodyTarget::filtered_own_graveyard(obj)
                             }
                             Some(
                                 ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
-                            ) => BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: true,
-                            },
+                            ) => BodyTarget::filtered_any_graveyard(obj, true),
                             Some(
                                 ZoneFilter::AnyGraveyard
                                 | ZoneFilter::AllGraveyards
                                 | ZoneFilter::SingleGraveyard,
-                            ) => BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: false,
-                            },
+                            ) => BodyTarget::filtered_any_graveyard(obj, false),
                             _ => return Err("oracle:unsupported-move-zone"),
                         };
                         builder.bind_target(bt)?;
@@ -7328,7 +7285,7 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.bind_target(BodyTarget::FilteredExiledCard(obj))?;
+                        builder.bind_target(BodyTarget::filtered_exiled(obj))?;
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
                                 MoveSubjectRef::TargetObject,
@@ -7552,22 +7509,16 @@ pub(super) fn lower_zone_moves_instruction(
                         };
                         let bt = match filter.zone {
                             Some(ZoneFilter::YourGraveyard) => {
-                                BodyTarget::FilteredOwnGraveyardCard(obj)
+                                BodyTarget::filtered_own_graveyard(obj)
                             }
                             Some(
                                 ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards,
-                            ) => BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: true,
-                            },
+                            ) => BodyTarget::filtered_any_graveyard(obj, true),
                             Some(
                                 ZoneFilter::AnyGraveyard
                                 | ZoneFilter::AllGraveyards
                                 | ZoneFilter::SingleGraveyard,
-                            ) => BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: false,
-                            },
+                            ) => BodyTarget::filtered_any_graveyard(obj, false),
                             _ => return Err("oracle:unsupported-move-zone"),
                         };
                         builder.bind_target(bt)?;
@@ -7634,10 +7585,10 @@ pub(super) fn lower_zone_moves_instruction(
                     SubjectRefAst::Anaphora(_)
                         if matches!(
                             builder.target,
-                            BodyTarget::SinglePermanent
-                                | BodyTarget::SingleCreature
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_)
+                            BodyTarget::Object {
+                                zone: TargetZone::Battlefield,
+                                ..
+                            }
                         ) && matches!(
                             pd,
                             PublicZoneDestination::Hand | PublicZoneDestination::Exile
@@ -7654,10 +7605,7 @@ pub(super) fn lower_zone_moves_instruction(
                     }
                     SubjectRefAst::Anaphora(_)
                         if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            )
+                            && !matches!(builder.target, BodyTarget::Player { .. })
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
                         builder.instructions.push(
@@ -7695,10 +7643,8 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
-                        if matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) && has_checked_revealed_top_strict(&builder.instructions)
+                        if matches!(builder.target, BodyTarget::Player { .. })
+                            && has_checked_revealed_top_strict(&builder.instructions)
                             && let Some(sd) = subj_dest_from_pd(pd) =>
                     {
                         builder.instructions.push(
@@ -8214,10 +8160,7 @@ pub(super) fn lower_zone_moves_instruction(
                         }
                         SubjectRefAst::Anaphora(raw) => {
                             if trial.target != BodyTarget::None
-                                && !matches!(
-                                    trial.target,
-                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                )
+                                && !matches!(trial.target, BodyTarget::Player { .. })
                             {
                                 Some(spellwake_engine::toolbox::ObjectQuery::Targets)
                             } else if last_instruction_moved_object(&trial.instructions)
@@ -8526,10 +8469,8 @@ pub(super) fn lower_zone_moves_instruction(
                         }
                         SubjectRefAst::Anaphora(raw) => {
                             let q_opt = if trial.target != BodyTarget::None
-                                && !matches!(
-                                    trial.target,
-                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                ) {
+                                && !matches!(trial.target, BodyTarget::Player { .. })
+                            {
                                 Some(spellwake_engine::toolbox::ObjectQuery::Targets)
                             } else if last_instruction_moved_object(&trial.instructions)
                                 || (is_last_moved_card_anaphora(raw)
@@ -10138,11 +10079,11 @@ pub(super) fn lower_zone_moves_instruction(
                     ),
                 },
                 "target player" | "target player's" => (
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 ),
                 "target opponent" | "target opponent's" => (
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                 ),
                 "each opponent" | "each opponent's" => (None, AffectedPlayers::EachOpponent),
@@ -10579,10 +10520,7 @@ pub(super) fn lower_zone_moves_instruction(
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 builder
                     .instructions
@@ -10850,14 +10788,14 @@ pub(super) fn lower_zone_moves_instruction(
                         Ok(())
                     }
                     "target player's hand" => {
-                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                         builder
                         .instructions
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::TargetPlayer));
                         Ok(())
                     }
                     "target opponent's hand" => {
-                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                         builder
                         .instructions
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::reveal_player_hand(ResolvingPlayer::TargetPlayer));
@@ -10927,11 +10865,11 @@ pub(super) fn lower_zone_moves_instruction(
                     (None, ResolvingPlayer::Controller)
                 }
                 "target player" | "target player's" | "targetplayer" => (
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     ResolvingPlayer::TargetPlayer,
                 ),
                 "target opponent" | "target opponent's" | "targetopponent" => (
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     ResolvingPlayer::TargetPlayer,
                 ),
                 "that player" | "that player's" | "thatplayer" | "their" => (
@@ -11651,11 +11589,11 @@ pub(super) fn resolve_select_zone(
             SourceZoneFilter::Hand,
         )),
         Some(ZoneFilter::TargetPlayerHand) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok((ResolvingPlayer::TargetPlayer, SourceZoneFilter::Hand))
         }
         Some(ZoneFilter::TargetOpponentHand) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok((ResolvingPlayer::TargetPlayer, SourceZoneFilter::Hand))
         }
         Some(ZoneFilter::YourGraveyard) => {
@@ -11677,11 +11615,11 @@ pub(super) fn resolve_select_zone(
             SourceZoneFilter::Graveyard,
         )),
         Some(ZoneFilter::TargetPlayerGraveyard) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok((ResolvingPlayer::TargetPlayer, SourceZoneFilter::Graveyard))
         }
         Some(ZoneFilter::TargetOpponentGraveyard) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok((ResolvingPlayer::TargetPlayer, SourceZoneFilter::Graveyard))
         }
         Some(ZoneFilter::DefendingPlayerGraveyard) => Ok((
@@ -12043,10 +11981,12 @@ fn damage_no_regen_object_query(
                     Some(ObjectQuery::Targets)
                 } else if matches!(
                     target,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
+                    BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::CreatureOrPlayer
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                    )
                 ) {
                     Some(ObjectQuery::filtered(
                         ObjectQuery::Targets,
@@ -12065,10 +12005,12 @@ fn damage_no_regen_object_query(
                         Some(ObjectQuery::Targets)
                     } else if matches!(
                         target,
-                        BodyTarget::SingleAnyTarget
-                            | BodyTarget::SingleCreatureOrPlayer
-                            | BodyTarget::SinglePlayerOrPlaneswalker
-                            | BodyTarget::SingleOpponentOrPlaneswalker
+                        BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker
+                        )
                     ) {
                         Some(ObjectQuery::filtered(
                             ObjectQuery::Targets,
@@ -12166,32 +12108,24 @@ fn extract_prior_resolving_player_for_shuffle(
             .or_else(|| extract_prior_resolving_player_for_shuffle(&body.instructions, in_trigger)),
         Instruction::FixedTargetClause(body) => {
             let from_bt = match body.target {
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                    Some(ResolvingPlayer::TargetPlayer)
+                BodyTarget::Player { .. } => Some(ResolvingPlayer::TargetPlayer),
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
                 }
-                BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_)
-                | BodyTarget::SingleAnyTarget
-                | BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker => {
-                    Some(ResolvingPlayer::TargetController)
-                }
-                BodyTarget::SingleSpell(_)
-                | BodyTarget::SingleStackObject(_)
-                | BodyTarget::SingleStackEntry
-                | BodyTarget::ControlledAbility { .. }
-                | BodyTarget::StackEntryTargetingControlledPermanent => {
+                | BodyTarget::AnyTarget(
+                    AnyTargetKind::Any
+                    | AnyTargetKind::CreatureOrPlayer
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker,
+                ) => Some(ResolvingPlayer::TargetController),
+                BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                     Some(ResolvingPlayer::TargetSpellController)
                 }
-                BodyTarget::FilteredAnyGraveyardCard { .. }
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => {
-                    Some(ResolvingPlayer::TargetOwner)
-                }
+                BodyTarget::Object {
+                    zone: TargetZone::AnyGraveyard { .. },
+                    ..
+                } => Some(ResolvingPlayer::TargetOwner),
                 _ => None,
             };
             from_bt.filter(|p| valid(*p)).or_else(|| {
@@ -12704,19 +12638,19 @@ pub(super) fn parse_lib_placement_for_subject(
 pub(super) fn is_valid_put_target_in_library_target(bt: &BodyTarget) -> bool {
     matches!(
         bt,
-        BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::SingleAnyTarget
-            | BodyTarget::SingleSpell(_)
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SingleOwnGraveyardCard
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-            | BodyTarget::FilteredOwnGraveyardCard(_)
-            | BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::FilteredExiledCard(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield
+                | TargetZone::OwnGraveyard
+                | TargetZone::AnyGraveyard { .. }
+                | TargetZone::Exile {
+                    owned_flashback_only: false,
+                },
+            ..
+        } | BodyTarget::AnyTarget(AnyTargetKind::Any)
+            | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            }
     )
 }
 
@@ -12899,28 +12833,28 @@ pub(super) fn resolve_return_select_zone(
         return Ok((ResolvingPlayer::Controller, SourceZoneFilter::CommandZone));
     }
     if fl.contains("target opponent's graveyard") {
-        builder.bind_target(BodyTarget::SingleOpponent)?;
+        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
         return Ok((
             ResolvingPlayer::Controller,
             SourceZoneFilter::TargetPlayerGraveyard,
         ));
     }
     if fl.contains("target player's graveyard") {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
         return Ok((
             ResolvingPlayer::Controller,
             SourceZoneFilter::TargetPlayerGraveyard,
         ));
     }
     if fl.contains("target opponent's hand") {
-        builder.bind_target(BodyTarget::SingleOpponent)?;
+        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
         return Ok((
             ResolvingPlayer::Controller,
             SourceZoneFilter::TargetPlayerHand,
         ));
     }
     if fl.contains("target player's hand") {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
         return Ok((
             ResolvingPlayer::Controller,
             SourceZoneFilter::TargetPlayerHand,
@@ -13316,10 +13250,10 @@ pub(super) fn lower_search_library_instruction<'a>(
     {
         if matches!(
             builder.target,
-            BodyTarget::SingleCreature
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
         ) {
             *reference = MoveSubjectRef::TargetObject;
         } else if !in_trigger {
@@ -13393,11 +13327,11 @@ pub(super) fn resolve_graveyard_group_players(
             Ok(Some(AffectedPlayers::One(rp)))
         }
         Some(ZoneFilter::TargetPlayerGraveyard) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(Some(AffectedPlayers::One(ResolvingPlayer::TargetPlayer)))
         }
         Some(ZoneFilter::TargetOpponentGraveyard) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(Some(AffectedPlayers::One(ResolvingPlayer::TargetPlayer)))
         }
         Some(ZoneFilter::DefendingPlayerGraveyard) => {
@@ -13413,10 +13347,10 @@ pub(super) fn resolve_graveyard_group_players(
                 return Ok(None);
             }
             if fz.contains("target opponent's graveyard") {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 Ok(Some(AffectedPlayers::One(ResolvingPlayer::TargetPlayer)))
             } else if fz.contains("target player's graveyard") {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 Ok(Some(AffectedPlayers::One(ResolvingPlayer::TargetPlayer)))
             } else if fz.contains("that player's graveyard") || fz.contains("their graveyard") {
                 let rp = lower_resolving_player_in_context(
@@ -13496,7 +13430,7 @@ fn zone_filter_to_object_query(
             Ok(ObjectQuery::zone(QueryZone::Graveyard(each()), obj))
         }
         ZoneFilter::TargetPlayerGraveyard => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(ObjectQuery::zone(
                 QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(
                     ResolvingPlayer::TargetPlayer,
@@ -13505,7 +13439,7 @@ fn zone_filter_to_object_query(
             ))
         }
         ZoneFilter::TargetOpponentGraveyard => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(ObjectQuery::zone(
                 QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(
                     ResolvingPlayer::TargetPlayer,
@@ -13545,7 +13479,7 @@ fn zone_filter_to_object_query(
             ))
         }
         ZoneFilter::TargetPlayerHand => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(ObjectQuery::zone(
                 QueryZone::Hand(Box::new(PlayerSelector::Resolving(
                     ResolvingPlayer::TargetPlayer,
@@ -13554,7 +13488,7 @@ fn zone_filter_to_object_query(
             ))
         }
         ZoneFilter::TargetOpponentHand => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(ObjectQuery::zone(
                 QueryZone::Hand(Box::new(PlayerSelector::Resolving(
                     ResolvingPlayer::TargetPlayer,
@@ -13570,7 +13504,7 @@ fn zone_filter_to_object_query(
         }
         ZoneFilter::YourLibrary => Ok(ObjectQuery::zone(QueryZone::Library(ctrl()), obj)),
         ZoneFilter::TargetPlayerLibrary => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(ObjectQuery::zone(
                 QueryZone::Library(Box::new(PlayerSelector::Resolving(
                     ResolvingPlayer::TargetPlayer,
@@ -13579,7 +13513,7 @@ fn zone_filter_to_object_query(
             ))
         }
         ZoneFilter::TargetOpponentLibrary => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(ObjectQuery::zone(
                 QueryZone::Library(Box::new(PlayerSelector::Resolving(
                     ResolvingPlayer::TargetPlayer,
@@ -13749,11 +13683,11 @@ pub(super) fn parse_ordered_zone_slice_anaphora_query(
     let rp = match owner_raw {
         "your" => ResolvingPlayer::Controller,
         "target player's" | "target player" => {
-            trial.bind_target(BodyTarget::SinglePlayer)?;
+            trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
             ResolvingPlayer::TargetPlayer
         }
         "target opponent's" | "target opponent" => {
-            trial.bind_target(BodyTarget::SingleOpponent)?;
+            trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             ResolvingPlayer::TargetPlayer
         }
         "that player's" | "that player" | "their" => {
@@ -14151,10 +14085,7 @@ fn lower_exile_random_or_face_down(
                         exile_dest,
                     )));
             } else if trial.target != BodyTarget::None
-                && !matches!(
-                    trial.target,
-                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                )
+                && !matches!(trial.target, BodyTarget::Player { .. })
             {
                 trial
                     .instructions
@@ -14334,7 +14265,7 @@ mod wave10_zone_tests {
         let ProgramKind::Spell(spell) = program.kind else {
             panic!("expected spell");
         };
-        assert_eq!(spell.body.target, BodyTarget::SinglePlayer);
+        assert_eq!(spell.body.target, BodyTarget::SINGLE_PLAYER);
         assert_eq!(
             spell.body.instructions,
             vec![

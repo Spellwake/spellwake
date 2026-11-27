@@ -27,7 +27,7 @@ fn cmm_zones_squee_and_reassembling_skeleton_return_from_their_own_graveyards() 
                     A,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -130,7 +130,7 @@ fn cmm_zones_hanna_and_living_lightning_recover_only_their_printed_graveyard_car
                     A,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,

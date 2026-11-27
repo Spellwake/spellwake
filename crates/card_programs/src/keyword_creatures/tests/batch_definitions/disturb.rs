@@ -35,7 +35,7 @@ fn shared_disturb_baithook_angler_casts_its_flying_reverse_from_the_graveyard_an
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -53,7 +53,7 @@ fn shared_disturb_baithook_angler_casts_its_flying_reverse_from_the_graveyard_an
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -71,7 +71,7 @@ fn shared_disturb_baithook_angler_casts_its_flying_reverse_from_the_graveyard_an
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
                 ),
@@ -81,7 +81,7 @@ fn shared_disturb_baithook_angler_casts_its_flying_reverse_from_the_graveyard_an
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -160,7 +160,7 @@ fn shared_disturb_drogskol_infantry_casts_its_aura_reverse_with_a_creature_targe
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

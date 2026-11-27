@@ -95,15 +95,15 @@ fn targeted_selection_consumes_only_the_exact_player_capability() {
     let target_player = AffectedPlayers::One(ResolvingPlayer::TargetPlayer);
     for effect in selected_effects(target_player, crate::program::ValueExpr::Literal(1.into())) {
         assert_eq!(
-            check(BodyTarget::SinglePlayer, vec![effect.clone()]),
+            check(BodyTarget::SINGLE_PLAYER, vec![effect.clone()]),
             Ok(())
         );
         for wrong in [
             BodyTarget::None,
-            BodyTarget::SinglePermanent,
-            BodyTarget::SingleCreature,
-            BodyTarget::SingleCreatureOrPlayer,
-            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+            BodyTarget::SINGLE_PERMANENT,
+            BodyTarget::SINGLE_CREATURE,
+            BodyTarget::SINGLE_CREATURE_OR_PLAYER,
+            BodyTarget::single_spell(crate::program::SpellFilter::any()),
         ] {
             assert_eq!(
                 check(wrong, vec![effect.clone()]),
@@ -122,7 +122,7 @@ fn nontargeted_scopes_cannot_hide_a_phantom_player_target() {
         for effect in selected_effects(scope, crate::program::ValueExpr::Literal(1.into())) {
             assert_eq!(check(BodyTarget::None, vec![effect.clone()]), Ok(()));
             assert_eq!(
-                check(BodyTarget::SinglePlayer, vec![effect]),
+                check(BodyTarget::SINGLE_PLAYER, vec![effect]),
                 Err(DefinitionError::PhantomTarget)
             );
         }
@@ -138,13 +138,13 @@ fn spell_controller_and_player_roles_remain_distinct_capabilities() {
     ) {
         assert_eq!(
             check(
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![effect.clone()]
             ),
             Ok(())
         );
         assert_eq!(
-            check(BodyTarget::SinglePlayer, vec![effect]),
+            check(BodyTarget::SINGLE_PLAYER, vec![effect]),
             Err(DefinitionError::ResolvingPlayerTarget)
         );
     }
@@ -168,11 +168,11 @@ fn target_player_uses_the_shared_optional_and_payment_role_owner() {
         )),
     ] {
         assert_eq!(
-            check(BodyTarget::SinglePlayer, vec![effect.clone(), gain()]),
+            check(BodyTarget::SINGLE_PLAYER, vec![effect.clone(), gain()]),
             Ok(())
         );
         assert_eq!(
-            check(BodyTarget::SingleCreatureOrPlayer, vec![effect, gain()]),
+            check(BodyTarget::SINGLE_CREATURE_OR_PLAYER, vec![effect, gain()]),
             Err(DefinitionError::ResolvingPlayerTarget)
         );
     }
@@ -396,7 +396,7 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
     }
     assert_eq!(
         check(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 Instruction::Jump { destination: 2 },
                 Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
@@ -416,12 +416,12 @@ fn possible_sacrifice_departure_rejects_straight_line_and_joined_copy_donors() {
         crate::program::ValueExpr::Literal(1.into()),
     );
     assert_eq!(
-        check(BodyTarget::SinglePermanent, vec![positive.clone(), copy()]),
+        check(BodyTarget::SINGLE_PERMANENT, vec![positive.clone(), copy()]),
         Err(DefinitionError::InvalidInstruction)
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![branch(2), positive, copy()]
         ),
         Err(DefinitionError::InvalidInstruction)
@@ -436,14 +436,14 @@ fn possible_sacrifice_departure_rejects_straight_line_and_joined_copy_donors() {
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![choose(), nonliteral, copy()]
         ),
         Err(DefinitionError::InvalidInstruction)
     );
     assert_eq!(
         check_triggered(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             TriggerGrouping::EachOccurrence,
             vec![
                 sacrifice(
@@ -467,7 +467,7 @@ fn sacrifice_transfer_does_not_leak_to_disjoint_or_unreachable_copy_paths() {
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 branch(3),
                 positive.clone(),
@@ -480,7 +480,7 @@ fn sacrifice_transfer_does_not_leak_to_disjoint_or_unreachable_copy_paths() {
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 Instruction::Jump { destination: 2 },
                 positive.clone(),
@@ -490,7 +490,7 @@ fn sacrifice_transfer_does_not_leak_to_disjoint_or_unreachable_copy_paths() {
         Ok(())
     );
     assert_eq!(
-        check(BodyTarget::SinglePermanent, vec![copy(), positive]),
+        check(BodyTarget::SINGLE_PERMANENT, vec![copy(), positive]),
         Ok(())
     );
 }
@@ -502,12 +502,12 @@ fn exact_zero_sacrifice_preserves_both_false_and_true_incoming_movement_facts() 
         crate::program::ValueExpr::Literal(0.into()),
     );
     assert_eq!(
-        check(BodyTarget::SinglePermanent, vec![zero.clone(), copy()]),
+        check(BodyTarget::SINGLE_PERMANENT, vec![zero.clone(), copy()]),
         Ok(())
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
@@ -523,7 +523,7 @@ fn exact_zero_sacrifice_preserves_both_false_and_true_incoming_movement_facts() 
     );
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 branch(2),
                 sacrifice(
@@ -542,7 +542,7 @@ fn exact_zero_sacrifice_preserves_both_false_and_true_incoming_movement_facts() 
 fn discard_does_not_invalidate_a_battlefield_copy_donor() {
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
                     AffectedPlayers::EachPlayer,

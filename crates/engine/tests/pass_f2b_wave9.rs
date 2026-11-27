@@ -277,7 +277,7 @@ fn destroy_permanent_instant() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -487,7 +487,7 @@ fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
     let chaos_warp = validated(
         Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SinglePermanent, chaos_warp_ops),
+            ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, chaos_warp_ops),
         ),
         &vocab,
     );
@@ -948,7 +948,7 @@ fn add_mana_for_player_and_cr605_1b_enchanted_land_tapped() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
                         ResolvingPlayer::TargetPlayer,
@@ -965,7 +965,7 @@ fn add_mana_for_player_and_cr605_1b_enchanted_land_tapped() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
                         ResolvingPlayer::TargetPlayer,

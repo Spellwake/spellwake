@@ -37,7 +37,7 @@ pub(super) fn compile(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::enchantment()),
+                BodyTarget::filtered_own_graveyard(ObjectFilter::enchantment()),
                 vec![
                     Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,

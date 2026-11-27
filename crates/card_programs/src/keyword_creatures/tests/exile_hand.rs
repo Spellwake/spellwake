@@ -270,7 +270,7 @@ fn real_foretell_and_suspend_cards_pay_and_cast_from_actual_exile() {
             let p = state.pending_decision().unwrap();
             let target = match plan {
                 BodyTarget::None => None,
-                BodyTarget::SingleCreature => Some(TargetRef::Object(oid(&state, 2))),
+                BodyTarget::SINGLE_CREATURE => Some(TargetRef::Object(oid(&state, 2))),
                 other => panic!("{} target {other:?}", row.name),
             };
             state = advance(
@@ -302,8 +302,11 @@ fn real_foretell_and_suspend_cards_pay_and_cast_from_actual_exile() {
             }
             let target = match plan {
                 BodyTarget::None => None,
-                BodyTarget::SingleCreature => Some(TargetRef::Object(oid(&state, 2))),
-                BodyTarget::SingleSpell(_) => {
+                BodyTarget::SINGLE_CREATURE => Some(TargetRef::Object(oid(&state, 2))),
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                } => {
                     state = advance(
                         &state,
                         a,

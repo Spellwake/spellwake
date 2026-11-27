@@ -939,7 +939,7 @@ impl ActivatedAbility {
             mana_cost,
             source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Reinforce),
             body: ExecutableBody::new(
-                crate::program::BodyTarget::SingleCreature,
+                crate::program::BodyTarget::SINGLE_CREATURE,
                 vec![crate::program::Instruction::MutateObject(Box::new(
                     crate::toolbox::MutateObjectSpec::all(
                         crate::toolbox::ObjectQuery::Targets,

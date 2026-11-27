@@ -2144,7 +2144,11 @@ fn pass_e12_filter_and_chooser_fidelity() {
     let ProgramKind::Spell(or_spell) = or_prog.kind else {
         panic!("expected spell");
     };
-    let BodyTarget::FilteredPermanent(filter) = or_spell.body.target else {
+    let BodyTarget::Object {
+        zone: TargetZone::Battlefield,
+        filter,
+    } = or_spell.body.target
+    else {
         panic!("expected filtered permanent target");
     };
     let (c1, c2) = filter.clauses();

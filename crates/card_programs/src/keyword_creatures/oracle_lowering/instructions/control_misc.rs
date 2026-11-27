@@ -569,23 +569,18 @@ pub(super) fn lower_control_misc_instruction(
                     ResolvingPlayer::Controller,
                 ),
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     )
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     )
                 }
-                PlayerRefAst::ThatPlayer
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
-                {
+                PlayerRefAst::ThatPlayer if matches!(builder.target, BodyTarget::Player { .. }) => {
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     )
@@ -1104,11 +1099,11 @@ pub(super) fn lower_control_misc_instruction(
                 let who_low = who_raw.trim().trim_end_matches('.').to_ascii_lowercase();
                 match who_low.as_str() {
                     "target player" => {
-                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                         return Ok(());
                     }
                     "target opponent" => {
-                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                         return Ok(());
                     }
                     "an opponent" | "any opponent" => {
@@ -1192,21 +1187,21 @@ pub(super) fn lower_control_misc_instruction(
                         (false, cleaned_choice)
                     };
                 if target_text == "any target" {
-                    builder.bind_target(BodyTarget::SingleAnyTarget)?;
+                    builder.bind_target(BodyTarget::SINGLE_ANY_TARGET)?;
                     if is_up_to_one {
                         builder.up_to_one_target = true;
                     }
                     return Ok(());
                 }
                 if target_text == "target player" {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     if is_up_to_one {
                         builder.up_to_one_target = true;
                     }
                     return Ok(());
                 }
                 if target_text == "target opponent" {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     if is_up_to_one {
                         builder.up_to_one_target = true;
                     }
@@ -1538,11 +1533,11 @@ pub(super) fn lower_control_misc_instruction(
             if builder.target == BodyTarget::None {
                 match raw_player_ast {
                     PlayerRefAst::TargetPlayer => {
-                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                         player_ast = PlayerRefAst::ThatPlayer;
                     }
                     PlayerRefAst::TargetOpponent => {
-                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                         player_ast = PlayerRefAst::ThatPlayer;
                     }
                     _ => {}
@@ -1661,12 +1656,12 @@ pub(super) fn lower_control_misc_instruction(
             if builder.target == BodyTarget::None {
                 match raw_player_ast {
                     PlayerRefAst::TargetPlayer => {
-                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                         player_ast = PlayerRefAst::ThatPlayer;
                         bound_unless_target = true;
                     }
                     PlayerRefAst::TargetOpponent => {
-                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                         player_ast = PlayerRefAst::ThatPlayer;
                         bound_unless_target = true;
                     }
@@ -2018,9 +2013,9 @@ pub(super) fn lower_control_misc_instruction(
                 ) {
                     let mut trial = builder.clone();
                     if *player == PlayerRefAst::TargetOpponent {
-                        trial.bind_target(BodyTarget::SingleOpponent)?;
+                        trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     } else if *player == PlayerRefAst::TargetPlayer {
-                        trial.bind_target(BodyTarget::SinglePlayer)?;
+                        trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     }
                     let rewritten_body: Vec<InstructionAst> = body
                         .iter()
@@ -2401,11 +2396,11 @@ pub(super) fn lower_control_misc_instruction(
         }
         InstructionAst::ChoosePlayerTarget { player } => match *player {
             PlayerRefAst::TargetPlayer => {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 Ok(())
             }
             PlayerRefAst::TargetOpponent => {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 Ok(())
             }
             PlayerRefAst::AnyOpponent => {
@@ -2978,10 +2973,8 @@ pub(super) fn lower_control_misc_instruction(
                                 | "that revealed card"
                         ) {
                             let q = if b.target != BodyTarget::None
-                                && !matches!(
-                                    b.target,
-                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                ) {
+                                && !matches!(b.target, BodyTarget::Player { .. })
+                            {
                                 spellwake_engine::toolbox::ObjectQuery::Targets
                             } else if last_instruction_moved_object(&b.instructions)
                                 || has_prior_moved_object(&b.instructions)
@@ -3240,7 +3233,7 @@ fn try_lower_choose_objects_new_primitives(
                 "from target opponent's graveyard" | "in target opponent's graveyard"
             ) {
                 trial
-                    .bind_target(BodyTarget::SingleOpponent)
+                    .bind_target(BodyTarget::SINGLE_OPPONENT)
                     .ok()
                     .map(|()| {
                         spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
@@ -3253,7 +3246,7 @@ fn try_lower_choose_objects_new_primitives(
                 suffix,
                 "from target player's graveyard" | "in target player's graveyard"
             ) {
-                trial.bind_target(BodyTarget::SinglePlayer).ok().map(|()| {
+                trial.bind_target(BodyTarget::SINGLE_PLAYER).ok().map(|()| {
                     spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::TargetPlayer,
@@ -3275,7 +3268,7 @@ fn try_lower_choose_objects_new_primitives(
                 "from target opponent's hand" | "in target opponent's hand"
             ) {
                 trial
-                    .bind_target(BodyTarget::SingleOpponent)
+                    .bind_target(BodyTarget::SINGLE_OPPONENT)
                     .ok()
                     .map(|()| {
                         spellwake_engine::toolbox::QueryZone::Hand(Box::new(
@@ -3288,7 +3281,7 @@ fn try_lower_choose_objects_new_primitives(
                 suffix,
                 "from target player's hand" | "in target player's hand"
             ) {
-                trial.bind_target(BodyTarget::SinglePlayer).ok().map(|()| {
+                trial.bind_target(BodyTarget::SINGLE_PLAYER).ok().map(|()| {
                     spellwake_engine::toolbox::QueryZone::Hand(Box::new(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::TargetPlayer,
@@ -3507,10 +3500,7 @@ fn try_lower_choose_objects_new_primitives(
             }
             && !obj.has_target_player()
         {
-            if matches!(
-                builder.target,
-                BodyTarget::SingleOpponent | BodyTarget::SinglePlayer
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 builder.instructions.extend(
                     spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
                         AffectedPlayers::One(ResolvingPlayer::Controller),
@@ -3906,13 +3896,13 @@ fn try_lower_choose_objects_new_primitives(
                 Some((
                     p,
                     SourceZoneFilter::TargetPlayerGraveyard,
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                 ))
             } else if let Some(p) = body_raw.strip_suffix(" in target player's graveyard") {
                 Some((
                     p,
                     SourceZoneFilter::TargetPlayerGraveyard,
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                 ))
             } else if let Some(p) = body_raw.strip_suffix(" in an opponent's graveyard")
                 && chooser == PlayerRefAst::You
@@ -4248,7 +4238,7 @@ fn try_lower_choose_objects_new_primitives(
             .or_else(|| body_raw.strip_suffix(" from target opponent's graveyard"))
         {
             trial_gy
-                .bind_target(BodyTarget::SingleOpponent)
+                .bind_target(BodyTarget::SINGLE_OPPONENT)
                 .ok()
                 .map(|()| {
                     (
@@ -4265,7 +4255,7 @@ fn try_lower_choose_objects_new_primitives(
             .or_else(|| body_raw.strip_suffix(" from target player's graveyard"))
         {
             trial_gy
-                .bind_target(BodyTarget::SinglePlayer)
+                .bind_target(BodyTarget::SINGLE_PLAYER)
                 .ok()
                 .map(|()| {
                     (
@@ -5777,13 +5767,12 @@ pub(super) fn splice_probed_body(
 pub(super) fn is_graveyard_body_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleOwnGraveyardCard
-            | BodyTarget::FilteredOwnGraveyardCard(_)
-            | BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::RecentlyDiscardedOrFromLibrary
+        BodyTarget::Object {
+            zone: TargetZone::OwnGraveyard
+                | TargetZone::AnyGraveyard { .. }
+                | TargetZone::RecentlyDiscardedOrFromLibrary,
+            ..
+        }
     )
 }
 
@@ -8358,48 +8347,38 @@ fn is_safe_resolving_player_for_shuffle(
         | ResolvingPlayer::AttachedHostController
         | ResolvingPlayer::SourceOwner
         | ResolvingPlayer::SourceChosenPlayer => has_source,
-        ResolvingPlayer::TargetPlayer => matches!(
-            builder.target,
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        ),
+        ResolvingPlayer::TargetPlayer => matches!(builder.target, BodyTarget::Player { .. }),
         ResolvingPlayer::TargetController => matches!(
             builder.target,
-            BodyTarget::SingleOpponent
-                | BodyTarget::SinglePlayer
-                | BodyTarget::SingleSpell(_)
-                | BodyTarget::SingleStackObject(_)
-                | BodyTarget::SingleStackEntry
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_)
-                | BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker
-                | BodyTarget::SingleAnyTarget
+            BodyTarget::Player { .. }
+                | BodyTarget::Spell { .. }
+                | BodyTarget::StackEntry(StackTargetKind::AnyEntry)
+                | BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+                | BodyTarget::AnyTarget(
+                    AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker
+                )
         ),
         ResolvingPlayer::TargetOwner => matches!(
             builder.target,
-            BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_)
-                | BodyTarget::SingleOwnGraveyardCard
-                | BodyTarget::FilteredOwnGraveyardCard(_)
-                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::SingleSpell(_)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield
+                    | TargetZone::OwnGraveyard
+                    | TargetZone::AnyGraveyard { .. },
+                ..
+            } | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            }
         ),
-        ResolvingPlayer::TargetSpellController => matches!(
-            builder.target,
-            BodyTarget::SingleSpell(_)
-                | BodyTarget::SingleStackObject(_)
-                | BodyTarget::SingleStackEntry
-                | BodyTarget::ControlledAbility { .. }
-                | BodyTarget::StackEntryTargetingControlledPermanent
-        ),
+        ResolvingPlayer::TargetSpellController => {
+            matches!(builder.target, BodyTarget::Spell { .. } | BodyTarget::StackEntry(_))
+        }
         ResolvingPlayer::ChosenPlayer => builder.instructions.iter().any(|op| {
             matches!(
                 op,
@@ -8597,25 +8576,22 @@ pub(super) fn lower_shuffle_that_player_fallback(
     // 1b. Bound spell/permanent/graveyard/player target when prior instruction acted on it
     // (e.g. Counter target spell ... Then that player shuffles).
     let target_rp = match builder.target {
-        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-            Some(ResolvingPlayer::TargetPlayer)
-        }
-        BodyTarget::SingleSpell(_)
-        | BodyTarget::SingleStackObject(_)
-        | BodyTarget::SingleStackEntry
-        | BodyTarget::ControlledAbility { .. }
-        | BodyTarget::StackEntryTargetingControlledPermanent => {
+        BodyTarget::Player { .. } => Some(ResolvingPlayer::TargetPlayer),
+        BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
             Some(ResolvingPlayer::TargetSpellController)
         }
-        BodyTarget::SinglePermanent
-        | BodyTarget::SingleCreature
-        | BodyTarget::SinglePlaneswalker
-        | BodyTarget::FilteredPermanent(_) => Some(ResolvingPlayer::TargetController),
-        BodyTarget::AnyGraveyardCard
-        | BodyTarget::AnyGraveyardCreature
-        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-        | BodyTarget::FilteredAnyGraveyardCard { .. }
-        | BodyTarget::FilteredExiledCard(_) => Some(ResolvingPlayer::TargetOwner),
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        } => Some(ResolvingPlayer::TargetController),
+        BodyTarget::Object {
+            zone:
+                TargetZone::AnyGraveyard { .. }
+                | TargetZone::Exile {
+                    owned_flashback_only: false,
+                },
+            ..
+        } => Some(ResolvingPlayer::TargetOwner),
         _ => None,
     };
     if let Some(rp) = target_rp

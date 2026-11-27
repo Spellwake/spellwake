@@ -147,7 +147,7 @@ pub(super) fn definition(
             None,
             Program::instant(
                 cost(1, 1),
-                ExecutableBody::new(BodyTarget::SinglePlayer, vec![sacrifice(targeted)]),
+                ExecutableBody::new(BodyTarget::SINGLE_PLAYER, vec![sacrifice(targeted)]),
             ),
         ),
         Kind::Verdict => (
@@ -161,7 +161,7 @@ pub(super) fn definition(
             Program::instant(
                 cost(0, 2),
                 ExecutableBody::new(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![
                         sacrifice(targeted),
                         Instruction::AdjustLife(Box::new(
@@ -203,7 +203,7 @@ pub(super) fn definition(
             Program::sorcery(
                 cost(2, 1),
                 ExecutableBody::new(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![Instruction::ZoneOp(Box::new(
                         spellwake_engine::toolbox::ZoneOpSpec::discard(
                             targeted,
@@ -465,7 +465,7 @@ mod tests {
                 Program::instant(
                     exact_cost(1, 1),
                     ExecutableBody::new(
-                        BodyTarget::SinglePlayer,
+                        BodyTarget::SINGLE_PLAYER,
                         vec![expected_sacrifice(targeted)],
                     ),
                 ),
@@ -475,7 +475,7 @@ mod tests {
                 Program::instant(
                     exact_cost(0, 2),
                     ExecutableBody::new(
-                        BodyTarget::SinglePlayer,
+                        BodyTarget::SINGLE_PLAYER,
                         vec![
                             expected_sacrifice(targeted),
                             Instruction::AdjustLife(Box::new(
@@ -505,7 +505,7 @@ mod tests {
                 Program::sorcery(
                     exact_cost(2, 1),
                     ExecutableBody::new(
-                        BodyTarget::SinglePlayer,
+                        BodyTarget::SINGLE_PLAYER,
                         vec![Instruction::ZoneOp(Box::new(
                             spellwake_engine::toolbox::ZoneOpSpec::discard(
                                 targeted,
@@ -592,7 +592,7 @@ mod tests {
                         panic!("instant expected")
                     };
                     assert_eq!(spell.cost, ManaCost::specific(ManaType::Black, 2.into()));
-                    assert_eq!(spell.body.target, BodyTarget::SinglePlayer);
+                    assert_eq!(spell.body.target, BodyTarget::SINGLE_PLAYER);
                     assert_eq!(
                         spell.body.instructions,
                         vec![
@@ -615,7 +615,7 @@ mod tests {
                     assert_eq!(spell.body.instructions.len(), 1);
                     assert!(def.program.triggered.is_empty());
                     assert_eq!(
-                        spell.body.target == BodyTarget::SinglePlayer,
+                        spell.body.target == BodyTarget::SINGLE_PLAYER,
                         matches!(card.kind, Kind::Edict | Kind::MindRot)
                     );
                     match (&spell.body.instructions[0], card.kind) {

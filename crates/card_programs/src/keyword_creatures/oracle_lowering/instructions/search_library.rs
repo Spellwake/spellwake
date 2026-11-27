@@ -81,14 +81,14 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::draw_target_player(amount));
                     Ok(())
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::draw_target_player(amount));
@@ -113,10 +113,7 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 PlayerRefAst::ThatPlayer => {
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) {
+                    if matches!(builder.target, BodyTarget::Player { .. }) {
                         builder
                             .instructions
                             .push(super::super::toolbox_emit::draw_target_player(amount));
@@ -632,10 +629,7 @@ pub(super) fn lower_search_library_group(
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 if builder.permanent_target_bounds.is_none()
                     && is_permanent_body_target(builder.target)
@@ -915,10 +909,7 @@ pub(super) fn lower_search_library_group(
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 if builder.permanent_target_bounds.is_none()
                     && is_permanent_body_target(builder.target)
@@ -1233,10 +1224,7 @@ pub(super) fn lower_search_library_group(
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 builder
                     .instructions
@@ -1271,10 +1259,10 @@ pub(super) fn lower_search_library_group(
             if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) {
                 if matches!(
                     builder.target,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
                 ) {
                     builder
                         .instructions
@@ -1432,9 +1420,7 @@ pub(super) fn lower_search_library_group(
             }
             let reuse_bound_spell = matches!(
                 builder.target,
-                BodyTarget::SingleSpell(_)
-                    | BodyTarget::SingleStackObject(_)
-                    | BodyTarget::SingleStackEntry
+                BodyTarget::Spell { .. } | BodyTarget::StackEntry(StackTargetKind::AnyEntry)
             ) && matches!(
                 target.as_ref(),
                 SubjectRefAst::Anaphora(raw) if matches!(
@@ -2259,9 +2245,9 @@ pub(super) fn lower_search_library_group(
             duration: DurationAst::Permanent,
         } if is_self_pronoun(subject, builder, self_pronoun_valid) => {
             let bt = if matches!(ctrl, PlayerRefAst::TargetOpponent) {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             };
             builder.bind_target(bt)?;
             builder
@@ -2291,9 +2277,9 @@ pub(super) fn lower_search_library_group(
         {
             let dur = lower_duration(duration)?;
             let player_bt = if matches!(ctrl, PlayerRefAst::TargetOpponent) {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             };
             let SubjectRefAst::TargetObject { filter, .. } = subject.as_ref() else {
                 return Err("oracle:unsupported-gain-control");
@@ -2401,10 +2387,10 @@ pub(super) fn lower_search_library_group(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) =>
                 {
                     EffectSubject::TargetObject
@@ -2664,10 +2650,11 @@ pub(super) fn lower_search_library_group(
                 };
                 let had_perm_target = matches!(
                     builder.target,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::FilteredPermanent(_)
-                );
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
+                ) && builder.target != BodyTarget::SINGLE_PLANESWALKER;
                 let is_player_subj = |s: &SubjectRefAst| {
                     matches!(
                         s,
@@ -2820,7 +2807,7 @@ pub(super) fn lower_search_library_group(
                     {
                         let bt = lower_battlefield_body_target(filter, vocabulary)?;
                         if bt
-                            == BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled())
+                            == BodyTarget::filtered_permanent(ObjectFilter::creature().controlled())
                         {
                             builder.bind_target(bt)?;
                             builder
@@ -2841,7 +2828,7 @@ pub(super) fn lower_search_library_group(
                     && filter.zone.is_none()
                 {
                     let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                    if bt == BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()) {
+                    if bt == BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()) {
                         builder.bind_target(bt)?;
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::attach_query(
@@ -2875,10 +2862,10 @@ pub(super) fn lower_search_library_group(
                         is_permanent_body_target(bt).then_some(bt)
                     }
                     SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                        Some(BodyTarget::SinglePlayer)
+                        Some(BodyTarget::SINGLE_PLAYER)
                     }
                     SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                        Some(BodyTarget::SingleOpponent)
+                        Some(BodyTarget::SINGLE_OPPONENT)
                     }
                     _ => None,
                 };
@@ -2887,10 +2874,7 @@ pub(super) fn lower_search_library_group(
                         att_f, &trial, in_trigger, vocabulary,
                     )?;
                     if is_permanent_body_target(att_bt) {
-                        if matches!(
-                            host_bt,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) {
+                        if matches!(host_bt, BodyTarget::Player { .. }) {
                             const ATT_BIND: spellwake_engine::toolbox::BindingId =
                                 spellwake_engine::toolbox::BindingId(940);
                             const HOST_PLAYER_BIND: spellwake_engine::toolbox::BindingId =
@@ -3481,11 +3465,11 @@ pub(super) fn lower_search_library_group(
                     Some((None, ResolvingPlayer::Controller))
                 }
                 "target player" | "target player's" | "targetplayer" => Some((
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     ResolvingPlayer::TargetPlayer,
                 )),
                 "target opponent" | "target opponent's" | "targetopponent" => Some((
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     ResolvingPlayer::TargetPlayer,
                 )),
                 "that player" | "that player's" | "thatplayer" | "that opponent"
@@ -3728,10 +3712,7 @@ pub(super) fn lower_search_library_group(
                 SubjectRefAst::Anaphora(_)
                     if count_limit.is_none()
                         && builder.target != BodyTarget::None
-                        && !matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) =>
+                        && !matches!(builder.target, BodyTarget::Player { .. }) =>
                 {
                     super::super::toolbox_emit::grant_play_permission(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -3824,34 +3805,28 @@ pub(super) fn lower_search_library_group(
                         {
                             match f.zone {
                                 Some(ZoneFilter::TargetPlayerHand) => Some((
-                                    Some(BodyTarget::SinglePlayer),
+                                    Some(BodyTarget::SINGLE_PLAYER),
                                     SourceZoneFilter::TargetPlayerHand,
                                 )),
                                 Some(ZoneFilter::TargetOpponentHand) => Some((
-                                    Some(BodyTarget::SingleOpponent),
+                                    Some(BodyTarget::SINGLE_OPPONENT),
                                     SourceZoneFilter::TargetPlayerHand,
                                 )),
                                 Some(ZoneFilter::ThatPlayerHand)
-                                    if matches!(
-                                        builder.target,
-                                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                    ) =>
+                                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                                 {
                                     Some((None, SourceZoneFilter::TargetPlayerHand))
                                 }
                                 Some(ZoneFilter::TargetPlayerGraveyard) => Some((
-                                    Some(BodyTarget::SinglePlayer),
+                                    Some(BodyTarget::SINGLE_PLAYER),
                                     SourceZoneFilter::TargetPlayerGraveyard,
                                 )),
                                 Some(ZoneFilter::TargetOpponentGraveyard) => Some((
-                                    Some(BodyTarget::SingleOpponent),
+                                    Some(BodyTarget::SINGLE_OPPONENT),
                                     SourceZoneFilter::TargetPlayerGraveyard,
                                 )),
                                 Some(ZoneFilter::ThatPlayerGraveyard)
-                                    if matches!(
-                                        builder.target,
-                                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                    ) =>
+                                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                                 {
                                     Some((None, SourceZoneFilter::TargetPlayerGraveyard))
                                 }
@@ -4404,11 +4379,11 @@ pub(super) fn lower_search_library_group(
                 let hand_owner = match lib_low.as_str() {
                     "your hand" => ResolvingPlayer::Controller,
                     "target player's hand" => {
-                        trial.bind_target(BodyTarget::SinglePlayer)?;
+                        trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
                         ResolvingPlayer::TargetPlayer
                     }
                     "target opponent's hand" => {
-                        trial.bind_target(BodyTarget::SingleOpponent)?;
+                        trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                         ResolvingPlayer::TargetPlayer
                     }
                     "their hand" | "hand" => actor,
@@ -4463,11 +4438,11 @@ pub(super) fn lower_search_library_group(
                     | "each other player"
                     | "each other player's" => (None, ResolvingPlayer::LoopPlayer),
                     "target player" | "target player's" | "targetplayer" => (
-                        Some(BodyTarget::SinglePlayer),
+                        Some(BodyTarget::SINGLE_PLAYER),
                         ResolvingPlayer::TargetPlayer,
                     ),
                     "target opponent" | "target opponent's" | "targetopponent" => (
-                        Some(BodyTarget::SingleOpponent),
+                        Some(BodyTarget::SINGLE_OPPONENT),
                         ResolvingPlayer::TargetPlayer,
                     ),
                     "defending player" | "defending player's" | "defendingplayer" => {
@@ -4621,11 +4596,11 @@ pub(super) fn lower_search_library_group(
                     )?,
                 ),
                 "target player" | "target player's" | "targetplayer" => (
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     ResolvingPlayer::TargetPlayer,
                 ),
                 "target opponent" | "target opponent's" | "targetopponent" => (
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     ResolvingPlayer::TargetPlayer,
                 ),
                 "defending player"
@@ -6193,14 +6168,14 @@ fn try_lower_search_library_toolbox<'a>(
             lib_owner: PlayerSelector::Resolving(ResolvingPlayer::Controller),
         },
         "target player" | "target player's" => {
-            trial.bind_target(BodyTarget::SinglePlayer)?;
+            trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
             SearchScope::Single {
                 chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 lib_owner: PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
             }
         }
         "target opponent" | "target opponent's" => {
-            trial.bind_target(BodyTarget::SingleOpponent)?;
+            trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             SearchScope::Single {
                 chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 lib_owner: PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),

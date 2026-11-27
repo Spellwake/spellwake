@@ -158,20 +158,18 @@ pub(super) fn is_self_anaphora(a: &str) -> bool {
 
 pub(super) fn is_object_body_target(target: BodyTarget, allow_any_target: bool) -> bool {
     if allow_any_target {
-        !matches!(
-            target,
-            BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        )
+        !matches!(target, BodyTarget::None | BodyTarget::Player { .. })
     } else {
         !matches!(
             target,
             BodyTarget::None
-                | BodyTarget::SinglePlayer
-                | BodyTarget::SingleOpponent
-                | BodyTarget::SingleAnyTarget
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker
-                | BodyTarget::SingleCreatureOrPlayer
+                | BodyTarget::Player { .. }
+                | BodyTarget::AnyTarget(
+                    AnyTargetKind::Any
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker
+                        | AnyTargetKind::CreatureOrPlayer
+                )
         )
     }
 }
@@ -313,10 +311,7 @@ pub(super) fn parse_library_top_anaphora(
         | "top card of target player's library"
         | "the top card of target opponent's library"
         | "top card of target opponent's library"
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) =>
+            if matches!(builder.target, BodyTarget::Player { .. }) =>
         {
             Some(ResolvingPlayer::TargetPlayer)
         }
@@ -1263,10 +1258,7 @@ pub(in super::super) fn lower_resolution_condition(
                     spellwake_engine::program::CounterSubjectRef::TargetObject
                 }
                 SubjectRefAst::Anaphora(_)
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                 {
                     let ck = kind.ok_or("oracle:unsupported-if-condition")?;
                     spellwake_engine::program::CounterSubjectRef::PlayerCounter(
@@ -1330,12 +1322,13 @@ pub(in super::super) fn lower_resolution_condition(
             let is_object_target = !matches!(
                 builder.target,
                 BodyTarget::None
-                    | BodyTarget::SinglePlayer
-                    | BodyTarget::SingleOpponent
-                    | BodyTarget::SingleAnyTarget
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker
-                    | BodyTarget::SingleCreatureOrPlayer
+                    | BodyTarget::Player { .. }
+                    | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                            | AnyTargetKind::CreatureOrPlayer
+                    )
             );
             let is_self_anaphora = |a: &str| {
                 matches!(
@@ -1439,14 +1432,14 @@ pub(in super::super) fn lower_resolution_condition(
                     "the top card of target player's library"
                         | "top card of target player's library"
                 ) {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     MatchObjectRef::LibraryTop(ResolvingPlayer::TargetPlayer)
                 } else if matches!(
                     al.as_str(),
                     "the top card of target opponent's library"
                         | "top card of target opponent's library"
                 ) {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     MatchObjectRef::LibraryTop(ResolvingPlayer::TargetPlayer)
                 } else {
                     resolve_match_object_ref(subject, builder, in_trigger, true)
@@ -3302,11 +3295,11 @@ pub(in super::super) fn lower_resolution_condition(
                 PlayerRefAst::You => ControllerFilter::You,
                 PlayerRefAst::AnyOpponent => ControllerFilter::Opponent,
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     ControllerFilter::TargetPlayer
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     ControllerFilter::TargetOpponent
                 }
                 PlayerRefAst::ThatPlayer if in_trigger => ControllerFilter::RelatedPlayer,
@@ -3348,11 +3341,11 @@ pub(in super::super) fn lower_resolution_condition(
                 PlayerRefAst::You => ControllerFilter::You,
                 PlayerRefAst::AnyOpponent => ControllerFilter::Opponent,
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     ControllerFilter::TargetPlayer
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     ControllerFilter::TargetOpponent
                 }
                 PlayerRefAst::ThatPlayer if in_trigger => ControllerFilter::RelatedPlayer,
@@ -3414,11 +3407,11 @@ pub(in super::super) fn lower_resolution_condition(
             let rp = match zone {
                 ZoneFilter::YourLibrary => ResolvingPlayer::Controller,
                 ZoneFilter::TargetPlayerLibrary => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     ResolvingPlayer::TargetPlayer
                 }
                 ZoneFilter::TargetOpponentLibrary => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     ResolvingPlayer::TargetPlayer
                 }
                 ZoneFilter::ThatPlayerLibrary => lower_resolving_player_in_context(
@@ -4183,11 +4176,11 @@ pub(in super::super) fn lower_resolution_condition(
                 ZoneFilter::Exile => ValueZone::Exile(None),
                 ZoneFilter::YourLibrary => ValueZone::Library(ResolvingPlayer::Controller),
                 ZoneFilter::TargetPlayerGraveyard => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     ValueZone::Graveyard(ResolvingPlayer::TargetPlayer)
                 }
                 ZoneFilter::TargetOpponentGraveyard => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     ValueZone::Graveyard(ResolvingPlayer::TargetPlayer)
                 }
                 ZoneFilter::ThatPlayerGraveyard => {
@@ -4521,13 +4514,13 @@ pub(super) fn lower_zone_filter_to_query_zone(
             Box::new(PlayerSelector::Group(AffectedPlayers::EachPlayer)),
         )),
         ZoneFilter::TargetPlayerGraveyard => {
-            builder.bind_target(BodyTarget::SinglePlayer).ok()?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER).ok()?;
             Some(QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(
                 ResolvingPlayer::TargetPlayer,
             ))))
         }
         ZoneFilter::TargetOpponentGraveyard => {
-            builder.bind_target(BodyTarget::SingleOpponent).ok()?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT).ok()?;
             Some(QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(
                 ResolvingPlayer::TargetPlayer,
             ))))
@@ -4553,13 +4546,13 @@ pub(super) fn lower_zone_filter_to_query_zone(
             PlayerSelector::Group(AffectedPlayers::EachPlayer),
         ))),
         ZoneFilter::TargetPlayerHand => {
-            builder.bind_target(BodyTarget::SinglePlayer).ok()?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER).ok()?;
             Some(QueryZone::Hand(Box::new(PlayerSelector::Resolving(
                 ResolvingPlayer::TargetPlayer,
             ))))
         }
         ZoneFilter::TargetOpponentHand => {
-            builder.bind_target(BodyTarget::SingleOpponent).ok()?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT).ok()?;
             Some(QueryZone::Hand(Box::new(PlayerSelector::Resolving(
                 ResolvingPlayer::TargetPlayer,
             ))))
@@ -4580,13 +4573,13 @@ pub(super) fn lower_zone_filter_to_query_zone(
             Box::new(PlayerSelector::Group(AffectedPlayers::EachPlayer)),
         )),
         ZoneFilter::TargetPlayerLibrary => {
-            builder.bind_target(BodyTarget::SinglePlayer).ok()?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER).ok()?;
             Some(QueryZone::Library(Box::new(PlayerSelector::Resolving(
                 ResolvingPlayer::TargetPlayer,
             ))))
         }
         ZoneFilter::TargetOpponentLibrary => {
-            builder.bind_target(BodyTarget::SingleOpponent).ok()?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT).ok()?;
             Some(QueryZone::Library(Box::new(PlayerSelector::Resolving(
                 ResolvingPlayer::TargetPlayer,
             ))))
@@ -6025,10 +6018,10 @@ fn lower_event_or_action_text_fallback(
             if let Some(flt_raw) = other.strip_prefix("it shares a color with ")
                 && matches!(
                     builder.target,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
                 )
             {
                 let compiler_vocab = cached_compiler_vocab(vocabulary);
@@ -6459,7 +6452,7 @@ mod wave11_distinct_power_tests {
 
         // PlayerActionThisTurn(You) -> EventOccurredThisTurn bridge (Winnow, Crimson Honor Guard, Furnace Punisher)
         let mut b_winnow = BodyBuilder::new();
-        b_winnow.target = BodyTarget::SinglePermanent;
+        b_winnow.target = BodyTarget::SINGLE_PERMANENT;
         let rc_winnow = lower_resolution_condition(
             &ConditionAst::PlayerActionThisTurn {
                 player: PlayerRefAst::You,
@@ -6596,7 +6589,7 @@ mod wave11_distinct_power_tests {
         // Strict fail-closed boundaries: Vizier of Deferment (non-self attacked or blocked),
         // Green Slime (permanent_only countered ability)
         let mut b_vizier = BodyBuilder::new();
-        b_vizier.target = BodyTarget::SingleCreature;
+        b_vizier.target = BodyTarget::SINGLE_CREATURE;
         assert!(
             lower_resolution_condition(
                 &ConditionAst::Marker(GameMarker::AttackedOrBlockedThisTurn {

@@ -47,14 +47,14 @@ fn world_history_snapshot_and_privileged_receipts_survive_later_loss_exit_and_dr
             tr::card(1, Program::artifact(None, vec![]), true),
             tr::spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![operation(TypeOperation::Add(BTreeSet::from([
                     Supertype::World,
                 ])))],
             ),
             tr::spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     operation(TypeOperation::Remove(BTreeSet::from([Supertype::World]))),
                     crate::program::Instruction::ZoneOp(Box::new(

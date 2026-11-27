@@ -218,7 +218,7 @@ fn cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure() 
         let removal = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
@@ -375,7 +375,7 @@ fn cmm_sliver_keyword_grants_change_combat_and_destruction_rules() {
             let destroy = Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -673,7 +673,7 @@ fn crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players() {
     let target = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -786,7 +786,7 @@ fn sliver_creature_grants_follow_host_type_changes() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

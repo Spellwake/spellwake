@@ -734,10 +734,12 @@ pub(super) fn lower_counters_pt_instruction(
                 if matches!(subject, SubjectRefAst::Anaphora(_))
                     && matches!(
                         builder.target,
-                        BodyTarget::SingleAnyTarget
-                            | BodyTarget::SingleCreatureOrPlayer
-                            | BodyTarget::SinglePlayerOrPlaneswalker
-                            | BodyTarget::SingleOpponentOrPlaneswalker
+                        BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker
+                        )
                     )
                 {
                     builder.instructions.push(
@@ -839,10 +841,12 @@ pub(super) fn lower_counters_pt_instruction(
             if matches!(subject, SubjectRefAst::Anaphora(_))
                 && matches!(
                     builder.target,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
+                    BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::CreatureOrPlayer
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                    )
                 )
             {
                 builder.instructions.push(
@@ -998,10 +1002,12 @@ pub(super) fn lower_counters_pt_instruction(
                     if matches!(subject, SubjectRefAst::Anaphora(_))
                         && matches!(
                             builder.target,
-                            BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker
+                            BodyTarget::AnyTarget(
+                                AnyTargetKind::Any
+                                    | AnyTargetKind::CreatureOrPlayer
+                                    | AnyTargetKind::PlayerOrPlaneswalker
+                                    | AnyTargetKind::OpponentOrPlaneswalker
+                            )
                         )
                     {
                         builder.instructions.push(
@@ -1105,10 +1111,12 @@ pub(super) fn lower_counters_pt_instruction(
                     if matches!(subject, SubjectRefAst::Anaphora(_))
                         && matches!(
                             builder.target,
-                            BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker
+                            BodyTarget::AnyTarget(
+                                AnyTargetKind::Any
+                                    | AnyTargetKind::CreatureOrPlayer
+                                    | AnyTargetKind::PlayerOrPlaneswalker
+                                    | AnyTargetKind::OpponentOrPlaneswalker
+                            )
                         )
                     {
                         builder.instructions.push(
@@ -1165,7 +1173,7 @@ pub(super) fn lower_counters_pt_instruction(
                         let mut inner = filter.as_ref().clone();
                         inner.zone = None;
                         let obj = lower_object_filter(&inner, vocabulary)?;
-                        builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
+                        builder.bind_target(BodyTarget::filtered_own_graveyard(obj))?;
                         builder
                             .instructions
                             .push(Instruction::MutateObject(Box::new(
@@ -1642,7 +1650,7 @@ pub(super) fn lower_counters_pt_instruction(
                             let obj = lower_object_filter_in_context(
                                 &f_clean, &trial, in_trigger, vocabulary,
                             )?;
-                            trial.bind_target(BodyTarget::FilteredPermanent(obj))?;
+                            trial.bind_target(BodyTarget::filtered_permanent(obj))?;
                             trial_bound = true;
                             Some(ChoiceTargetKind::TargetAnyNumber)
                         }
@@ -1759,9 +1767,9 @@ pub(super) fn lower_counters_pt_instruction(
                             count: TargetCountAst::Exact(1),
                         } => {
                             trial.bind_target(if *opponent_only {
-                                BodyTarget::SingleOpponent
+                                BodyTarget::SINGLE_OPPONENT
                             } else {
-                                BodyTarget::SinglePlayer
+                                BodyTarget::SINGLE_PLAYER
                             })?;
                             trial_bound = true;
                             Some(ChoiceTargetKind::Players(AffectedPlayers::One(
@@ -1769,14 +1777,14 @@ pub(super) fn lower_counters_pt_instruction(
                             )))
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                            trial.bind_target(BodyTarget::SinglePlayer)?;
+                            trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
                             trial_bound = true;
                             Some(ChoiceTargetKind::Players(AffectedPlayers::One(
                                 ResolvingPlayer::TargetPlayer,
                             )))
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                            trial.bind_target(BodyTarget::SingleOpponent)?;
+                            trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                             trial_bound = true;
                             Some(ChoiceTargetKind::Players(AffectedPlayers::One(
                                 ResolvingPlayer::TargetPlayer,
@@ -2356,7 +2364,7 @@ pub(super) fn lower_counters_pt_instruction(
                     f_clean.zone = None;
                     let obj =
                         lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
-                    builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+                    builder.bind_target(BodyTarget::filtered_permanent(obj))?;
                     builder.instructions.push(Instruction::ApplyContinuous(Box::new(
                         spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
                             ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
@@ -2388,9 +2396,9 @@ pub(super) fn lower_counters_pt_instruction(
                     .is_some_and(|kws| !kws.is_empty() && kws.iter().all(is_player_keyword)) =>
                 {
                     builder.bind_target(if *opponent_only {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     let Some(kws) = pure_kws else {
                         return Err("oracle:unsupported-grant-kw");
@@ -3414,9 +3422,9 @@ pub(super) fn lower_counters_pt_instruction(
                             count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                         } => {
                             trial.bind_target(if *opponent_only {
-                                BodyTarget::SingleOpponent
+                                BodyTarget::SINGLE_OPPONENT
                             } else {
-                                BodyTarget::SinglePlayer
+                                BodyTarget::SINGLE_PLAYER
                             })?;
                             if *tc == TargetCountAst::UpTo(1) {
                                 trial.up_to_one_target = true;
@@ -3424,11 +3432,11 @@ pub(super) fn lower_counters_pt_instruction(
                             SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                            trial.bind_target(BodyTarget::SinglePlayer)?;
+                            trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
                             SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                            trial.bind_target(BodyTarget::SingleOpponent)?;
+                            trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                             SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                         }
                         other => other.clone(),
@@ -3763,9 +3771,9 @@ pub(super) fn lower_counters_pt_instruction(
                 } = subject.as_ref()
                 {
                     builder.bind_target(if *opponent_only {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     if *tc == TargetCountAst::UpTo(1) {
                         builder.up_to_one_target = true;
@@ -4117,10 +4125,12 @@ pub(super) fn lower_counters_pt_instruction(
                     if is_permanent_body_target(builder.target)
                         || matches!(
                             builder.target,
-                            BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker
+                            BodyTarget::AnyTarget(
+                                AnyTargetKind::Any
+                                    | AnyTargetKind::CreatureOrPlayer
+                                    | AnyTargetKind::PlayerOrPlaneswalker
+                                    | AnyTargetKind::OpponentOrPlaneswalker
+                            )
                         ) =>
                 {
                     builder
@@ -4278,23 +4288,15 @@ pub(super) fn lower_counters_pt_instruction(
                         lower_object_filter(&inner, vocabulary)?
                     };
                     let bt = match filter.zone {
-                        Some(ZoneFilter::YourGraveyard) => {
-                            BodyTarget::FilteredOwnGraveyardCard(obj)
-                        }
+                        Some(ZoneFilter::YourGraveyard) => BodyTarget::filtered_own_graveyard(obj),
                         Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
-                            BodyTarget::FilteredAnyGraveyardCard {
-                                filter: obj,
-                                opponents_only: true,
-                            }
+                            BodyTarget::filtered_any_graveyard(obj, true)
                         }
                         Some(
                             ZoneFilter::AnyGraveyard
                             | ZoneFilter::AllGraveyards
                             | ZoneFilter::SingleGraveyard,
-                        ) => BodyTarget::FilteredAnyGraveyardCard {
-                            filter: obj,
-                            opponents_only: false,
-                        },
+                        ) => BodyTarget::filtered_any_graveyard(obj, false),
                         _ => return Err("oracle:unsupported-put-counters"),
                     };
                     builder.bind_target(bt)?;
@@ -4878,14 +4880,14 @@ pub(super) fn lower_counters_pt_instruction(
                 return Err("oracle:non-const-support");
             }
             if self_pronoun_valid {
-                builder.bind_target(BodyTarget::FilteredPermanent(ObjectFilter::Clause(
+                builder.bind_target(BodyTarget::filtered_permanent(ObjectFilter::Clause(
                     ObjectClause {
                         source_relation: SourceRelation::OtherThanAbilitySource,
                         ..ObjectClause::creature()
                     },
                 )))?;
             } else {
-                builder.bind_target(BodyTarget::SingleCreature)?;
+                builder.bind_target(BodyTarget::SINGLE_CREATURE)?;
             }
             builder.push_bounded_target_op(
                 0,
@@ -5098,10 +5100,10 @@ pub(super) fn lower_counters_pt_instruction(
                     SubjectRefAst::Anaphora(_)
                         if matches!(
                             builder.target,
-                            BodyTarget::SinglePermanent
-                                | BodyTarget::SingleCreature
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_)
+                            BodyTarget::Object {
+                                zone: TargetZone::Battlefield,
+                                ..
+                            }
                         ) =>
                     {
                         EffectSubject::TargetObject
@@ -5195,10 +5197,10 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) =>
                 {
                     builder.instructions.push(
@@ -5777,7 +5779,7 @@ pub(super) fn lower_counters_pt_instruction(
                                                 ObjectFilter::Either(a, b)
                                             }
                                         };
-                                        BodyTarget::FilteredPermanent(with_ctrl)
+                                        BodyTarget::filtered_permanent(with_ctrl)
                                     });
                             Some(res)
                         } else {
@@ -6129,7 +6131,7 @@ pub(super) fn emit_resolved_parts_for_subject(
             let mut f_clean = filter.as_ref().clone();
             f_clean.zone = None;
             let obj = lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
-            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder.bind_target(BodyTarget::filtered_permanent(obj))?;
             builder
                 .instructions
                 .push(Instruction::ApplyContinuous(Box::new(
@@ -6653,7 +6655,7 @@ pub(super) fn partition_temp_keyword_grants(
                         mana_cost,
                         source_cost: SourceCost::None,
                         body: ExecutableBody::new(
-                            BodyTarget::SingleCreature,
+                            BodyTarget::SINGLE_CREATURE,
                             vec![Instruction::MutateObject(Box::new(
                                 spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
                                     AttachAbility::Equip,

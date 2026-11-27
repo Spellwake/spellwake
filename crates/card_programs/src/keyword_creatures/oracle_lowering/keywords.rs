@@ -635,7 +635,7 @@ pub(super) fn lower_keyword(
                     from_graveyard: true,
                 },
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         CounterKind::PlusOne,
                         ValueExpr::Literal(power),
@@ -684,7 +684,7 @@ pub(super) fn lower_keyword(
                 mana_cost: cost.clone(),
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
                             AttachAbility::Reconfigure,
@@ -716,7 +716,7 @@ pub(super) fn lower_keyword(
                 mana_cost: cost,
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
                             AttachAbility::Fortify,
@@ -945,7 +945,7 @@ pub(super) fn lower_keyword(
                 ),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+                    BodyTarget::filtered_permanent(ObjectFilter::creature().opposing()),
                     vec![
                         Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
@@ -1025,7 +1025,7 @@ pub(super) fn lower_keyword(
                 mana_cost,
                 source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Reinforce),
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         CounterKind::PlusOne,
                         ValueExpr::Literal(n.into()),
@@ -1718,7 +1718,7 @@ pub(super) fn lower_keyword(
                 condition: TriggerSpec::self_enters(),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![
                         Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::TargetPlayer,
@@ -3219,7 +3219,7 @@ fn lower_equip_keyword(
             program,
             ids,
             (mana_cost, SourceCost::None, hybrids, extra),
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             restriction,
         );
         return Ok(());
@@ -3228,12 +3228,12 @@ fn lower_equip_keyword(
     let compiler_vocab = cached_compiler_vocab(vocabulary);
     let (target, cost_branches) =
         if let Some(branches) = parse_equip_cost_branches(core, &compiler_vocab, vocabulary) {
-            (BodyTarget::SingleCreature, branches)
+            (BodyTarget::SINGLE_CREATURE, branches)
         } else if let Some((quality_raw, cost_raw)) = split_equip_quality_and_cost(core)
             && let Some(obj) = parse_equip_quality_filter(quality_raw, &compiler_vocab, vocabulary)
             && let Some(branches) = parse_equip_cost_branches(cost_raw, &compiler_vocab, vocabulary)
         {
-            (BodyTarget::FilteredPermanent(obj), branches)
+            (BodyTarget::filtered_permanent(obj), branches)
         } else {
             return Err("oracle:equip-non-mana");
         };

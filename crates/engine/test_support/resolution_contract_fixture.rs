@@ -121,12 +121,12 @@ pub fn body(
 ) -> Result<ExecutableBody, String> {
     let target = match text(value, "target")? {
         "None" => BodyTarget::None,
-        "SingleCreature" => BodyTarget::SingleCreature,
+        "SingleCreature" => BodyTarget::SINGLE_CREATURE,
         "SingleSpell(CopyableInstructionSpell)" => {
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction())
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::copyable_instruction())
         }
         "SingleSpell(AnySpell)" => {
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any())
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any())
         }
         _ => return Err("unlisted finite body target".into()),
     };

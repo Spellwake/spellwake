@@ -465,7 +465,7 @@ fn departure_ends_temporary_control_before_exiling_remaining_objects() {
     let control = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,
@@ -543,7 +543,7 @@ fn a_permanent_is_exiled_when_its_default_controller_left_before_the_effect_expi
     let control = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,
@@ -632,7 +632,7 @@ fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
     let instant = |instruction| {
         Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![instruction]),
         )
     };
     let control = instant({
@@ -790,7 +790,7 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
                 crate::program::ValueExpr::Literal(3.into()),
             ),
         ))],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         library.clone(),
     );
     let state = resolve(state, Some(TargetRef::Player(B)));
@@ -833,7 +833,7 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
                 crate::program::ValueExpr::Literal(3.into()),
             ),
         ))],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         cards,
     );
     let state = resolve(state, Some(TargetRef::Player(B)));

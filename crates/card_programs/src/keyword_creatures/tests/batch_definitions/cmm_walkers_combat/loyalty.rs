@@ -20,7 +20,7 @@ fn with_loyalty_for_ultimate(
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         spellwake_engine::effects::CounterKind::Loyalty,
@@ -278,7 +278,7 @@ fn cmm_the_wanderer_prevents_noncombat_damage_to_its_controller_and_other_perman
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleAnyTarget,
+                    BodyTarget::SINGLE_ANY_TARGET,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
@@ -579,7 +579,7 @@ fn cmm_freyalise_and_ob_nixilis_are_commanders_and_pay_the_tax_when_recast() {
                     A,
                     ObjectDestination::LibraryBottom,
                     free_instant(
-                        BodyTarget::SinglePermanent,
+                        BodyTarget::SINGLE_PERMANENT,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -802,7 +802,7 @@ fn cmm_ajani_steadfast_grants_combat_abilities_distributes_counters_and_prevents
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(3),

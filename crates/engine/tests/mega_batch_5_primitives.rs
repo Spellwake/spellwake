@@ -204,7 +204,7 @@ fn shares_color_with_target_and_same_total_pt_filter_flags() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -283,7 +283,7 @@ fn dynamic_stat_anchor_target_toughness_and_target_mana_value() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -349,7 +349,7 @@ fn dynamic_stat_anchor_target_toughness_and_target_mana_value() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -417,7 +417,7 @@ fn source_zone_filter_target_player_hand_exiles_chosen_creature() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer))), ObjectFilter::Clause(creature_clause())), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller), min: Box::new(ValueExpr::literal(1)), max: Box::new(ValueExpr::literal(1)), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: !(false) }, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: matches!(None, Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)), delayed_return: None, link_group: None })))],
             ),
         ),

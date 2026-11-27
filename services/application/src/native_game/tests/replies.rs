@@ -573,7 +573,7 @@ fn copied_spell_retain_and_changed_targets_are_bound_options() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreatureOrPlayer,
+                BodyTarget::SINGLE_CREATURE_OR_PLAYER,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -591,7 +591,7 @@ fn copied_spell_retain_and_changed_targets_are_bound_options() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(
@@ -677,7 +677,7 @@ fn trigger_order_then_target_use_actual_instances_and_controller() {
             grouping: TriggerGrouping::EachOccurrence,
             body: if id == 1 {
                 ExecutableBody::new(
-                    BodyTarget::SingleCreatureOrPlayer,
+                    BodyTarget::SINGLE_CREATURE_OR_PLAYER,
                     vec![Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec {
                             source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -793,7 +793,7 @@ fn singleton_damage_effect_order_uses_only_current_offered_application() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -816,7 +816,7 @@ fn singleton_damage_effect_order_uses_only_current_offered_application() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -839,7 +839,7 @@ fn singleton_damage_effect_order_uses_only_current_offered_application() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -932,7 +932,7 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -1257,7 +1257,7 @@ fn storm_controller_selects_each_copy_target_through_player_actions() {
         program::{CastCopyKeyword, TriggeredAbility, TriggeredAbilityId},
     };
     let mut storm = instant(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![Instruction::AdjustLife(Box::new(
             spellwake_engine::toolbox::AdjustLifeSpec::lose(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
@@ -2281,7 +2281,7 @@ fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_inva
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -2302,7 +2302,7 @@ fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_inva
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

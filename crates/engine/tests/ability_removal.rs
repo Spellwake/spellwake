@@ -34,7 +34,7 @@ fn source(condition: Option<TriggerSpec>) -> Program {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::Tap,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -87,7 +87,7 @@ fn removed_mana_and_activated_abilities_reject_before_paying_any_cost() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![removal(
                     AbilityRemoval::All,
                     ResolvedDuration::UntilEndOfTurn,
@@ -164,7 +164,7 @@ fn nonmana_removal_keeps_mana_but_prevents_tap_trigger_discovery() {
             ),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![removal(
                     AbilityRemoval::NonMana,
                     ResolvedDuration::NoStatedDuration,
@@ -214,7 +214,7 @@ fn removing_abilities_does_not_erase_an_activation_already_on_the_stack() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![removal(
                     AbilityRemoval::All,
                     ResolvedDuration::NoStatedDuration,
@@ -268,7 +268,7 @@ fn captured_tap_trigger_resolves_after_the_source_loses_all_abilities() {
             ),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![removal(
                     AbilityRemoval::All,
                     ResolvedDuration::NoStatedDuration,

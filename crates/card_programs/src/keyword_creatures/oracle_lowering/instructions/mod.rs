@@ -27,20 +27,20 @@ pub(super) fn lower_target_subject(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<BodyTarget, &'static str> {
     match subject {
-        SubjectRefAst::AnyTarget => Ok(BodyTarget::SingleAnyTarget),
+        SubjectRefAst::AnyTarget => Ok(BodyTarget::SINGLE_ANY_TARGET),
         SubjectRefAst::TargetPlayerOrPlaneswalker {
             opponent_only: false,
-        } => Ok(BodyTarget::SinglePlayerOrPlaneswalker),
+        } => Ok(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
         SubjectRefAst::TargetPlayerOrPlaneswalker {
             opponent_only: true,
-        } => Ok(BodyTarget::SingleOpponentOrPlaneswalker),
+        } => Ok(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
         SubjectRefAst::TargetPlayer {
             opponent_only,
             count: TargetCountAst::Exact(1),
         } => Ok(if *opponent_only {
-            BodyTarget::SingleOpponent
+            BodyTarget::SINGLE_OPPONENT
         } else {
-            BodyTarget::SinglePlayer
+            BodyTarget::SINGLE_PLAYER
         }),
         SubjectRefAst::TargetObject {
             filter,
@@ -54,9 +54,9 @@ pub(super) fn lower_target_subject(
                     inner.zone = None;
                 }
                 return if is_unrestricted_filter(&inner) {
-                    Ok(BodyTarget::SingleStackEntry)
+                    Ok(BodyTarget::SINGLE_STACK_ENTRY)
                 } else {
-                    Ok(BodyTarget::SingleStackObject(lower_spell_filter(
+                    Ok(BodyTarget::single_stack_object(lower_spell_filter(
                         &inner, vocabulary,
                     )?))
                 };
@@ -64,7 +64,7 @@ pub(super) fn lower_target_subject(
             if filter.any_spell {
                 let mut inner = filter.as_ref().clone();
                 inner.any_spell = false;
-                return Ok(BodyTarget::SingleSpell(lower_spell_filter(
+                return Ok(BodyTarget::single_spell(lower_spell_filter(
                     &inner, vocabulary,
                 )?));
             }
@@ -74,16 +74,16 @@ pub(super) fn lower_target_subject(
                 return match zone {
                     ZoneFilter::YourGraveyard => {
                         if is_unrestricted_filter(&inner) {
-                            Ok(BodyTarget::SingleOwnGraveyardCard)
+                            Ok(BodyTarget::SINGLE_OWN_GRAVEYARD_CARD)
                         } else {
-                            Ok(BodyTarget::FilteredOwnGraveyardCard(lower_object_filter(
+                            Ok(BodyTarget::filtered_own_graveyard(lower_object_filter(
                                 &inner, vocabulary,
                             )?))
                         }
                     }
                     ZoneFilter::AnyGraveyard | ZoneFilter::SingleGraveyard => {
                         if is_unrestricted_filter(&inner) {
-                            Ok(BodyTarget::AnyGraveyardCard)
+                            Ok(BodyTarget::ANY_GRAVEYARD_CARD)
                         } else if inner.any_types == AstCardTypeMask::CREATURE
                             && filter_only_has(
                                 &inner,
@@ -93,7 +93,7 @@ pub(super) fn lower_target_subject(
                                 },
                             )
                         {
-                            Ok(BodyTarget::AnyGraveyardCreature)
+                            Ok(BodyTarget::ANY_GRAVEYARD_CREATURE)
                         } else if inner.any_types
                             == AstCardTypeMask::CREATURE.union(AstCardTypeMask::PLANESWALKER)
                             && filter_only_has(
@@ -104,12 +104,12 @@ pub(super) fn lower_target_subject(
                                 },
                             )
                         {
-                            Ok(BodyTarget::AnyGraveyardCreatureOrPlaneswalker)
+                            Ok(BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER)
                         } else {
-                            Ok(BodyTarget::FilteredAnyGraveyardCard {
-                                filter: lower_object_filter(&inner, vocabulary)?,
-                                opponents_only: false,
-                            })
+                            Ok(BodyTarget::filtered_any_graveyard(
+                                lower_object_filter(&inner, vocabulary)?,
+                                false,
+                            ))
                         }
                     }
                     ZoneFilter::OpponentGraveyard => {
@@ -118,24 +118,21 @@ pub(super) fn lower_target_subject(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        Ok(BodyTarget::FilteredAnyGraveyardCard {
-                            filter,
-                            opponents_only: true,
-                        })
+                        Ok(BodyTarget::filtered_any_graveyard(filter, true))
                     }
                     ZoneFilter::Stack => {
                         if inner.is_ability {
                             inner.is_ability = false;
                             inner.any_spell = false;
                             if is_unrestricted_filter(&inner) {
-                                Ok(BodyTarget::SingleStackEntry)
+                                Ok(BodyTarget::SINGLE_STACK_ENTRY)
                             } else {
-                                Ok(BodyTarget::SingleStackObject(lower_spell_filter(
+                                Ok(BodyTarget::single_stack_object(lower_spell_filter(
                                     &inner, vocabulary,
                                 )?))
                             }
                         } else {
-                            Ok(BodyTarget::SingleSpell(lower_spell_filter(
+                            Ok(BodyTarget::single_spell(lower_spell_filter(
                                 &inner, vocabulary,
                             )?))
                         }
@@ -263,12 +260,12 @@ fn lower_target_one_of_body_target(
             return Err("oracle:unsupported-target-subject");
         }
         return match (has_any_player, has_opponent, has_creature, has_planeswalker) {
-            (true, false, true, true) => Ok(BodyTarget::SingleAnyTarget),
-            (true, false, true, false) => Ok(BodyTarget::SingleCreatureOrPlayer),
-            (true, false, false, true) => Ok(BodyTarget::SinglePlayerOrPlaneswalker),
-            (false, true, false, true) => Ok(BodyTarget::SingleOpponentOrPlaneswalker),
-            (true, false, false, false) => Ok(BodyTarget::SinglePlayer),
-            (false, true, false, false) => Ok(BodyTarget::SingleOpponent),
+            (true, false, true, true) => Ok(BodyTarget::SINGLE_ANY_TARGET),
+            (true, false, true, false) => Ok(BodyTarget::SINGLE_CREATURE_OR_PLAYER),
+            (true, false, false, true) => Ok(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
+            (false, true, false, true) => Ok(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
+            (true, false, false, false) => Ok(BodyTarget::SINGLE_PLAYER),
+            (false, true, false, false) => Ok(BodyTarget::SINGLE_OPPONENT),
             _ => Err("oracle:unsupported-target-subject"),
         };
     }
@@ -276,16 +273,16 @@ fn lower_target_one_of_body_target(
         1 => {
             let f = ObjectFilter::Clause(perm_clauses[0]);
             if f == ObjectFilter::creature() {
-                Ok(BodyTarget::SingleCreature)
+                Ok(BodyTarget::SINGLE_CREATURE)
             } else if f == ObjectFilter::planeswalker() {
-                Ok(BodyTarget::SinglePlaneswalker)
+                Ok(BodyTarget::SINGLE_PLANESWALKER)
             } else if f == ObjectFilter::any() {
-                Ok(BodyTarget::SinglePermanent)
+                Ok(BodyTarget::SINGLE_PERMANENT)
             } else {
-                Ok(BodyTarget::FilteredPermanent(f))
+                Ok(BodyTarget::filtered_permanent(f))
             }
         }
-        2 => Ok(BodyTarget::FilteredPermanent(ObjectFilter::Either(
+        2 => Ok(BodyTarget::filtered_permanent(ObjectFilter::Either(
             perm_clauses[0],
             perm_clauses[1],
         ))),
@@ -333,16 +330,16 @@ fn lower_target_one_of_permanent_body_target(
         1 => {
             let f = ObjectFilter::Clause(perm_clauses[0]);
             if f == ObjectFilter::creature() {
-                Ok(BodyTarget::SingleCreature)
+                Ok(BodyTarget::SINGLE_CREATURE)
             } else if f == ObjectFilter::planeswalker() {
-                Ok(BodyTarget::SinglePlaneswalker)
+                Ok(BodyTarget::SINGLE_PLANESWALKER)
             } else if f == ObjectFilter::any() {
-                Ok(BodyTarget::SinglePermanent)
+                Ok(BodyTarget::SINGLE_PERMANENT)
             } else {
-                Ok(BodyTarget::FilteredPermanent(f))
+                Ok(BodyTarget::filtered_permanent(f))
             }
         }
-        2 => Ok(BodyTarget::FilteredPermanent(ObjectFilter::Either(
+        2 => Ok(BodyTarget::filtered_permanent(ObjectFilter::Either(
             perm_clauses[0],
             perm_clauses[1],
         ))),
@@ -373,7 +370,7 @@ pub(super) fn lower_battlefield_body_target(
         && f.stat_bounds.is_empty()
         && f.flags.is_empty()
     {
-        return Ok(BodyTarget::SinglePermanent);
+        return Ok(BodyTarget::SINGLE_PERMANENT);
     }
     let mut obj = lower_object_filter(f, vocabulary)?;
     if f.controller == Some(ControllerRelation::DefendingPlayer) {
@@ -384,11 +381,11 @@ pub(super) fn lower_battlefield_body_target(
         );
     }
     if obj == ObjectFilter::creature() {
-        Ok(BodyTarget::SingleCreature)
+        Ok(BodyTarget::SINGLE_CREATURE)
     } else if obj == ObjectFilter::planeswalker() {
-        Ok(BodyTarget::SinglePlaneswalker)
+        Ok(BodyTarget::SINGLE_PLANESWALKER)
     } else {
-        Ok(BodyTarget::FilteredPermanent(obj))
+        Ok(BodyTarget::filtered_permanent(obj))
     }
 }
 
@@ -515,7 +512,10 @@ fn lower_battlefield_body_target_in_context(
         && builder.target == BodyTarget::None
         && builder.instructions.is_empty()
         && f.controller == Some(ControllerRelation::ThatPlayer)
-        && let BodyTarget::FilteredPermanent(ref mut obj) = bt
+        && let BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter: ref mut obj,
+        } = bt
     {
         rewrite_object_filter_controller(
             obj,
@@ -621,39 +621,36 @@ pub(super) fn lower_resolving_player_in_context(
     match p {
         PlayerRefAst::You => Ok(ResolvingPlayer::Controller),
         PlayerRefAst::TargetPlayer => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(ResolvingPlayer::TargetPlayer)
         }
         PlayerRefAst::TargetOpponent => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(ResolvingPlayer::TargetPlayer)
         }
         PlayerRefAst::ThatPlayer => match builder.target {
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                Ok(ResolvingPlayer::TargetPlayer)
-            }
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Player { .. } => Ok(ResolvingPlayer::TargetPlayer),
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Ok(ResolvingPlayer::TargetSpellController)
             }
-            BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_) => Ok(ResolvingPlayer::TargetController),
-            BodyTarget::SingleOwnGraveyardCard | BodyTarget::FilteredOwnGraveyardCard(_) => {
-                Ok(ResolvingPlayer::Controller)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
             }
-            BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Ok(ResolvingPlayer::TargetOwner),
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Ok(ResolvingPlayer::TargetController),
+            BodyTarget::Object {
+                zone: TargetZone::OwnGraveyard,
+                ..
+            } => Ok(ResolvingPlayer::Controller),
+            BodyTarget::Object {
+                zone: TargetZone::AnyGraveyard { .. },
+                ..
+            } => Ok(ResolvingPlayer::TargetOwner),
             _ if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
@@ -675,21 +672,19 @@ pub(super) fn lower_resolving_player_in_context(
             _ => Err("oracle:unbound-that-player"),
         },
         PlayerRefAst::ItsController => match builder.target {
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Ok(ResolvingPlayer::TargetSpellController)
             }
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Ok(ResolvingPlayer::TargetController),
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             BodyTarget::None
                 if !builder
@@ -706,17 +701,17 @@ pub(super) fn lower_resolving_player_in_context(
             _ => Err("oracle:unsupported-its-controller"),
         },
         PlayerRefAst::ItsOwner => match builder.target {
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SingleOwnGraveyardCard
-            | BodyTarget::FilteredOwnGraveyardCard(_)
-            | BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-            | BodyTarget::SingleSpell(_) => Ok(ResolvingPlayer::TargetOwner),
+            BodyTarget::Object {
+                zone:
+                    TargetZone::Battlefield
+                    | TargetZone::OwnGraveyard
+                    | TargetZone::AnyGraveyard { .. },
+                ..
+            }
+            | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            } => Ok(ResolvingPlayer::TargetOwner),
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectOwner),
             BodyTarget::None if has_source => Ok(ResolvingPlayer::SourceOwner),
             _ => Err("oracle:unsupported-its-owner"),
@@ -731,21 +726,19 @@ pub(super) fn lower_resolving_player_in_context(
         }
         PlayerRefAst::DefendingPlayer => Ok(ResolvingPlayer::DefendingPlayer),
         PlayerRefAst::ThatObjectController => match builder.target {
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Ok(ResolvingPlayer::TargetSpellController)
             }
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Ok(ResolvingPlayer::TargetController),
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             BodyTarget::None
                 if has_source
@@ -759,24 +752,24 @@ pub(super) fn lower_resolving_player_in_context(
             _ => Err("oracle:unbound-that-player"),
         },
         PlayerRefAst::ThatPlayerOrPlaneswalkerController => match builder.target {
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                Ok(ResolvingPlayer::TargetPlayer)
+            BodyTarget::Player { .. } => Ok(ResolvingPlayer::TargetPlayer),
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
             }
-            BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget
-            | BodyTarget::SinglePermanent
-            | BodyTarget::FilteredPermanent(_) => Ok(ResolvingPlayer::TargetController),
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) if builder.target != BodyTarget::SINGLE_CREATURE => {
+                Ok(ResolvingPlayer::TargetController)
+            }
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             _ => Err("oracle:unsupported-resolving-player"),
         },
         PlayerRefAst::ChosenPlayer => {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 Ok(ResolvingPlayer::TargetPlayer)
             } else if builder.instructions.iter().any(|op| {
                 matches!(
@@ -1042,16 +1035,11 @@ pub(super) fn bind_filter_player_target(
         }
     }
     if needs_opponent {
-        if builder.target != BodyTarget::SingleOpponent {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+        if builder.target != BodyTarget::SINGLE_OPPONENT {
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
         }
-    } else if needs_player
-        && !matches!(
-            builder.target,
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        )
-    {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+    } else if needs_player && !matches!(builder.target, BodyTarget::Player { .. }) {
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
     }
     Ok(())
 }
@@ -1059,22 +1047,15 @@ pub(super) fn bind_filter_player_target(
 fn is_permanent_body_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
     )
 }
 
 fn is_stack_body_target(target: BodyTarget) -> bool {
-    matches!(
-        target,
-        BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent
-    )
+    matches!(target, BodyTarget::Spell { .. } | BodyTarget::StackEntry(_))
 }
 
 fn has_prior_token_creation(ops: &[Instruction]) -> bool {

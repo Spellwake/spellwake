@@ -24,7 +24,7 @@ fn targeted_offer(body: Vec<Instruction>) -> GameState {
         destination: ObjectDestination::Hand,
         program: Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SinglePlayer, body),
+            ExecutableBody::new(BodyTarget::SINGLE_PLAYER, body),
         ),
     }];
     let seed = GameSeed::with_uniform_life(

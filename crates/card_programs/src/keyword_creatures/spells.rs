@@ -69,7 +69,7 @@ pub(super) fn compile(
         && effect=="Counter target spell or ability that targets a permanent you control."
         && let Some((cost,power))=reduction.strip_prefix("This spell costs {").and_then(|line|line.strip_suffix(" or greater.")).and_then(|line|line.split_once("} less to cast if it targets a spell or ability that targets a creature you control with power "))
     {
-        let mut program=Program::instant(fixed_cost(face.mana_cost.as_deref()?)?,ExecutableBody::new(BodyTarget::StackEntryTargetingControlledPermanent,vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))]));
+        let mut program=Program::instant(fixed_cost(face.mana_cost.as_deref()?)?,ExecutableBody::new(BodyTarget::STACK_ENTRY_TARGETING_CONTROLLED_PERMANENT,vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))]));
         program.card_types.insert(CardType::Kindred);
         program.creature_subtypes.insert(vocabulary.resolve_label(subtype)?);
         program.cast_reductions.push(spellwake_engine::program::CastReduction::StackTargetThreatensCreature {minimum_power:power.parse().ok()?,discount:cost.parse().ok()?});
@@ -99,11 +99,11 @@ pub(super) fn compile(
                 BodyTarget::None,
                 vec![
                     Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                        BodyTarget::SinglePermanent,
+                        BodyTarget::SINGLE_PERMANENT,
                         vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))],
                     ))),
                     Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                        BodyTarget::SinglePlayer,
+                        BodyTarget::SINGLE_PLAYER,
                         vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                             spellwake_engine::program::ValueExpr::Literal(4.into()),
                         )],
@@ -448,7 +448,7 @@ pub(super) fn compile(
             && text.strip_prefix(&card.name) == Some(" deals 4 damage to target creature.") =>
         {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -463,7 +463,7 @@ pub(super) fn compile(
             if kindred && matches!(conditional, Some(ConditionalCastCost::Prowl(_))) =>
         {
             ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -496,13 +496,13 @@ pub(super) fn compile(
         "Target creature gets -5/-5 until end of turn."
             if matches!(conditional, Some(ConditionalCastCost::Mayhem(_))) =>
         {
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![pump(-5, -5, None)])
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![pump(-5, -5, None)])
         }
         line if matches!(conditional, Some(ConditionalCastCost::Mayhem(_)))
             && line.strip_prefix(&card.name) == Some(" deals 4 damage to target creature.") =>
         {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -516,7 +516,7 @@ pub(super) fn compile(
             use spellwake_engine::program::ConditionalCastCost;
             let counter = |filter| {
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(filter),
+                    BodyTarget::single_spell(filter),
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -551,13 +551,13 @@ pub(super) fn compile(
             if exile_action.is_some() =>
         {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![pump(1, 1, Some(KeywordAbility::DoubleStrike))],
             )
         }
         "Counter target spell." if !cascades.is_empty() || exile_action.is_some() => {
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -581,7 +581,7 @@ pub(super) fn compile(
             && line.strip_prefix(&card.name) == Some(" deals 13 damage to target creature.") =>
         {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -592,7 +592,7 @@ pub(super) fn compile(
             )
         }
         "Target player loses 2 life." if escaped => ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -603,7 +603,7 @@ pub(super) fn compile(
             ],
         ),
         "Target player mills four cards." if escaped => ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::MutatePlayer(Box::new(
                 spellwake_engine::toolbox::MutatePlayerSpec::mill(
                     spellwake_engine::program::ResolvingPlayer::TargetPlayer,
@@ -615,7 +615,7 @@ pub(super) fn compile(
             if keywords.contains(&KeywordAbility::Bargain) =>
         {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     if_not_bargained(3),
                     pump(-5, -5, None),
@@ -631,7 +631,7 @@ pub(super) fn compile(
                 AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
             };
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     pump(2, 2, None),
                     if_not_bargained(3),
@@ -649,7 +649,7 @@ pub(super) fn compile(
             )
         }
         "Target creature gets -3/-3 until end of turn." if madness.is_some() => {
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![pump(-3, -3, None)])
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![pump(-3, -3, None)])
         }
         "Create two 2/2 black Zombie creature tokens." if madness.is_some() => {
             let mut create = rebound::creature_token(
@@ -666,7 +666,7 @@ pub(super) fn compile(
             ExecutableBody::new(BodyTarget::None, vec![create])
         }
         "Counter target spell." if madness.is_some() => ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -675,7 +675,7 @@ pub(super) fn compile(
         ),
         "Target creature gets +2/+2 and gains trample until end of turn." if madness.is_some() => {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![pump(2, 2, Some(KeywordAbility::Trample))],
             )
         }
@@ -683,7 +683,7 @@ pub(super) fn compile(
             && text.strip_prefix(&card.name) == Some(" deals 4 damage to target creature.") =>
         {
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -790,29 +790,29 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
     };
     let (target, effects) = match line {
         "Target creature gets +4/+4 until end of turn." => {
-            (BodyTarget::SingleCreature, vec![pump(4, 4, None)])
+            (BodyTarget::SINGLE_CREATURE, vec![pump(4, 4, None)])
         }
         "Target creature gets +1/+1 and gains flying until end of turn." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![pump(1, 1, Some(KeywordAbility::Flying))],
         ),
         "Target creature gets +1/+1 and gains haste until end of turn." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![pump(1, 1, Some(KeywordAbility::Haste))],
         ),
         "Draw a card." => (BodyTarget::None, vec![draw(1)]),
         "Draw two cards." => (BodyTarget::None, vec![draw(2)]),
         "Draw three cards." => (BodyTarget::None, vec![draw(3)]),
         "Return target creature to its owner's hand." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()],
         ),
         "Return target permanent to its owner's hand." => (
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()],
         ),
         "Destroy target creature." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -827,7 +827,7 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
             ],
         ),
         "Destroy target permanent." => (
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -843,7 +843,7 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
         ),
         "Return target creature to its owner's hand. Draw a card. If this spell was kicked, you gain 3 life." => {
             (
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
@@ -864,7 +864,7 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
             ) =>
         {
             (
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     if_kicked(kicker?, 3),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(

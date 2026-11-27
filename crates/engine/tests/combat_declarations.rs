@@ -70,7 +70,7 @@ fn instant(id: u64, player: SeatId, instruction: Instruction) -> SeedCard {
         destination: ObjectDestination::Hand,
         program: Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![instruction]),
         ),
     }
 }

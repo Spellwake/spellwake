@@ -171,7 +171,7 @@ fn splice_rechecks_all_targets_and_preserves_untargeted_text_only_if_spell_resol
                     5,
                     A,
                     ObjectDestination::Hand,
-                    free_instant(BodyTarget::SingleCreature, crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()),
+                    free_instant(BodyTarget::SINGLE_CREATURE, crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()),
                 ),
             ],
             &[(Blue, 5), (Red, 2)],
@@ -229,7 +229,7 @@ fn splice_spell_copies_keep_added_effects_and_choose_each_target_without_repayin
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     Instruction::StackOp(Box::new(

@@ -148,9 +148,7 @@ fn trigger_cond_uses_damage_pairs(cond: &crate::program::TriggerCondition) -> bo
 
 fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
     let target_uses = match body.target {
-        BodyTarget::FilteredPermanent(f)
-        | BodyTarget::FilteredOwnGraveyardCard(f)
-        | BodyTarget::FilteredAnyGraveyardCard { filter: f, .. } => filter_uses_damage_pairs(f),
+        BodyTarget::Object { filter, .. } => filter_uses_damage_pairs(filter),
         _ => false,
     };
     if let Some(modes) = body.triggered_modes()

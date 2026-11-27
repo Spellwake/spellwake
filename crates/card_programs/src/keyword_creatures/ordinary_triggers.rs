@@ -329,7 +329,7 @@ pub(super) fn compile(
             let minimum = threshold.parse::<u16>().ok().filter(|value| *value > 0)?;
             let keyword = static_keyword(effect.strip_prefix("target creature you control gains ")?.strip_suffix(" until end of turn.")?)?;
             triggers.push((spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::BeginningCombat, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::TotalControlledPowerAtLeast(minimum)),
-                ExecutableBody::new(BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()), vec![
+                ExecutableBody::new(BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()), vec![
                     Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::aggregate(spellwake_engine::program::ObjectFilter::creature().controlled(), spellwake_engine::program::ObjectStatKind::Power, spellwake_engine::program::StatAggregate::Sum),
                         comparison: Comparison::GreaterOrEqual,
@@ -374,7 +374,7 @@ pub(super) fn compile(
             let (subject,damage)=effect.split_once(", then it deals damage equal to its power to ")?;
             if (subject!=card.name && Some(subject)!=card.name.split(',').next() && subject!="this creature") || damage!="any target." {return None;}
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::any().ordinal_this_turn(std::num::NonZeroU32::from(std::num::NonZeroU16::new(ordinal)?))),
-                ExecutableBody::new(BodyTarget::SingleAnyTarget,vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1)),
+                ExecutableBody::new(BodyTarget::SINGLE_ANY_TARGET,vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1)),
                     Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::from_power(spellwake_engine::program::PowerDamageSource::AbilitySource)))])));
         } else if let Some((kind,effect)) = line.strip_prefix("Whenever one or more +1/+1 counters are put on another non-").and_then(|s|s.split_once(" creature you control, ")) {
             triggers.push((spellwake_engine::program::TriggerSpec::counters_changed(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source().without_subtype(vocabulary.resolve_label(kind)?), spellwake_engine::program::CounterTriggerKind::PlusOnePlaced { by_controller_only: false }),body(effect,&card.name,vocabulary)?));
@@ -419,7 +419,7 @@ pub(super) fn compile(
                     spellwake_engine::program::ObjectFilter::self_object(),
                 ),
                 ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+                    BodyTarget::filtered_permanent(ObjectFilter::creature().opposing()),
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -438,7 +438,7 @@ pub(super) fn compile(
                     spellwake_engine::program::ObjectFilter::self_object(),
                 ),
                 ExecutableBody::new(
-                    BodyTarget::SingleOpponent,
+                    BodyTarget::SINGLE_OPPONENT,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -1327,7 +1327,7 @@ pub(super) fn body(
     }
     if text == "target creature phases out." {
         return Some(ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::phase_out_query(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1391,7 +1391,7 @@ pub(super) fn body(
         let until_end = ResolvedDuration::UntilEndOfTurn;
         let grant = TriggeredAbility::annihilator(TriggeredAbilityId(0), 2.into());
         return Some(ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1487,7 +1487,7 @@ pub(super) fn body(
     }
     if text == "goad target creature that player controls." {
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature().of_related_player()),
+            BodyTarget::filtered_permanent(ObjectFilter::creature().of_related_player()),
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::goad_target()],
         ));
     }
@@ -1520,7 +1520,7 @@ pub(super) fn body(
     }
     if text == "return target land card from your graveyard to the battlefield tapped." {
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::land()),
+            BodyTarget::filtered_own_graveyard(ObjectFilter::land()),
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(true)],
         ));
     }
@@ -1583,7 +1583,7 @@ pub(super) fn body(
             }),
         ]);
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::planeswalker().controlled()),
+            BodyTarget::filtered_permanent(ObjectFilter::planeswalker().controlled()),
             vec![Instruction::ApplyContinuous(Box::new(
                 spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
                     parts,
@@ -1634,7 +1634,7 @@ pub(super) fn body(
     }
     if text == "tap target creature defending player controls." {
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature().of_related_player()),
+            BodyTarget::filtered_permanent(ObjectFilter::creature().of_related_player()),
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true)],
         ));
     }
@@ -1764,7 +1764,7 @@ pub(super) fn body(
         let maximum = u16::try_from(amount(subjects)?).ok()?;
         return Some(
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     Instruction::PromptChoice(Box::new(
                         spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
@@ -1867,7 +1867,7 @@ pub(super) fn body(
         }
         use spellwake_engine::program::{Comparison, ResolutionCondition};
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
+            BodyTarget::filtered_own_graveyard(ObjectFilter::creature()),
             vec![
                 Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::object_stat(
@@ -2509,7 +2509,7 @@ pub(super) fn body(
         .and_then(|s| s.parse::<u32>().ok())
     {
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredOwnGraveyardCard(
+            BodyTarget::filtered_own_graveyard(
                 ObjectFilter::creature().with_mana_value(ManaValueFilter::AtMost(limit)),
             ),
             vec![
@@ -2591,9 +2591,9 @@ pub(super) fn body(
         .and_then(|s| s.strip_suffix('.'))
     {
         let target = match recipient {
-            "target player or planeswalker" => BodyTarget::SinglePlayerOrPlaneswalker,
-            "any target" => BodyTarget::SingleAnyTarget,
-            "target player" => BodyTarget::SinglePlayer,
+            "target player or planeswalker" => BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
+            "any target" => BodyTarget::SINGLE_ANY_TARGET,
+            "target player" => BodyTarget::SINGLE_PLAYER,
             _ => return None,
         };
         return Some(ExecutableBody::new(
@@ -2613,7 +2613,7 @@ pub(super) fn body(
         == "you may exile target creature an opponent controls until this creature leaves the battlefield."
     {
         return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+            BodyTarget::filtered_permanent(ObjectFilter::creature().opposing()),
             vec![
                 Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
@@ -2929,7 +2929,7 @@ pub(super) fn body(
             .or_else(|| s.strip_suffix(" +1/+1 counters on target creature"))
     }) {
         (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
@@ -3012,7 +3012,7 @@ fn modal_body(
             ],
         ),
         "Target opponent sacrifices a creature of their choice." => (
-            BodyTarget::SingleOpponent,
+            BodyTarget::SINGLE_OPPONENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
@@ -3022,7 +3022,7 @@ fn modal_body(
             ))],
         ),
         "Target opponent discards two cards." => (
-            BodyTarget::SingleOpponent,
+            BodyTarget::SINGLE_OPPONENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::discard(
                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
@@ -3031,7 +3031,7 @@ fn modal_body(
             ))],
         ),
         "Target opponent loses 5 life." => (
-            BodyTarget::SingleOpponent,
+            BodyTarget::SINGLE_OPPONENT,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(

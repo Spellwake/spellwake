@@ -211,7 +211,7 @@ fn cmm_deadly_rollick_and_flawless_maneuver_pay_the_printed_price_or_use_a_contr
                     A,
                     ObjectDestination::LibraryBottom,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -364,7 +364,7 @@ fn cmm_deflecting_swat_can_retain_or_change_a_spell_or_an_ability_target_and_use
  {
     use spellwake_engine::effects::CopyTargetChoice;
     let bolt = ExecutableBody::new(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -481,7 +481,7 @@ fn cmm_darksteel_monolith_survives_destruction_and_pays_zero_for_only_one_colorl
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -539,7 +539,7 @@ fn cmm_darksteel_monolith_survives_destruction_and_pays_zero_for_only_one_colorl
 fn cmm_obscuring_haze_prevents_damage_only_from_opposing_creatures_and_only_during_the_current_turn()
  {
     let bolt = ExecutableBody::new(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -854,7 +854,7 @@ fn cmm_starfield_mystic_and_herald_of_the_pantheon_discount_enchantments_and_tri
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1078,7 +1078,7 @@ fn cmm_imps_mischief_requires_a_single_target_changes_it_and_costs_life_equal_to
     let original = Program::instant(
         ManaCost::generic(3.into()),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -1170,7 +1170,7 @@ fn cmm_imps_mischief_requires_a_single_target_changes_it_and_costs_life_equal_to
 fn cmm_not_of_this_world_counters_a_spell_or_ability_targeting_an_own_permanent_and_is_free_at_seven_power()
  {
     let body = ExecutableBody::new(
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -1372,7 +1372,7 @@ fn cmm_commandeer_pays_the_normal_price_or_exiles_two_blue_hand_cards_takes_cont
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
@@ -1499,7 +1499,7 @@ fn cmm_abstruse_archaic_copies_controlled_colorless_activated_and_triggered_abil
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,

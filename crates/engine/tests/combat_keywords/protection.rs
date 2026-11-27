@@ -175,7 +175,7 @@ fn protection_filters_sources_by_color_in_a_simultaneous_damage_batch() {
 }
 fn body() -> ExecutableBody {
     ExecutableBody::new(
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![
             change(AbilityChange::grant_keywords([ProtectionFromRed])),
             spellwake_engine::program::Instruction::DealDamage(Box::new(
@@ -215,7 +215,7 @@ fn an_instruction_spell_copy_uses_the_copied_spells_color_for_damage() {
         program: Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],

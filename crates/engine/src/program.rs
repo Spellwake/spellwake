@@ -432,14 +432,14 @@ pub enum ResolvingPlayer {
     HighestEntrantController,
     TriggeringAttackerController,
     /// The exact bound current spell entry's controller, including spell copies.
-    /// This consumes the body's required [`BodyTarget::SingleSpell`] target.
+    /// This consumes the body's required [`BodyTarget::single_spell`] target.
     /// A departed target spell supplies its controller through last known information.
     TargetSpellController,
     /// The controller captured from the targeted permanent immediately before its exile.
     ExiledTargetController,
     /// The controller observed immediately before the preceding destruction instruction.
     DestructionTargetController,
-    /// The body's exact bound player, consuming [`BodyTarget::SinglePlayer`].
+    /// The body's exact bound player, consuming [`BodyTarget::SINGLE_PLAYER`].
     /// A creature-or-player target does not guarantee this player capability.
     TargetPlayer,
     /// The controller of the body's target (permanent, spell, or planeswalker), or the targeted
@@ -574,101 +574,76 @@ impl ResolvingPlayer {
                 }
             },
             Self::TargetSpellController => match target {
-                BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                BodyTarget::SingleStackObject(_)
-                | BodyTarget::SingleStackEntry
-                | BodyTarget::ControlledAbility { .. }
-                | BodyTarget::StackEntryTargetingControlledPermanent => {
-                    Ok(Some(OperandFamily::StackEntry))
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                } => Ok(Some(OperandFamily::Spell)),
+                BodyTarget::Spell {
+                    include_abilities: true,
+                    ..
                 }
+                | BodyTarget::StackEntry(_) => Ok(Some(OperandFamily::StackEntry)),
                 BodyTarget::None
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SingleOpponent
-                | BodyTarget::SinglePlayer
-                | BodyTarget::SingleOwnGraveyardCard
-                | BodyTarget::FilteredOwnGraveyardCard(_)
-                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                | BodyTarget::RecentlyDiscardedOrFromLibrary
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::OwnedExiledFlashbackCard
-                | BodyTarget::FilteredExiledCard(_)
-                | BodyTarget::FilteredPermanent(_)
-                | BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker
-                | BodyTarget::OpponentOrPlaneswalkerThenCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::SingleAnyTarget => Err(DefinitionError::ResolvingPlayerTarget),
+                | BodyTarget::Object { .. }
+                | BodyTarget::Player { .. }
+                | BodyTarget::AnyTarget(_) => Err(DefinitionError::ResolvingPlayerTarget),
             },
             Self::TargetPlayer => match target {
-                BodyTarget::SingleOpponent | BodyTarget::SinglePlayer => {
-                    Ok(Some(OperandFamily::Player))
-                }
+                BodyTarget::Player { .. } => Ok(Some(OperandFamily::Player)),
                 BodyTarget::None
-                | BodyTarget::ControlledAbility { .. }
-                | BodyTarget::StackEntryTargetingControlledPermanent
-                | BodyTarget::SingleStackEntry
-                | BodyTarget::SingleStackObject(_)
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SingleOwnGraveyardCard
-                | BodyTarget::FilteredOwnGraveyardCard(_)
-                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                | BodyTarget::RecentlyDiscardedOrFromLibrary
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::OwnedExiledFlashbackCard
-                | BodyTarget::FilteredExiledCard(_)
-                | BodyTarget::FilteredPermanent(_)
-                | BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker
-                | BodyTarget::OpponentOrPlaneswalkerThenCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::SingleAnyTarget
-                | BodyTarget::SingleSpell(_) => Err(DefinitionError::ResolvingPlayerTarget),
+                | BodyTarget::Object { .. }
+                | BodyTarget::AnyTarget(_)
+                | BodyTarget::Spell { .. }
+                | BodyTarget::StackEntry(_) => Err(DefinitionError::ResolvingPlayerTarget),
             },
             Self::TargetController => match target {
-                BodyTarget::SingleOpponent | BodyTarget::SinglePlayer => {
-                    Ok(Some(OperandFamily::Player))
+                BodyTarget::Player { .. } => Ok(Some(OperandFamily::Player)),
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                } => Ok(Some(OperandFamily::Spell)),
+                BodyTarget::Spell {
+                    include_abilities: true,
+                    ..
                 }
-                BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                BodyTarget::SingleStackObject(_) | BodyTarget::SingleStackEntry => {
+                | BodyTarget::StackEntry(StackTargetKind::AnyEntry) => {
                     Ok(Some(OperandFamily::StackEntry))
                 }
-                BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
-                BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker
-                | BodyTarget::SingleAnyTarget => Ok(Some(OperandFamily::DamageRecipient)),
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                } => Ok(Some(OperandFamily::Permanent)),
+                BodyTarget::AnyTarget(
+                    AnyTargetKind::Any
+                    | AnyTargetKind::CreatureOrPlayer
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker,
+                ) => Ok(Some(OperandFamily::DamageRecipient)),
                 _ => Err(DefinitionError::ResolvingPlayerTarget),
             },
             Self::TargetOwner => match target {
-                BodyTarget::SinglePermanent
-                | BodyTarget::SingleCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
-                BodyTarget::SingleOwnGraveyardCard
-                | BodyTarget::FilteredOwnGraveyardCard(_)
-                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature => Ok(Some(OperandFamily::GraveyardCard)),
-                BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
-                    Ok(Some(OperandFamily::ExiledCard))
-                }
-                BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                BodyTarget::SingleCreatureOrPlayer
-                | BodyTarget::SinglePlayerOrPlaneswalker
-                | BodyTarget::SingleOpponentOrPlaneswalker
-                | BodyTarget::SingleAnyTarget => Ok(Some(OperandFamily::DamageRecipient)),
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                } => Ok(Some(OperandFamily::Permanent)),
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                } => Ok(Some(OperandFamily::GraveyardCard)),
+                BodyTarget::Object {
+                    zone: TargetZone::Exile { .. },
+                    ..
+                } => Ok(Some(OperandFamily::ExiledCard)),
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                } => Ok(Some(OperandFamily::Spell)),
+                BodyTarget::AnyTarget(
+                    AnyTargetKind::Any
+                    | AnyTargetKind::CreatureOrPlayer
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker,
+                ) => Ok(Some(OperandFamily::DamageRecipient)),
                 _ => Err(DefinitionError::ResolvingPlayerTarget),
             },
             Self::ActivePlayer
@@ -3256,62 +3231,179 @@ impl GraveyardCohortReturn {
     }
 }
 
+/// Zone scope for a single-object [`BodyTarget::Object`] target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetZone {
+    Battlefield,
+    OwnGraveyard,
+    AnyGraveyard { opponents_only: bool },
+    Exile { owned_flashback_only: bool },
+    RecentlyDiscardedOrFromLibrary,
+}
+
+/// Recipient scope for a [`BodyTarget::AnyTarget`] target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnyTargetKind {
+    Any,
+    CreatureOrPlayer,
+    PlayerOrPlaneswalker,
+    OpponentOrPlaneswalker,
+    OpponentOrPlaneswalkerThenCreature,
+}
+
+/// Stack-entry scope for a [`BodyTarget::StackEntry`] target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackTargetKind {
+    AnyEntry,
+    TargetingControlledPermanent,
+    ControlledAbility { colorless_source: bool },
+}
+
 /// The body's admission gate is independent of its instruction order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyTarget {
-    /// A card in the resolving controller’s graveyard.
-    SingleOwnGraveyardCard,
-    FilteredOwnGraveyardCard(ObjectFilter),
-    /// A card matching `filter` in any graveyard (or an opponent's graveyard when `opponents_only`).
-    FilteredAnyGraveyardCard {
+    None,
+    Object {
+        zone: TargetZone,
         filter: ObjectFilter,
+    },
+    Player {
         opponents_only: bool,
     },
-    /// Creature or planeswalker card in any graveyard.
-    AnyGraveyardCreatureOrPlaneswalker,
-    /// Any physical card in any graveyard.
-    AnyGraveyardCard,
-    /// A face-up exiled card owned by this ability or spell's controller that has flashback.
-    OwnedExiledFlashbackCard,
-    /// An exiled card matching `ObjectFilter`.
-    FilteredExiledCard(ObjectFilter),
-    RecentlyDiscardedOrFromLibrary,
-    /// Any creature card in any graveyard.
-    AnyGraveyardCreature,
-    FilteredPermanent(ObjectFilter),
-    None,
-    SinglePermanent,
-    SingleCreature,
-    SinglePlayer,
-    /// A current opponent of the controller of this spell or ability.
-    SingleOpponent,
-    /// Deliberately excludes planeswalkers and battles until those are modeled.
-    SingleCreatureOrPlayer,
-    /// A player or a battlefield planeswalker.
-    SinglePlayerOrPlaneswalker,
-    /// A current opponent or a battlefield planeswalker.
-    SingleOpponentOrPlaneswalker,
-    /// One opponent or planeswalker, then up to one creature that player controls.
-    OpponentOrPlaneswalkerThenCreature,
-    /// A battlefield planeswalker, evaluated at announcement and resolution.
-    SinglePlaneswalker,
-    /// Any creature, planeswalker or player (battles are not yet modeled).
-    SingleAnyTarget,
-    /// Any current spell or ability on the stack.
-    SingleStackEntry,
-    /// A spell or ability on the stack targeting a permanent you control.
-    StackEntryTargetingControlledPermanent,
-    ControlledAbility {
-        colorless_source: bool,
+    AnyTarget(AnyTargetKind),
+    Spell {
+        filter: SpellFilter,
+        include_abilities: bool,
     },
-    SingleSpell(SpellFilter),
-    /// A spell matching `SpellFilter` or any activated/triggered ability on the stack.
-    SingleStackObject(SpellFilter),
+    StackEntry(StackTargetKind),
 }
+
 impl BodyTarget {
+    pub const SINGLE_PERMANENT: Self = Self::Object {
+        zone: TargetZone::Battlefield,
+        filter: ObjectFilter::any(),
+    };
+    pub const SINGLE_CREATURE: Self = Self::Object {
+        zone: TargetZone::Battlefield,
+        filter: ObjectFilter::creature(),
+    };
+    pub const SINGLE_PLANESWALKER: Self = Self::Object {
+        zone: TargetZone::Battlefield,
+        filter: ObjectFilter::planeswalker(),
+    };
+    pub const SINGLE_OWN_GRAVEYARD_CARD: Self = Self::Object {
+        zone: TargetZone::OwnGraveyard,
+        filter: ObjectFilter::any(),
+    };
+    pub const ANY_GRAVEYARD_CARD: Self = Self::Object {
+        zone: TargetZone::AnyGraveyard {
+            opponents_only: false,
+        },
+        filter: ObjectFilter::any(),
+    };
+    pub const ANY_GRAVEYARD_CREATURE: Self = Self::Object {
+        zone: TargetZone::AnyGraveyard {
+            opponents_only: false,
+        },
+        filter: ObjectFilter::creature(),
+    };
+    pub const ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER: Self = Self::Object {
+        zone: TargetZone::AnyGraveyard {
+            opponents_only: false,
+        },
+        filter: ObjectFilter::creature_or_planeswalker(),
+    };
+    pub const OWNED_EXILED_FLASHBACK_CARD: Self = Self::Object {
+        zone: TargetZone::Exile {
+            owned_flashback_only: true,
+        },
+        filter: ObjectFilter::any(),
+    };
+    pub const RECENTLY_DISCARDED_OR_FROM_LIBRARY: Self = Self::Object {
+        zone: TargetZone::RecentlyDiscardedOrFromLibrary,
+        filter: ObjectFilter::any(),
+    };
+    pub const SINGLE_PLAYER: Self = Self::Player {
+        opponents_only: false,
+    };
+    pub const SINGLE_OPPONENT: Self = Self::Player {
+        opponents_only: true,
+    };
+    pub const SINGLE_ANY_TARGET: Self = Self::AnyTarget(AnyTargetKind::Any);
+    pub const SINGLE_CREATURE_OR_PLAYER: Self = Self::AnyTarget(AnyTargetKind::CreatureOrPlayer);
+    pub const SINGLE_PLAYER_OR_PLANESWALKER: Self =
+        Self::AnyTarget(AnyTargetKind::PlayerOrPlaneswalker);
+    pub const SINGLE_OPPONENT_OR_PLANESWALKER: Self =
+        Self::AnyTarget(AnyTargetKind::OpponentOrPlaneswalker);
+    pub const OPPONENT_OR_PLANESWALKER_THEN_CREATURE: Self =
+        Self::AnyTarget(AnyTargetKind::OpponentOrPlaneswalkerThenCreature);
+    pub const SINGLE_STACK_ENTRY: Self = Self::StackEntry(StackTargetKind::AnyEntry);
+    pub const STACK_ENTRY_TARGETING_CONTROLLED_PERMANENT: Self =
+        Self::StackEntry(StackTargetKind::TargetingControlledPermanent);
+
+    #[must_use]
+    pub const fn filtered_permanent(filter: ObjectFilter) -> Self {
+        Self::Object {
+            zone: TargetZone::Battlefield,
+            filter,
+        }
+    }
+
+    #[must_use]
+    pub const fn filtered_own_graveyard(filter: ObjectFilter) -> Self {
+        Self::Object {
+            zone: TargetZone::OwnGraveyard,
+            filter,
+        }
+    }
+
+    #[must_use]
+    pub const fn filtered_any_graveyard(filter: ObjectFilter, opponents_only: bool) -> Self {
+        Self::Object {
+            zone: TargetZone::AnyGraveyard { opponents_only },
+            filter,
+        }
+    }
+
+    #[must_use]
+    pub const fn filtered_exiled(filter: ObjectFilter) -> Self {
+        Self::Object {
+            zone: TargetZone::Exile {
+                owned_flashback_only: false,
+            },
+            filter,
+        }
+    }
+
+    #[must_use]
+    pub const fn single_spell(filter: SpellFilter) -> Self {
+        Self::Spell {
+            filter,
+            include_abilities: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn single_stack_object(filter: SpellFilter) -> Self {
+        Self::Spell {
+            filter,
+            include_abilities: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn controlled_ability(colorless_source: bool) -> Self {
+        Self::StackEntry(StackTargetKind::ControlledAbility { colorless_source })
+    }
+
     pub fn guarantees_creature(self) -> bool {
-        matches!(self, Self::SingleCreature)
-            || matches!(self, Self::FilteredPermanent(filter) if filter.guarantees_creature())
+        matches!(
+            self,
+            Self::Object {
+                zone: TargetZone::Battlefield,
+                filter,
+            } if filter.guarantees_creature()
+        )
     }
 }
 
@@ -3365,33 +3457,58 @@ fn toolbox_merge_family(
 
 fn toolbox_object_target_family(target: BodyTarget) -> Result<OperandFamily, DefinitionError> {
     match target {
-        BodyTarget::SinglePermanent
-        | BodyTarget::SingleCreature
-        | BodyTarget::SinglePlaneswalker
-        | BodyTarget::FilteredPermanent(_) => Ok(OperandFamily::Permanent),
-        BodyTarget::SingleOwnGraveyardCard
-        | BodyTarget::FilteredOwnGraveyardCard(_)
-        | BodyTarget::FilteredAnyGraveyardCard { .. }
-        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-        | BodyTarget::RecentlyDiscardedOrFromLibrary
-        | BodyTarget::AnyGraveyardCard
-        | BodyTarget::AnyGraveyardCreature => Ok(OperandFamily::GraveyardCard),
-        BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
-            Ok(OperandFamily::ExiledCard)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        } => Ok(OperandFamily::Permanent),
+        BodyTarget::Object {
+            zone:
+                TargetZone::OwnGraveyard
+                | TargetZone::AnyGraveyard { .. }
+                | TargetZone::RecentlyDiscardedOrFromLibrary,
+            ..
+        } => Ok(OperandFamily::GraveyardCard),
+        BodyTarget::Object {
+            zone: TargetZone::Exile { .. },
+            ..
+        } => Ok(OperandFamily::ExiledCard),
+        BodyTarget::Spell {
+            include_abilities: false,
+            ..
+        } => Ok(OperandFamily::Spell),
+        BodyTarget::Spell {
+            include_abilities: true,
+            ..
         }
-        BodyTarget::SingleSpell(_) => Ok(OperandFamily::Spell),
-        BodyTarget::SingleStackEntry
-        | BodyTarget::SingleStackObject(_)
-        | BodyTarget::ControlledAbility { .. }
-        | BodyTarget::StackEntryTargetingControlledPermanent => Ok(OperandFamily::StackEntry),
-        BodyTarget::SingleCreatureOrPlayer
-        | BodyTarget::SinglePlayerOrPlaneswalker
-        | BodyTarget::SingleOpponentOrPlaneswalker
-        | BodyTarget::OpponentOrPlaneswalkerThenCreature
-        | BodyTarget::SingleAnyTarget => Ok(OperandFamily::DamageRecipient),
-        BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-            Err(DefinitionError::OperandFamily)
+        | BodyTarget::StackEntry(_) => Ok(OperandFamily::StackEntry),
+        BodyTarget::AnyTarget(_) => Ok(OperandFamily::DamageRecipient),
+        BodyTarget::None | BodyTarget::Player { .. } => Err(DefinitionError::OperandFamily),
+    }
+}
+
+fn inherited_target_family(target: BodyTarget) -> Option<OperandFamily> {
+    match target {
+        BodyTarget::Player { .. } => Some(OperandFamily::Player),
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        } => Some(OperandFamily::Permanent),
+        BodyTarget::AnyTarget(
+            AnyTargetKind::Any
+            | AnyTargetKind::CreatureOrPlayer
+            | AnyTargetKind::PlayerOrPlaneswalker
+            | AnyTargetKind::OpponentOrPlaneswalker,
+        ) => Some(OperandFamily::DamageRecipient),
+        BodyTarget::Spell {
+            include_abilities: false,
+            ..
+        } => Some(OperandFamily::Spell),
+        BodyTarget::Spell {
+            include_abilities: true,
+            ..
         }
+        | BodyTarget::StackEntry(_) => Some(OperandFamily::StackEntry),
+        _ => Some(OperandFamily::GraveyardCard),
     }
 }
 
@@ -3424,7 +3541,7 @@ fn validate_toolbox_filter(
     }
     if filter.has_target_player() {
         let f = match target {
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => OperandFamily::Player,
+            BodyTarget::Player { .. } => OperandFamily::Player,
             _ => toolbox_object_target_family(target)?,
         };
         family = toolbox_merge_family(family, Some(f))?;
@@ -3718,17 +3835,24 @@ pub(super) enum OperandFamily {
 impl BodyTarget {
     /// Bind source-relative targeting to the exact permanent incarnation.
     pub(crate) fn with_ability_source(self, source: crate::object_identity::ObjectId) -> Self {
-        let Self::FilteredPermanent(filter) = self else {
+        let Self::Object {
+            zone: TargetZone::Battlefield,
+            filter,
+        } = self
+        else {
             return self;
         };
-        Self::FilteredPermanent(filter.with_ability_source(source))
+        Self::Object {
+            zone: TargetZone::Battlefield,
+            filter: filter.with_ability_source(source),
+        }
     }
 }
 
 impl ExecutableBody {
     pub(crate) fn dependent_targets(&self) -> Option<DependentTargets> {
         match (self.target, self.instructions.first()) {
-            (BodyTarget::OpponentOrPlaneswalkerThenCreature, _) => {
+            (BodyTarget::AnyTarget(AnyTargetKind::OpponentOrPlaneswalkerThenCreature), _) => {
                 Some(DependentTargets::CreatureControlledByPrimary)
             }
             _ => None,
@@ -3742,7 +3866,7 @@ impl ExecutableBody {
                 if matches!(
                     spec.recipients,
                     crate::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                ) && self.target == BodyTarget::OpponentOrPlaneswalkerThenCreature =>
+                ) && self.target == BodyTarget::OPPONENT_OR_PLANESWALKER_THEN_CREATURE =>
             {
                 Some((1, 2))
             }
@@ -3751,7 +3875,7 @@ impl ExecutableBody {
                     spec.recipients,
                     crate::toolbox::DamageTargetQuery::OrderedTargets { .. }
                         | crate::toolbox::DamageTargetQuery::DivideThree
-                ) && self.target == BodyTarget::SingleAnyTarget =>
+                ) && self.target == BodyTarget::SINGLE_ANY_TARGET =>
             {
                 Some((1, 3))
             }
@@ -3819,7 +3943,7 @@ impl ExecutableBody {
                         crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
                     )
                 ) && self.target
-                    == BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()) =>
+                    == BodyTarget::filtered_own_graveyard(ObjectFilter::creature()) =>
             {
                 Some((0, usize::MAX))
             }
@@ -4009,10 +4133,10 @@ impl ExecutableBody {
         if self.up_to_one_target {
             let valid_target = matches!(
                 self.target,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             );
             if !valid_target
                 || self.graveyard_target_bounds.is_some()
@@ -4028,10 +4152,10 @@ impl ExecutableBody {
         if let Some((minimum, maximum)) = self.permanent_target_bounds {
             let valid_target = matches!(
                 self.target,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             );
             if minimum > maximum
                 || maximum == 0
@@ -4072,15 +4196,17 @@ impl ExecutableBody {
                             )
                 )
             });
-            let valid_gy_target_and_ops = match self.target {
-                BodyTarget::FilteredOwnGraveyardCard(_) => has_multi_gy_move,
-                BodyTarget::SingleOwnGraveyardCard
-                | BodyTarget::AnyGraveyardCard
-                | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                | BodyTarget::FilteredExiledCard(_) => has_multi_gy_move,
-                _ => false,
-            };
+            let valid_gy_target_and_ops = matches!(
+                self.target,
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard
+                        | TargetZone::AnyGraveyard { .. }
+                        | TargetZone::Exile {
+                            owned_flashback_only: false
+                        },
+                    ..
+                }
+            ) && has_multi_gy_move;
             if minimum > maximum
                 || maximum == 0
                 || self.non_graveyard_target_bounds().is_some()
@@ -4136,14 +4262,14 @@ impl ExecutableBody {
             }
             return Ok(());
         }
-        if let BodyTarget::FilteredPermanent(filter)
-        | BodyTarget::FilteredOwnGraveyardCard(filter)
-        | BodyTarget::FilteredAnyGraveyardCard { filter, .. }
-        | BodyTarget::FilteredExiledCard(filter) = self.target
-        {
+        if let BodyTarget::Object { filter, .. } = self.target {
             filter.validate_vocabulary(vocabulary)?;
         }
-        if let BodyTarget::FilteredPermanent(filter) = self.target {
+        if let BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter,
+        } = self.target
+        {
             if filter.has_bound_exclusion() {
                 return Err(DefinitionError::InvalidInstruction);
             }
@@ -4206,15 +4332,12 @@ impl ExecutableBody {
             .collect();
         let permanent_target = matches!(
             self.target,
-            BodyTarget::SingleCreature
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::SinglePermanent
-                | BodyTarget::FilteredPermanent(_)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
         );
-        let player_target = matches!(
-            self.target,
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        );
+        let player_target = matches!(self.target, BodyTarget::Player { .. });
         let merge_family = |a: Option<OperandFamily>,
                             b: Option<OperandFamily>|
          -> Result<Option<OperandFamily>, DefinitionError> {
@@ -4243,24 +4366,25 @@ impl ExecutableBody {
                 ..FlowFacts::default()
             });
             facts.exact_creature_target = (self.target.guarantees_creature()
-                || matches!(self.target, BodyTarget::AnyGraveyardCreature)
                 || matches!(
                     self.target,
-                    BodyTarget::SingleSpell(sf) if sf.object.guarantees_creature()
+                    BodyTarget::Object {
+                        zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                        filter,
+                    } if filter.guarantees_creature()
                 )
                 || matches!(
                     self.target,
-                    BodyTarget::FilteredOwnGraveyardCard(filter)
-                        | BodyTarget::FilteredAnyGraveyardCard { filter, .. }
-                        if filter.guarantees_creature()
+                    BodyTarget::Spell {
+                        filter,
+                        include_abilities: false,
+                    } if filter.object.guarantees_creature()
                 ))
                 && self
                     .permanent_target_bounds()
                     .is_none_or(|bounds| bounds == (1, 1) || bounds == (0, 1));
-            facts.has_object_or_spell_target = !matches!(
-                self.target,
-                BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            );
+            facts.has_object_or_spell_target =
+                !matches!(self.target, BodyTarget::None | BodyTarget::Player { .. });
             let mut defined_slots = facts.definitely.clone();
             let mut donor_moved = facts.donor_moved;
             if let Instruction::PromptChoice(spec) = instruction
@@ -4310,7 +4434,7 @@ impl ExecutableBody {
                             }
                             crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures => {
                                 if self.target
-                                    == BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature())
+                                    == BodyTarget::filtered_own_graveyard(ObjectFilter::creature())
                                     && self.instructions.len() == 1
                                 {
                                     Some(OperandFamily::GraveyardCard)
@@ -4619,9 +4743,10 @@ impl ExecutableBody {
                                 Some(MoveSubjectRef::TargetObject) => {
                                     if !matches!(
                                         self.target,
-                                        BodyTarget::SingleCreature
-                                            | BodyTarget::SinglePermanent
-                                            | BodyTarget::FilteredPermanent(_)
+                                        BodyTarget::Object {
+                                            zone: TargetZone::Battlefield,
+                                            ..
+                                        }
                                     ) {
                                         return Err(DefinitionError::OperandFamily);
                                     }
@@ -4669,9 +4794,7 @@ impl ExecutableBody {
                     };
                     let rec_fam = match &spec.recipients {
                         crate::toolbox::DamageTargetQuery::Targets => Some(match self.target {
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                                OperandFamily::Player
-                            }
+                            BodyTarget::Player { .. } => OperandFamily::Player,
                             _ => toolbox_object_target_family(self.target)?,
                         }),
                         crate::toolbox::DamageTargetQuery::Objects(q) => {
@@ -4714,18 +4837,17 @@ impl ExecutableBody {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             match self.target {
-                                BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker
-                                | BodyTarget::SinglePlayer
-                                | BodyTarget::SingleOpponent
-                                | BodyTarget::SingleCreature
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::FilteredPermanent(_) => {
-                                    Some(OperandFamily::DamageRecipient)
-                                }
+                                BodyTarget::AnyTarget(
+                                    AnyTargetKind::Any
+                                    | AnyTargetKind::CreatureOrPlayer
+                                    | AnyTargetKind::PlayerOrPlaneswalker
+                                    | AnyTargetKind::OpponentOrPlaneswalker,
+                                )
+                                | BodyTarget::Player { .. }
+                                | BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                } => Some(OperandFamily::DamageRecipient),
                                 _ => return Err(DefinitionError::OperandFamily),
                             }
                         }
@@ -4745,10 +4867,10 @@ impl ExecutableBody {
                                     Some(OperandFamily::DamageRecipient)
                                 }
                                 PowerDamageSource::TargetCreature => match self.target {
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } => Some(OperandFamily::Permanent),
                                     _ => Some(OperandFamily::DamageRecipient),
                                 },
                                 PowerDamageSource::TargetCreatureToAbilitySource => {
@@ -4756,10 +4878,10 @@ impl ExecutableBody {
                                         return Err(DefinitionError::InvalidInstruction);
                                     }
                                     match self.target {
-                                        BodyTarget::SingleCreature
-                                        | BodyTarget::FilteredPermanent(_) => {
-                                            Some(OperandFamily::Permanent)
-                                        }
+                                        BodyTarget::Object {
+                                            zone: TargetZone::Battlefield,
+                                            ..
+                                        } => Some(OperandFamily::Permanent),
                                         _ => return Err(DefinitionError::OperandFamily),
                                     }
                                 }
@@ -4775,21 +4897,19 @@ impl ExecutableBody {
                             else {
                                 return Err(DefinitionError::InvalidInstruction);
                             };
-                            let dealer_ok = matches!(
-                                &dealer.target,
-                                BodyTarget::SingleCreature | BodyTarget::FilteredPermanent(_)
-                            ) && dealer.target.guarantees_creature();
+                            let dealer_ok = dealer.target.guarantees_creature();
                             let recipient_ok = matches!(
                                 &recipient.target,
-                                BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::SinglePlayer
-                                    | BodyTarget::SingleOpponent
-                                    | BodyTarget::SingleAnyTarget
-                                    | BodyTarget::SingleCreatureOrPlayer
-                                    | BodyTarget::SinglePlayerOrPlaneswalker
-                                    | BodyTarget::SingleOpponentOrPlaneswalker
-                                    | BodyTarget::FilteredPermanent(_)
+                                BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                } | BodyTarget::Player { .. }
+                                    | BodyTarget::AnyTarget(
+                                        AnyTargetKind::Any
+                                            | AnyTargetKind::CreatureOrPlayer
+                                            | AnyTargetKind::PlayerOrPlaneswalker
+                                            | AnyTargetKind::OpponentOrPlaneswalker,
+                                    )
                             );
                             if self.target != BodyTarget::None || !dealer_ok || !recipient_ok {
                                 return Err(DefinitionError::InvalidInstruction);
@@ -4801,10 +4921,11 @@ impl ExecutableBody {
                         } => {
                             if !matches!(
                                 self.target,
-                                BodyTarget::SinglePlayer
-                                    | BodyTarget::SingleOpponent
-                                    | BodyTarget::SinglePlayerOrPlaneswalker
-                                    | BodyTarget::SingleOpponentOrPlaneswalker
+                                BodyTarget::Player { .. }
+                                    | BodyTarget::AnyTarget(
+                                        AnyTargetKind::PlayerOrPlaneswalker
+                                            | AnyTargetKind::OpponentOrPlaneswalker,
+                                    )
                             ) {
                                 return Err(DefinitionError::OperandFamily);
                             }
@@ -4812,7 +4933,7 @@ impl ExecutableBody {
                         }
                         crate::toolbox::DamageTargetQuery::OrderedTargets { first, others } => {
                             let dependent = self.target
-                                == BodyTarget::OpponentOrPlaneswalkerThenCreature
+                                == BodyTarget::OPPONENT_OR_PLANESWALKER_THEN_CREATURE
                                 && matches!(
                                     context,
                                     BodyContext::TriggerBound {
@@ -4820,7 +4941,7 @@ impl ExecutableBody {
                                         ..
                                     }
                                 );
-                            if !(dependent || self.target == BodyTarget::SingleAnyTarget)
+                            if !(dependent || self.target == BodyTarget::SINGLE_ANY_TARGET)
                                 || self.instructions.len() != 1
                                 || !first.is_positive()
                                 || !others.is_positive()
@@ -4835,7 +4956,7 @@ impl ExecutableBody {
                                 DamageAmountSpec::Expr(ValueExpr::Literal(amt)) if amt.is_positive()
                             );
                             if !valid_amt
-                                || self.target != BodyTarget::SingleAnyTarget
+                                || self.target != BodyTarget::SINGLE_ANY_TARGET
                                 || self.instructions.len() != 1
                             {
                                 return Err(DefinitionError::InvalidInstruction);
@@ -4843,7 +4964,7 @@ impl ExecutableBody {
                             Some(OperandFamily::DamageRecipient)
                         }
                         crate::toolbox::DamageTargetQuery::DivideThree => {
-                            if self.target != BodyTarget::SingleAnyTarget
+                            if self.target != BodyTarget::SINGLE_ANY_TARGET
                                 || self.instructions.len() != 1
                                 || !matches!(
                                     context,
@@ -4864,9 +4985,10 @@ impl ExecutableBody {
                                     Some(MoveSubjectRef::TargetObject) => {
                                         if !matches!(
                                             self.target,
-                                            BodyTarget::SingleCreature
-                                                | BodyTarget::SinglePermanent
-                                                | BodyTarget::FilteredPermanent(_)
+                                            BodyTarget::Object {
+                                                zone: TargetZone::Battlefield,
+                                                ..
+                                            }
                                         ) {
                                             return Err(DefinitionError::OperandFamily);
                                         }
@@ -4902,25 +5024,23 @@ impl ExecutableBody {
                         crate::toolbox::DamageTargetQuery::Divided { total, .. } => {
                             total.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                             match self.target {
-                                BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreature
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::FilteredPermanent(_) => {
-                                    Some(OperandFamily::DamageRecipient)
-                                }
+                                BodyTarget::AnyTarget(
+                                    AnyTargetKind::Any
+                                    | AnyTargetKind::CreatureOrPlayer
+                                    | AnyTargetKind::PlayerOrPlaneswalker
+                                    | AnyTargetKind::OpponentOrPlaneswalker,
+                                )
+                                | BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                } => Some(OperandFamily::DamageRecipient),
                                 _ => return Err(DefinitionError::OperandFamily),
                             }
                         }
                         crate::toolbox::DamageTargetQuery::Relative(rel) => match rel.as_ref() {
                             DamageRecipientsRef::Target | DamageRecipientsRef::TargetController => {
                                 Some(match self.target {
-                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                                        OperandFamily::Player
-                                    }
+                                    BodyTarget::Player { .. } => OperandFamily::Player,
                                     _ => toolbox_object_target_family(self.target)?,
                                 })
                             }
@@ -5276,8 +5396,13 @@ impl ExecutableBody {
                             None
                         }
                         crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves => {
-                            if !matches!(self.target, BodyTarget::FilteredPermanent(_))
-                                || !matches!(context, BodyContext::TriggerBound { .. })
+                            if !matches!(
+                                self.target,
+                                BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                }
+                            ) || !matches!(context, BodyContext::TriggerBound { .. })
                             {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -5308,35 +5433,8 @@ impl ExecutableBody {
                                         let mut inherited = band.body.clone();
                                         inherited.target = self.target;
                                         inherited.validate_in(vocabulary, context)?;
-                                        let inherited_fam = match self.target {
-                                            BodyTarget::SinglePlayer
-                                            | BodyTarget::SingleOpponent => {
-                                                Some(OperandFamily::Player)
-                                            }
-                                            BodyTarget::SingleCreature
-                                            | BodyTarget::SinglePermanent
-                                            | BodyTarget::SinglePlaneswalker
-                                            | BodyTarget::FilteredPermanent(_) => {
-                                                Some(OperandFamily::Permanent)
-                                            }
-                                            BodyTarget::SingleAnyTarget
-                                            | BodyTarget::SingleCreatureOrPlayer
-                                            | BodyTarget::SinglePlayerOrPlaneswalker
-                                            | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                                Some(OperandFamily::DamageRecipient)
-                                            }
-                                            BodyTarget::SingleSpell(_) => {
-                                                Some(OperandFamily::Spell)
-                                            }
-                                            BodyTarget::SingleStackEntry
-                                            | BodyTarget::SingleStackObject(_)
-                                            | BodyTarget::ControlledAbility { .. }
-                                            | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                                Some(OperandFamily::StackEntry)
-                                            }
-                                            _ => Some(OperandFamily::GraveyardCard),
-                                        };
-                                        rf = merge_family(rf, inherited_fam)?;
+                                        rf =
+                                            merge_family(rf, inherited_target_family(self.target))?;
                                     }
                                 }
                             }
@@ -5389,35 +5487,10 @@ impl ExecutableBody {
                                         let mut inherited = sub.clone();
                                         inherited.target = self.target;
                                         inherited.validate_in(vocabulary, context)?;
-                                        let inherited_fam = match self.target {
-                                            BodyTarget::SinglePlayer
-                                            | BodyTarget::SingleOpponent => {
-                                                Some(OperandFamily::Player)
-                                            }
-                                            BodyTarget::SingleCreature
-                                            | BodyTarget::SinglePermanent
-                                            | BodyTarget::SinglePlaneswalker
-                                            | BodyTarget::FilteredPermanent(_) => {
-                                                Some(OperandFamily::Permanent)
-                                            }
-                                            BodyTarget::SingleAnyTarget
-                                            | BodyTarget::SingleCreatureOrPlayer
-                                            | BodyTarget::SinglePlayerOrPlaneswalker
-                                            | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                                Some(OperandFamily::DamageRecipient)
-                                            }
-                                            BodyTarget::SingleSpell(_) => {
-                                                Some(OperandFamily::Spell)
-                                            }
-                                            BodyTarget::SingleStackEntry
-                                            | BodyTarget::SingleStackObject(_)
-                                            | BodyTarget::ControlledAbility { .. }
-                                            | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                                Some(OperandFamily::StackEntry)
-                                            }
-                                            _ => Some(OperandFamily::GraveyardCard),
-                                        };
-                                        ofam = merge_family(ofam, inherited_fam)?;
+                                        ofam = merge_family(
+                                            ofam,
+                                            inherited_target_family(self.target),
+                                        )?;
                                     }
                                 }
                             }
@@ -5432,7 +5505,7 @@ impl ExecutableBody {
                             facts.moved_library_cards = true;
                             facts.definitely_checked_top = true;
                             let tf = if *target_opponent {
-                                if self.target != BodyTarget::SingleOpponent {
+                                if self.target != BodyTarget::SINGLE_OPPONENT {
                                     return Err(DefinitionError::OperandFamily);
                                 }
                                 Some(OperandFamily::Player)
@@ -5448,7 +5521,7 @@ impl ExecutableBody {
                             expr.required_operand_family(self.target)?
                         }
                         crate::toolbox::PlayerMutation::SacrificeRandomUntilLand => {
-                            if self.target != BodyTarget::SingleOpponent {
+                            if self.target != BodyTarget::SINGLE_OPPONENT {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             Some(OperandFamily::Player)
@@ -5456,10 +5529,7 @@ impl ExecutableBody {
                         crate::toolbox::PlayerMutation::ChooseRevealedHandCard {
                             filter, ..
                         } => {
-                            if !matches!(
-                                self.target,
-                                BodyTarget::SingleOpponent | BodyTarget::SinglePlayer
-                            ) {
+                            if !matches!(self.target, BodyTarget::Player { .. }) {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             if let Some(f) = filter {
@@ -5622,12 +5692,21 @@ impl ExecutableBody {
                                         || (*ability == crate::attachment::AttachAbility::Equip
                                             && matches!(
                                                 self.target,
-                                                BodyTarget::FilteredPermanent(_)
+                                                BodyTarget::Object {
+                                                    zone: TargetZone::Battlefield,
+                                                    ..
+                                                }
                                             ))
                                 }
                                 BodyContext::TriggerBound { .. } => {
                                     *ability == crate::attachment::AttachAbility::Equip
-                                        && matches!(self.target, BodyTarget::FilteredPermanent(_))
+                                        && matches!(
+                                            self.target,
+                                            BodyTarget::Object {
+                                                zone: TargetZone::Battlefield,
+                                                ..
+                                            }
+                                        )
                                 }
                             };
                             let single_only = !matches!(context, BodyContext::TriggerBound { .. });
@@ -5656,10 +5735,10 @@ impl ExecutableBody {
                                     Some(MoveSubjectRef::TargetObject) => {
                                         if !matches!(
                                             self.target,
-                                            BodyTarget::SingleCreature
-                                                | BodyTarget::SinglePermanent
-                                                | BodyTarget::SinglePlaneswalker
-                                                | BodyTarget::FilteredPermanent(_)
+                                            BodyTarget::Object {
+                                                zone: TargetZone::Battlefield,
+                                                ..
+                                            }
                                         ) {
                                             return Err(DefinitionError::OperandFamily);
                                         }
@@ -5732,12 +5811,10 @@ impl ExecutableBody {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             match self.target {
-                                BodyTarget::SingleCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_) => {
-                                    Some(OperandFamily::Permanent)
-                                }
+                                BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                } => Some(OperandFamily::Permanent),
                                 _ => return Err(DefinitionError::OperandFamily),
                             }
                         }
@@ -5745,7 +5822,7 @@ impl ExecutableBody {
                             crate::toolbox::ObjectCombatOp::ReselectAttackDefender,
                         ) => {
                             if self.target
-                                != BodyTarget::FilteredPermanent(
+                                != BodyTarget::filtered_permanent(
                                     ObjectFilter::creature().attacking(),
                                 )
                             {
@@ -5822,12 +5899,13 @@ impl ExecutableBody {
                             Some(
                                 if matches!(
                                     self.target,
-                                    BodyTarget::SinglePlayer
-                                        | BodyTarget::SingleOpponent
-                                        | BodyTarget::SingleAnyTarget
-                                        | BodyTarget::SingleCreatureOrPlayer
-                                        | BodyTarget::SinglePlayerOrPlaneswalker
-                                        | BodyTarget::SingleOpponentOrPlaneswalker
+                                    BodyTarget::Player { .. }
+                                        | BodyTarget::AnyTarget(
+                                            AnyTargetKind::Any
+                                                | AnyTargetKind::CreatureOrPlayer
+                                                | AnyTargetKind::PlayerOrPlaneswalker
+                                                | AnyTargetKind::OpponentOrPlaneswalker,
+                                        )
                                 ) {
                                     OperandFamily::DamageRecipient
                                 } else {
@@ -5860,11 +5938,10 @@ impl ExecutableBody {
                                     None
                                 }
                                 Some(MoveSubjectRef::TargetObject) => match self.target {
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } => Some(OperandFamily::Permanent),
                                     _ => return Err(DefinitionError::OperandFamily),
                                 },
                                 Some(MoveSubjectRef::RevealedCard) | None => {
@@ -5889,25 +5966,21 @@ impl ExecutableBody {
                             )?;
                             let mut fam = match spec.source.to_move_subject() {
                                 Some(MoveSubjectRef::TargetObject) => match self.target {
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
-                                    BodyTarget::SingleOwnGraveyardCard
-                                    | BodyTarget::AnyGraveyardCard
-                                    | BodyTarget::AnyGraveyardCreature
-                                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                                    | BodyTarget::FilteredAnyGraveyardCard { .. }
-                                    | BodyTarget::RecentlyDiscardedOrFromLibrary => {
-                                        Some(OperandFamily::GraveyardCard)
-                                    }
-                                    BodyTarget::OwnedExiledFlashbackCard
-                                    | BodyTarget::FilteredExiledCard(_) => {
-                                        Some(OperandFamily::ExiledCard)
-                                    }
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } => Some(OperandFamily::Permanent),
+                                    BodyTarget::Object {
+                                        zone:
+                                            TargetZone::OwnGraveyard
+                                            | TargetZone::AnyGraveyard { .. }
+                                            | TargetZone::RecentlyDiscardedOrFromLibrary,
+                                        ..
+                                    } => Some(OperandFamily::GraveyardCard),
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Exile { .. },
+                                        ..
+                                    } => Some(OperandFamily::ExiledCard),
                                     _ => return Err(DefinitionError::OperandFamily),
                                 },
                                 Some(
@@ -5974,12 +6047,10 @@ impl ExecutableBody {
                                 .map_err(|_| DefinitionError::InvalidInstruction)?;
                             match spec.source.to_move_subject() {
                                 Some(MoveSubjectRef::TargetObject) => match self.target {
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } => Some(OperandFamily::Permanent),
                                     _ if facts.returned_graveyard_target => {
                                         Some(OperandFamily::GraveyardCard)
                                     }
@@ -6233,12 +6304,10 @@ impl ExecutableBody {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             match self.target {
-                                BodyTarget::SingleCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_) => {
-                                    Some(OperandFamily::Permanent)
-                                }
+                                BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                } => Some(OperandFamily::Permanent),
                                 _ => return Err(DefinitionError::OperandFamily),
                             }
                         }
@@ -6264,12 +6333,10 @@ impl ExecutableBody {
                         crate::toolbox::ContinuousPayload::ChosenColorProtection { recipients } => {
                             match recipients {
                                 ProtectionRecipients::TargetPermanent => match self.target {
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } => Some(OperandFamily::Permanent),
                                     _ => return Err(DefinitionError::OperandFamily),
                                 },
                                 ProtectionRecipients::AbilitySource => {
@@ -6295,7 +6362,10 @@ impl ExecutableBody {
                         crate::toolbox::ContinuousPayload::ModifyAnyNumber { parts } => {
                             if !matches!(
                                 self.target,
-                                BodyTarget::FilteredPermanent(_) | BodyTarget::SinglePermanent
+                                BodyTarget::Object {
+                                    zone: TargetZone::Battlefield,
+                                    ..
+                                }
                             ) || parts.0.iter().any(|part| {
                                 matches!(
                                     part,
@@ -6568,10 +6638,10 @@ impl ExecutableBody {
                                             | EffectSubject::TargetAndSharingColorMatching(_)
                                                 if !matches!(
                                                     self.target,
-                                                    BodyTarget::SingleCreature
-                                                        | BodyTarget::SinglePermanent
-                                                        | BodyTarget::SinglePlaneswalker
-                                                        | BodyTarget::FilteredPermanent(_)
+                                                    BodyTarget::Object {
+                                                        zone: TargetZone::Battlefield,
+                                                        ..
+                                                    }
                                                 ) =>
                                             {
                                                 return Err(DefinitionError::OperandFamily);
@@ -6582,10 +6652,10 @@ impl ExecutableBody {
                                     crate::toolbox::ObjectQuery::Targets
                                         if !matches!(
                                             self.target,
-                                            BodyTarget::SingleCreature
-                                                | BodyTarget::SinglePermanent
-                                                | BodyTarget::SinglePlaneswalker
-                                                | BodyTarget::FilteredPermanent(_)
+                                            BodyTarget::Object {
+                                                zone: TargetZone::Battlefield,
+                                                ..
+                                            }
                                         ) =>
                                     {
                                         return Err(DefinitionError::OperandFamily);
@@ -6613,12 +6683,10 @@ impl ExecutableBody {
                                         return Err(DefinitionError::InvalidInstruction);
                                     }
                                     match self.target {
-                                        BodyTarget::SingleCreature
-                                        | BodyTarget::SinglePermanent
-                                        | BodyTarget::SinglePlaneswalker
-                                        | BodyTarget::FilteredPermanent(_) => {
-                                            Some(OperandFamily::Permanent)
-                                        }
+                                        BodyTarget::Object {
+                                            zone: TargetZone::Battlefield,
+                                            ..
+                                        } => Some(OperandFamily::Permanent),
                                         _ => return Err(DefinitionError::OperandFamily),
                                     }
                                 }
@@ -6789,32 +6857,8 @@ impl ExecutableBody {
                                 let mut inherited = branch.clone();
                                 inherited.target = self.target;
                                 inherited.validate_in(vocabulary, context)?;
-                                let inherited_fam = match self.target {
-                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                                        Some(OperandFamily::Player)
-                                    }
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
-                                    BodyTarget::SingleAnyTarget
-                                    | BodyTarget::SingleCreatureOrPlayer
-                                    | BodyTarget::SinglePlayerOrPlaneswalker
-                                    | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                        Some(OperandFamily::DamageRecipient)
-                                    }
-                                    BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                                    BodyTarget::SingleStackEntry
-                                    | BodyTarget::SingleStackObject(_)
-                                    | BodyTarget::ControlledAbility { .. }
-                                    | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                        Some(OperandFamily::StackEntry)
-                                    }
-                                    _ => Some(OperandFamily::GraveyardCard),
-                                };
-                                family = merge_family(family, inherited_fam)?;
+                                family =
+                                    merge_family(family, inherited_target_family(self.target))?;
                             }
                         }
                     }
@@ -6904,15 +6948,18 @@ impl ExecutableBody {
                             )
                         }) && !matches!(
                             self.target,
-                            BodyTarget::FilteredOwnGraveyardCard(_)
-                                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                                | BodyTarget::FilteredExiledCard(_)
-                                | BodyTarget::AnyGraveyardCard
-                                | BodyTarget::AnyGraveyardCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SingleCreature
-                                | BodyTarget::FilteredPermanent(_)
-                                | BodyTarget::SingleSpell(_)
+                            BodyTarget::Object {
+                                zone: TargetZone::Battlefield
+                                    | TargetZone::OwnGraveyard
+                                    | TargetZone::AnyGraveyard { .. }
+                                    | TargetZone::Exile {
+                                        owned_flashback_only: false
+                                    },
+                                ..
+                            } | BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            }
                         ) {
                             return Err(DefinitionError::InvalidInstruction);
                         }
@@ -6943,32 +6990,7 @@ impl ExecutableBody {
                             let mut inherited = inner.as_ref().clone();
                             inherited.target = self.target;
                             inherited.validate_in(vocabulary, context)?;
-                            let inherited_fam = match self.target {
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                                    Some(OperandFamily::Player)
-                                }
-                                BodyTarget::SingleCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_) => {
-                                    Some(OperandFamily::Permanent)
-                                }
-                                BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                    Some(OperandFamily::DamageRecipient)
-                                }
-                                BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                                BodyTarget::SingleStackEntry
-                                | BodyTarget::SingleStackObject(_)
-                                | BodyTarget::ControlledAbility { .. }
-                                | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                    Some(OperandFamily::StackEntry)
-                                }
-                                _ => Some(OperandFamily::GraveyardCard),
-                            };
-                            family = merge_family(family, inherited_fam)?;
+                            family = merge_family(family, inherited_target_family(self.target))?;
                         }
                     }
                     family
@@ -7043,32 +7065,7 @@ impl ExecutableBody {
                             let mut inherited = inner.as_ref().clone();
                             inherited.target = self.target;
                             inherited.validate_in(vocabulary, context)?;
-                            let inherited_fam = match self.target {
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                                    Some(OperandFamily::Player)
-                                }
-                                BodyTarget::SingleCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_) => {
-                                    Some(OperandFamily::Permanent)
-                                }
-                                BodyTarget::SingleAnyTarget
-                                | BodyTarget::SingleCreatureOrPlayer
-                                | BodyTarget::SinglePlayerOrPlaneswalker
-                                | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                    Some(OperandFamily::DamageRecipient)
-                                }
-                                BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                                BodyTarget::SingleStackEntry
-                                | BodyTarget::SingleStackObject(_)
-                                | BodyTarget::ControlledAbility { .. }
-                                | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                    Some(OperandFamily::StackEntry)
-                                }
-                                _ => Some(OperandFamily::GraveyardCard),
-                            };
-                            family = merge_family(family, inherited_fam)?;
+                            family = merge_family(family, inherited_target_family(self.target))?;
                         }
                     }
                     family
@@ -7130,17 +7127,23 @@ impl ExecutableBody {
                             StackOpKind::Counter { destination, .. },
                         ) => {
                             if !matches!(destination, CounterDestination::Graveyard)
-                                && !matches!(self.target, BodyTarget::SingleSpell(_))
+                                && !matches!(
+                                    self.target,
+                                    BodyTarget::Spell {
+                                        include_abilities: false,
+                                        ..
+                                    }
+                                )
                             {
                                 return Err(DefinitionError::OperandFamily);
                             }
                             Some(
                                 if matches!(
                                     self.target,
-                                    BodyTarget::StackEntryTargetingControlledPermanent
-                                        | BodyTarget::SingleStackEntry
-                                        | BodyTarget::SingleStackObject(_)
-                                        | BodyTarget::ControlledAbility { .. }
+                                    BodyTarget::Spell {
+                                        include_abilities: true,
+                                        ..
+                                    } | BodyTarget::StackEntry(_)
                                 ) {
                                     OperandFamily::StackEntry
                                 } else {
@@ -7156,24 +7159,34 @@ impl ExecutableBody {
                             StackOpKind::Retarget {
                                 single_target_only: false,
                             },
-                        ) => Some(if matches!(self.target, BodyTarget::SingleSpell(_)) {
-                            OperandFamily::Spell
-                        } else {
-                            OperandFamily::StackEntry
-                        }),
+                        ) => Some(
+                            if matches!(
+                                self.target,
+                                BodyTarget::Spell {
+                                    include_abilities: false,
+                                    ..
+                                }
+                            ) {
+                                OperandFamily::Spell
+                            } else {
+                                OperandFamily::StackEntry
+                            },
+                        ),
                         (
                             StackTargetSelector::Targeted,
                             StackOpKind::Retarget {
                                 single_target_only: true,
                             },
                         ) => match self.target {
-                            BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                            BodyTarget::SingleStackEntry
-                            | BodyTarget::SingleStackObject(_)
-                            | BodyTarget::ControlledAbility { .. }
-                            | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                Some(OperandFamily::StackEntry)
+                            BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            } => Some(OperandFamily::Spell),
+                            BodyTarget::Spell {
+                                include_abilities: true,
+                                ..
                             }
+                            | BodyTarget::StackEntry(_) => Some(OperandFamily::StackEntry),
                             _ => return Err(DefinitionError::InvalidInstruction),
                         },
                         (
@@ -7182,7 +7195,10 @@ impl ExecutableBody {
                                 ability_mode: true, ..
                             },
                         ) => {
-                            if matches!(self.target, BodyTarget::ControlledAbility { .. }) {
+                            if matches!(
+                                self.target,
+                                BodyTarget::StackEntry(StackTargetKind::ControlledAbility { .. })
+                            ) {
                                 Some(OperandFamily::StackEntry)
                             } else {
                                 return Err(DefinitionError::OperandFamily);
@@ -7345,29 +7361,37 @@ impl ExecutableBody {
                         },
                         (StackTargetSelector::CopyTarget(ct), _) => match ct {
                             StackCopyTarget::TargetSpell => match self.target {
-                                BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                                BodyTarget::SingleStackObject(_) | BodyTarget::SingleStackEntry => {
+                                BodyTarget::Spell {
+                                    include_abilities: false,
+                                    ..
+                                } => Some(OperandFamily::Spell),
+                                BodyTarget::Spell {
+                                    include_abilities: true,
+                                    ..
+                                }
+                                | BodyTarget::StackEntry(StackTargetKind::AnyEntry) => {
                                     Some(OperandFamily::StackEntry)
                                 }
                                 _ => return Err(DefinitionError::OperandFamily),
                             },
                             StackCopyTarget::TargetAbility => match self.target {
-                                BodyTarget::ControlledAbility { .. }
-                                | BodyTarget::SingleStackEntry
-                                | BodyTarget::SingleStackObject(_)
-                                | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                    Some(OperandFamily::StackEntry)
+                                BodyTarget::Spell {
+                                    include_abilities: true,
+                                    ..
                                 }
+                                | BodyTarget::StackEntry(_) => Some(OperandFamily::StackEntry),
                                 _ => return Err(DefinitionError::OperandFamily),
                             },
                             StackCopyTarget::TargetSpellOrAbility => match self.target {
-                                BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
-                                BodyTarget::SingleStackEntry
-                                | BodyTarget::SingleStackObject(_)
-                                | BodyTarget::ControlledAbility { .. }
-                                | BodyTarget::StackEntryTargetingControlledPermanent => {
-                                    Some(OperandFamily::StackEntry)
+                                BodyTarget::Spell {
+                                    include_abilities: false,
+                                    ..
+                                } => Some(OperandFamily::Spell),
+                                BodyTarget::Spell {
+                                    include_abilities: true,
+                                    ..
                                 }
+                                | BodyTarget::StackEntry(_) => Some(OperandFamily::StackEntry),
                                 _ => return Err(DefinitionError::OperandFamily),
                             },
                             StackCopyTarget::TriggeringSpell
@@ -7630,10 +7654,10 @@ impl ExecutableBody {
                                 MoveSubjectRef::TargetObject => {
                                     if !matches!(
                                         self.target,
-                                        BodyTarget::SingleCreature
-                                            | BodyTarget::SinglePermanent
-                                            | BodyTarget::SinglePlaneswalker
-                                            | BodyTarget::FilteredPermanent(_)
+                                        BodyTarget::Object {
+                                            zone: TargetZone::Battlefield,
+                                            ..
+                                        }
                                     ) {
                                         return Err(DefinitionError::OperandFamily);
                                     }
@@ -7699,15 +7723,12 @@ impl ExecutableBody {
                             }
                         }
                     } else if filter.source == SearchSource::TargetOpponentLibrary {
-                        if self.target != BodyTarget::SingleOpponent {
+                        if self.target != BodyTarget::SINGLE_OPPONENT {
                             return Err(DefinitionError::OperandFamily);
                         }
                         Some(OperandFamily::Player)
                     } else if filter.source == SearchSource::TargetPlayerLibrary {
-                        if !matches!(
-                            self.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) {
+                        if !matches!(self.target, BodyTarget::Player { .. }) {
                             return Err(DefinitionError::OperandFamily);
                         }
                         Some(OperandFamily::Player)
@@ -7876,20 +7897,21 @@ impl ExecutableBody {
                         inherited.target = self.target;
                         inherited.validate_in_with_facts(vocabulary, context, loop_facts)?;
                         match self.target {
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                                Some(OperandFamily::Player)
-                            }
-                            BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
-                            BodyTarget::SingleAnyTarget
-                            | BodyTarget::SingleCreatureOrPlayer
-                            | BodyTarget::SinglePlayerOrPlaneswalker
-                            | BodyTarget::SingleOpponentOrPlaneswalker => {
-                                Some(OperandFamily::DamageRecipient)
-                            }
-                            BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
+                            BodyTarget::Player { .. } => Some(OperandFamily::Player),
+                            BodyTarget::Object {
+                                zone: TargetZone::Battlefield,
+                                ..
+                            } => Some(OperandFamily::Permanent),
+                            BodyTarget::AnyTarget(
+                                AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker,
+                            ) => Some(OperandFamily::DamageRecipient),
+                            BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            } => Some(OperandFamily::Spell),
                             _ => Some(OperandFamily::GraveyardCard),
                         }
                     } else {
@@ -7900,67 +7922,57 @@ impl ExecutableBody {
             };
             if let Some(family) = family {
                 consuming |= reachable;
-                let damageable = matches!(family, OperandFamily::DamageRecipient)
-                    && matches!(self.target, BodyTarget::FilteredPermanent(_));
                 let returned_permanent_followup = facts.returned_graveyard_target
                     && matches!(family, OperandFamily::Permanent)
                     && matches!(
                         self.target,
-                        BodyTarget::SingleOwnGraveyardCard
-                            | BodyTarget::FilteredOwnGraveyardCard(_)
-                            | BodyTarget::FilteredAnyGraveyardCard { .. }
-                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                            | BodyTarget::AnyGraveyardCreature
-                            | BodyTarget::RecentlyDiscardedOrFromLibrary
-                            | BodyTarget::AnyGraveyardCard
+                        BodyTarget::Object {
+                            zone: TargetZone::OwnGraveyard
+                                | TargetZone::AnyGraveyard { .. }
+                                | TargetZone::RecentlyDiscardedOrFromLibrary,
+                            ..
+                        }
                     );
-                if !damageable
-                    && !returned_permanent_followup
+                if !returned_permanent_followup
                     && !matches!(
                         (self.target, family),
                         (
-                            BodyTarget::SingleCreature
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::FilteredPermanent(_),
-                            OperandFamily::Permanent
+                            BodyTarget::Object {
+                                zone: TargetZone::Battlefield,
+                                ..
+                            },
+                            OperandFamily::Permanent | OperandFamily::DamageRecipient
                         ) | (
-                            BodyTarget::SingleOwnGraveyardCard
-                                | BodyTarget::FilteredOwnGraveyardCard(_)
-                                | BodyTarget::FilteredAnyGraveyardCard { .. }
-                                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                                | BodyTarget::AnyGraveyardCreature
-                                | BodyTarget::RecentlyDiscardedOrFromLibrary
-                                | BodyTarget::AnyGraveyardCard,
+                            BodyTarget::Object {
+                                zone: TargetZone::OwnGraveyard
+                                    | TargetZone::AnyGraveyard { .. }
+                                    | TargetZone::RecentlyDiscardedOrFromLibrary,
+                                ..
+                            },
                             OperandFamily::GraveyardCard
                         ) | (
-                            BodyTarget::OwnedExiledFlashbackCard
-                                | BodyTarget::FilteredExiledCard(_),
+                            BodyTarget::Object {
+                                zone: TargetZone::Exile { .. },
+                                ..
+                            },
                             OperandFamily::ExiledCard
                         ) | (
-                            BodyTarget::ControlledAbility { .. }
-                                | BodyTarget::SingleStackEntry
-                                | BodyTarget::SingleStackObject(_)
-                                | BodyTarget::StackEntryTargetingControlledPermanent,
+                            BodyTarget::StackEntry(_)
+                                | BodyTarget::Spell {
+                                    include_abilities: true,
+                                    ..
+                                },
                             OperandFamily::StackEntry
-                        ) | (BodyTarget::SingleSpell(_), OperandFamily::Spell)
-                            | (
-                                BodyTarget::SingleOpponent | BodyTarget::SinglePlayer,
-                                OperandFamily::Player
-                            )
-                            | (
-                                BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::SingleOpponent
-                                    | BodyTarget::SinglePlayer
-                                    | BodyTarget::SingleCreatureOrPlayer
-                                    | BodyTarget::SinglePlayerOrPlaneswalker
-                                    | BodyTarget::SingleOpponentOrPlaneswalker
-                                    | BodyTarget::OpponentOrPlaneswalkerThenCreature
-                                    | BodyTarget::SinglePlaneswalker
-                                    | BodyTarget::SingleAnyTarget,
-                                OperandFamily::DamageRecipient
-                            )
+                        ) | (
+                            BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            },
+                            OperandFamily::Spell
+                        ) | (
+                            BodyTarget::Player { .. },
+                            OperandFamily::Player | OperandFamily::DamageRecipient
+                        ) | (BodyTarget::AnyTarget(_), OperandFamily::DamageRecipient)
                     )
                 {
                     return Err(DefinitionError::OperandFamily);
@@ -8578,7 +8590,10 @@ impl ExecutableBody {
             };
             let recipient_family = match spec.recipient {
                 PreventionRecipientSpec::Target => match self.target {
-                    BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } => Some(OperandFamily::Permanent),
                     _ => Some(OperandFamily::DamageRecipient),
                 },
                 _ => None,
@@ -9622,7 +9637,7 @@ pub enum DefinitionError {
     /// The trigger condition/grouping does not guarantee one related participant.
     UnguaranteedRelatedPlayer,
     /// A targeted resolving role lacks its exact whole-body target capability:
-    /// TargetSpellController requires SingleSpell; TargetPlayer requires SinglePlayer.
+    /// TargetSpellController requires single_spell; TargetPlayer requires SINGLE_PLAYER.
     ResolvingPlayerTarget,
     /// An optional wrapper has no following primitive instruction.
     MissingOptionalEffect,
@@ -10054,7 +10069,7 @@ impl Program {
                 mana_cost: cost.clone(),
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::MutateObject(Box::new(
                         crate::toolbox::MutateObjectSpec::attach_ability(
                             AttachAbility::Reconfigure,
@@ -11532,19 +11547,23 @@ impl Program {
             {
                 return Err(DefinitionError::InvalidInstruction);
             }
-            if matches!(ability.body.target, BodyTarget::FilteredPermanent(filter) if filter.has_power_at_most_x())
-                && !matches!(
-                    ability.source_cost,
-                    SourceCost::TapPermanents {
-                        count: TapCostCount::ChosenX,
+            if matches!(
+                ability.body.target,
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    filter,
+                } if filter.has_power_at_most_x()
+            ) && !matches!(
+                ability.source_cost,
+                SourceCost::TapPermanents {
+                    count: TapCostCount::ChosenX,
+                    ..
+                } | SourceCost::GenericX { .. }
+                    | SourceCost::Counter {
+                        delta: CounterCostDelta::RemoveAll,
                         ..
-                    } | SourceCost::GenericX { .. }
-                        | SourceCost::Counter {
-                            delta: CounterCostDelta::RemoveAll,
-                            ..
-                        }
-                )
-                && !self.loyalty_costs.contains_key(&ability.id)
+                    }
+            ) && !self.loyalty_costs.contains_key(&ability.id)
             {
                 return Err(DefinitionError::InvalidInstruction);
             }
@@ -11676,8 +11695,16 @@ impl Program {
                     ..
                 } => BodyContext::SacrificedCreature,
                 SourceCost::SacrificeSelected { count: 1, from_graveyard: false, .. } => BodyContext::SacrificedPermanent,
-                _ if matches!(ability.body.target, BodyTarget::FilteredPermanent(filter) if filter.requires_same_name_as_source()) =>
-                    BodyContext::ACTIVATED,
+                _ if matches!(
+                    ability.body.target,
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        filter,
+                    } if filter.requires_same_name_as_source()
+                ) =>
+                {
+                    BodyContext::ACTIVATED
+                }
                 _ if ability.body.instructions.iter().any(|op| {
                     let expr_uses_source = |e: &ValueExpr| e.references_ability_source();
                     matches!(
@@ -11710,7 +11737,16 @@ impl Program {
                             | Instruction::RepeatLoop { .. }
                     )
                 }) => BodyContext::ACTIVATED,
-                _ if matches!(ability.body.target, BodyTarget::FilteredPermanent(filter) if filter.is_creature_or_other_planeswalker()) => BodyContext::ACTIVATED,
+                _ if matches!(
+                    ability.body.target,
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        filter,
+                    } if filter.is_creature_or_other_planeswalker()
+                ) =>
+                {
+                    BodyContext::ACTIVATED
+                }
                 _ => BodyContext::ACTIVATED,
             };
             ability.body.validate_in(vocabulary, context)?;
@@ -11767,7 +11803,7 @@ impl Program {
                     ..
                 }
             ) {
-                if ability.body.target != BodyTarget::SingleSpell(SpellFilter::any())
+                if ability.body.target != BodyTarget::single_spell(SpellFilter::any())
                     || !matches!(
                         ability.body.instructions.as_slice(),
                         [Instruction::StackOp(spec)]
@@ -11857,7 +11893,7 @@ impl Program {
             } else if ability.source_cost
                 == SourceCost::HandDiscardSelf(HandDiscardKeyword::Reinforce)
             {
-                if ability.body.target != BodyTarget::SingleCreature
+                if ability.body.target != BodyTarget::SINGLE_CREATURE
                     || !matches!(
                         ability.body.instructions.as_slice(),
                         [Instruction::MutateObject(spec)]

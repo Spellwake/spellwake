@@ -59,7 +59,7 @@ fn shared_split_claim_fame_uses_combined_characteristics_elsewhere_and_exiles_th
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -228,7 +228,7 @@ fn shared_split_spring_mind_combines_types_off_stack_and_casts_the_instant_after
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

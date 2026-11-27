@@ -238,7 +238,7 @@ pub(super) fn unblockable_creature(
         id: ActivatedAbilityId(program.activated.len().try_into().ok()?),
         mana_cost: fixed_cost(cost)?,
         source_cost: SourceCost::Tap,
-        body: ExecutableBody::new(BodyTarget::SingleCreature, vec![unblockable_effect()]),
+        body: ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![unblockable_effect()]),
     });
     Some(program)
 }

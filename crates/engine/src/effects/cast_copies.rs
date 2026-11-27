@@ -212,7 +212,7 @@ impl EffectWindow {
         {
             return self.legal_target_kind_in(domain, target, entry.controller(), current);
         }
-        if matches!(payload.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+        if matches!(payload.body.target, BodyTarget::Object { zone: crate::program::TargetZone::Battlefield, filter } if filter.excludes_ability_source())
             && matches!((target,entry.kind()),(TargetRef::Object(id),StackKind::ActivatedAbility {source}|StackKind::TriggeredAbility {source}) if source.id()==id)
         {
             return false;

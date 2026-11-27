@@ -188,7 +188,7 @@ pub(super) fn body(text: &str) -> Option<ExecutableBody> {
             search = search.with_pair_constraint(pair);
         }
         return Some(ExecutableBody::new(
-            BodyTarget::SingleOpponent,
+            BodyTarget::SINGLE_OPPONENT,
             vec![Instruction::SearchLibrary {
                 filter: Box::new(search),
             }],

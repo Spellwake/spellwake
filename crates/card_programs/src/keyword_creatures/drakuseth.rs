@@ -52,7 +52,7 @@ pub(super) fn compile(
             ]),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::divide_three(),
                 ))],
@@ -76,7 +76,7 @@ pub(super) fn compile(
         condition: spellwake_engine::program::TriggerSpec::self_attacks(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec::ordered_targets(4.into(), 3.into()),
             ))],

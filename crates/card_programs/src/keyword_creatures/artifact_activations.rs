@@ -20,7 +20,7 @@ pub(super) fn compile(
         let mut program = Program::artifact(Some(fixed_cost(face.mana_cost.as_deref()?)?),vec![]);
         program.activated.push(ActivatedAbility {id:ActivatedAbilityId(0),mana_cost:fixed_cost(cost)?,source_cost:SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::FilteredPermanent(spellwake_engine::program::ObjectFilter::any_types(
+                BodyTarget::filtered_permanent(spellwake_engine::program::ObjectFilter::any_types(
                     spellwake_engine::program::CardTypeMask::ARTIFACT
                         .union(spellwake_engine::program::CardTypeMask::CREATURE)
                         .union(spellwake_engine::program::CardTypeMask::ENCHANTMENT)
@@ -33,7 +33,7 @@ pub(super) fn compile(
     let (cost, effect) = ability.split_once(", {T}, Sacrifice this artifact: ")?;
     let (target, op) = match effect {
         "Destroy target permanent." => (
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -46,7 +46,7 @@ pub(super) fn compile(
             ),
         ),
         "It deals 2 damage to target creature." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(2),

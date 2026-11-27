@@ -43,7 +43,7 @@ fn swiftwing_assailant_walking_sarcophagus_and_streaking_oilgorger_reach_max_spe
             program: Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(

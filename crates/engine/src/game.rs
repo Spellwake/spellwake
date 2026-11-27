@@ -3343,7 +3343,7 @@ mod tests {
                                 mana_cost: crate::mana::ManaCost::one(ManaType::Red),
                                 source_cost,
                                 body: ExecutableBody::new(
-                                    BodyTarget::SingleCreature,
+                                    BodyTarget::SINGLE_CREATURE,
                                     vec![Instruction::DealDamage(Box::new(
                                         crate::toolbox::DealDamageSpec {
                                             source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -3874,7 +3874,7 @@ mod tests {
                         program: Program::instant(
                             ManaCost::one(ManaType::Red),
                             ExecutableBody::new(
-                                BodyTarget::SingleCreature,
+                                BodyTarget::SINGLE_CREATURE,
                                 vec![Instruction::DealDamage(Box::new(
                                     crate::toolbox::DealDamageSpec {
                                         source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -3985,7 +3985,7 @@ mod tests {
                         program: Program::instant(
                             ManaCost::one(ManaType::Red),
                             ExecutableBody::new(
-                                BodyTarget::SingleCreature,
+                                BodyTarget::SINGLE_CREATURE,
                                 vec![
                                     Instruction::DealDamage(Box::new(
                                         crate::toolbox::DealDamageSpec {
@@ -4145,7 +4145,7 @@ mod tests {
                 destination: ObjectDestination::Hand,
                 program: Program::instant(
                     ManaCost::one(ManaType::Red),
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![instruction]),
                 ),
             })
             .collect();
@@ -4386,7 +4386,7 @@ mod tests {
                                 exile_if_dies: false,
                             },
                         ))],
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                     ),
                     instant(
                         2,
@@ -4400,7 +4400,7 @@ mod tests {
                                 crate::toolbox::StackOpSpec::copy_targeted_spell(),
                             )),
                         ],
-                        BodyTarget::SingleSpell(SpellFilter::copyable_instruction()),
+                        BodyTarget::single_spell(SpellFilter::copyable_instruction()),
                     ),
                     SeedCard {
                         card: CardId(3),
@@ -4569,7 +4569,7 @@ mod combat_tests {
             program: Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::DealDamage(Box::new(
                         crate::toolbox::DealDamageSpec {
                             source: crate::toolbox::DamageSourceQuery::EntrySource,

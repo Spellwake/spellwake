@@ -499,7 +499,7 @@ fn run_probe(
         id: ActivatedAbilityId(probe.ability),
         mana_cost: probe.cost.clone(),
         source_cost: probe.source_cost,
-        body: ExecutableBody::new(BodyTarget::SingleCreature, probe.instructions.clone()),
+        body: ExecutableBody::new(BodyTarget::SINGLE_CREATURE, probe.instructions.clone()),
     }];
     if probe.initially_tapped {
         abilities.push(ActivatedAbility {
@@ -507,7 +507,7 @@ fn run_probe(
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Tap,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -543,7 +543,7 @@ fn run_probe(
             program: Program::instant(
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![Instruction::ZoneOp(Box::new(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

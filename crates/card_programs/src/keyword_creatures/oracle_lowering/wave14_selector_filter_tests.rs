@@ -187,7 +187,7 @@ fn wave14_wave_goodbye_bounces_only_creatures_without_plus_one_counter() {
 
     let put_counter_spell = spell(
         10,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![super::toolbox_emit::put_counters_on_subject(
             spellwake_engine::program::EffectSubject::TargetObject,
             CounterKind::PlusOne,
@@ -282,7 +282,7 @@ fn wave14_oil_gorger_troll_requires_exact_oil_counter_not_plus_one() {
 
     let put_plus_one = spell(
         10,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![super::toolbox_emit::put_counters_on_subject(
             spellwake_engine::program::EffectSubject::TargetObject,
             CounterKind::PlusOne,
@@ -291,7 +291,7 @@ fn wave14_oil_gorger_troll_requires_exact_oil_counter_not_plus_one() {
     );
     let put_oil = spell(
         11,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![super::toolbox_emit::put_counters_on_subject(
             spellwake_engine::program::EffectSubject::TargetObject,
             CounterKind::Oil,
