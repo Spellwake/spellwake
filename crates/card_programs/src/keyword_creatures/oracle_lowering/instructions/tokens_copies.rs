@@ -721,9 +721,44 @@ pub(super) fn lower_tokens_copies_instruction(
             };
             let sub =
                 resolve_protection_subtype(st_label, vocabulary).ok_or("oracle:amass-subtype")?;
-            builder
-                .instructions
-                .push(Instruction::CreateArmyIfAbsent { army, subtype: sub });
+            let mut army_program =
+                Program::creature(None, 0.into(), 0.into(), BTreeSet::from([army, sub]));
+            army_program.effect_defined_colors = Some(BTreeSet::from([Color::Black]));
+            let mut ordered_subtypes = vec![TokenSubtype::Creature(sub)];
+            if sub != army {
+                ordered_subtypes.push(TokenSubtype::Creature(army));
+            }
+            let army_def = TokenDefinition::new(
+                army_program,
+                TokenName::Default { ordered_subtypes },
+                vocabulary,
+            )
+            .map_err(|_| "oracle:amass-token-invalid")?;
+            let skip_create = builder.instructions.len() + 2;
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Not(Box::new(
+                    spellwake_engine::toolbox::ConditionExpr::NonEmpty(Box::new(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(
+                                Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                )),
+                            ),
+                            ObjectFilter::creature().with_subtype(army),
+                        ),
+                    )),
+                ))),
+                destination: skip_create,
+            });
+            builder.instructions.push(Instruction::CreateTokens {
+                creations: vec![TokenCreation {
+                    enters_tapped: false,
+                    definition: army_def,
+                    amount: ValueExpr::literal(1),
+                    base_size: None,
+                    recipients: TokenRecipients::Controller,
+                }],
+            });
             builder.instructions.push(Instruction::Amass {
                 army,
                 subtype: sub,

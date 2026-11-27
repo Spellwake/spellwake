@@ -51,39 +51,14 @@ impl EffectWindow {
                 InstructionCut::Ready(occurrence)
             }
             Instruction::AffectPermanentTargets { .. }
-            | Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::AttachControlledToSource { .. }
-            | Instruction::AttachBattlefieldAurasToSource
-            | Instruction::EnterHandOrGraveyardAurasAttachedToSource
             | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::ExileForBlackToken { .. }
-            | Instruction::ExileForSubtypeToken(_)
-            | Instruction::GiveEquippedCreatureToUpkeepPlayer
-            | Instruction::CopyCreatureExiledForAbility
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::CopyEntrantAsArtifact
-            | Instruction::ReplaceSourceCreatedTokens
-            | Instruction::CopyEntrantOnceEachTurn
-            | Instruction::CopyCreatureAsToken
-            | Instruction::CopyDifferentlyNamedTokens
             | Instruction::Populate
-            | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::Bolster(_)
-            | Instruction::CreateArmyIfAbsent { .. }
             | Instruction::Amass { .. }
-            | Instruction::UntapUpTo { .. }
-            | Instruction::ChooseVowedCreatures
-            | Instruction::ChooseCreaturesToKeep
-            | Instruction::DestroyOtherCreatures
-            | Instruction::SacrificeOtherCreatures
-            | Instruction::ExileFromHandOrBattlefield(_)
-            | Instruction::ExileRelatedHandCardForPlay
-            | Instruction::PayLifeOrSacrificeCreatures
-            | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::SacrificeToContinue { .. }
             | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -96,40 +71,20 @@ impl EffectWindow {
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ReturnUpToOneRecentGraveyardCard
-            | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Instruction::ExileTargetUntilNonlandForFreeCast
-            | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleTargetGraveyardCards { .. }
-            | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-            | Instruction::CastLinkedSpellMatchingX
-            | Instruction::DestroyDamagedPlayersNonlandsAtX
-            | Instruction::DestroyNonlandsAtSourceChargeCount
-            | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::ExileDefeatedSiege
-            | Instruction::FightSourceWithTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::Proliferate
-            | Instruction::DamagePlayersHalfLife
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::RepeatOpponentLifeLoss
-            | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -191,101 +146,55 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
-            | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
-            | Instruction::CreateTokensToFight(_)
-            | Instruction::FightPairedCreatures(_)
-            | Instruction::OfferOpponentsDamage
-            | Instruction::TemptWithTokens { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::CreateAttackingTokens { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
             | Instruction::OfferSourceCounters { .. }
-            | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
-            | Instruction::PutEquipmentFromHandOrGraveyard
-            | Instruction::EquipNewToken
             | Instruction::Encore
-            | Instruction::RequireAttackSourceNextTurn
-            | Instruction::ChooseAttackDirection
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::ImpulseCastOrDamage(_)
-            | Instruction::RevealCreatureOfSacrificedType
-            | Instruction::SacrificeCombatContributor
-            | Instruction::ExileNonlandForFormerControllers
-            | Instruction::ExileMilledCreatures { .. }
-            | Instruction::VoteForGraveyardCards { .. }
-            | Instruction::ShuffleOnePermanentPerPlayer
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::RevealCreatureForEachTargetController
-            | Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
-            | Instruction::PutGraveyardCreatureAtMostX
-            | Instruction::PutLandFromExiledCohort
-            | Instruction::ExileTopForEachSpellType(_)
             | Instruction::ExileTopForPlay { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ScheduleCreatedTokenExile(_)
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::ReflectAttachedCreatureDamage
-            | Instruction::DestroyAttachedEnchantmentSubtype(_)
             | Instruction::GrantFlashback(_)
-            | Instruction::TapTargetWhileControllingSource
-            | Instruction::RegisterTokenLinkedExile
-            | Instruction::ReturnTokenLinkedExile
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AttachFixedTargets
-            | Instruction::CreateNonlegendaryLoyaltyCopy
-            | Instruction::WeakenOpposingAttackersUntilNextTurn
-            | Instruction::PhaseOtherPlaneswalkersNextEndStep
-            | Instruction::ChooseMeldPartner(_)
-            | Instruction::ExileMeldPair
-            | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::ReturnOneNonlandPerOpponent
-            | Instruction::DrawRevealRemoveLoyalty
-            | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::CopyForOtherCreatures
-            | Instruction::CopyResolvingSpell
             | Instruction::WatchNextSpellOrLoyaltyTwice
             | Instruction::WatchNextLoyaltyCopy
-            | Instruction::ChoosePlaneswalkerTypeForCopies
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
             | Instruction::MiracleCast(_)
             | Instruction::CastDefeatedSiege
-            | Instruction::CastTargetGraveyardInstant
             | Instruction::ReboundCast(_)
             | Instruction::EndStepCast { .. }
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnDyingCreatureAsForest
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
@@ -301,61 +210,19 @@ impl EffectWindow {
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::ExchangeLifeWithSourceToughness
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DistributePlusOneCounters { .. }
             | Instruction::DamageOrderedTargets { .. }
-            | Instruction::ExileUntilOtherTargetLeaves
-            | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::DestroyFixedTargets
-            | Instruction::ReturnFixedTargets
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
-            | Instruction::ExileOrderedPermanent(_)
-            | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
-            | Instruction::LookOpponentExileForCast { .. }
-            | Instruction::ExileFromTargetLibrary
-            | Instruction::OfferVariablePayment { .. }
-            | Instruction::DrawEachPlayerForPayments
-            | Instruction::CreateReflexiveGraveyardReturn
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::ReturnRandomLinkedExile
-            | Instruction::ReturnLinkedSearchCards
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::RevealSharedTypeCreatureCastOrBottom
-            | Instruction::RevealOddCastOrDraw
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
-            | Instruction::ExileNonlandsToHandAndDamage { .. }
-            | Instruction::RevealTopHandLoseManaValue { .. }
-            | Instruction::RevealUntilLandKind
-            | Instruction::RevealOpponentChoosesCreature
-            | Instruction::RevealToNameAfterSourceShuffle(_)
-            | Instruction::WatchSmallCreatureCombatDraw(_)
-            | Instruction::WatchTargetCombatDamageDraw
-            | Instruction::ChooseOwnCommanderToCast
-            | Instruction::ChooseMatchingHandSpellToCast
-            | Instruction::SearchEachLibraryForFreeCast
             | Instruction::ChooseFoundSpell
             | Instruction::CastFoundSpell(_)
-            | Instruction::LookTopOneRestGraveyard { .. }
-            | Instruction::RevealTopHandRestGraveyard { .. }
-            | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
-            | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
-            | Instruction::RevealHandAndBottomPiles
-            | Instruction::RevealDividePiles
-            | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::LookTopPlaneswalkers
-            | Instruction::RevealTopPermanentOrHand
-            | Instruction::LookTopLandBattlefieldTapped
-            | Instruction::LookTopReveal { .. }
-            | Instruction::LookTopTakeOne { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::ChooseTypeThenDestroyUnchosen
-            | Instruction::OrderArtifactCreatureLandSacrifices
             | Instruction::ChooseCreatureType { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -371,37 +238,6 @@ impl EffectWindow {
                 )?;
                 let created = DamageEffectCreation::Multiplier {
                     multiplier,
-                    instruction: index,
-                };
-                journal.created.push(created.clone());
-                InstructionCut::Ready(RulesOccurrence::DamageEffectCreated(created))
-            }
-            Instruction::CreateReflectingShield => {
-                let amount = self.resolve_value_expr(entry.controller(), &ValueExpr::chosen_x())?;
-                if !amount.is_positive() {
-                    return Ok(());
-                }
-                let traits = self
-                    .stack_copiable_traits(entry.id())
-                    .ok_or(EffectError::InconsistentProgram)?;
-                let source = self.resolution_damage_source(&entry)?;
-                let reflection = crate::damage::DamageReflection {
-                    colors: self.source_colors_for_damage(&before.view().evaluated, &source),
-                    source,
-                    keywords: traits.keywords.clone(),
-                    creature_types: traits.creature_subtypes.clone(),
-                    card_types: traits.card_types.clone(),
-                    is_creature: traits.card_types.contains(&CardType::Creature),
-                    target,
-                };
-                let shield = self.damage_state.add_reflecting_shield(
-                    entry.id(),
-                    entry.controller(),
-                    amount,
-                    reflection,
-                )?;
-                let created = DamageEffectCreation::Prevention {
-                    shield,
                     instruction: index,
                 };
                 journal.created.push(created.clone());
@@ -611,22 +447,6 @@ impl EffectWindow {
                     after,
                 })
             }
-            Instruction::LoseLifeEqualToTargetSpellManaValue => {
-                let TargetRef::Stack(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let value = self
-                    .entry_spell_mana_value(target)
-                    .ok_or(EffectError::InconsistentProgram)?;
-                self.adjust_life_at_cut(
-                    entry.id(),
-                    index,
-                    entry.controller(),
-                    &crate::life::LifeAdjustment::Lose(value),
-                    append,
-                )?;
-                return Ok(());
-            }
             Instruction::CopyAbility => {
                 let (actor, changes) = copy_choice.ok_or(EffectError::CopyChoiceRequired)?;
                 if actor != entry.controller() {
@@ -659,55 +479,6 @@ impl EffectWindow {
                 };
                 let snapshot = self.capture_copy_source(original, 0.into())?;
                 InstructionCut::Ready(self.create_copy(&snapshot, actor, selected)?)
-            }
-            Instruction::AnimateTargetAsCountedCreature {
-                amount,
-                subtype,
-                keywords,
-                duration,
-            } => {
-                use crate::characteristics::{
-                    AbilityChange, InstructionSubtypeOperand, PowerToughness, ResolvedPartSpec,
-                    ResolvedPartsSpec, SubtypeOperation, TypeChangeSpec, TypeOperation,
-                };
-                let TargetRef::Object(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let count = self.resolve_value_expr(entry.controller(), &amount)?;
-                let parts = ResolvedPartsSpec(vec![
-                    ResolvedPartSpec::Type(TypeChangeSpec {
-                        land_subtypes: SubtypeOperation::Keep,
-                        supertypes: TypeOperation::Keep,
-                        types: TypeOperation::Add(BTreeSet::from([CardType::Creature])),
-                        subtypes: SubtypeOperation::Add(InstructionSubtypeOperand::Literal(
-                            BTreeSet::from([subtype]),
-                        )),
-                    }),
-                    ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(keywords)),
-                    ResolvedPartSpec::SetPT(PowerToughness {
-                        power: count.clone(),
-                        toughness: count,
-                    }),
-                ]);
-                let locals = self
-                    .resolution_state()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .locals()
-                    .clone();
-                let owner = self
-                    .window
-                    .cards()
-                    .get(target)
-                    .ok_or(EffectError::InconsistentProgram)?
-                    .owner();
-                let materialized =
-                    self.materialize_resolved_parts(&entry, &parts, &locals, owner, None)?;
-                InstructionCut::Continuous(self.characteristics.add_effect(
-                    entry.id(),
-                    target,
-                    materialized,
-                    duration,
-                )?)
             }
             Instruction::CopyTargetToSource {
                 duration,
@@ -758,106 +529,6 @@ impl EffectWindow {
             }
             Instruction::GrantProtectionChosenColor(_) => {
                 return Err(EffectError::InconsistentProgram);
-            }
-            Instruction::ExileCreatureAtMostRevealedPower => {
-                return Err(EffectError::InconsistentProgram);
-            }
-            Instruction::ImprintTargetLand
-            | Instruction::ImprintTargetCreature
-            | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilOpponentMonarch => {
-                let linked_source: Option<ObjectId> = None;
-                let (destination, reason) = match instruction {
-                    Instruction::ImprintTargetLand
-                    | Instruction::ImprintTargetCreature
-                    | Instruction::ExileTargetAsAbilityDonor
-                    | Instruction::ExileTargetUntilOpponentMonarch => {
-                        (ObjectDestination::Exile, ZoneReason::ExiledByEffect)
-                    }
-                    _ => (ObjectDestination::Hand, ZoneReason::ReturnToOwnersHand),
-                };
-                if let TargetRef::Object(object) = target
-                    && let Some(lki) = self.capture_target_lki(object, &before.view().evaluated)
-                {
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .results
-                        .target_lki
-                        .insert(object, lki);
-                }
-                if false {
-                    let TargetRef::Object(object) = target else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    let view = before.view();
-                    let lki = view
-                        .evaluated
-                        .get(object)
-                        .ok_or(EffectError::InconsistentProgram)?;
-                    let departed = DepartedTarget {
-                        controller: lki.controller.ok_or(EffectError::InconsistentProgram)?,
-                        power: lki
-                            .power_toughness
-                            .as_ref()
-                            .map(|pt| pt.derived.power.clone()),
-                    };
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .exiled_target = Some(departed);
-                }
-                let (window, exit) = self.window.record_targeted_resolution_move_with_exit(
-                    self.window.revision(),
-                    choice.id,
-                    destination,
-                )?;
-                self.window = window;
-                if let crate::stack_window::StackExit::Object(movement) = &exit {
-                    let cursor = self
-                        .resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?;
-                    let arrivals: Vec<_> = movement.arrivals().collect();
-                    cursor.results.last_action_succeeded = !arrivals.is_empty();
-                    cursor.results.last_action_count =
-                        Some(RulesInteger::from_usize(arrivals.len()));
-                    cursor.results.last_moved_objects = arrivals;
-                }
-                if let (Some(source), crate::stack_window::StackExit::Object(movement)) =
-                    (linked_source, &exit)
-                {
-                    self.linked_exiles
-                        .entry(source)
-                        .or_default()
-                        .extend(movement.arrivals());
-                }
-                if matches!(
-                    instruction,
-                    Instruction::ImprintTargetLand | Instruction::ImprintTargetCreature
-                ) && let crate::stack_window::StackExit::Object(movement) = &exit
-                {
-                    self.remember_imprinted_card(entry.id(), movement);
-                }
-                if instruction == Instruction::ExileTargetAsAbilityDonor
-                    && let crate::stack_window::StackExit::Object(movement) = &exit
-                {
-                    self.remember_exiled_ability_donor(entry.id(), movement);
-                }
-                if false
-                    && let crate::stack_window::StackExit::Object(movement) = &exit
-                    && movement.after.zone() == ObjectZone::Exile
-                {
-                    self.schedule_return_at_next_end_step(
-                        entry.id(),
-                        movement.arrivals().collect(),
-                    )?;
-                }
-                if instruction == Instruction::ExileTargetUntilOpponentMonarch
-                    && let crate::stack_window::StackExit::Object(movement) = &exit
-                    && movement.after.zone() == ObjectZone::Exile
-                {
-                    self.monarch_linked_exiles
-                        .extend(movement.arrivals().map(|id| (id, entry.controller())));
-                }
-                InstructionCut::Exit { exit, reason }
             }
         };
         self.emit_from(

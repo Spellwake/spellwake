@@ -1,14 +1,14 @@
 //! Complete planeswalker faces using source-authenticated printed loyalty.
-use super::{Inventory, InventoryCard, fixed_cost, ordinary_text, without_reminder};
+use super::{Inventory, InventoryCard, fixed_cost, without_reminder};
 use spellwake_engine::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
-    characteristics::{Color, KeywordAbility, PowerToughness, StaticAbilityId},
+    characteristics::{KeywordAbility, PowerToughness, StaticAbilityId},
     emblem::EmblemDefinition,
     mana::{ManaCost, ManaType},
     program::{
-        BodyTarget, CardType, CardTypeMask, EffectSubject, ExecutableBody, Instruction,
-        ObjectClause, ObjectColorFilter, ObjectFilter, PermanentDefinition, PlaneswalkerSubtype,
-        PowerFilter, Program, ProgramKind, ResolvingPlayer, Supertype,
+        BodyTarget, CardType, CardTypeMask, ExecutableBody, Instruction, ObjectClause,
+        ObjectColorFilter, ObjectFilter, PermanentDefinition, PlaneswalkerSubtype, PowerFilter,
+        Program, ProgramKind, ResolvingPlayer, Supertype,
     },
 };
 use std::collections::BTreeSet;
@@ -48,33 +48,6 @@ pub(super) fn compile(
             program.additional_cast_costs.push(
                 spellwake_engine::program::AdditionalCastCost::Kicker(fixed_cost(price)?),
             );
-            continue;
-        }
-        let short = card.name.split(',').next()?;
-        if line
-            == format!(
-                "When {short} enters, if {short} was kicked, create a token that's a copy of {short}, except it's not legendary and its starting loyalty is 1."
-            )
-        {
-            use spellwake_engine::program::{
-                TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
-            };
-            program.triggered.push(TriggeredAbility {
-                id: TriggeredAbilityId(index.try_into().ok()?),
-                condition: spellwake_engine::program::TriggerSpec::new(
-                    spellwake_engine::program::TriggerEvent::Enters {
-                        subject: spellwake_engine::program::ObjectFilter::self_object(),
-                        from_zone: spellwake_engine::program::TriggerFromZone::Any,
-                        cast_origin: Some(spellwake_engine::program::CastEntryKind::Kicked),
-                        attached_to_creature: false,
-                    },
-                ),
-                grouping: TriggerGrouping::EachOccurrence,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::CreateNonlegendaryLoyaltyCopy],
-                ),
-            });
             continue;
         }
         if let Some(token) = line
@@ -327,12 +300,6 @@ pub(super) fn compile(
                     },
                 }],
             )),
-            "Separate all permanents target player controls into two piles. That player sacrifices all permanents in the pile of their choice." => {
-                Some((
-                    BodyTarget::SinglePlayer,
-                    vec![Instruction::DivideTargetPermanentsAndSacrificePile],
-                ))
-            }
             "Tap target permanent. It doesn't untap during its controller's next untap step." => {
                 Some((
                     BodyTarget::SinglePermanent,
@@ -531,59 +498,6 @@ pub(super) fn compile(
             });
             continue;
         }
-        if effect
-            == "Draw a card, then you may discard a card. When you discard a nonland card this way, Narset deals damage equal to that card's mana value to target creature or planeswalker."
-        {
-            let id = ActivatedAbilityId(u64::try_from(index).ok()?);
-            program.loyalty_costs.insert(id, loyalty_cost);
-            program.activated.push(ActivatedAbility {
-                id,
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::None,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                            spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        ),
-                        Instruction::OptionalEffect {
-                            chooser: ResolvingPlayer::Controller,
-                        },
-                        Instruction::Discard {
-                            players: spellwake_engine::program::AffectedPlayers::One(
-                                ResolvingPlayer::Controller,
-                            ),
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
-                        Instruction::CreateReflexiveDiscardDamage,
-                    ],
-                ),
-            });
-            continue;
-        }
-        if effect
-            == "Exile the top card of your library face down and look at it. Create a 2/2 colorless Spirit creature token. When that token leaves the battlefield, put the exiled card into your hand."
-        {
-            let id = ActivatedAbilityId(u64::try_from(index).ok()?);
-            program.loyalty_costs.insert(id, loyalty_cost);
-            program.activated.push(ActivatedAbility {
-                id,
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::None,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_top_face_down(),
-                        super::ordinary_text::create_tokens(
-                            "a 2/2 colorless Spirit creature token",
-                            vocabulary,
-                        )?,
-                        Instruction::RegisterTokenLinkedExile,
-                    ],
-                ),
-            });
-            continue;
-        }
         if effect == "Create a 5/5 black Demon creature token with flying. You lose 2 life." {
             let id = ActivatedAbilityId(u64::try_from(index).ok()?);
             program.loyalty_costs.insert(id, loyalty_cost);
@@ -609,52 +523,7 @@ pub(super) fn compile(
             });
             continue;
         }
-        if effect == "Discard up to two cards, then draw that many cards."
-            || effect
-                == "Sacrifice an artifact. If you do, return target artifact card from your graveyard to the battlefield."
-        {
-            let id = ActivatedAbilityId(index.try_into().ok()?);
-            let (target, ops) = if effect.starts_with("Discard ") {
-                (
-                    BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_up_to(2),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                            spellwake_engine::program::ValueExpr::event(
-                                spellwake_engine::program::EventValueKind::LargestDiscard,
-                            ),
-                        ),
-                    ],
-                )
-            } else {
-                (
-                    BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::artifact()),
-                    vec![
-                        Instruction::SacrificeToContinue {
-                            filter: spellwake_engine::program::PermanentTypeFilter {
-                                any_types: BTreeSet::new(),
-                                required_types: [CardType::Artifact].into(),
-                                forbidden_types: BTreeSet::new(),
-                                object_filter: None,
-                            },
-                        },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
-                    ],
-                )
-            };
-            program.loyalty_costs.insert(id, loyalty_cost);
-            program.activated.push(ActivatedAbility {
-                id,
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::None,
-                body: ExecutableBody::new(target, ops),
-            });
-            continue;
-        }
-        if let Some(token) = effect
-            .strip_prefix("Create ")
-            .and_then(|s| s.strip_suffix(". You may attach an Equipment you control to it."))
-        {
+        if effect == "Discard up to two cards, then draw that many cards." {
             let id = ActivatedAbilityId(index.try_into().ok()?);
             program.loyalty_costs.insert(id, loyalty_cost);
             program.activated.push(ActivatedAbility {
@@ -664,8 +533,12 @@ pub(super) fn compile(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        super::ordinary_text::create_tokens(token, vocabulary)?,
-                        Instruction::EquipNewToken,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_up_to(2),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            spellwake_engine::program::ValueExpr::event(
+                                spellwake_engine::program::EventValueKind::LargestDiscard,
+                            ),
+                        ),
                     ],
                 ),
             });
@@ -696,60 +569,6 @@ pub(super) fn compile(
                                 spellwake_engine::program::EventValueKind::LargestDiscard,
                             ),
                         ),
-                    ],
-                ),
-            });
-            continue;
-        }
-        if effect
-            == "Target artifact you control becomes a copy of another target artifact or creature you control until end of turn, except it's an artifact in addition to its other types."
-        {
-            let id = ActivatedAbilityId(index.try_into().ok()?);
-            let target = |filter| {
-                Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(filter),
-                    vec![Instruction::RememberPermanentTarget],
-                )))
-            };
-            program.loyalty_costs.insert(id, loyalty_cost);
-            program.activated.push(ActivatedAbility {
-                id,
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::None,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![
-                        target(ObjectFilter::artifact().controlled()),
-                        target(ObjectFilter::artifact_or_creature().controlled()),
-                        Instruction::CopyOtherTargetAsArtifact,
-                    ],
-                ),
-            });
-            continue;
-        }
-        if effect
-            == "Exile target creature or enchantment you don't control until target enchantment you control leaves the battlefield."
-        {
-            let id = ActivatedAbilityId(u64::try_from(index).ok()?);
-            program.loyalty_costs.insert(id, loyalty_cost);
-            program.activated.push(ActivatedAbility {
-                id,
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::None,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![
-                        Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                            BodyTarget::FilteredPermanent(
-                                ObjectFilter::creature_or_enchantment().opposing(),
-                            ),
-                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
-                        ))),
-                        Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                            BodyTarget::FilteredPermanent(ObjectFilter::enchantment().controlled()),
-                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
-                        ))),
-                        Instruction::ExileUntilOtherTargetLeaves,
                     ],
                 ),
             });
@@ -822,7 +641,6 @@ pub(super) fn compile(
                     EmblemDefinition::ReturnFallenArtifacts,
                 ),
             ),
-            "You may put an Equipment card from your hand or graveyard onto the battlefield." => (BodyTarget::None,Instruction::PutEquipmentFromHandOrGraveyard),
             text if text.starts_with("Create a colorless Equipment artifact token named ") => {
                 let (name,abilities)=text.strip_prefix("Create a colorless Equipment artifact token named ")?.split_once(". It has indestructible, \"Equipped creature ")?;
                 let (host,price)=abilities.split_once(",\" and equip ")?;
@@ -834,11 +652,6 @@ pub(super) fn compile(
                 let definition=spellwake_engine::token::TokenDefinition::new(token,spellwake_engine::token::TokenName::Specified(name),vocabulary).ok()?;
                 (BodyTarget::None,Instruction::CreateTokens {creations:vec![spellwake_engine::token::TokenCreation::one(definition)]})
             }
-            "Reveal the top three cards of your library. An opponent separates those cards into two piles. Put one pile into your hand and the other on the bottom of your library in any order." => (BodyTarget::None,Instruction::RevealHandAndBottomPiles),
-            "Until your next turn, whenever a creature an opponent controls attacks, it gets -1/-0 until end of turn." => (BodyTarget::None,Instruction::WeakenOpposingAttackersUntilNextTurn),
-            "For each player, search that player's library for a nonland card and exile it, then that player shuffles. You may cast those cards without paying their mana costs." => (BodyTarget::None,Instruction::SearchEachLibraryForFreeCast),
-            "Up to two other target planeswalkers you control phase out at the beginning of the next end step." => (BodyTarget::FilteredPermanent(ObjectFilter::planeswalker().controlled().other_than_trigger_source()),Instruction::PhaseOtherPlaneswalkersNextEndStep),
-            "For each opponent, return up to one target nonland permanent that player controls to its owner's hand." => (BodyTarget::FilteredPermanent(ObjectFilter::nonland().opposing()),Instruction::ReturnOneNonlandPerOpponent),
             "Target artifact you control becomes a 9/9 Construct artifact creature and gains vigilance, indestructible, and \"This creature can't be blocked.\"" => {
                 use spellwake_engine::characteristics::{AbilityChange,ResolvedPartsSpec,ResolvedPartSpec,ResolvedDuration,TypeChangeSpec,TypeOperation,SubtypeOperation,InstructionSubtypeOperand};
                 let parts=ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {types:TypeOperation::Add([CardType::Artifact,CardType::Creature].into()),supertypes:TypeOperation::Keep,
@@ -848,7 +661,6 @@ pub(super) fn compile(
                 (BodyTarget::FilteredPermanent(ObjectFilter::artifact().controlled()),crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets,parts,ResolvedDuration::NoStatedDuration))
             }
             "Scry 2." => (BodyTarget::None,Instruction::Scry {player:ResolvingPlayer::Controller,amount:spellwake_engine::program::ValueExpr::Literal(2.into())}),
-            text if text == format!("Draw a card and reveal it. Remove a number of loyalty counters equal to that card's mana value from {short}.") => (BodyTarget::None,Instruction::DrawRevealRemoveLoyalty),
             "Exile target enchantment, tapped artifact, or tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::either(ObjectClause::enchantment(), ObjectClause::any().any_types(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)).tapped())),crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Search your library for an artifact or creature card, put it onto the battlefield, then shuffle. It gains haste. Return it to your hand at the beginning of the next end step." =>
                 (BodyTarget::None, Instruction::SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
@@ -859,10 +671,6 @@ pub(super) fn compile(
                         tapped: false,
                         post_entry: spellwake_engine::program::SearchBattlefieldPostEntry::HasteAndReturnAtEndStep,
                     })) }),
-            text if text == format!("During target opponent's next turn, creatures that player controls attack {} if able.",card.name) =>
-                (BodyTarget::SingleOpponent,Instruction::RequireAttackSourceNextTurn),
-            "Choose left or right. Until your next turn, each player may attack only the nearest opponent in the last chosen direction and planeswalkers controlled by that opponent." =>
-                (BodyTarget::None,Instruction::ChooseAttackDirection),
             "Until end of turn, each planeswalker you control becomes a 4/4 red Dragon creature and gains flying." => {
                 use spellwake_engine::characteristics::{Color,ColorOperation,AbilityChange,ResolvedPartsSpec,ResolvedPartSpec,ResolvedDuration,TypeChangeSpec,TypeOperation,SubtypeOperation,InstructionSubtypeOperand};
                 let parts=ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {types:TypeOperation::Set([CardType::Creature].into()),supertypes:TypeOperation::Keep,
@@ -896,7 +704,6 @@ pub(super) fn compile(
                     true,
                 ),
             ),
-            "Remove a loyalty counter from each of any number of permanents you control. Exile that many cards from the top of your library. You may play them this turn." => (BodyTarget::None, Instruction::RemoveLoyaltyExileTopForPlay),
             "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) })),
             "Add {R}{R}." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Fixed([(ManaType::Red, 2.into())].into()))),
             "Create a 1/1 red Wizard creature token with \"{T}: Add {R}. Spend this mana only to cast a planeswalker spell.\"" => {
@@ -930,8 +737,6 @@ pub(super) fn compile(
                     EmblemDefinition::PreventAllButOne,
                 ),
             ),
-            "Look at the top two cards of your library. Put one of them into your hand and the other on the bottom of your library." =>
-                (BodyTarget::None, Instruction::LookTopTakeOne { count: 2 }),
             "You get an emblem with \"{1}{B}, Sacrifice a creature: You gain X life and draw X cards, where X is the sacrificed creature's power.\"" => (
                 BodyTarget::None,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
@@ -950,8 +755,6 @@ pub(super) fn compile(
                     EmblemDefinition::LoyaltyAnyTurn,
                 ),
             ),
-            text if text == format!("Exile the top card of your library. You may cast that card. If you don't, {} deals 2 damage to each opponent.", card.name.split(',').next()?) =>
-                (BodyTarget::None, Instruction::ImpulseCastOrDamage(2.into())),
             "Create a 1/1 green Elf Druid creature token with \"{T}: Add {G}.\"" => {
                 use spellwake_engine::{characteristics::Color, mana::{ManaAbility, ManaAbilityId, ManaOutput}, token::{TokenCreation, TokenDefinition, TokenName, TokenSubtype}};
                 let elf = vocabulary.resolve_label("Elf")?;
@@ -963,17 +766,9 @@ pub(super) fn compile(
                 let creation = TokenCreation::one(TokenDefinition::new(token, name, vocabulary).ok()?);
                 (BodyTarget::None, Instruction::CreateTokens { creations: vec![creation] })
             },
-            "Return all enchantment cards from your graveyard to the battlefield." => (BodyTarget::None, Instruction::ReturnGraveyardCohort(spellwake_engine::program::GraveyardCohortReturn::own(
-                spellwake_engine::program::GraveyardReturnFilter::CardType(CardType::Enchantment),
-            ))),
             "Destroy target permanent that's one or more colors." => (BodyTarget::FilteredPermanent(ObjectFilter::permanent().with_color(ObjectColorFilter::Colored)), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
             "Destroy target artifact or enchantment." => (BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
             "Draw a card for each green creature you control." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::count_battlefield(spellwake_engine::program::ObjectFilter::creature().controlled().with_color(spellwake_engine::program::ObjectColorFilter::has(spellwake_engine::characteristics::Color::Green))))),
-            "Look at the top four cards of your library. You may reveal a noncreature, nonland card from among them and put it into your hand. Put the rest on the bottom of your library in a random order." =>
-                (BodyTarget::None, Instruction::LookTopReveal { count: 4, filter: spellwake_engine::program::LookTopFilter::NoncreatureNonland }),
-            "Look at the top four cards of your library. You may reveal an enchantment card from among them and put it into your hand. Put the rest on the bottom of your library in a random order."
-            | "Look at the top four cards of your library. You may reveal an enchantment card from among them and put that card into your hand. Put the rest on the bottom of your library in a random order." =>
-                (BodyTarget::None, Instruction::LookTopReveal { count: 4, filter: spellwake_engine::program::LookTopFilter::Enchantment }),
             text if text == format!("{} deals 3 damage to each non-Elemental creature.", card.name.split(',').next()?) => (
                 BodyTarget::None,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
@@ -1245,153 +1040,11 @@ fn planeswalker_face(line: &str, cost: Option<ManaCost>, loyalty: u16) -> Option
 }
 
 pub(super) fn compile_transforming(
-    card: &InventoryCard,
-    inventory: &Inventory,
-    vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
-    indicator: Option<&[String]>,
-    loyalty_source_verified: bool,
+    _card: &InventoryCard,
+    _inventory: &Inventory,
+    _vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    _indicator: Option<&[String]>,
+    _loyalty_source_verified: bool,
 ) -> Option<Program> {
-    use spellwake_contracts::names::{EnglishCardName, ObjectNames};
-    use spellwake_engine::{
-        effects::CounterKind,
-        program::{
-            Comparison, LibrarySearch, PermanentTypeFilter, PowerDamageSource, TriggerGrouping,
-            TriggeredAbility, TriggeredAbilityId,
-        },
-    };
-    let [front, back] = card.faces.as_slice() else {
-        return None;
-    };
-    if !loyalty_source_verified
-        || card.layout != "transform"
-        || front.name != "Garruk Relentless"
-        || back.name != "Garruk, the Veil-Cursed"
-        || without_reminder(front.oracle_text.as_deref()?)?
-            != concat!(
-                "When Garruk has two or fewer loyalty counters on him, transform him.\n",
-                "0: Garruk deals 3 damage to target creature. That creature deals damage equal to its power to him.\n",
-                "0: Create a 2/2 green Wolf creature token."
-            )
-        || without_reminder(back.oracle_text.as_deref()?)?
-            != concat!(
-                "+1: Create a 1/1 black Wolf creature token with deathtouch.\n",
-                "−1: Sacrifice a creature. If you do, search your library for a creature card, reveal it, put it into your hand, then shuffle.\n",
-                "−3: Creatures you control gain trample and get +X/+X until end of turn, where X is the number of creature cards in your graveyard."
-            )
-        || indicator? != ["B", "G"]
-    {
-        return None;
-    }
-    let oracle = card.oracle_id.as_deref()?;
-    let loyalty = inventory.source_loyalty(oracle, 0)?.parse().ok()?;
-    let mut initial = planeswalker_face(
-        front.type_line.as_deref()?,
-        Some(fixed_cost(front.mana_cost.as_deref()?)?),
-        loyalty,
-    )?;
-    let mut transformed = planeswalker_face(back.type_line.as_deref()?, None, 0)?;
-    initial.names = ObjectNames::single(EnglishCardName::new(front.name.clone()).ok()?);
-    transformed.names = ObjectNames::single(EnglishCardName::new(back.name.clone()).ok()?);
-    transformed.color_indicator = Some([Color::Black, Color::Green].into());
-    initial.triggered.push(TriggeredAbility {
-        id: TriggeredAbilityId(0),
-        condition: spellwake_engine::program::TriggerSpec::state_threshold(
-            spellwake_engine::program::StateThresholdKind::SourceCounters {
-                kind: CounterKind::Loyalty,
-                comparison: Comparison::LessOrEqual,
-                amount: 2,
-            },
-        ),
-        grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(
-            BodyTarget::None,
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
-        ),
-    });
-    let add = |program: &mut Program, id, cost, target, instructions| {
-        let id = ActivatedAbilityId(id);
-        program.loyalty_costs.insert(id, cost);
-        program.activated.push(ActivatedAbility {
-            id,
-            mana_cost: ManaCost::free(),
-            source_cost: SourceCost::None,
-            body: ExecutableBody::new(target, instructions),
-        });
-    };
-    add(
-        &mut initial,
-        1,
-        0,
-        BodyTarget::SingleCreature,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                spellwake_engine::program::ValueExpr::literal(3),
-                false,
-            ),
-            Instruction::DamageFromPower(PowerDamageSource::TargetCreatureToAbilitySource),
-        ],
-    );
-    add(
-        &mut initial,
-        2,
-        0,
-        BodyTarget::None,
-        vec![ordinary_text::create_tokens(
-            "a 2/2 green Wolf creature token",
-            vocabulary,
-        )?],
-    );
-    add(
-        &mut transformed,
-        0,
-        1,
-        BodyTarget::None,
-        vec![ordinary_text::create_tokens(
-            "a 1/1 black Wolf creature token with deathtouch",
-            vocabulary,
-        )?],
-    );
-    add(
-        &mut transformed,
-        1,
-        -1,
-        BodyTarget::None,
-        vec![
-            Instruction::SacrificeToContinue {
-                filter: PermanentTypeFilter {
-                    any_types: BTreeSet::new(),
-                    required_types: [CardType::Creature].into(),
-                    forbidden_types: BTreeSet::new(),
-                    object_filter: None,
-                },
-            },
-            Instruction::SearchLibrary {
-                filter: Box::new(LibrarySearch::card_type_to_hand(CardType::Creature)),
-            },
-        ],
-    );
-    add(
-        &mut transformed,
-        2,
-        -3,
-        BodyTarget::None,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                EffectSubject::Matching(ObjectFilter::creature().controlled()),
-                spellwake_engine::program::ValueExpr::count_graveyard(
-                    spellwake_engine::program::ResolvingPlayer::Controller,
-                    spellwake_engine::program::ObjectFilter::creature(),
-                ),
-                spellwake_engine::program::ValueExpr::count_graveyard(
-                    spellwake_engine::program::ResolvingPlayer::Controller,
-                    spellwake_engine::program::ObjectFilter::creature(),
-                ),
-                [KeywordAbility::Trample].into(),
-                BTreeSet::new(),
-            ),
-        ],
-    );
-    initial.transform_back = Some(Box::new(transformed));
-    Some(initial)
+    None
 }

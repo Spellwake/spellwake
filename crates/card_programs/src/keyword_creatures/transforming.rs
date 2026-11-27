@@ -446,7 +446,10 @@ fn compile_face(
                     fixed_cost("{R}")?,
                     SourceCost::Tap,
                     BodyTarget::SingleCreature,
-                    vec![FightSourceWithTarget],
+                    vec![Instruction::Fight {
+                        first: Box::new(spellwake_engine::program::MoveSubjectRef::AbilitySource),
+                        second: Box::new(spellwake_engine::program::MoveSubjectRef::TargetObject),
+                    }],
                 ));
                 continue;
             }
@@ -587,15 +590,6 @@ fn compile_face(
                     ),
                 ],
             ),
-            "When this creature dies, return it to the battlefield transformed under your control at the beginning of the next end step." if !reverse => {
-                transforms = true;
-                (
-                    spellwake_engine::program::TriggerSpec::dies(spellwake_engine::program::ObjectFilter::self_object()),
-                    vec![ScheduleGraveyardReturnAtEndStep(
-                        spellwake_engine::program::DelayedGraveyardReturn::DyingSourceTransformed,
-                    )],
-                )
-            }
             "Whenever this creature deals combat damage to a player, draw a card." => (
                 spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
                 vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(

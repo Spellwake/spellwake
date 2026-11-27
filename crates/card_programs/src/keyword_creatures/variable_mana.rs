@@ -136,51 +136,6 @@ fn spell_body(
             ],
         ));
     }
-    if text.trim()
-        == "Search your library and/or graveyard for a creature card with mana value X or less and put it onto the battlefield. If you search your library this way, shuffle. If X is 10 or more, creatures you control get +X/+X and gain haste until end of turn."
-    {
-        use spellwake_engine::characteristics::KeywordAbility;
-        use spellwake_engine::program::{
-            CardType, Comparison, EffectSubject, LibrarySearch, ObjectFilter, ResolutionCondition,
-            ResolvingPlayer, SearchCardMatcher, SearchManaValue, SearchSource,
-        };
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::OptionalSequence {
-                    chooser: ResolvingPlayer::Controller,
-                    instructions: 2,
-                },
-                Instruction::SearchLibrary {
-                    filter: Box::new(
-                        LibrarySearch::to_battlefield(
-                            SearchCardMatcher::CardTypes([CardType::Creature].into()),
-                            false,
-                        )
-                        .with_source(SearchSource::OwnLibraryOrGraveyard)
-                        .with_mana_value(SearchManaValue::AtMostAnnouncedX),
-                    ),
-                },
-                Instruction::Jump { destination: 4 },
-                Instruction::PutGraveyardCreatureAtMostX,
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: ValueExpr::chosen_x(),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: ValueExpr::Literal(10.into()),
-                    },
-                    destination: 6,
-                },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                    EffectSubject::Matching(ObjectFilter::creature().controlled()),
-                    ValueExpr::chosen_x(),
-                    ValueExpr::chosen_x(),
-                    [KeywordAbility::Haste].into(),
-                    std::collections::BTreeSet::new(),
-                ),
-            ],
-        ));
-    }
     let (target, instruction) = match text.trim() {
         "Cast this spell only during combat on an opponent's turn.\nReturn X target creature cards from your graveyard to the battlefield. Sacrifice those creatures at the beginning of the next end step." => {
             (

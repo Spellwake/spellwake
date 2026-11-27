@@ -40,8 +40,6 @@ use spellwake_contracts::{RulesInteger, creature_types::CreatureTypeId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-mod combat_draw;
-pub(crate) use combat_draw::{CombatDrawSource, CombatDrawSubject};
 mod causes;
 pub use causes::{TriggerCauseKey, TriggerCauseMember, TriggerCauseSet};
 mod matching;
@@ -2154,14 +2152,7 @@ enum DelayedStepAction {
         kind: crate::program::EndStepCast,
     },
     ReturnFromExile(Vec<ObjectId>),
-    ReturnFromGraveyard {
-        object: ObjectId,
-        while_source_remains: bool,
-    },
-    ReturnFromGraveyardTransformed(ObjectId),
-    ReturnGraveyardToHand(ObjectId),
     ReturnPermanentToHand(ObjectId),
-    PhaseOut(Vec<ObjectId>),
     Unearth(ObjectId),
     Rebound(ObjectId),
     /// Generalized CR 603.7 delayed step trigger executing an authored body.
@@ -2187,11 +2178,9 @@ pub(crate) struct WaitingEmblem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AbilityCopyWatch {
     NextLoyalty,
-    PlaneswalkerType(crate::program::PlaneswalkerSubtype),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DelayedCopyAction {
-    Draw(RulesInteger, BTreeSet<crate::characteristics::Color>),
     ReturnExiledWithCounters(Vec<ObjectId>),
     ReturnExiled(Vec<ObjectId>),
     Sacrifice(Vec<ObjectId>),
@@ -2201,19 +2190,7 @@ pub(crate) enum DelayedCopyAction {
         Arc<crate::effects::CapturedAbilityCopy>,
         BTreeSet<crate::characteristics::Color>,
     ),
-    GrantCastCardAbilities {
-        recipient: ObjectId,
-        donor: Box<crate::characteristics::ObjectCharacteristics>,
-    },
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GraveyardCastWatch {
-    player: SeatId,
-    original: StackEntryId,
-    recipient: ObjectId,
-    card: ObjectId,
-}
-
 /// Only checked counters and owned waiting instances survive acceptance.
 /// Event-driven delayed triggered ability (CR 603.7) scheduled by `Instruction::ScheduleDelayedEventTrigger`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2230,18 +2207,14 @@ struct DelayedEventTrigger {
 pub(crate) struct TriggerState {
     next_event: u64,
     next_instance: u64,
-    watched_graveyard_casts: Vec<GraveyardCastWatch>,
     next_wave: u64,
     waiting: BTreeMap<TriggerInstanceId, WaitingInstance>,
     speed_waiting: BTreeMap<TriggerInstanceId, SeatId>,
     monarch_waiting: BTreeMap<TriggerInstanceId, (SeatId, Option<SeatId>)>,
     emblem_waiting: BTreeMap<TriggerInstanceId, WaitingEmblem>,
-    combat_draws: Vec<combat_draw::CombatDrawWatch>,
-    weakening_attack_triggers: Vec<(SupportedAppearance, SeatId, BTreeSet<SeatId>)>,
     delayed_emblem_returns: Vec<(crate::emblem::EmblemId, SeatId, ObjectId)>,
     delayed_copy_waiting: BTreeMap<TriggerInstanceId, (SeatId, StackEntryId, DelayedCopyAction)>,
     delayed_copy_steps: Vec<(SeatId, StackEntryId, crate::turn::Step, DelayedCopyAction)>,
-    token_leave_triggers: BTreeMap<ObjectId, (SupportedAppearance, SeatId)>,
     earthbent_returns: BTreeMap<ObjectId, (SupportedAppearance, SeatId)>,
     speed_triggered_turn: Option<(u64, SeatId)>,
     current_speed_turn: Option<(u64, SeatId)>,
@@ -2250,12 +2223,6 @@ pub(crate) struct TriggerState {
         ObjectId,
         Option<crate::characteristics::EffectInstanceKey>,
         TriggeredAbilityId,
-    )>,
-    used_optional_trigger_effects: BTreeSet<(
-        ObjectId,
-        Option<crate::characteristics::EffectInstanceKey>,
-        TriggeredAbilityId,
-        SeatId,
     )>,
     delayed_steps: Vec<DelayedStepTrigger>,
     delayed_event_triggers: Vec<DelayedEventTrigger>,
@@ -2271,24 +2238,19 @@ impl Default for TriggerState {
         Self {
             next_event: 1,
             next_instance: 1,
-            watched_graveyard_casts: Vec::new(),
             next_wave: 1,
             waiting: BTreeMap::new(),
             speed_waiting: BTreeMap::new(),
             monarch_waiting: BTreeMap::new(),
             emblem_waiting: BTreeMap::new(),
             delayed_emblem_returns: Vec::new(),
-            combat_draws: Vec::new(),
-            weakening_attack_triggers: Vec::new(),
             delayed_copy_waiting: BTreeMap::new(),
             delayed_copy_steps: Vec::new(),
-            token_leave_triggers: BTreeMap::new(),
             earthbent_returns: BTreeMap::new(),
             speed_triggered_turn: None,
             current_speed_turn: None,
             declared_attackers_this_turn: BTreeSet::new(),
             once_this_turn: BTreeSet::new(),
-            used_optional_trigger_effects: BTreeSet::new(),
             delayed_steps: vec![],
             delayed_event_triggers: vec![],
             next_spell_or_loyalty: Vec::new(),
@@ -2326,34 +2288,10 @@ impl TriggerState {
     }
 
     pub(crate) fn reset_once_each_turn(&mut self) {
-        self.combat_draws.clear();
         self.once_this_turn.clear();
-        self.used_optional_trigger_effects.clear();
         self.declared_attackers_this_turn.clear();
         self.ability_copy_watches.clear();
         self.next_spell_or_loyalty.clear();
-    }
-    pub(crate) fn optional_trigger_effect_used(
-        &self,
-        trigger: &TriggerBinding,
-        controller: SeatId,
-    ) -> bool {
-        self.used_optional_trigger_effects.contains(&(
-            trigger.source.object.id(),
-            trigger.granting_effect,
-            trigger.definition,
-            controller,
-        ))
-    }
-    pub(crate) fn use_optional_trigger_effect(
-        &mut self,
-        source: ObjectId,
-        grant: Option<crate::characteristics::EffectInstanceKey>,
-        definition: TriggeredAbilityId,
-        controller: SeatId,
-    ) {
-        self.used_optional_trigger_effects
-            .insert((source, grant, definition, controller));
     }
 
     pub(crate) fn watch_ability_copy(
@@ -2365,62 +2303,8 @@ impl TriggerState {
         self.ability_copy_watches.push((source, player, watch));
     }
     pub(crate) fn expire_end_of_turn_watches(&mut self) {
-        self.combat_draws.clear();
         self.ability_copy_watches.clear();
         self.next_spell_or_loyalty.clear();
-        self.watched_graveyard_casts.clear();
-    }
-
-    pub(crate) fn watch_graveyard_cast(
-        &mut self,
-        player: SeatId,
-        original: StackEntryId,
-        recipient: ObjectId,
-        card: ObjectId,
-    ) {
-        self.watched_graveyard_casts.push(GraveyardCastWatch {
-            player,
-            original,
-            recipient,
-            card,
-        });
-    }
-
-    fn match_graveyard_cast(
-        &mut self,
-        occurrence: OccurrenceId,
-        cast: &CastOccurrence,
-        current: &RulesView<'_>,
-        discoveries: &mut Vec<RulesRecord>,
-    ) -> Result<(), TriggerError> {
-        for watch in std::mem::take(&mut self.watched_graveyard_casts) {
-            if Some(watch.card) != cast.cast_original_object || watch.player != cast.controller() {
-                self.watched_graveyard_casts.push(watch);
-                continue;
-            }
-            let donor = current
-                .evaluated
-                .get(cast.spell().object.id())
-                .ok_or(TriggerError::InvalidWorld)?;
-            let instance = TriggerInstanceId(self.next_instance);
-            self.next_instance = self
-                .next_instance
-                .checked_add(1)
-                .ok_or(TriggerError::InstanceIdentityExhausted)?;
-            let action = DelayedCopyAction::GrantCastCardAbilities {
-                recipient: watch.recipient,
-                donor: Box::new(donor.clone()),
-            };
-            self.delayed_copy_waiting
-                .insert(instance, (watch.player, watch.original, action));
-            discoveries.push(RulesRecord::DelayedCopyTriggerDiscovered {
-                instance,
-                controller: watch.player,
-                original: watch.original,
-                cause: occurrence,
-            });
-        }
-        Ok(())
     }
     pub(crate) fn watch_next_spell_or_loyalty(
         &mut self,
@@ -2472,7 +2356,7 @@ impl TriggerState {
         controller: SeatId,
         source: std::sync::Arc<crate::effects::CapturedAbilityCopy>,
         loyalty: bool,
-        types: &BTreeSet<crate::program::PlaneswalkerSubtype>,
+        _types: &BTreeSet<crate::program::PlaneswalkerSubtype>,
         journal: &mut RulesJournal,
     ) -> Result<(), TriggerError> {
         if loyalty {
@@ -2484,11 +2368,8 @@ impl TriggerState {
             )?;
         }
         for (appearance, player, watch) in std::mem::take(&mut self.ability_copy_watches) {
-            let matches = player == controller
-                && match watch {
-                    AbilityCopyWatch::NextLoyalty => loyalty,
-                    AbilityCopyWatch::PlaneswalkerType(kind) => types.contains(&kind),
-                };
+            let AbilityCopyWatch::NextLoyalty = watch;
+            let matches = player == controller && loyalty;
             if matches {
                 let causes = TriggerCauseSet::new(
                     occurrence.event,
@@ -2521,7 +2402,7 @@ impl TriggerState {
                     .records
                     .push(RulesRecord::TriggerDiscovered(Box::new(instance)));
             }
-            if !matches || watch != AbilityCopyWatch::NextLoyalty {
+            if !matches {
                 self.ability_copy_watches.push((appearance, player, watch));
             }
         }
@@ -2532,15 +2413,6 @@ impl TriggerState {
     pub(crate) fn reverse_cast_announcement(&mut self, event: EventId) {
         self.waiting
             .retain(|_, instance| instance.causes.event() != event);
-    }
-    pub(crate) fn delay_token_leave(
-        &mut self,
-        token: ObjectId,
-        source: SupportedAppearance,
-        controller: SeatId,
-    ) {
-        self.token_leave_triggers
-            .insert(token, (source, controller));
     }
     /// Schedule a delayed return trigger for an earthbent land if it dies or is exiled.
     pub fn delay_earthbend_return(
@@ -2641,58 +2513,6 @@ impl TriggerState {
             source,
             controller,
             action: DelayedStepAction::ReturnFromExile(objects),
-        });
-    }
-    pub(crate) fn delay_graveyard_to_hand(
-        &mut self,
-        source: SupportedAppearance,
-        controller: SeatId,
-        object: ObjectId,
-    ) {
-        self.delayed_steps.push(DelayedStepTrigger {
-            source,
-            controller,
-            action: DelayedStepAction::ReturnGraveyardToHand(object),
-        });
-    }
-    pub(crate) fn delay_transformed_return(
-        &mut self,
-        source: SupportedAppearance,
-        controller: SeatId,
-        object: ObjectId,
-    ) {
-        self.delayed_steps.push(DelayedStepTrigger {
-            source,
-            controller,
-            action: DelayedStepAction::ReturnFromGraveyardTransformed(object),
-        });
-    }
-    pub(crate) fn delay_graveyard_return(
-        &mut self,
-        source: SupportedAppearance,
-        controller: SeatId,
-        object: ObjectId,
-        while_source_remains: bool,
-    ) {
-        self.delayed_steps.push(DelayedStepTrigger {
-            source,
-            controller,
-            action: DelayedStepAction::ReturnFromGraveyard {
-                object,
-                while_source_remains,
-            },
-        });
-    }
-    pub(crate) fn delay_phasing(
-        &mut self,
-        source: SupportedAppearance,
-        controller: SeatId,
-        objects: Vec<ObjectId>,
-    ) {
-        self.delayed_steps.push(DelayedStepTrigger {
-            source,
-            controller,
-            action: DelayedStepAction::PhaseOut(objects),
         });
     }
     pub(crate) fn delay_permanent_return_to_hand(
@@ -2852,19 +2672,7 @@ impl TriggerState {
     ) -> Option<(SeatId, Option<SeatId>)> {
         self.monarch_waiting.remove(&id)
     }
-    pub(crate) fn weaken_opposing_attackers(
-        &mut self,
-        source: SupportedAppearance,
-        controller: SeatId,
-        opponents: BTreeSet<SeatId>,
-    ) {
-        self.weakening_attack_triggers
-            .push((source, controller, opponents));
-    }
-    pub(crate) fn expire_attack_triggers(&mut self, active: SeatId, skipped: &BTreeSet<SeatId>) {
-        self.weakening_attack_triggers
-            .retain(|(_, controller, _)| *controller != active && !skipped.contains(controller));
-    }
+    pub(crate) fn expire_attack_triggers(&mut self, _active: SeatId, _skipped: &BTreeSet<SeatId>) {}
     pub(crate) fn delay_emblem_return(
         &mut self,
         emblem: crate::emblem::EmblemId,
@@ -2986,11 +2794,6 @@ impl TriggerState {
             occurrences,
         };
         let mut discoveries = Vec::new();
-        for (source, _) in self.token_leave_triggers.values_mut() {
-            if let Some(current) = before.appearance(source.object.id()) {
-                *source = current;
-            }
-        }
         for (source, _) in self.earthbent_returns.values_mut() {
             if let Some(current) = before.appearance(source.object.id()) {
                 *source = current;
@@ -3246,21 +3049,7 @@ impl TriggerState {
                 }
             }
         }
-        self.match_combat_draws(&event, after, &mut discoveries)?;
         for ((object, granting_effect, ability_id), (source, controller, ability)) in sources {
-            if ability
-                .body
-                .instructions
-                .contains(&crate::program::Instruction::CopyEntrantOnceEachTurn)
-                && self.used_optional_trigger_effects.contains(&(
-                    object,
-                    granting_effect,
-                    ability_id,
-                    controller,
-                ))
-            {
-                continue;
-            }
             if (matches!(
                 ability.condition.event,
                 TriggerEvent::Attacks {
@@ -3496,12 +3285,6 @@ impl TriggerState {
                 }
             }
             if let RulesOccurrence::CastCompleted(cast) = &occurrence.value
-                && cast.cast_from_graveyard
-                && !self.watched_graveyard_casts.is_empty()
-            {
-                self.match_graveyard_cast(occurrence.id, cast, after, &mut discoveries)?;
-            }
-            if let RulesOccurrence::CastCompleted(cast) = &occurrence.value
                 && SpellFilter::instant_or_sorcery().matches_spell_appearance(cast.spell())
                 && self.watches_next_spell(cast.controller())
             {
@@ -3514,44 +3297,6 @@ impl TriggerState {
                     &mut discoveries,
                     |colors| DelayedCopyAction::SpellTwice(cast.clone(), colors),
                 )?;
-            }
-            if let RulesOccurrence::ZoneChange(change) = &occurrence.value
-                && change.before.object.zone() == ObjectZone::Battlefield
-                && change.after.object.zone() != ObjectZone::Battlefield
-                && let Some((source, controller)) =
-                    self.token_leave_triggers.remove(&change.before.object.id())
-            {
-                let causes = TriggerCauseSet::new(
-                    id,
-                    TriggerCauseKey::Occurrence(occurrence.id),
-                    vec![TriggerCauseMember {
-                        occurrence: occurrence.id,
-                        related_player: Some(controller),
-                        related: TriggerRelated::ZoneChange {
-                            before: change.before.clone(),
-                            after: change.after.clone(),
-                        },
-                    }],
-                )?;
-                let instance = WaitingInstance {
-                    id: TriggerInstanceId(self.next_instance),
-                    definition: TriggeredAbilityId(0),
-                    granting_effect: None,
-                    causes,
-                    source,
-                    controller,
-                    body: ExecutableBody::new(
-                        crate::program::BodyTarget::None,
-                        vec![crate::program::Instruction::ReturnTokenLinkedExile],
-                    ),
-                    upkeep_keyword: None,
-                };
-                self.next_instance = self
-                    .next_instance
-                    .checked_add(1)
-                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
-                self.waiting.insert(instance.id, instance.clone());
-                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
             }
             if let RulesOccurrence::ZoneChange(change) = &occurrence.value
                 && change.before.object.zone() == ObjectZone::Battlefield
@@ -3598,63 +3343,6 @@ impl TriggerState {
             }
         }
         for occurrence in &event.occurrences {
-            if let RulesOccurrence::AttackersDeclared { selected, .. } = &occurrence.value {
-                for (source, controller, opponents) in &self.weakening_attack_triggers {
-                    for attack in selected {
-                        let Some(attacker) = after.evaluated.get(attack.attacker) else {
-                            return Err(TriggerError::InvalidWorld);
-                        };
-                        if !attacker.is_creature()
-                            || !attacker
-                                .controller
-                                .is_some_and(|owner| opponents.contains(&owner))
-                        {
-                            continue;
-                        }
-                        let causes = TriggerCauseSet::new(
-                            id,
-                            TriggerCauseKey::Occurrence(occurrence.id),
-                            vec![TriggerCauseMember {
-                                occurrence: occurrence.id,
-                                related_player: attacker.controller,
-                                related: TriggerRelated::Combatant(attack.attacker),
-                            }],
-                        )?;
-                        let instance = WaitingInstance {
-                            id: TriggerInstanceId(self.next_instance),
-                            definition: TriggeredAbilityId(0),
-                            granting_effect: None,
-                            causes,
-                            source: source.clone(),
-                            controller: *controller,
-                            body: ExecutableBody::new(
-                                crate::program::BodyTarget::None,
-                                vec![crate::program::Instruction::ApplyContinuous(Box::new(
-                                    crate::toolbox::ApplyContinuousSpec::resolved_parts(
-                                        crate::toolbox::ObjectQuery::Fixed(vec![attack.attacker]),
-                                        crate::characteristics::ResolvedPartsSpec(vec![
-                                            crate::characteristics::ResolvedPartSpec::ModifyPT(
-                                                crate::characteristics::PowerToughness {
-                                                    power: (-1).into(),
-                                                    toughness: 0.into(),
-                                                },
-                                            ),
-                                        ]),
-                                        crate::characteristics::ResolvedDuration::UntilEndOfTurn,
-                                    ),
-                                ))],
-                            ),
-                            upkeep_keyword: None,
-                        };
-                        self.next_instance = self
-                            .next_instance
-                            .checked_add(1)
-                            .ok_or(TriggerError::InstanceIdentityExhausted)?;
-                        self.waiting.insert(instance.id, instance.clone());
-                        discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
-                    }
-                }
-            }
             if let RulesOccurrence::CommanderTypeManaSpent {
                 source,
                 player,
@@ -3943,12 +3631,8 @@ impl TriggerState {
                         DelayedStepAction::Exile { step, .. }
                         | DelayedStepAction::Sacrifice { step, .. } => position.step == *step,
                         DelayedStepAction::ReturnExiledWithCounters(_)
-                        | DelayedStepAction::PhaseOut(_)
-                        | DelayedStepAction::ReturnGraveyardToHand(_)
                         | DelayedStepAction::ReturnPermanentToHand(_)
                         | DelayedStepAction::ReturnFromExile(_)
-                        | DelayedStepAction::ReturnFromGraveyard { .. }
-                        | DelayedStepAction::ReturnFromGraveyardTransformed(_)
                         | DelayedStepAction::Cast { .. }
                         | DelayedStepAction::Unearth(_) => position.step == Step::End,
                         DelayedStepAction::Rebound(_) => {
@@ -4011,17 +3695,6 @@ impl TriggerState {
                             DelayedStepAction::ReturnExiledWithCounters(objects) => {
                                 vec![Instruction::ReturnDelayedExileWithCounters(objects)]
                             }
-                            DelayedStepAction::PhaseOut(objects) => {
-                                vec![Instruction::MutateObject(Box::new(
-                                    crate::toolbox::MutateObjectSpec::all(
-                                        crate::toolbox::ObjectQuery::Fixed(objects),
-                                        crate::toolbox::ObjectMutation::PhaseOut,
-                                    ),
-                                ))]
-                            }
-                            DelayedStepAction::ReturnGraveyardToHand(object) => {
-                                vec![Instruction::ReturnDelayedGraveyardToHand(object)]
-                            }
                             DelayedStepAction::ReturnPermanentToHand(object) => {
                                 vec![Instruction::ReturnDelayedPermanentToHand(object)]
                             }
@@ -4034,34 +3707,6 @@ impl TriggerState {
                             DelayedStepAction::Rebound(object) => {
                                 vec![Instruction::ReboundCast(object)]
                             }
-                            DelayedStepAction::ReturnFromGraveyardTransformed(object) => {
-                                vec![Instruction::ReturnDelayedGraveyardCardTransformed(object)]
-                            }
-                            DelayedStepAction::ReturnFromGraveyard {
-                                object,
-                                while_source_remains: true,
-                            } => {
-                                if !after
-                                    .cards
-                                    .get(source.object.id())
-                                    .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                                {
-                                    continue;
-                                }
-                                vec![
-                                    Instruction::RequireCondition(
-                                        crate::program::InterveningCondition::ReturnSourceOnBattlefield,
-                                    ),
-                                    Instruction::OptionalEffect {
-                                        chooser: crate::program::ResolvingPlayer::Controller,
-                                    },
-                                    Instruction::ReturnDelayedGraveyardCard(object),
-                                ]
-                            }
-                            DelayedStepAction::ReturnFromGraveyard {
-                                object,
-                                while_source_remains: false,
-                            } => vec![Instruction::ReturnDelayedGraveyardCard(object)],
                             DelayedStepAction::ExecuteBody { .. } => unreachable!(),
                         };
                         ExecutableBody::new(crate::program::BodyTarget::None, instructions)

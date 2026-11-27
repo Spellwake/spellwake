@@ -4,7 +4,7 @@ use spellwake_engine::{
     activated::{ActivatedAbility, ActivatedAbilityId, ActivationRestriction, SourceCost},
     characteristics::StaticAbilityId,
     mana::{ManaAbility, ManaAbilityId, ManaOutput, ManaType},
-    program::{BodyTarget, ExecutableBody, Instruction, TriggerGrouping},
+    program::{BodyTarget, ExecutableBody},
 };
 
 pub(super) fn compile(
@@ -84,32 +84,6 @@ pub(super) fn compile(
                 ascend,
                 spellwake_engine::characteristics::StaticContinuousAbility::Restriction { id: StaticAbilityId(2), rule: spellwake_engine::characteristics::StaticRestriction::CombatRequiresCityBlessing },
             ]);
-            creature
-        }
-        ["Flying", "Ascend", upkeep]
-            if upkeep.strip_prefix(
-                "At the beginning of your upkeep, if you have the city's blessing, ",
-            ) == Some(concat!(
-                "reveal the top card of your library and put it into your hand. ",
-                "Each opponent loses X life and you gain X life, where X is that card's mana value."
-            )) =>
-        {
-            let mut creature =
-                ordinary_creature(card, vocabulary, Profile::Current, Some("Flying")).ok()?;
-            creature.continuous = Some(ascend);
-            creature.triggered.push(TriggeredAbility {
-                id: TriggeredAbilityId(0),
-                condition: spellwake_engine::program::TriggerSpec::step_began(
-                    spellwake_engine::turn::Step::Upkeep,
-                    spellwake_engine::program::PlayerRelation::Controller,
-                )
-                .only_if(spellwake_engine::program::TriggerCondition::ControllerHasCityBlessing),
-                grouping: TriggerGrouping::EachOccurrence,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::RevealTopHandLoseManaValue { gain_life: true }],
-                ),
-            });
             creature
         }
         _ => return None,

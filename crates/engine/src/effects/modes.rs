@@ -57,23 +57,6 @@ impl SelectedMode {
 }
 
 impl EffectWindow {
-    pub(super) fn ordered_permanent(&self, position: u16) -> Result<Option<ObjectId>, EffectError> {
-        let assessment = self
-            .window
-            .target_assessment()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let Some(row) = assessment
-            .get(TargetId(u32::from(position)))
-            .filter(|row| row.legality == TargetLegality::Legal)
-        else {
-            return Ok(None);
-        };
-        match row.choice.target {
-            TargetRef::Object(object) => Ok(Some(object)),
-            _ => Err(EffectError::InconsistentProgram),
-        }
-    }
-
     /// Legal surviving objects in the original multi-target clause. CR 608.2b.
     pub(super) fn legal_permanent_targets(&self) -> Result<BTreeSet<ObjectId>, EffectError> {
         self.legal_object_targets_at(
@@ -318,24 +301,11 @@ impl EffectWindow {
         report_first: bool,
         legal: impl Fn(&ExecutableBody, TargetRef) -> bool,
     ) -> Result<ResolvedModeSelection, EffectError> {
-        let copies_other = matches!(
-            body.instructions.last(),
-            Some(Instruction::CopyOtherTargetAsArtifact)
-        );
         let fights = body.instructions.contains(&Instruction::FightFixedTargets);
-        if (copies_other || fights) && matches!(choices, [first, second] if first == second) {
+        if fights && matches!(choices, [first, second] if first == second) {
             return Err(EffectError::IllegalTarget);
         }
-        let shared_action = copies_other
-            || fights
-            || matches!(
-                body.instructions.last(),
-                Some(
-                    Instruction::ReturnFixedTargets
-                        | Instruction::DestroyFixedTargets
-                        | Instruction::ExileUntilOtherTargetLeaves
-                )
-            )
+        let shared_action = fights
             || body
                 .instructions
                 .iter()
@@ -538,44 +508,6 @@ impl EffectWindow {
         Ok(Some((first, second)))
     }
 
-    pub(super) fn legal_linked_player_and_object_targets(
-        &self,
-    ) -> Result<Option<(SeatId, ObjectId)>, EffectError> {
-        let assessment = self
-            .window
-            .target_assessment()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let (first_id, second_id) = self
-            .resolution_cursor()
-            .and_then(|cursor| {
-                let modes = self.stack_modes(cursor.entry);
-                let mut prior = modes
-                    .iter()
-                    .filter(|mode| mode.end <= cursor.instruction)
-                    .filter_map(|mode| mode.target.map(|(tid, _)| tid))
-                    .rev();
-                let second = prior.next()?;
-                let first = prior.next()?;
-                Some((first, second))
-            })
-            .unwrap_or((TargetId(0), TargetId(1)));
-        let first = assessment
-            .get(first_id)
-            .filter(|row| row.legality == TargetLegality::Legal)
-            .and_then(|row| match row.choice.target {
-                TargetRef::Player(seat) => Some(seat),
-                _ => None,
-            });
-        let second = assessment
-            .get(second_id)
-            .filter(|row| row.legality == TargetLegality::Legal)
-            .and_then(|row| match row.choice.target {
-                TargetRef::Object(object) => Some(object),
-                _ => None,
-            });
-        Ok(first.zip(second))
-    }
-
     pub(super) fn stack_modes(&self, entry: StackEntryId) -> &[SelectedMode] {
         match self.payloads.get(&entry) {
             Some(StackPayload::Instructions(payload)) => &payload.modes,
@@ -645,124 +577,5 @@ impl EffectWindow {
                         .is_some_and(|result| result.legality != TargetLegality::Legal)
                 })
             })
-    }
-}
-
-impl InstructionPayload {
-    /// A resolving instruction can expand into a different number of operations.
-    /// Keep later targets, modes and branch destinations bound to their original text.
-    pub(super) fn expand_instruction(
-        &mut self,
-        index: usize,
-        keep_original: bool,
-        operations: impl IntoIterator<Item = Instruction>,
-    ) {
-        let operations: Vec<_> = operations.into_iter().collect();
-        let removed = usize::from(!keep_original);
-        let rebase = |position: &mut usize| {
-            if *position > index {
-                *position = *position - removed + operations.len();
-            }
-        };
-        for mode in &mut self.modes {
-            rebase(&mut mode.start);
-            rebase(&mut mode.end);
-        }
-        for instruction in &mut self.body.instructions {
-            match instruction {
-                Instruction::FlipCoin {
-                    lose_destination: destination,
-                }
-                | Instruction::BranchIfFalse { destination, .. }
-                | Instruction::Jump { destination } => rebase(destination),
-                Instruction::OfferManaPayment {
-                    paid_destination,
-                    declined_destination,
-                    ..
-                }
-                | Instruction::OfferDynamicManaPayment {
-                    paid_destination,
-                    declined_destination,
-                    ..
-                } => {
-                    rebase(paid_destination);
-                    rebase(declined_destination);
-                }
-                Instruction::OfferSourceCounters {
-                    placed_destination,
-                    declined_destination,
-                    ..
-                } => {
-                    rebase(placed_destination);
-                    rebase(declined_destination);
-                }
-                _ => {}
-            }
-        }
-        self.body
-            .instructions
-            .splice(index + usize::from(keep_original)..index + 1, operations);
-    }
-}
-
-#[cfg(test)]
-mod segment_tests {
-    use super::*;
-
-    #[test]
-    fn expanding_then_removing_host_operations_keeps_splice_target_and_branch_boundaries() {
-        let damage = Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
-            source: crate::toolbox::DamageSourceQuery::EntrySource,
-            recipients: crate::toolbox::DamageTargetQuery::Targets,
-            amount: crate::program::DamageAmountSpec::Expr(ValueExpr::Literal(2.into())),
-            exile_if_dies: false,
-        }));
-        let host = ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::FlipCoin {
-                    lose_destination: 2,
-                },
-                crate::program::Instruction::DrawCards(Box::new(
-                    crate::toolbox::DrawCardsSpec::simple(
-                        crate::toolbox::PlayerSelector::Resolving(
-                            crate::program::ResolvingPlayer::Controller,
-                        ),
-                        ValueExpr::Literal(1.into()),
-                    ),
-                )),
-                damage.clone(),
-            ],
-        );
-        let StackPayload::Instructions(mut payload) = StackPayload::from_body(host, None) else {
-            panic!()
-        };
-        payload.modes = vec![
-            SelectedMode::splice(0, 2, std::iter::empty()),
-            SelectedMode::splice(
-                2,
-                3,
-                std::iter::once((TargetId(0), BodyTarget::SinglePlayer)),
-            ),
-        ];
-        let draw = payload.body.instructions[1].clone();
-        payload.expand_instruction(1, true, [draw.clone(), draw]);
-        assert_eq!((payload.modes[1].start, payload.modes[1].end), (4, 5));
-        assert_eq!(
-            payload.body.instructions[0],
-            Instruction::FlipCoin {
-                lose_destination: 4
-            }
-        );
-        payload.expand_instruction(1, false, []);
-        assert_eq!((payload.modes[0].start, payload.modes[0].end), (0, 3));
-        assert_eq!((payload.modes[1].start, payload.modes[1].end), (3, 4));
-        assert_eq!(
-            payload.body.instructions[0],
-            Instruction::FlipCoin {
-                lose_destination: 3
-            }
-        );
-        assert_eq!(payload.body.instructions[3], damage);
     }
 }

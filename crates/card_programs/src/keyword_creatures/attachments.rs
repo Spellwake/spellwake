@@ -44,35 +44,6 @@ pub(super) fn compile_rules(
     {
         return Some(program);
     }
-    if face.type_line.as_deref() == Some("Artifact — Equipment")
-        && let [effect, upkeep, equip] = lines.as_slice()
-        && *effect
-            == "Equipped creature gets +2/+2, has haste, can't attack you or planeswalkers you control, and can't be sacrificed."
-        && *upkeep
-            == "At the beginning of each opponent's upkeep, you may have that player gain control of equipped creature until end of turn. If you do, untap it."
-    {
-        let mut program = Program::equipment(cost, fixed_cost(equip.strip_prefix("Equip ")?)?);
-        program.continuous = Some(host_effect("gets +2/+2 and has haste.", vocabulary)?);
-        program.attack_requirement = Some(spellwake_engine::program::AttackRequirement::EquippedCannotAttackControllerOrBeSacrificed);
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(0),
-            condition: spellwake_engine::program::TriggerSpec::step_began(
-                spellwake_engine::turn::Step::Upkeep,
-                spellwake_engine::program::PlayerRelation::Opponent,
-            ),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    Instruction::OptionalEffect {
-                        chooser: ResolvingPlayer::Controller,
-                    },
-                    Instruction::GiveEquippedCreatureToUpkeepPlayer,
-                ],
-            ),
-        });
-        return Some(program);
-    }
     if face.type_line.as_deref() == Some("Legendary Artifact — Equipment")
         && let ["Living weapon", "Indestructible", effect, equip] = lines.as_slice()
         && *effect
@@ -124,35 +95,6 @@ pub(super) fn compile_rules(
             ),
         });
         program.continuous = Some(continuous);
-        return Some(program);
-    }
-    if face.type_line.as_deref() == Some("Enchantment — Aura")
-        && lines.as_slice()
-            == [
-                "Enchant creature",
-                "Enchanted creature gets +1/+1, has deathtouch, and is goaded.",
-                "When enchanted creature dies, return this card to the battlefield at the beginning of the next end step.",
-            ]
-    {
-        use spellwake_engine::program::{
-            AttackRequirement, DelayedGraveyardReturn, TriggerGrouping,
-        };
-        let mut program = Program::aura(cost, EnchantRestriction::Creature);
-        program.continuous = Some(host_effect("gets +1/+1 and has deathtouch.", vocabulary)?);
-        program.attack_requirement = Some(AttackRequirement::EnchantedCreatureIsGoaded);
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(0),
-            condition: spellwake_engine::program::TriggerSpec::dies(
-                spellwake_engine::program::ObjectFilter::any().attached_to_self(),
-            ),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::ScheduleGraveyardReturnAtEndStep(
-                    DelayedGraveyardReturn::AuraAfterEnchantedCreatureDies,
-                )],
-            ),
-        });
         return Some(program);
     }
     if face.type_line.as_deref() == Some("Enchantment — Aura")
@@ -463,18 +405,6 @@ pub(super) fn compile_rules(
                             false,
                         ),
                     ],
-                )
-            }
-            "Whenever equipped creature attacks, look at the top card of your library. If it's a land card, you may put it onto the battlefield tapped." => {
-                (
-                    spellwake_engine::program::TriggerSpec::attacks(
-                        spellwake_engine::program::ObjectFilter::any().attached_to_self(),
-                        spellwake_engine::program::AttackTriggerMode::Individual {
-                            capture_defender: false,
-                        },
-                    ),
-                    BodyTarget::None,
-                    vec![Instruction::LookTopLandBattlefieldTapped],
                 )
             }
             "Whenever equipped creature attacks, you may search your library for a basic land card, put it onto the battlefield tapped, then shuffle." => {

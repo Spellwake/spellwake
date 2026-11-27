@@ -325,15 +325,11 @@ pub(super) fn jeweled_lotus(card: &InventoryCard, profile: Profile) -> Option<Pr
 /// Lower rules that refer to the creature type selected on entry.
 fn chosen_type_artifact(card: &InventoryCard) -> Option<Program> {
     use spellwake_engine::{
-        activated::SourceCost,
         characteristics::{
-            ControllerSelector, NumericExpression, NumericPair, PermanentSelector, SpellDiscount,
-            StaticAbilityId, StaticPart, StaticParts,
+            ControllerSelector, NumericExpression, NumericPair, PermanentSelector, StaticPart,
+            StaticParts,
         },
-        program::{
-            BodyTarget, ExecutableBody, Instruction, LookTopFilter, PlayerRelation, TriggerGrouping,
-        },
-        turn::Step,
+        program::{BodyTarget, ExecutableBody, PlayerRelation, TriggerGrouping},
     };
     let [face] = card.faces.as_slice() else {
         return None;
@@ -346,7 +342,12 @@ fn chosen_type_artifact(card: &InventoryCard) -> Option<Program> {
     let [entry, static_rule, other] = lines.as_slice() else {
         return None;
     };
-    if entry.strip_prefix("As this artifact enters, ") != Some("choose a creature type.") {
+    if entry.strip_prefix("As this artifact enters, ") != Some("choose a creature type.")
+        || static_rule.strip_prefix("Creatures you control of the chosen type get ")
+            != Some("+1/+1.")
+        || other.strip_prefix("Whenever you cast a creature spell of the chosen type, ")
+            != Some("draw a card.")
+    {
         return None;
     }
     let mut result = Program::artifact(Some(fixed_cost(face.mana_cost.as_deref()?)?), vec![]);
@@ -354,105 +355,34 @@ fn chosen_type_artifact(card: &InventoryCard) -> Option<Program> {
         return None;
     };
     permanent.entry_tap = Some(EntryTap::ChooseCreatureType);
-    let (condition, instruction) = if static_rule
-        .strip_prefix("Creatures you control of the chosen type get ")
-        == Some("+1/+1.")
-    {
-        super::army_grants::add_battlefield_ability(
-            &mut result,
-            PermanentSelector {
-                controller: ControllerSelector::SourceController,
-                required_types: [CardType::Creature].into(),
-                matches_source_entry_type: true,
-                ..Default::default()
-            },
-            StaticParts(vec![StaticPart::ModifyPT(NumericPair {
-                power: NumericExpression::Literal(1.into()),
-                toughness: NumericExpression::Literal(1.into()),
-            })]),
-        )?;
-        if other.strip_prefix("Whenever you cast a creature spell of the chosen type, ")
-            == Some("draw a card.")
-        {
-            (
-                spellwake_engine::program::TriggerSpec::spell_cast(
-                    PlayerRelation::Controller,
-                    spellwake_engine::program::SpellFilter::creature().of_chosen_entry_type(),
-                ),
+    super::army_grants::add_battlefield_ability(
+        &mut result,
+        PermanentSelector {
+            controller: ControllerSelector::SourceController,
+            required_types: [CardType::Creature].into(),
+            matches_source_entry_type: true,
+            ..Default::default()
+        },
+        StaticParts(vec![StaticPart::ModifyPT(NumericPair {
+            power: NumericExpression::Literal(1.into()),
+            toughness: NumericExpression::Literal(1.into()),
+        })]),
+    )?;
+    result.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(0),
+        condition: spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::Controller,
+            spellwake_engine::program::SpellFilter::creature().of_chosen_entry_type(),
+        ),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
-            )
-        } else {
-            let (cost, effect) = other.split_once(", {T}: ")?;
-            let (look, result_text) = effect
-                .strip_prefix("Look at the top ")?
-                .split_once(" cards of your library. ")?;
-            let (reveal, bottom) = result_text.split_once(". ")?;
-            if reveal.strip_prefix("You may reveal a creature card of the chosen type ")
-                != Some("from among them and put it into your hand")
-                || bottom.strip_prefix("Put the rest on the bottom of your library ")
-                    != Some("in a random order.")
-            {
-                return None;
-            }
-            result.activated.push(ActivatedAbility {
-                id: ActivatedAbilityId(0),
-                mana_cost: fixed_cost(cost)?,
-                source_cost: SourceCost::Tap,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::LookTopReveal {
-                        count: super::ordinary_text::amount(look)?.try_into().ok()?,
-                        filter: LookTopFilter::SourceChosenCreatureType,
-                    }],
-                ),
-            });
-            return Some(result);
-        }
-    } else {
-        let cost = static_rule
-            .strip_prefix("Creature spells you cast of the chosen type cost ")?
-            .strip_suffix(" less to cast.")?
-            .strip_prefix('{')?
-            .strip_suffix('}')?
-            .parse::<std::num::NonZeroU8>()
-            .ok()?;
-        let remainder = other
-            .strip_prefix("At the beginning of your upkeep, ")?
-            .strip_prefix("look at the top card of your library. ")?;
-        if remainder.strip_prefix("If it's a creature card of the chosen type, ")
-            != Some("you may reveal it and put it into your hand.")
-        {
-            return None;
-        }
-        result.continuous = Some(
-            spellwake_engine::characteristics::StaticContinuousAbility::CostModifier {
-                id: StaticAbilityId(0),
-                modifier: spellwake_engine::characteristics::SpellCostModifier::Discount {
-                    any_player: false,
-                    matching: spellwake_engine::program::SpellFilter::creature()
-                        .of_chosen_entry_type(),
-                    amount: SpellDiscount::Fixed(cost),
-                },
-            },
-        );
-        (
-            spellwake_engine::program::TriggerSpec::step_began(
-                Step::Upkeep,
-                PlayerRelation::Controller,
-            ),
-            Instruction::LookTopReveal {
-                count: 1,
-                filter: LookTopFilter::SourceChosenCreatureTypeKeepRest,
-            },
-        )
-    };
-    result.triggered.push(TriggeredAbility {
-        id: TriggeredAbilityId(0),
-        condition,
-        grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![instruction]),
+            ],
+        ),
     });
     Some(result)
 }

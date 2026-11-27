@@ -6009,9 +6009,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::CreatureDealsPowerDamageToOther { .. }
                                 | Instruction::Fight { .. }
-                                | Instruction::FightSourceWithTarget
                                 | Instruction::FightFixedTargets
-                                | Instruction::FightPairedCreatures(_)
                         )
                     });
                 if has_damage_op {
@@ -7785,9 +7783,7 @@ fn try_lower_temp_exile_replacement(
                         | Instruction::DivideDamageExprAmongTargets { .. }
                         | Instruction::CreatureDealsPowerDamageToOther { .. }
                         | Instruction::Fight { .. }
-                        | Instruction::FightSourceWithTarget
                         | Instruction::FightFixedTargets
-                        | Instruction::FightPairedCreatures(_)
                 )
             });
         if has_damage_op {

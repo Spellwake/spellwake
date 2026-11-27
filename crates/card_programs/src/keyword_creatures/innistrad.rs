@@ -193,20 +193,9 @@ pub(super) fn spell(
                     spellwake_engine::program::SearchDestination::HandOrBattlefieldIfCreatureDied,
                 )) }],
         ),
-        "Target player shuffles up to three target cards from their graveyard into their library." => (
-            SinglePlayer,
-            vec![ShuffleTargetGraveyardCards { maximum: 3 }],
-        ),
-        "Each player chooses a creature they control. Destroy the rest." => (
-            NoTarget, vec![ChooseCreaturesToKeep, DestroyOtherCreatures],
-        ),
         "Return target exiled card with flashback you own to your hand." => (
             BodyTarget::OwnedExiledFlashbackCard,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()],
-        ),
-        "Choose a permanent type. Return all cards of the chosen type from your graveyard to your hand." => (
-            NoTarget,
-            vec![ChooseAndReturnOwnGraveyardCardsByType],
         ),
         "Target creature an opponent controls deals damage equal to its power to each other creature that player controls, then each of those creatures deals damage equal to its power to that creature." => (
             FilteredPermanent(ObjectFilter::creature().opposing()),
@@ -677,20 +666,6 @@ pub(super) fn spell(
                 ),
             )
         }
-        "Reveal the top four cards of your library. Put all land cards revealed this way into your hand and the rest into your graveyard." => (
-            NoTarget,
-            vec![RevealTopHandRestGraveyard {
-                count: 4,
-                hand: spellwake_engine::program::RevealedHandSelection::AllLands,
-            }],
-        ),
-        "Reveal the top four cards of your library. Put a creature card from among them into your hand and the rest into your graveyard." => (
-            NoTarget,
-            vec![RevealTopHandRestGraveyard {
-                count: 4,
-                hand: spellwake_engine::program::RevealedHandSelection::OneCreature,
-            }],
-        ),
         "Target opponent sacrifices a creature of their choice. You gain life equal to that creature's toughness." => (
             SingleOpponent,
             vec![
@@ -713,25 +688,9 @@ pub(super) fn spell(
                 ),
             ],
         ),
-        "Return all Zombie creature cards from your graveyard to the battlefield tapped, then destroy all Humans." => (
-            NoTarget,
-            vec![
-                ReturnGraveyardCohort(spellwake_engine::program::GraveyardCohortReturn {
-                    tapped: true,
-                    ..spellwake_engine::program::GraveyardCohortReturn::own(
-                        spellwake_engine::program::GraveyardReturnFilter::CreatureSubtype(subtype("Zombie")?),
-                    )
-                }),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::any().with_subtype(subtype("Human")?), true),
-            ],
-        ),
         "Return two cards at random from your graveyard to your hand." => (
             NoTarget,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(None, std::num::NonZeroU8::new(2)?, false)],
-        ),
-        "Counter target spell. You may cast a spell that shares a card type with it from your hand without paying its mana cost." => (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![CounterSpell, ChooseMatchingHandSpellToCast],
         ),
         "Counter target spell unless its controller pays {1}. That player discards a card." => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
@@ -876,10 +835,6 @@ pub(super) fn spell(
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(LibraryPlacement::Top)],
         ),
         "Target opponent loses 3 life." => (SingleOpponent, vec![lose(3)]),
-        "Create a token that's a copy of target creature you control." => (
-            FilteredPermanent(ObjectFilter::creature().controlled()),
-            vec![CopyCreatureAsToken],
-        ),
         "Draw two cards, then discard a card at random." => {
             (NoTarget, vec![draw(2), crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(ResolvingPlayer::Controller)])
         }
@@ -888,7 +843,25 @@ pub(super) fn spell(
             vec![affect(0, 2, PermanentTargetAction::Tap)],
         ),
         "Look at the top four cards of your library. Put one of them into your hand and the rest into your graveyard." => {
-            (NoTarget, vec![LookTopOneRestGraveyard { count: 4 }])
+            (
+                NoTarget,
+                vec![LookTopChoose {
+                    count: amount(4),
+                    library_owner: ResolvingPlayer::Controller,
+                    filter: None,
+                    reveal: false,
+                    reveal_only: false,
+                    to_battlefield: false,
+                    enters_tapped: false,
+                    take_all_matching: false,
+                    max_picks: 1,
+                    rest_to_graveyard: true,
+                    rest_to_exile: false,
+                    rest_to_top: false,
+                    random_rest_order: false,
+                    secondary: None,
+                }],
+            )
         }
         "Exile target card from a graveyard." => {
             (BodyTarget::AnyGraveyardCard, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()])
@@ -1212,14 +1185,6 @@ pub(super) fn compile(
             )))]))?;
             return Some(program);
         }
-        "Enchant creature\nAt the beginning of your upkeep, you may look at the top five cards of your library. If you do, you may put a creature card that shares a creature type with enchanted creature from among them onto the battlefield, then you put the rest of those cards on the bottom of your library in any order."
-            if face.type_line.as_deref() == Some("Enchantment — Aura") =>
-        {
-            let mut program = Program::aura(Some(price()?), EnchantRestriction::Creature);
-            add_trigger(&mut program, spellwake_engine::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::Controller),
-                NoTarget, vec![OptionalEffect { chooser: ResolvingPlayer::Controller }, LookTopCreatureSharingAttachedSubtype { count: 5 }]);
-            return Some(program);
-        }
         "Whenever a nontoken creature you control dies, put a slime counter on this enchantment, then create a green Ooze creature token with \"This token's power and toughness are each equal to the number of slime counters on Gutter Grime.\""
             if face.type_line.as_deref() == Some("Enchantment") =>
         {
@@ -1233,34 +1198,6 @@ pub(super) fn compile(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(CounterKind::Slime, amount(1)),
                 CreateTokens { creations },
             ]);
-            return Some(program);
-        }
-        "{1}, {T}, Discard a card: Put a study counter on Grimoire of the Dead.\n{T}, Remove three study counters from Grimoire of the Dead and sacrifice it: Put all creature cards from all graveyards onto the battlefield under your control. They're black Zombies in addition to their other colors and types."
-            if face.type_line.as_deref() == Some("Legendary Artifact — Book") =>
-        {
-            use spellwake_engine::{
-                activated::{CounterCostDelta, DiscardCostMode},
-                effects::CounterKind,
-            };
-            let study = activation(fixed_cost("{1}")?, SourceCost::Discard { mode: DiscardCostMode::SelectedOne, tap_source: true, sacrifice_source: false }, NoTarget,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(CounterKind::Study, amount(1))]);
-            let mut raise = activation(ManaCost::free(), SourceCost::Counter {
-                kind: CounterKind::Study,
-                delta: CounterCostDelta::Remove(std::num::NonZeroU8::new(3)?),
-                tap_source: true,
-                sacrifice_source: true,
-            }, NoTarget, vec![ReturnGraveyardCohort(spellwake_engine::program::GraveyardCohortReturn {
-                filter: spellwake_engine::program::GraveyardReturnFilter::CardType(spellwake_engine::program::CardType::Creature),
-                from_all_graveyards: true, under_resolving_players_control: true, tapped: false,
-                additions: spellwake_engine::program::EntryAdditions {
-                    creature_subtype: Some(vocabulary.resolve_label("Zombie")?),
-                    color: Some(spellwake_engine::characteristics::Color::Black),
-                },
-            })]);
-            raise.id = spellwake_engine::activated::ActivatedAbilityId(1);
-            let mut program = Program::artifact(Some(price()?), vec![study, raise]);
-            program.supertypes.insert(spellwake_engine::program::Supertype::Legendary);
-            program.artifact_subtypes.insert(spellwake_engine::program::ArtifactSubtype::Book);
             return Some(program);
         }
         "Whenever a creature you control dies, put two eyeball counters on this artifact.\n{3}, {T}, Remove all eyeball counters from this artifact: Look at the top X cards of your library, where X is the number of eyeball counters removed this way. Put one of them into your hand and the rest on the bottom of your library in any order."
@@ -1298,72 +1235,6 @@ pub(super) fn compile(
         {
             let mut program = Program::artifact(Some(price()?), vec![]);
             program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::Restriction { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticRestriction::RestrictGraveyardAndLibrary });
-            return Some(program);
-        }
-        "Exile a creature card from your graveyard and pay its mana cost: Create a token that's a copy of that card. Activate only as a sorcery."
-            if face.type_line.as_deref() == Some("Enchantment") =>
-        {
-            let mut program = Program::enchantment(Some(price()?));
-            let ability = activation(
-                ManaCost::free(),
-                SourceCost::ExileGraveyard {
-                    filter: spellwake_engine::activated::GraveyardExileCost::Creature { pay_mana_cost: true },
-                    tap_source: false,
-                },
-                NoTarget,
-                vec![CopyCreatureExiledForAbility],
-            );
-            program.activation_restrictions.insert(ability.id, ActivationRestriction::Sorcery);
-            program.activated.push(ability);
-            return Some(program);
-        }
-        "At the beginning of each upkeep, you may exile target creature card from your graveyard. If you do, create a token that's a copy of that card, except it's a Spirit in addition to its other types. Exile it at the beginning of the next end step."
-            if face.type_line.as_deref() == Some("Enchantment") =>
-        {
-            let mut program = Program::enchantment(Some(price()?));
-            add_trigger(
-                &mut program,
-                spellwake_engine::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::AnyParticipant),
-                BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
-                vec![
-                    OptionalSequence { chooser: ResolvingPlayer::Controller, instructions: 2 },
-                    ExileForSubtypeToken(vocabulary.resolve_label("Spirit")?),
-                    ScheduleCreatedTokenExile(Step::End),
-                ],
-            );
-            return Some(program);
-        }
-        "{3}, {T}: Target player puts the bottom card of their library into their graveyard. If it's a creature card, you create a 2/2 black Zombie creature token."
-            if face.type_line.as_deref() == Some("Artifact") =>
-        {
-            let mut program = Program::artifact(Some(price()?), vec![]);
-            program.activated.push(activation(
-                fixed_cost("{3}")?, SourceCost::Tap, SinglePlayer,
-                vec![
-                    PutLibraryCohortIntoGraveyard(spellwake_engine::program::LibraryCohort::BottomCardOfTargetPlayer),
-                    BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::MovedLibraryCard, spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(spellwake_engine::program::CardType::Creature))),
-                            comparison: Comparison::Greater,
-                            right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        },
-                        destination: 3,
-                    },
-                    tokens("a 2/2 black Zombie creature token", amount(1), false, vocabulary)?,
-                ],
-            ));
-            return Some(program);
-        }
-        "Whenever equipped creature attacks, defending player reveals cards from the top of their library until they reveal a land card. The creature gets +1/+0 until end of turn for each card revealed this way. That player puts the revealed cards into their graveyard.\nEquip {2}"
-            if face.type_line.as_deref() == Some("Artifact — Equipment") =>
-        {
-            let mut program = Program::equipment(Some(price()?), fixed_cost("{2}")?);
-            add_trigger(
-                &mut program, spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any().attached_to_self(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: false }), NoTarget,
-                vec![PutLibraryCohortIntoGraveyard(
-                    spellwake_engine::program::LibraryCohort::DefendingPlayerRevealsThroughLand,
-                )],
-            );
             return Some(program);
         }
         "Deathtouch\nWhen this creature dies, you may search your library for a Curse card, put it onto the battlefield attached to target player, then shuffle." => (
@@ -1466,14 +1337,6 @@ pub(super) fn compile(
             definition.entry_tap = Some(spellwake_engine::land::EntryTap::Always);
             return Some(program);
         }
-        "Whenever a creature attacks you or a planeswalker you control, reveal the top card of your library. If it's a Forest card, remove that creature from combat. Then put the revealed card on the bottom of your library." if face.type_line.as_deref() == Some("Enchantment") => {
-            let mut program = Program::enchantment(Some(price()?));
-            add_trigger(
-                &mut program, spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::AtControllerOrPlaneswalker), NoTarget,
-                vec![RevealTopAndRemoveAttackerIfForest],
-            );
-            return Some(program);
-        }
         "Flying\nAs long as this creature is in your graveyard, each Human creature you control enters with an additional +1/+1 counter on it." => {
             let mut program = base("Flying")?;
             program.entry_counter_abilities.push(
@@ -1487,16 +1350,6 @@ pub(super) fn compile(
                 spellwake_engine::program::EntryCounterAbility::ControlledAndGraveyardSubtypePlusOne(vocabulary.resolve_label("Zombie")?),
             );
             program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::DamageRule { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticDamageRule::PreventIncomingRemovePlusOne });
-            return Some(program);
-        }
-        "Defender\n{T}: Exchange your life total with this creature's toughness." => {
-            let mut program = base("Defender")?;
-            program.activated.push(activation(
-                spellwake_engine::mana::ManaCost::free(),
-                SourceCost::Tap,
-                NoTarget,
-                vec![ExchangeLifeWithSourceToughness],
-            ));
             return Some(program);
         }
         "When this creature enters, you may exile another target creature.\nWhen this creature leaves the battlefield, return the exiled card to the battlefield under its owner's control." => {
@@ -1571,16 +1424,6 @@ pub(super) fn compile(
                 vec![DamageFromPower(spellwake_engine::program::PowerDamageSource::GraveyardEntrant)],
             )],
         ),
-        "Enchant creature\nWhenever enchanted creature is dealt damage, it deals that much damage to its controller." => {
-            let mut program = aura()?;
-            program.triggered.push(spellwake_engine::program::TriggeredAbility {
-                id: spellwake_engine::program::TriggeredAbilityId(0),
-                condition: spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::DealtDamage { subject: spellwake_engine::program::ObjectFilter::any().attached_to_self(), linked_player: false }),
-                grouping: spellwake_engine::program::TriggerGrouping::OneOrMoreTogether,
-                body: ExecutableBody::new(NoTarget, vec![ReflectAttachedCreatureDamage]),
-            });
-            return Some(program);
-        }
         "If equipped creature would deal combat damage, it deals double that damage instead.\nIf another creature would deal combat damage to equipped creature, it deals double that damage to equipped creature instead.\nEquip {2}"
             if face.type_line.as_deref() == Some("Artifact — Equipment") =>
         {
@@ -1659,33 +1502,12 @@ pub(super) fn compile(
             program.activated.push(ability);
             return Some(program);
         }
-        "When this artifact enters, destroy all Curses attached to you.\nYou have hexproof."
-            if face.type_line.as_deref() == Some("Artifact") =>
-        {
-            let mut program = Program::artifact(Some(price()?), Vec::new());
-            add_trigger(
-                &mut program,
-                etb,
-                NoTarget,
-                vec![DestroyAttachedEnchantmentSubtype(spellwake_engine::program::EnchantmentSubtype::Curse)],
-            );
-            program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::Restriction { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticRestriction::ControllerHasHexproof });
-            return Some(program);
-        }
         "Flash\nWhen this creature enters, target instant or sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost." => (
             "Flash",
             vec![(
                 etb,
                 BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::instant_or_sorcery()),
                 vec![GrantFlashback(spellwake_engine::program::FlashbackSubject::Target)],
-            )],
-        ),
-        "Flying\nWhen this creature enters, tap target creature an opponent controls. That creature doesn't untap during its controller's untap step for as long as you control this creature." => (
-            "Flying",
-            vec![(
-                etb,
-                BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
-                vec![TapTargetWhileControllingSource],
             )],
         ),
         "Flash\nFlying\nWhen this creature enters, remove target attacking or blocking creature from combat." => (
@@ -1899,19 +1721,6 @@ pub(super) fn compile(
                         spellwake_engine::program::ValueExpr::literal(1),
                     ),
                 ],
-            );
-            return Some(program);
-        }
-        "Enchant player\nWhenever enchanted player casts an instant or sorcery spell, each other player may copy that spell and may choose new targets for the copy they control."
-            if face.type_line.as_deref() == Some("Enchantment — Aura Curse") =>
-        {
-            let mut program = Program::aura(Some(price()?), EnchantRestriction::Player);
-            program.enchantment_subtypes.insert(spellwake_engine::program::EnchantmentSubtype::Curse);
-            add_trigger(
-                &mut program,
-                spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::SpellCast { caster: spellwake_engine::program::TriggerPlayerScope::EnchantedPlayer, filter: spellwake_engine::program::SpellFilter::instant_or_sorcery(), self_cast: false, include_copy: false, min_mana_value: None }),
-                NoTarget,
-                vec![CopyOnCast(spellwake_engine::program::CastCopyKeyword::OfferCopyToOtherPlayers)],
             );
             return Some(program);
         }
@@ -2327,25 +2136,6 @@ pub(super) fn compile(
             program.activated.push(gain);
             return Some(program);
         }
-        "Flying\n{1}{U}: This creature's owner shuffles it into their library. If that player does, they reveal cards from the top of that library until a card named Mirror-Mad Phantasm is revealed. The player puts that card onto the battlefield and all other cards revealed this way into their graveyard." => {
-            let mut program = base("Flying")?;
-            program.activated.push(activation(
-                fixed_cost("{1}{U}")?, SourceCost::None, BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_ability_source_into_library(),
-                    RevealToNameAfterSourceShuffle(EnglishCardName::new("Mirror-Mad Phantasm".to_owned()).ok()?),
-                ],
-            ));
-            return Some(program);
-        }
-        "{1}: You may cast target creature card in a graveyard this turn. When you cast it this turn, this creature gains all activated abilities of that card until end of turn." => {
-            let mut program = base("")?;
-            program.activated.push(activation(
-                fixed_cost("{1}")?, SourceCost::None, BodyTarget::AnyGraveyardCreature,
-                vec![GrantGraveyardCastAndWatchAbilities],
-            ));
-            return Some(program);
-        }
         "If a Zombie you control would deal combat damage to a player, instead that player mills that many cards.\nWhenever a creature card is put into an opponent's graveyard from their library, exile that card and create a 2/2 black Zombie creature token." => {
             let mut program = base("")?;
             program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::DamageRule { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticDamageRule::ReplaceSubtypeCombatWithMill(vocabulary.resolve_label("Zombie")?) });
@@ -2378,22 +2168,6 @@ pub(super) fn compile(
         "If you would draw a card while your library has no cards in it, you win the game instead." => {
             let mut program = base("")?;
             program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::DrawRule { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticDrawRule::EmptyDrawWins });
-            return Some(program);
-        }
-        "Flying\nWhenever this creature deals combat damage to a player, that player exiles a card from their hand. You may play that card for as long as it remains exiled.\nSacrifice a Human: Regenerate this creature." => {
-            let mut program = base("Flying")?;
-            add_trigger(&mut program, spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(), NoTarget, vec![ExileRelatedHandCardForPlay]);
-            program.activated.push(activation(
-                ManaCost::free(),
-                SourceCost::SacrificeSelected {
-                    tap_source: false,
-                    from_graveyard: false,
-                    filter: spellwake_engine::activated::SelectedSacrificeFilter::Subtype(human()?),
-                    count: 1,
-                },
-                NoTarget,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
-            ));
             return Some(program);
         }
         "When this creature dies, target opponent discards a card at random." => (
@@ -3115,7 +2889,26 @@ pub(super) fn compile(
         "Flying\nWhen this creature enters, look at the top two cards of your library. Put one of them into your hand and the other into your graveyard." => {
             (
                 "Flying",
-                vec![(etb, NoTarget, vec![LookTopOneRestGraveyard { count: 2 }])],
+                vec![(
+                    etb,
+                    NoTarget,
+                    vec![LookTopChoose {
+                        count: amount(2),
+                        library_owner: ResolvingPlayer::Controller,
+                        filter: None,
+                        reveal: false,
+                        reveal_only: false,
+                        to_battlefield: false,
+                        enters_tapped: false,
+                        take_all_matching: false,
+                        max_picks: 1,
+                        rest_to_graveyard: true,
+                        rest_to_exile: false,
+                        rest_to_top: false,
+                        random_rest_order: false,
+                        secondary: None,
+                    }],
+                )],
             )
         }
         "When this creature dies, put a +1/+1 counter on target creature you control. If that creature is a Human, put two +1/+1 counters on it instead." =>

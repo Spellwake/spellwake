@@ -23,44 +23,12 @@ pub(super) fn compile(
     let text = without_reminder(face.oracle_text.as_deref()?)?;
     let mut triggers = Vec::new();
     let mut once_each_turn = BTreeSet::new();
-    let mut by_player = BTreeSet::new();
     let mut other = Vec::new();
     let mut lines = text
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .peekable();
-    if text.trim()
-        == "Whenever you attack a player with one or more equipped creatures, draw a card.\n{W}: You may unattach an Equipment from a creature you control. If you do, tap that creature and it gains indestructible until end of turn."
-    {
-        let mut program = ordinary_creature(card, vocabulary, Profile::Current, Some("")).ok()?;
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(0),
-            condition: spellwake_engine::program::TriggerSpec::attacks(
-                spellwake_engine::program::ObjectFilter::any(),
-                spellwake_engine::program::AttackTriggerMode::EquippedAtPlayer,
-            ),
-            grouping: TriggerGrouping::OneOrMoreByPlayer,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                        spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    ),
-                ],
-            ),
-        });
-        program.activated.push(ActivatedAbility {
-            id: ActivatedAbilityId(0),
-            mana_cost: fixed_cost("{W}")?,
-            source_cost: spellwake_engine::activated::SourceCost::None,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::UnattachEquipmentAndProtectHost],
-            ),
-        });
-        return Some(program);
-    }
     if let Some((kicker, remaining)) = text.trim().split_once('\n')
         && let Some(cost) = kicker.trim().strip_prefix("Kicker ")
         && let Some((counters, target_trigger)) = remaining.split_once('\n')
@@ -135,25 +103,8 @@ pub(super) fn compile(
             };
             Some((condition, minimum, maximum, distinct_targets))
         });
-        if line == "Will of the council — When this creature enters, starting with you, each player votes for an artifact, creature, or enchantment card in your graveyard. Return each card with the most votes or tied for most votes to your hand." {
-            triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::self_object()),ExecutableBody::new(BodyTarget::None,vec![
-                Instruction::VoteForGraveyardCards {types:[CardType::Artifact,CardType::Creature,CardType::Enchantment].into()},
-            ])));
-        } else if line == "Whenever one or more creatures you control deal combat damage to a player, you may sacrifice one of them. If you do, reveal cards from the top of your library until you reveal a creature card that shares a creature type with the sacrificed creature. Put that card onto the battlefield and the rest on the bottom of your library in a random order." {
-            by_player.insert(triggers.len());
-            triggers.push((spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::creature().controlled(), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true),ExecutableBody::new(BodyTarget::None,vec![
-                Instruction::OptionalSequence {chooser:ResolvingPlayer::Controller,instructions:2},Instruction::SacrificeCombatContributor,Instruction::RevealCreatureOfSacrificedType,
-            ])));
-        } else if line == "Imprint — When this artifact enters, you may exile target land you control." {
-            triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::self_object()), ExecutableBody::new(
-                BodyTarget::FilteredPermanent(ObjectFilter::land().controlled()),
-                vec![Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},Instruction::ImprintTargetLand])));
-        } else if line=="Myriad" {
+        if line=="Myriad" {
             triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::Myriad,Instruction::ScheduleCreatedTokenExile(spellwake_engine::turn::Step::EndCombat)])));
-        } else if let Some((subject,effect))=line.strip_prefix("Whenever you cast an instant or sorcery spell that targets only ").and_then(|s|s.split_once(", "))
-            && (subject==card.name || Some(subject)==card.name.split(',').next())
-            && effect=="copy that spell for each other creature you control that the spell could target. Each copy targets a different one of those creatures." {
-            triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(spellwake_engine::program::PlayerRelation::Controller, spellwake_engine::program::SpellFilter::instant_or_sorcery().targeting_only_source()),ExecutableBody::new(BodyTarget::None,vec![Instruction::CopyForOtherCreatures])));
         } else if line == "Whenever you cast a planeswalker spell, you may return this card from your graveyard to the battlefield." {
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(spellwake_engine::program::PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(spellwake_engine::program::CardType::Planeswalker)).in_zone(spellwake_engine::program::TriggerZone::Graveyard),ExecutableBody::new(BodyTarget::None,vec![
                 Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(false),
@@ -529,9 +480,6 @@ pub(super) fn compile(
                 Instruction::CreateTokens {creations}
             };
             triggers.push((spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().with_subtype(kind), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true),ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalEffect {chooser},consequence])));
-        } else if let Some(kind)=line.strip_prefix("Whenever a ").and_then(|s|s.strip_suffix(" you control deals combat damage to a player, reveal the top card of your library and put that card into your hand. Each opponent loses life equal to that card's mana value.")) {
-            triggers.push((spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().controlled().with_subtype(vocabulary.resolve_label(kind)?), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true),
-                ExecutableBody::new(BodyTarget::None,vec![Instruction::RevealTopHandLoseManaValue {gain_life:false}])));
         } else if let Some(reference)=line.strip_prefix("Whenever you put one or more +1/+1 counters on another colorless creature, you may put a +1/+1 counter on ").and_then(|s|s.strip_suffix('.')) && (reference==face.name || Some(reference)==face.name.split_once(", ").map(|(name,_)|name)) {
             triggers.push((spellwake_engine::program::TriggerSpec::counters_changed(spellwake_engine::program::ObjectFilter::creature().with_color(spellwake_engine::program::ObjectColorFilter::Colorless).other_than_ability_source(), spellwake_engine::program::CounterTriggerKind::PlusOnePlaced { by_controller_only: true }), ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1))])));
         } else if line=="Whenever you cast a colorless creature spell, manifest the top card of your library." {
@@ -566,8 +514,6 @@ pub(super) fn compile(
                 ExecutableBody::new(BodyTarget::None,vec![Instruction::WatchNextLoyaltyCopy])
             } else if condition == (spellwake_engine::program::TriggerSpec::status_changed(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::StatusTriggerKind::Phased { out: false })) && effect == "put a +1/+1 counter on it." {
                 ExecutableBody::new(BodyTarget::None, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(1))])
-            } else if condition==spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player() && effect=="choose a planeswalker type. Until end of turn, whenever you activate an ability of a planeswalker of that type, copy that ability. You may choose new targets for the copies." {
-                ExecutableBody::new(BodyTarget::None,vec![Instruction::ChoosePlaneswalkerTypeForCopies])
             } else if let Some(token) = effect.strip_prefix("create that many ") {
                 let amount = if condition == spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player()
                     || condition == spellwake_engine::program::TriggerSpec::deals_damage(
@@ -658,9 +604,7 @@ pub(super) fn compile(
     for (index, (condition, body)) in triggers.into_iter().enumerate() {
         program.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(id),
-            grouping: if by_player.contains(&index) {
-                TriggerGrouping::OneOrMoreByPlayer
-            } else if once_each_turn.contains(&index) {
+            grouping: if once_each_turn.contains(&index) {
                 TriggerGrouping::OneOrMoreOnceEachTurn
             } else if matches!(
                 condition.event,
@@ -1394,18 +1338,6 @@ pub(super) fn body(
         ));
     }
     if text
-        == "exile up to one target non-Aura enchantment card from your graveyard. Create a token that's a copy of that card, except it's a 3/3 black Zombie creature in addition to its other types."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::enchantment().non_aura()),
-            vec![Instruction::ExileForBlackToken {
-                subtype: vocabulary.resolve_label("Zombie")?,
-                size: 3,
-                add_types: true,
-            }],
-        ));
-    }
-    if text
         == "each opponent loses X life and you scry X, where X is the number of Zombies you control."
     {
         let zombie = vocabulary.resolve_label("Zombie")?;
@@ -1433,14 +1365,6 @@ pub(super) fn body(
                     amount: spellwake_engine::program::ValueExpr::controlled_subtype(zombie),
                 },
             ],
-        ));
-    }
-    if text == "return it to its owner's hand at the beginning of the next end step." {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::ScheduleGraveyardReturnAtEndStep(
-                spellwake_engine::program::DelayedGraveyardReturn::DyingSourceToHand,
-            )],
         ));
     }
     if text
@@ -1491,9 +1415,31 @@ pub(super) fn body(
             ],
         ));
     }
-    if let Some(number)=text.trim().strip_prefix("look at the top ").and_then(|s|s.strip_suffix(" cards of your library. Put one of them into your hand and the rest into your graveyard.")) {
-        let count=u8::try_from(amount(number)?).ok().filter(|&n|n>0)?;
-        return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::LookTopOneRestGraveyard {count}]));
+    if let Some(number) = text.trim().strip_prefix("look at the top ").and_then(|s| {
+        s.strip_suffix(
+            " cards of your library. Put one of them into your hand and the rest into your graveyard.",
+        )
+    }) {
+        let count = u8::try_from(amount(number)?).ok().filter(|&n| n > 0)?;
+        return Some(ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::LookTopChoose {
+                count: spellwake_engine::program::ValueExpr::literal(i64::from(count)),
+                library_owner: ResolvingPlayer::Controller,
+                filter: None,
+                reveal: false,
+                reveal_only: false,
+                to_battlefield: false,
+                enters_tapped: false,
+                take_all_matching: false,
+                max_picks: 1,
+                rest_to_graveyard: true,
+                rest_to_exile: false,
+                rest_to_top: false,
+                random_rest_order: false,
+                secondary: None,
+            }],
+        ));
     }
 
     if let Some(rest) =
@@ -1527,36 +1473,6 @@ pub(super) fn body(
             ]
         };
         return Some(ExecutableBody::new(BodyTarget::None, instructions));
-    }
-    if text
-        .strip_prefix("you may return it to the battlefield face down under its owner's control. ")
-        == Some("It's a Forest land.")
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::OptionalEffect {
-                    chooser: ResolvingPlayer::Controller,
-                },
-                Instruction::ReturnDyingCreatureAsForest,
-            ],
-        ));
-    }
-    if text
-        == "you may cast target instant card from your graveyard without paying its mana cost. If that spell would be put into your graveyard, exile it instead."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::instant()),
-            vec![Instruction::CastTargetGraveyardInstant],
-        ));
-    }
-    if text
-        == "choose up to one target card in a graveyard that was discarded or put there from a library this turn. Put that card into its owner's hand."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::RecentlyDiscardedOrFromLibrary,
-            vec![Instruction::ReturnUpToOneRecentGraveyardCard],
-        ));
     }
     if text == "goad target creature that player controls." {
         return Some(ExecutableBody::new(
@@ -1817,31 +1733,6 @@ pub(super) fn body(
             ],
         ));
     }
-    if text.strip_prefix("reveal the top card of your library. You may cast it without paying its mana cost if its mana value is odd. ")==Some("If you don't cast it, draw a card.") {
-        return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::RevealOddCastOrDraw]));
-    }
-    if text.strip_prefix("look at the top four cards of target opponent's library, exile one of them face down, then put the rest on the bottom of that library in a random order. ")==Some("You may cast that card for as long as it remains exiled, and mana of any type can be spent to cast that spell.") {
-        return Some(ExecutableBody::new(BodyTarget::SingleOpponent,vec![Instruction::LookOpponentExileForCast {count:4}]));
-    }
-    if text
-        == "reveal the top card of your library. You may put that card onto the battlefield if it's a permanent card with mana value 3 or less. Otherwise, put that card into your hand."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::RevealTopPermanentOrHand],
-        ));
-    }
-    if text
-        == "look at the top three cards of your library. You may reveal a land card from among them and put that card into your hand. Put the rest on the bottom of your library in a random order."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::LookTopReveal {
-                count: 3,
-                filter: spellwake_engine::program::LookTopFilter::Land,
-            }],
-        ));
-    }
 
     if let Some((price, effect)) = text.strip_prefix("you may pay ").and_then(|clause| clause.split_once(". If you do, tap up to "))
         && let Some(subjects) = effect.strip_suffix(" target permanents. Those permanents don't untap during their controllers' next untap steps.")
@@ -1868,9 +1759,15 @@ pub(super) fn body(
                     cost: fixed_cost(price)?,
                     payer: ResolvingPlayer::Controller,
                     paid_destination: 1,
-                    declined_destination: 2,
+                    declined_destination: 3,
                 },
-                Instruction::AdditionalCombatAfterUntappingAttackers,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
+                    ObjectFilter::creature().attacking(),
+                    false,
+                ),
+                Instruction::AdditionalCombat {
+                    untap: spellwake_engine::program::CombatUntapGroup::None,
+                },
             ],
         ));
     }
@@ -2014,12 +1911,6 @@ pub(super) fn body(
                 },
                 creation,
             ],
-        ));
-    }
-    if text == "each opponent loses life equal to the life that player lost this turn." {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::RepeatOpponentLifeLoss],
         ));
     }
     if let Some(symbol) = text.strip_prefix("add that much ").and_then(|s| {
@@ -2245,15 +2136,6 @@ pub(super) fn body(
             }],
         ));
     }
-    if let Some((minimum,finish))=text.strip_prefix("exile cards from the top of your library until you exile a nonland card, then put that card into your hand. If the card's mana value is ").and_then(|s|s.split_once(" or greater, repeat this process. ")) {
-        let source=finish.strip_suffix(" deals 1 damage to you for each card put into your hand this way.")?;
-        if source!=name && Some(source)!=name.split_once(", ").map(|(short,_)|short) {return None;}
-        return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::ExileNonlandsToHandAndDamage {repeat_at:minimum.parse().ok()?}]));
-    }
-    if let Some(number)=text.strip_prefix("target opponent exiles the top ").and_then(|s|s.strip_suffix(" cards of their library, then you may put any number of land cards that player owns from exile onto the battlefield under your control.")) {
-        let amount=match number {"two"=>2,"three"=>3,"four"=>4,"five"=>5,_=>return None};
-        return Some(ExecutableBody::new(BodyTarget::SingleOpponent,vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(ResolvingPlayer::TargetPlayer,spellwake_engine::program::ValueExpr::literal(i64::from(amount)),false),Instruction::PutTargetOwnedExiledLandsOntoBattlefield]));
-    }
     if let Some(kind) = text
         .strip_prefix(
             "return it to its owner's hand. If you do, you may search your library for a ",
@@ -2336,21 +2218,6 @@ pub(super) fn body(
             ],
         ));
     }
-    if text
-        .strip_prefix("you may put the exiled card ")
-        .and_then(|s| s.strip_suffix('.'))
-        == Some("into its owner's hand")
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::OptionalEffect {
-                    chooser: ResolvingPlayer::Controller,
-                },
-                Instruction::ReturnLinkedSearchCards,
-            ],
-        ));
-    }
     if text == "it deals that much damage to each creature that player controls." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
@@ -2372,14 +2239,6 @@ pub(super) fn body(
                     false,
                 ),
             ],
-        ));
-    }
-    if text == "you may attach any number of Auras and Equipment you control to it." {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::AttachControlledToSource {
-                optional_auras_and_equipment: true,
-            }],
         ));
     }
     if text == "draw three cards if three or more creatures died this turn." {
@@ -2777,14 +2636,6 @@ pub(super) fn body(
                     amount,
                 },
             ],
-        ));
-    }
-    if text.trim()
-        == "you may cast your commander from the command zone without paying its mana cost."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::ChooseOwnCommanderToCast],
         ));
     }
     if let Some(remainder) = text.strip_prefix("you may ") {

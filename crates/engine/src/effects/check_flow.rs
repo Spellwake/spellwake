@@ -1020,10 +1020,7 @@ impl EffectWindow {
         if per_clause.is_empty() {
             return Ok(None);
         }
-        let distinct_pair = matches!(
-            body.instructions.last(),
-            Some(Instruction::CopyOtherTargetAsArtifact)
-        ) || body.instructions.contains(&Instruction::FightFixedTargets);
+        let distinct_pair = body.instructions.contains(&Instruction::FightFixedTargets);
         if distinct_pair
             && per_clause.len() == 2
             && per_clause[0].len() == 1
@@ -1629,14 +1626,6 @@ impl EffectWindow {
                     DelayedCopyAction::ReturnExiledWithCounters(objects) => {
                         vec![Instruction::ReturnDelayedExileWithCounters(objects.clone())]
                     }
-                    DelayedCopyAction::Draw(amount, _) => vec![Instruction::DrawCards(Box::new(
-                        crate::toolbox::DrawCardsSpec::simple(
-                            crate::toolbox::PlayerSelector::Resolving(
-                                crate::program::ResolvingPlayer::Controller,
-                            ),
-                            ValueExpr::Literal(amount.clone()),
-                        ),
-                    ))],
                     DelayedCopyAction::Sacrifice(objects) => {
                         vec![Instruction::SacrificeDelayedObjects(objects.clone())]
                     }
@@ -1650,12 +1639,6 @@ impl EffectWindow {
                         Instruction::CopyCapturedAbility,
                         Instruction::CopyCapturedAbility,
                     ],
-                    DelayedCopyAction::GrantCastCardAbilities { recipient, donor } => {
-                        vec![Instruction::GainCastCardAbilities {
-                            recipient: *recipient,
-                            donor: donor.clone(),
-                        }]
-                    }
                 };
                 let mut payload = StackPayload::from_body(
                     ExecutableBody::new(BodyTarget::None, instructions),
@@ -1664,9 +1647,7 @@ impl EffectWindow {
                 if let StackPayload::Instructions(p) = &mut payload
                     && matches!(
                         action,
-                        DelayedCopyAction::Draw(..)
-                            | DelayedCopyAction::SpellTwice(..)
-                            | DelayedCopyAction::AbilityTwice(..)
+                        DelayedCopyAction::SpellTwice(..) | DelayedCopyAction::AbilityTwice(..)
                     )
                 {
                     p.delayed_copy_action = Some(action);
@@ -1695,7 +1676,11 @@ impl EffectWindow {
             }
         } else if let Some((_, beneficiary)) = self.triggers.take_monarch(placement.instance) {
             let instruction = match beneficiary {
-                Some(player) => Instruction::BecomeMonarch(Some(player)),
+                Some(player) => Instruction::MutatePlayer(Box::new(
+                    crate::toolbox::MutatePlayerSpec::become_monarch(
+                        crate::toolbox::PlayerSelector::Fixed(player),
+                    ),
+                )),
                 None => crate::program::Instruction::DrawCards(Box::new(
                     crate::toolbox::DrawCardsSpec::simple(
                         crate::toolbox::PlayerSelector::Resolving(

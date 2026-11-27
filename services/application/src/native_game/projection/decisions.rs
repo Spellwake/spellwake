@@ -1334,8 +1334,7 @@ impl Projection<'_, '_> {
             ),
             RuleFrame::CopyTargets(frame) => {
                 let number = frame.target_ordinal() + 1;
-                let ordering = source.execution().stack_body(frame.entry()).and_then(|body| body.instructions.get(frame.instruction_index()))
-                    == Some(&spellwake_engine::program::Instruction::CopyForOtherCreatures);
+                let ordering = false;
                 let mut options = vec![];
                 if self.copy_probe(CopyTargetChoice::Retain)? {
                     options.push(self.option(

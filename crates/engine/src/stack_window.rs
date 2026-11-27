@@ -3029,21 +3029,6 @@ impl StackWindow {
         Ok(self.cards.select_adventure(spell)?)
     }
     /// Install the selected spell characteristics on the admitted stack object.
-    pub(crate) fn meld_during_resolution(
-        &mut self,
-        entry: StackEntryId,
-        halves: [ObjectId; 2],
-        controller: SeatId,
-        back: crate::program::Program,
-    ) -> Result<GameObject, StackWindowError> {
-        if self.resolving().is_none_or(|current| current.id() != entry) {
-            return Err(StackWindowError::InvalidResolutionMove);
-        }
-        let revision = self.next_revision(self.revision)?;
-        let joined = self.cards.meld_from_exile(halves, controller, back)?;
-        self.revision = revision;
-        Ok(joined)
-    }
     pub(crate) fn select_split_half(
         &mut self,
         object: ObjectId,

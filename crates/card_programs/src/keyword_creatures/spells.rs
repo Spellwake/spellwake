@@ -87,47 +87,6 @@ pub(super) fn compile(
         return None;
     }
     if profile == Profile::Current
-        && card.name == "Decimate"
-        && kind == "Sorcery"
-        && face.mana_cost.as_deref() == Some("{2}{R}{G}")
-        && super::without_reminder(face.oracle_text.as_deref()?)?.trim()
-            == "Destroy target artifact, target creature, target enchantment, and target land."
-    {
-        use spellwake_engine::program::ObjectFilter;
-        let targets = [
-            BodyTarget::FilteredPermanent(ObjectFilter::artifact()),
-            BodyTarget::SingleCreature,
-            BodyTarget::FilteredPermanent(ObjectFilter::enchantment()),
-            BodyTarget::FilteredPermanent(ObjectFilter::land()),
-        ];
-        let mut instructions = targets
-            .into_iter()
-            .map(|target| {
-                Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                    target,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                                spellwake_engine::toolbox::ObjectQuery::Targets,
-                                spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                    semantics:
-                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                            allow_regenerate: true,
-                                        },
-                                },
-                            ),
-                        ),
-                    ],
-                )))
-            })
-            .collect::<Vec<_>>();
-        instructions.push(Instruction::DestroyFixedTargets);
-        return Some(Program::sorcery(
-            fixed_cost("{2}{R}{G}")?,
-            ExecutableBody::new(BodyTarget::None, instructions),
-        ));
-    }
-    if profile == Profile::Current
         && card.name == "Rise of the Eldrazi"
         && kind == "Sorcery"
         && face.mana_cost.as_deref() == Some("{9}{C}{C}{C}")
@@ -175,20 +134,6 @@ pub(super) fn compile(
                 vec![Instruction::WatchNextSpellOrLoyaltyTwice],
             ),
         ));
-    }
-    if profile == Profile::Current && let Some(effect) = rules.trim().strip_prefix("As an additional cost to cast this spell, reveal a colorless creature card from your hand.\n") {
-        let (target,operation) = match effect {
-            "Exile target creature if its power is less than or equal to the revealed card's power." => (BodyTarget::SingleCreature,Instruction::ExileCreatureAtMostRevealedPower),
-            "Exile each creature and planeswalker with mana value less than the revealed card's mana value." => (BodyTarget::None,Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue),
-            _ => return None,
-        };
-        let body=ExecutableBody::new(target,vec![operation]);
-        let cost=fixed_cost(face.mana_cost.as_deref()?)?;
-        let mut program = match kind {
-            "Instant" => Program::instant(cost,body), "Sorcery" => Program::sorcery(cost,body), _ => return None,
-        };
-        program.reveal_colorless_creature_cast_cost=true;
-        return Some(program);
     }
     if profile == Profile::Current
         && let Some((text, price)) = rules.trim().split_once("\nOverload ")
@@ -482,43 +427,6 @@ pub(super) fn compile(
             })
     };
     let body = match text {
-        "For each creature your opponents control, create a 4/4 green Phyrexian Beast creature token. Each of those tokens fights a different one of those creatures."
-            if profile == Profile::Current =>
-        {
-            let Instruction::CreateTokens { mut creations } = ordinary_text::create_tokens(
-                "a 4/4 green Phyrexian Beast creature token",
-                vocabulary,
-            )?
-            else {
-                return None;
-            };
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::CreateTokensToFight(
-                    creations.pop()?.definition,
-                )],
-            )
-        }
-        "Tempting offer — Create X 1/1 red Elemental creature tokens with haste. Each opponent may create X 1/1 red Elemental creature tokens with haste. For each opponent who does, create X 1/1 red Elemental creature tokens with haste."
-            if profile == Profile::Current =>
-        {
-            let Instruction::CreateTokens { mut creations } = ordinary_text::create_tokens(
-                "a 1/1 red Elemental creature token with haste",
-                vocabulary,
-            )?
-            else {
-                return None;
-            };
-            let mut creation = creations.pop()?;
-            creation.amount = spellwake_engine::program::ValueExpr::chosen_x();
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::TemptWithTokens {
-                    creation,
-                    phase: spellwake_engine::token::TemptingTokenPhase::Initial,
-                }],
-            )
-        }
         // A spell whose only printed ability is cascade resolves without doing anything.
         "" if !cascades.is_empty() => {
             ExecutableBody::new(BodyTarget::None, vec![Instruction::Jump { destination: 1 }])
@@ -857,24 +765,6 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
         destination,
     };
     let (target, effects) = match line {
-        "Return target permanent card with mana value 3 or less from your graveyard to the battlefield. If this spell was cast from a graveyard, you may copy this spell and may choose a new target for the copy." => {
-            (
-                BodyTarget::FilteredOwnGraveyardCard(
-                    spellwake_engine::program::ObjectFilter::permanent()
-                        .with_mana_value(spellwake_engine::program::ManaValueFilter::AtMost(3)),
-                ),
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
-                    Instruction::RequireCondition(
-                        spellwake_engine::program::InterveningCondition::CastFromGraveyard,
-                    ),
-                    Instruction::OptionalEffect {
-                        chooser: spellwake_engine::program::ResolvingPlayer::Controller,
-                    },
-                    Instruction::CopyResolvingSpell,
-                ],
-            )
-        }
         "Target creature gets +4/+4 until end of turn." => {
             (BodyTarget::SingleCreature, vec![pump(4, 4, None)])
         }
@@ -897,18 +787,42 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
             BodyTarget::SinglePermanent,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()],
         ),
-        "Destroy target creature." => {
-            (BodyTarget::SingleCreature, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))])
-        }
+        "Destroy target creature." => (
+            BodyTarget::SingleCreature,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ],
+        ),
         "Destroy target permanent." => (
             BodyTarget::SinglePermanent,
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ],
         ),
         "Return target creature to its owner's hand. Draw a card. If this spell was kicked, you gain 3 life." => {
             (
                 BodyTarget::SingleCreature,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
+                    ),
                     draw(1),
                     if_kicked(kicker?, 4),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(

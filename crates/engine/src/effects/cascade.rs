@@ -78,20 +78,11 @@ impl EffectWindow {
         match op {
             Instruction::Cascade
             | Instruction::CascadeBottom
-            | Instruction::ReturnRandomLinkedExile
-            | Instruction::RevealCreatureOfSacrificedType
-            | Instruction::ExileNonlandForFormerControllers
             | Instruction::SacrificeRandomUntilLand
             | Instruction::FlipCoin { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::Discover { .. }
-            | Instruction::ShuffleTargetGraveyardCards { .. }
-            | Instruction::RevealCreatureForEachTargetController
-            | Instruction::RevealUntilLandKind
-            | Instruction::LookTopPlaneswalkers
-            | Instruction::LookTopTakeOne { .. }
-            | Instruction::LookTopReveal { .. }
             | Instruction::SearchLibrary { .. }
             | Instruction::LookTopChoose {
                 random_rest_order: true,
@@ -339,9 +330,6 @@ impl EffectWindow {
                 .and_then(|body| body.get(work.cursor.instruction)),
             Some(
                 Instruction::CascadeBottom
-                    | Instruction::ReturnRandomLinkedExile
-                    | Instruction::RevealCreatureOfSacrificedType
-                    | Instruction::ExileNonlandForFormerControllers
                     | Instruction::SacrificeRandomUntilLand
                     | Instruction::FlipCoin { .. }
                     | Instruction::RollDie { .. }
@@ -604,31 +592,6 @@ impl EffectWindow {
                 entropy,
             ));
         }
-        if self
-            .payloads
-            .get(&work.cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(work.cursor.instruction))
-            == Some(&Instruction::ReturnRandomLinkedExile)
-        {
-            self.pending_work = Some(PendingWork::Resolution(work.cursor));
-            let candidates = self.exiled_search_results()?;
-            let (order, entropy) = tape.shuffled(candidates)?;
-            let chosen = *order.first().ok_or(EffectError::InconsistentProgram)?;
-            if !self.begin_linked_exile_to_hand(chosen)? {
-                return Err(EffectError::InconsistentProgram.into());
-            }
-            return Ok((
-                self.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )?,
-                entropy,
-            ));
-        }
         if let Some(instruction @ Instruction::SacrificeRandomUntilLand) = self
             .payloads
             .get(&work.cursor.entry)
@@ -685,61 +648,6 @@ impl EffectWindow {
                     vec![],
                     DrawJournal::default(),
                     append,
-                )?,
-                entropy,
-            ));
-        }
-        if self
-            .payloads
-            .get(&work.cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(work.cursor.instruction))
-            == Some(&Instruction::RevealCreatureOfSacrificedType)
-        {
-            let kin = work
-                .cursor
-                .impulse
-                .kin_reveal
-                .as_ref()
-                .ok_or(EffectError::InconsistentProgram)?;
-            let (order, entropy) = tape.shuffled(kin.rest.clone())?;
-            self.pending_work = Some(PendingWork::Resolution(work.cursor));
-            let mut journal = RulesJournal::default();
-            self.finish_kin_reveal(order, &mut journal)?;
-            return Ok((
-                self.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    journal,
-                )?,
-                entropy,
-            ));
-        }
-        if self
-            .payloads
-            .get(&work.cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(work.cursor.instruction))
-            == Some(&Instruction::ExileNonlandForFormerControllers)
-        {
-            let rewrite = work
-                .cursor
-                .impulse
-                .rewrite
-                .as_ref()
-                .ok_or(EffectError::InconsistentProgram)?;
-            let (order, entropy) = tape.shuffled(rewrite.lands.clone())?;
-            self.pending_work = Some(PendingWork::Resolution(work.cursor));
-            self.begin_rewrite_bottom(order)?;
-            return Ok((
-                self.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
                 )?,
                 entropy,
             ));

@@ -1049,9 +1049,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::BindResolutionX(amount) => {
                 rewrite_offer_chosen_to_loop_ve(amount);
             }
-            Instruction::ReturnEarthbentCard
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AttachFixedTargets => {}
+            Instruction::ReturnEarthbentCard | Instruction::SelectExtremeLifePlayer { .. } => {}
             Instruction::SearchLibrary { filter } => {
                 rewrite_offer_chosen_to_loop_rp(&mut filter.searcher);
             }

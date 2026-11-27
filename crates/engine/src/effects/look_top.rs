@@ -221,27 +221,19 @@ impl EffectWindow {
         instruction: &Instruction,
         append: &mut RulesJournal,
     ) -> Result<bool, EffectError> {
-        let (count, filter, required, reveal, battlefield_tapped, battlefield_else_hand) =
-            match instruction {
-                Instruction::LookTopReveal { count, filter } => {
-                    (*count, Some(*filter), false, true, false, false)
-                }
-                Instruction::LookOpponentExileForCast { count }
-                | Instruction::LookTopTakeOne { count } => {
-                    (*count, None, true, false, false, false)
-                }
-                Instruction::LookTopLandBattlefieldTapped => {
-                    (1, Some(LookTopFilter::Land), false, false, true, false)
-                }
-                Instruction::MayRevealLibraryTop => (1, None, false, true, false, false),
-                Instruction::ExploreSubject(_) | Instruction::RevealTopHandLoseManaValue { .. } => {
-                    (1, None, false, true, false, false)
-                }
-                Instruction::RevealUntilLandKind => (0, None, false, false, false, false),
-                Instruction::LookTopPlaneswalkers => (7, None, false, false, false, false),
-                Instruction::RevealTopPermanentOrHand => (1, None, false, false, false, true),
-                _ => return Ok(false),
-            };
+        let (count, filter, required, reveal, battlefield_tapped, battlefield_else_hand): (
+            u8,
+            Option<LookTopFilter>,
+            bool,
+            bool,
+            bool,
+            bool,
+        ) = match instruction {
+            Instruction::MayRevealLibraryTop | Instruction::ExploreSubject(_) => {
+                (1, None, false, true, false, false)
+            }
+            _ => return Ok(false),
+        };
         self.resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?;
         if *instruction == Instruction::MayRevealLibraryTop {
@@ -314,7 +306,7 @@ impl EffectWindow {
                     .and_then(GameObject::controller)
             })
             .unwrap_or(entry.controller());
-        let private_exile = matches!(instruction, Instruction::LookOpponentExileForCast { .. });
+        let private_exile = false;
         let library_owner = if private_exile {
             let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
             let target = self.instruction_target(entry)?;
@@ -333,7 +325,7 @@ impl EffectWindow {
             .take(usize::from(count))
             .copied()
             .collect::<Vec<_>>();
-        let choose_land_kind = matches!(instruction, Instruction::RevealUntilLandKind);
+        let choose_land_kind = false;
         let extra_explores = match &exploring {
             Some(source) => self.extra_explore_count(source)?,
             None => 0,
@@ -361,7 +353,7 @@ impl EffectWindow {
             return Ok(true);
         }
         let evaluated = self.evaluated_characteristics()?;
-        let planeswalkers = matches!(instruction, Instruction::LookTopPlaneswalkers);
+        let planeswalkers = false;
         let explore_nonland = exploring.is_some()
             && evaluated
                 .get(domain[0])
@@ -439,17 +431,7 @@ impl EffectWindow {
         let Some(PendingWork::Resolution(cursor)) = self.pending_work.take() else {
             return Err(EffectError::WrongResolutionFrame);
         };
-        let mana_value_life =
-            if let Instruction::RevealTopHandLoseManaValue { gain_life } = instruction {
-                Some((
-                    self.copiable_program(domain[0])
-                        .ok_or(EffectError::InconsistentProgram)?
-                        .mana_value(),
-                    *gain_life,
-                ))
-            } else {
-                None
-            };
+        let mana_value_life = None;
         if exploring.is_some() || battlefield_else_hand || mana_value_life.is_some() {
             let object = self
                 .window
@@ -575,210 +557,33 @@ impl EffectWindow {
         self.window = window;
         Ok(())
     }
-    /// Resolve one controller's reveal and entry before shuffling and processing the next creature.
-    pub(super) fn progress_creature_reveals(
-        &mut self,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let cursor = self
-            .resolution_cursor()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let Some(&player) = cursor.impulse.transformed_controllers.front() else {
-            return self.advance_instruction();
-        };
-        if cursor.impulse.shuffle_after_reveal {
-            return self.begin_shuffle(player, true);
-        }
-        let entry = cursor.entry;
-        let instruction = cursor.instruction;
-        let evaluated = self.evaluated_characteristics()?;
-        let mut reveals = Vec::new();
-        let mut found = None;
-        for &id in self.window.cards().library(player) {
-            let card = self
-                .window
-                .cards()
-                .get(id)
-                .ok_or(EffectError::UnknownObject)?;
-            reveals.push(crate::occurrence::RulesOccurrence::LibraryCardRevealed {
-                object: card.clone(),
-            });
-            if evaluated.get(id).is_some_and(|card| card.is_creature()) {
-                found = Some(id);
-                break;
-            }
-        }
-        if !reveals.is_empty() {
-            let before = self.rules_snapshot(None)?;
-            self.emit_from(
-                EventCause::Instruction { entry, instruction },
-                &before,
-                None,
-                append,
-                |_, _, _| Ok(reveals),
-            )?;
-        }
-        self.resolution_cursor_mut()
-            .ok_or(EffectError::InconsistentProgram)?
-            .impulse
-            .shuffle_after_reveal = true;
-        if let Some(id) = found {
-            self.linked_return_work = Some(LinkedReturnWork {
-                origin: LinkedReturnOrigin::LibraryTop {
-                    player,
-                    entry,
-                    instruction,
-                    tapped: false,
-                },
-                objects: vec![id],
-                library_bottom: None,
-                wake_entry: None,
-                orders: BTreeMap::new(),
-                graveyard_orders: BTreeMap::new(),
-                choices: BTreeMap::new(),
-                auras: BTreeMap::new(),
-                replacements: None,
-            });
-            self.finish_linked_return_if_ready(append)?;
-        }
-        Ok(())
-    }
     pub(super) fn hand_entry_selection(
         &self,
     ) -> Result<Option<ResolutionSelectionFrame>, EffectError> {
-        let (chooser, types, hand_filter, maximum) = match self.current_instruction()? {
-            Instruction::PutHandPermanentsOntoBattlefield {
-                player,
-                types,
-                maximum,
-                ..
-            } => (
-                self.resolving_player(*player)?,
-                Some(types),
-                None,
-                usize::from(*maximum),
-            ),
-            Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
-            | Instruction::PutGraveyardCreatureAtMostX
-            | Instruction::PutLandFromExiledCohort => (
-                self.resolving_player(crate::program::ResolvingPlayer::Controller)?,
-                None,
-                None,
-                1,
-            ),
-            Instruction::PutTargetOwnedExiledLandsOntoBattlefield => (
-                self.resolving_player(crate::program::ResolvingPlayer::Controller)?,
-                None,
-                None,
-                usize::MAX,
-            ),
-            Instruction::PutEquipmentFromHandOrGraveyard => (
-                self.resolving_player(crate::program::ResolvingPlayer::Controller)?,
-                None,
-                None,
-                1,
-            ),
-            _ => return Err(EffectError::InconsistentProgram),
+        let Instruction::PutHandPermanentsOntoBattlefield {
+            player,
+            types,
+            maximum,
+            ..
+        } = self.current_instruction()?
+        else {
+            return Err(EffectError::InconsistentProgram);
         };
+        let chooser = self.resolving_player(*player)?;
+        let maximum = usize::from(*maximum);
         let cursor = self
             .resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?;
         let evaluated = self.evaluated_characteristics()?;
-        let exile_owner = if self.current_instruction()?
-            == &Instruction::PutTargetOwnedExiledLandsOntoBattlefield
-        {
-            Some(self.resolving_player(crate::program::ResolvingPlayer::TargetPlayer)?)
-        } else {
-            None
-        };
-        let from_cohort = matches!(
-            self.current_instruction()?,
-            Instruction::PutLandFromExiledCohort
-        );
-        let odd_permanent = matches!(
-            self.current_instruction()?,
-            Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
-        );
-        if odd_permanent
-            && !matches!(self.payloads.get(&cursor.entry), Some(StackPayload::Instructions(payload)) if payload.met_mana_threshold)
-        {
-            return Ok(None);
-        }
-        let from_graveyard = odd_permanent
-            || self.current_instruction()? == &Instruction::PutGraveyardCreatureAtMostX;
-        let maximum_mana = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .chosen_x()
-            .cloned()
-            .unwrap_or_else(|| 0.into());
-        let cohort = self.typed_exile_cohorts.get(&cursor.entry);
         let domain: Vec<_> = evaluated
             .objects
             .values()
             .filter(|card| {
-                (match types {
-                    None if odd_permanent => {
-                        card.zone == ObjectZone::Graveyard(chooser)
-                            && self.copiable_program(card.object).is_some_and(|program| {
-                                let value = program.mana_value();
-                                program.permanent().is_some()
-                                    && value.nonnegative_half_rounded_up()
-                                        != value.nonnegative_half_rounded_down()
-                            })
-                    }
-                    None if from_graveyard => {
-                        card.zone == ObjectZone::Graveyard(chooser)
-                            && card.is_creature()
-                            && self
-                                .copiable_program(card.object)
-                                .is_some_and(|p| p.mana_value() <= maximum_mana)
-                    }
-                    None if from_cohort => {
-                        card.zone == ObjectZone::Exile
-                            && card.has_type(CardType::Land)
-                            && cohort.is_some_and(|c| c.cards.contains(&card.object))
-                    }
-                    None if exile_owner.is_some() => {
-                        card.zone == ObjectZone::Exile
-                            && card.has_type(CardType::Land)
-                            && self
-                                .window
-                                .cards()
-                                .get(card.object)
-                                .is_some_and(|object| Some(object.owner()) == exile_owner)
-                            && !self.face_down_exile.contains_key(&card.object)
-                            && !self.characteristics.foretold.contains_key(&card.object)
-                    }
-                    Some(types) => {
-                        card.zone == ObjectZone::Hand(chooser)
-                            && !types.is_disjoint(&card.current_types)
-                    }
-                    None if hand_filter.is_some() => {
-                        let excluded = BTreeSet::new();
-                        card.zone == ObjectZone::Hand(chooser)
-                            && card
-                                .current_types
-                                .iter()
-                                .copied()
-                                .any(CardType::is_permanent)
-                            && hand_filter.is_some_and(|filter: &crate::program::ObjectFilter| {
-                                filter.matches_static_characteristics(card, &excluded, || {
-                                    self.copiable_program(card.object).map(Program::mana_value)
-                                })
-                            })
-                    }
-                    None => {
-                        (card.zone == ObjectZone::Hand(chooser)
-                            || card.zone == ObjectZone::Graveyard(chooser))
-                            && card
-                                .current_artifact_subtypes
-                                .contains(&crate::program::ArtifactSubtype::Equipment)
-                    }
-                }) && self
-                    .linked_aura_domain(card.object, chooser, &evaluated)
-                    .is_none_or(|candidates| !candidates.is_empty())
+                card.zone == ObjectZone::Hand(chooser)
+                    && !types.is_disjoint(&card.current_types)
+                    && self
+                        .linked_aura_domain(card.object, chooser, &evaluated)
+                        .is_none_or(|candidates| !candidates.is_empty())
             })
             .map(|card| card.object)
             .collect();
@@ -790,13 +595,7 @@ impl EffectWindow {
                 chooser,
                 domain,
                 maximum,
-                if from_graveyard {
-                    ResolutionSelectionKind::GraveyardToBattlefield
-                } else if exile_owner.is_some() || from_cohort {
-                    ResolutionSelectionKind::ExileToBattlefield
-                } else {
-                    ResolutionSelectionKind::HandToBattlefield
-                },
+                ResolutionSelectionKind::HandToBattlefield,
             )
         }))
     }

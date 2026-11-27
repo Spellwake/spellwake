@@ -1,29 +1,11 @@
 //! Resolving a targetless activated ability changes its original source (CR 113.7a).
 use super::*;
 use crate::{
-    characteristics::{
-        AbilityChange, PowerToughness, ResolvedDuration, ResolvedPart, ResolvedParts,
-    },
+    characteristics::{ResolvedDuration, ResolvedParts},
     occurrence::{EventCause, RulesOccurrence},
     stack_window::StackEntry,
 };
 impl EffectWindow {
-    pub(super) fn modify_group(
-        &mut self,
-        entry: &StackEntry,
-        index: usize,
-        group: crate::program::EffectSubject,
-        stats: Option<PowerToughness>,
-        keywords: BTreeSet<KeywordAbility>,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let affected = self.effect_group(entry, group)?;
-        if affected.is_empty() {
-            return Ok(());
-        }
-        self.modify_objects(entry, index, affected, stats, keywords, append)
-    }
-
     pub(super) fn effect_group(
         &self,
         entry: &StackEntry,
@@ -367,45 +349,6 @@ impl EffectWindow {
                 Ok(affected)
             }
         }
-    }
-
-    pub(super) fn modify_objects(
-        &mut self,
-        entry: &StackEntry,
-        index: usize,
-        affected: BTreeSet<ObjectId>,
-        stats: Option<PowerToughness>,
-        keywords: BTreeSet<KeywordAbility>,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let mut parts = Vec::new();
-        if let Some(stats) = stats {
-            parts.push(ResolvedPart::ModifyPT(stats));
-        }
-        if !keywords.is_empty() {
-            parts.push(ResolvedPart::Abilities(AbilityChange::grant_keywords(
-                keywords,
-            )));
-        }
-        self.modify_objects_until_cleanup(entry, index, affected, ResolvedParts(parts), append)
-    }
-
-    pub(super) fn modify_objects_until_cleanup(
-        &mut self,
-        entry: &StackEntry,
-        index: usize,
-        affected: BTreeSet<ObjectId>,
-        parts: ResolvedParts,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        self.modify_objects_for_duration(
-            entry,
-            index,
-            affected,
-            parts,
-            ResolvedDuration::UntilEndOfTurn,
-            append,
-        )
     }
 
     pub(super) fn modify_objects_for_duration(

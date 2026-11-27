@@ -170,56 +170,13 @@ pub(super) fn feast(card: &InventoryCard, profile: Profile) -> Option<Program> {
     Some(Program::sorcery(fixed_cost("{4}{B}{B}")?, body))
 }
 
-/// The two distinct Palace Jailer entry abilities retain their separate ordering.
+/// Retired bespoke Palace Jailer override; falls through to oracle_lowering.
 pub(super) fn jailer(
-    card: &InventoryCard,
-    vocabulary: &CreatureTypeVocabulary,
-    profile: Profile,
+    _card: &InventoryCard,
+    _vocabulary: &CreatureTypeVocabulary,
+    _profile: Profile,
 ) -> Option<Program> {
-    let [face] = card.faces.as_slice() else {
-        return None;
-    };
-    if profile != Profile::Current
-        || card.layout != "normal"
-        || face.name != card.name
-        || face.oracle_text.as_deref()
-            != Some(
-                "When this creature enters, you become the monarch.\nWhen this creature enters, exile target creature an opponent controls until an opponent becomes the monarch.",
-            )
-    {
-        return None;
-    }
-    let mut program = ordinary_creature(card, vocabulary, profile, Some("")).ok()?;
-    let condition = spellwake_engine::program::TriggerSpec::enters(
-        spellwake_engine::program::ObjectFilter::self_object(),
-    );
-    program.triggered.push(TriggeredAbility {
-        id: TriggeredAbilityId(0),
-        condition: condition.clone(),
-        grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                ),
-            ],
-        ),
-    });
-    program.triggered.push(TriggeredAbility {
-        id: TriggeredAbilityId(1),
-        condition,
-        grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(
-            BodyTarget::FilteredPermanent(
-                spellwake_engine::program::ObjectFilter::creature().opposing(),
-            ),
-            vec![Instruction::ExileTargetUntilOpponentMonarch],
-        ),
-    });
-    Some(program)
+    None
 }
 
 /// Monarch-conditioned upkeep token triggers with an intervening-if recheck.

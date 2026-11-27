@@ -312,55 +312,6 @@ impl EffectWindow {
                 };
                 (ExileCastAbility::Siege, id)
             }
-            Instruction::CastTargetGraveyardInstant => {
-                let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                (ExileCastAbility::TargetedGraveyard, object)
-            }
-            Instruction::RevealSharedTypeCreatureCastOrBottom => {
-                let Some(&id) = self.window.cards().library(caster).first() else {
-                    return Ok(None);
-                };
-                let evaluated = self.evaluated_characteristics()?;
-                let card = evaluated.get(id).ok_or(EffectError::InconsistentProgram)?;
-                if !card.is_creature()
-                    || !evaluated.objects.values().any(|other| {
-                        other.zone == ObjectZone::Battlefield
-                            && other.controller == Some(caster)
-                            && other.is_creature()
-                            && !other
-                                .current_creature_subtypes
-                                .is_disjoint(&card.current_creature_subtypes)
-                    })
-                {
-                    return Ok(None);
-                }
-                (ExileCastAbility::RevealedLibrary, id)
-            }
-            Instruction::RevealOddCastOrDraw => {
-                let Some(&id) = self.window.cards().library(caster).first() else {
-                    return Ok(None);
-                };
-                let value = self
-                    .copiable_program(id)
-                    .ok_or(EffectError::InconsistentProgram)?
-                    .mana_value();
-                if value.nonnegative_half_rounded_down() == value.nonnegative_half_rounded_up() {
-                    return Ok(None);
-                }
-                (ExileCastAbility::RevealedLibrary, id)
-            }
-            Instruction::ImpulseCastOrDamage(_) => {
-                let Some(id) = self
-                    .resolution_cursor()
-                    .and_then(|cursor| cursor.impulse.exiled)
-                else {
-                    return Ok(None);
-                };
-                (ExileCastAbility::Impulse, id)
-            }
             Instruction::Cascade => {
                 let Some(id) = self
                     .cascade_batch(entry.id())
@@ -683,20 +634,7 @@ impl EffectWindow {
                     .appearance(card.id())
                     .ok_or(EffectError::InconsistentProgram)?;
                 let targets = self.trigger_target_domain(&spell.body, caster, Some(&source))?;
-                let (minimum, maximum) = if spell.body.instructions.first()
-                    == Some(&Instruction::ShuffleOnePermanentPerPlayer)
-                {
-                    let represented: BTreeSet<_> = targets
-                        .iter()
-                        .filter_map(|target| match target {
-                            TargetRef::Object(id) => evaluated.get(*id)?.controller,
-                            _ => None,
-                        })
-                        .collect();
-                    (self.window.participants().len(), represented.len())
-                } else {
-                    (minimum, maximum.min(targets.len()))
-                };
+                let maximum = maximum.min(targets.len());
                 Some(ExilePermanentTargets {
                     minimum,
                     maximum,

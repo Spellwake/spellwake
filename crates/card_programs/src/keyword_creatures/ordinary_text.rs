@@ -24,22 +24,8 @@ pub(super) fn amount(s: &str) -> Option<i64> {
     }
 }
 
-pub(super) fn amass(text: &str, vocabulary: &CreatureTypeVocabulary) -> Option<[Instruction; 2]> {
-    let (kind, count) = text
-        .strip_prefix("amass ")?
-        .strip_suffix('.')?
-        .split_once(' ')?;
-    let subtype = vocabulary.resolve_label(kind.strip_suffix('s')?)?;
-    let army = vocabulary.resolve_label("Army")?;
-    let amount = count.parse::<u16>().ok().filter(|count| *count > 0)?;
-    Some([
-        Instruction::CreateArmyIfAbsent { army, subtype },
-        Instruction::Amass {
-            army,
-            subtype,
-            amount,
-        },
-    ])
+pub(super) fn amass(_text: &str, _vocabulary: &CreatureTypeVocabulary) -> Option<[Instruction; 2]> {
+    None
 }
 
 struct TokenGroup<'a> {

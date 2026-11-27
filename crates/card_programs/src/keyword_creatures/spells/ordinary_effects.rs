@@ -69,22 +69,6 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         ));
     }
     if text.trim()
-        == "Choose target creature you control. Whenever that creature deals combat damage to a player or planeswalker this turn, draw that many cards."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
-            vec![Instruction::WatchTargetCombatDamageDraw],
-        ));
-    }
-    if text.trim()
-        == "Each player chooses a creature type. Destroy all creatures that aren't of a type chosen this way. They can't be regenerated."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::ChooseTypeThenDestroyUnchosen],
-        ));
-    }
-    if text.trim()
         == "Each player shuffles their hand and graveyard into their library, then draws seven cards. If it's your turn, end the turn."
     {
         return Some(ExecutableBody::new(
@@ -95,40 +79,6 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                     spellwake_engine::program::ValueExpr::Literal(7.into()),
                 ),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::end_turn(),
-            ],
-        ));
-    }
-    if text
-        .trim()
-        .strip_prefix("Join forces — ")
-        .unwrap_or(text.trim())
-        == "Starting with you, each player may pay any amount of mana. Each player draws X cards, where X is the total amount of mana paid this way."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::OfferVariablePayment { each_player: true },
-                Instruction::DrawEachPlayerForPayments,
-            ],
-        ));
-    }
-    if text.trim().strip_prefix("For each opponent, exile up to one target permanent that player controls with an even mana value. ")
-        == Some("Adamant — If at least three colorless mana was spent to cast this spell, return a permanent card with an odd mana value from your graveyard to the battlefield.") {
-        return Some(ExecutableBody::new(BodyTarget::FilteredPermanent(ObjectFilter::permanent().opposing().with_mana_value(ManaValueFilter::Even)), vec![
-            Instruction::AffectPermanentTargets {minimum:0, maximum:u16::MAX, action:spellwake_engine::program::PermanentTargetAction::Exile},
-            Instruction::ReturnOddGraveyardPermanentIfPaid {mana:spellwake_engine::mana::ManaType::Colourless, minimum:3},
-        ]));
-    }
-    if text.trim().strip_prefix(
-        "Each player puts a vow counter on a creature they control and sacrifices the rest. ",
-    ) == Some(
-        "Each of those creatures can't attack you or planeswalkers you control for as long as it has a vow counter on it.",
-    ) {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ChooseVowedCreatures,
-                Instruction::SacrificeOtherCreatures,
             ],
         ));
     }
@@ -210,36 +160,6 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             ],
         ));
     }
-    if text.trim()
-        == "For each player, choose target nonenchantment, nonland permanent that player controls. Those permanents' owners shuffle them into their libraries. Each player who controlled one of those permanents exiles cards from the top of their library until they exile a nonland card, then puts the rest on the bottom of their library in a random order. Each player may cast the nonland card they exiled without paying its mana cost."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::nonland().nonenchantment()),
-            vec![
-                Instruction::ShuffleOnePermanentPerPlayer,
-                Instruction::ExileNonlandForFormerControllers,
-            ],
-        ));
-    }
-    if text.trim()
-        == "Exile two target creatures. For each of those creatures, its controller reveals cards from the top of their library until they reveal a creature card, puts that card onto the battlefield, then shuffles the rest into their library."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![
-                Instruction::AffectPermanentTargets {
-                    minimum: 2,
-                    maximum: 2,
-                    action: spellwake_engine::program::PermanentTargetAction::Exile,
-                },
-                Instruction::RevealCreatureForEachTargetController,
-            ],
-        ));
-    }
-    if let Some(count)=text.trim().strip_prefix("Exile the top ").and_then(|rest|rest.strip_suffix(" cards of your library. You may put a land card from among them onto the battlefield. Until end of turn, for each nonland card type, you may cast a spell of that type from among the exiled cards without paying its mana cost.")) {
-        let count=u8::try_from(crate::keyword_creatures::ordinary_text::amount(count)?).ok().filter(|n|*n>0)?;
-        return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::ExileTopForEachSpellType(count),Instruction::PutLandFromExiledCohort]));
-    }
     if text.trim() == "Gain control of target noncreature spell. You may choose new targets for it."
     {
         return Some(ExecutableBody::new(
@@ -268,38 +188,6 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                 maximum: 2,
                 tapped: false,
             }],
-        ));
-    }
-    if text.trim()
-        == "Choose land or nonland. Reveal cards from the top of your library until you reveal a card of the chosen kind. Put that card into your hand and the rest on the bottom of your library in a random order."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::RevealUntilLandKind],
-        ));
-    }
-    if text.trim()
-        == "Reveal the top five cards of your library. An opponent chooses a creature card from among them. Put that card onto the battlefield and the rest into your graveyard."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::RevealOpponentChoosesCreature],
-        ));
-    }
-    if text.trim()
-        == "Reveal the top five cards of your library. An opponent separates those cards into two piles. Put one pile into your hand and the other into your graveyard."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::RevealDividePiles],
-        ));
-    }
-    if text.trim()
-        == "Look at the top seven cards of your library. Put up to two planeswalker cards from among them onto the battlefield. Put the rest on the bottom of your library in a random order."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::LookTopPlaneswalkers],
         ));
     }
     let lower = text.to_ascii_lowercase();
@@ -390,17 +278,6 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, ResolvedDuration::UntilEndOfTurn),
         ]));
     }
-    if let Some(count) = lower.trim().strip_prefix("choose ")
-        .and_then(|clause| clause.strip_suffix(" target creature cards in your graveyard. sacrifice a creature. if you do, return the chosen cards to the battlefield tapped."))
-    {
-        use spellwake_engine::program::PermanentTypeFilter;
-        let _count = u8::try_from(number(count)?).ok().filter(|count| *count > 0)?;
-        return Some(ExecutableBody::new(BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()), vec![
-            Instruction::SacrificeToContinue { filter: PermanentTypeFilter {
-                any_types: Default::default(), required_types: [CardType::Creature].into(), forbidden_types: Default::default(), object_filter: None } },
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(true),
-        ]));
-    }
     if lower.trim()
         == "destroy all creatures. they can't be regenerated. draw a card for each creature destroyed this way."
     {
@@ -456,40 +333,6 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                         spellwake_engine::program::EventValueKind::DestroyedPermanents,
                     ),
                 }),
-            ],
-        ));
-    }
-    if let Some((first, optional)) =
-        lower.split_once(". if you cast this spell during your main phase, ")
-        && let Some(target) = first.strip_prefix("exile target ")
-        && optional
-            .strip_prefix("you may exile up to one other target ")
-            .and_then(|clause| clause.strip_suffix('.'))
-            == Some(target)
-    {
-        let filter = filtered_target(target)?;
-        return Some(ExecutableBody::new(
-            filter,
-            vec![
-                Instruction::BindOrderedPermanents {
-                    minimum: 1,
-                    maximum: 2,
-                },
-                Instruction::ExileOrderedPermanent(0),
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: spellwake_engine::program::ValueExpr::event(
-                            spellwake_engine::program::EventValueKind::CastDuringOwnMain,
-                        ),
-                        comparison: Comparison::Equal,
-                        right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
-                    destination: 5,
-                },
-                Instruction::OptionalEffect {
-                    chooser: ResolvingPlayer::Controller,
-                },
-                Instruction::ExileOrderedPermanent(1),
             ],
         ));
     }
@@ -666,17 +509,6 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             comparison:Comparison::Equal,right:spellwake_engine::program::ValueExpr::Literal(1.into())},destination:3},damage(enhanced)?,Instruction::Jump {destination:4},damage(normal)?]));
     }
     if lower
-        == "change the target of target spell with a single target. you lose life equal to that spell's mana value."
-    {
-        return Some(ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any().single_target()),
-            vec![
-                Instruction::ChangeOnlyTarget,
-                Instruction::LoseLifeEqualToTargetSpellManaValue,
-            ],
-        ));
-    }
-    if lower
         == "draw a card. until end of turn, target creature gains trample and gets +1/+0 for each card you've drawn this turn."
     {
         return Some(ExecutableBody::new(
@@ -775,34 +607,6 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             }],
         ));
     }
-    if let Some((loot, untap)) = lower.split_once(". untap up to ") {
-        let (draw, discard) = loot.strip_prefix("draw ")?.split_once(", then discard ")?;
-        let cards = |s: &str| {
-            super::super::ordinary_text::amount(
-                s.strip_suffix(" cards")
-                    .or_else(|| s.strip_suffix(" card"))?,
-            )
-        };
-        let max = super::super::ordinary_text::amount(untap.strip_suffix(" lands.")?)?;
-        return Some(ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(cards(draw)?.into()),
-                ),
-                Instruction::Discard {
-                    players: spellwake_engine::program::AffectedPlayers::One(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    amount: spellwake_engine::program::ValueExpr::Literal(cards(discard)?.into()),
-                },
-                Instruction::UntapUpTo {
-                    kind: CardType::Land,
-                    maximum: max.try_into().ok()?,
-                },
-            ],
-        ));
-    }
     if lower == "each player sacrifices all permanents they control that are one or more colors." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
@@ -884,20 +688,30 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         use spellwake_engine::program::CreatureTypeSlot;
         let slot = CreatureTypeSlot::new(0);
         let operation = match result {
-            text if text.strip_prefix("look at the top six cards of your library. you may reveal any number of cards of the chosen type from among them and put the revealed cards into your hand. ")==Some("put the rest on the bottom of your library in a random order.")=>
-                Some(Instruction::LookTopReveal {count:6,filter:spellwake_engine::program::LookTopFilter::AllOfChosenType(slot)}),
-            "destroy all creatures that aren't of the chosen type." =>
-                Some(crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::creature().except_chosen_slot(slot), true)),
+            "destroy all creatures that aren't of the chosen type." => Some(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    ObjectFilter::creature().except_chosen_slot(slot),
+                    true,
+                ),
+            ),
             effect if effect.starts_with("creatures that aren't of the chosen type get ") => {
-                let stats = effect.strip_prefix("creatures that aren't of the chosen type get ")?.strip_suffix(" until end of turn.")?;
+                let stats = effect
+                    .strip_prefix("creatures that aren't of the chosen type get ")?
+                    .strip_suffix(" until end of turn.")?;
                 let (p, t) = stats.split_once('/')?;
-                Some(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                    EffectSubject::Matching(ObjectFilter::creature().except_chosen_slot(slot)),
-                    spellwake_engine::program::ValueExpr::Literal(p.parse::<i64>().ok()?.into()),
-                    spellwake_engine::program::ValueExpr::Literal(t.parse::<i64>().ok()?.into()),
-                    BTreeSet::new(),
-                    BTreeSet::new(),
-                ))
+                Some(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::Matching(ObjectFilter::creature().except_chosen_slot(slot)),
+                        spellwake_engine::program::ValueExpr::Literal(
+                            p.parse::<i64>().ok()?.into(),
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(
+                            t.parse::<i64>().ok()?.into(),
+                        ),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                )
             }
             _ => None,
         };
@@ -1763,9 +1577,6 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         .or_else(|| line.strip_prefix("this artifact deals "))
         .or_else(|| line.strip_prefix("this enchantment deals "))
     {
-        if rest == "damage to each player equal to half that player's life total, rounded down" {
-            return Some((NoTarget, Instruction::DamagePlayersHalfLife));
-        }
         let (amount, recipient) = rest.split_once(" damage to ")?;
         use spellwake_engine::program::DamageGroup;
         let group = match recipient {
@@ -1884,17 +1695,6 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
                     ResolvingPlayer::Controller,
                 ),
                 amount: spellwake_engine::program::ValueExpr::Literal(count.into()),
-            },
-        ));
-    }
-    if let Some(maximum) = line
-        .strip_prefix("remove up to ")
-        .and_then(|rest| rest.strip_suffix(" counters from target creature"))
-    {
-        return Some((
-            SingleCreature,
-            Instruction::RemoveCreatureCounters {
-                maximum: number(maximum)?.try_into().ok()?,
             },
         ));
     }

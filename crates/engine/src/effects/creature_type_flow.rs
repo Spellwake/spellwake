@@ -267,47 +267,6 @@ impl EffectWindow {
         })
     }
 
-    pub(super) fn expand_type_choices_for_table(
-        &mut self,
-        entry: StackEntryId,
-        instruction: usize,
-    ) -> Result<(), EffectError> {
-        let mut operations = Vec::new();
-        for (index, player) in self.window.apnap_players()?.enumerate() {
-            let slot = u16::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
-            operations.push(Instruction::BindEnv {
-                binding: crate::toolbox::BindingId(u16::MAX),
-                value: Box::new(crate::toolbox::ExecValue::Players(vec![player])),
-            });
-            operations.push(Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(slot),
-                excluding: BTreeSet::new(),
-            });
-        }
-        operations.push(Instruction::BindEnv {
-            binding: crate::toolbox::BindingId(u16::MAX),
-            value: Box::new(crate::toolbox::ExecValue::Players(Vec::new())),
-        });
-        operations.push(Instruction::ZoneOp(Box::new(
-            crate::toolbox::ZoneOpSpec::move_all(
-                crate::toolbox::ObjectQuery::zone(
-                    crate::toolbox::QueryZone::Battlefield,
-                    crate::program::ObjectFilter::creature().outside_named_slots(),
-                ),
-                crate::toolbox::ZoneDest::Graveyard {
-                    semantics: crate::toolbox::GraveyardSemantics::Destroy {
-                        allow_regenerate: false,
-                    },
-                },
-            ),
-        )));
-        let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry) else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        payload.expand_instruction(instruction, false, operations);
-        Ok(())
-    }
-
     /// The production one-instruction acceptance step. The caller then runs the
     /// existing iterative driver; no priority or checks occur between these steps.
     pub(crate) fn accept_creature_type(

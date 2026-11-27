@@ -100,15 +100,6 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         amount,
     };
     let (target, instructions) = match rules {
-        "Prevent the next X damage that would be dealt to you and/or permanents you control this turn. If damage is prevented this way, Divine Deflection deals that much damage to any target." => {
-            (SingleAnyTarget, vec![CreateReflectingShield])
-        }
-        "Distribute four +1/+1 counters among any number of target creatures." => {
-            (SingleCreature, vec![DistributePlusOneCounters { total: 4 }])
-        }
-        "For each creature, its controller sacrifices it unless they pay X life." => {
-            (NoTarget, vec![PayLifeOrSacrificeCreatures])
-        }
         "Until end of turn, target creature gets +6/+6 and gains trample, and all creatures able to block it this turn do so." => {
             (
                 SingleCreature,
@@ -124,10 +115,6 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             )
         }
 
-        "Choose an order for artifacts, creatures, and lands. Each player sacrifices one permanent of their choice of the first type, sacrifices two of their choice of the second type, then sacrifices three of their choice of the third type." => {
-            (NoTarget, vec![OrderArtifactCreatureLandSacrifices])
-        }
-
         "As an additional cost to cast this spell, tap any number of untapped creatures you control.\nBurn at the Stake deals damage to any target equal to three times the number of creatures tapped this way." => {
             (
                 SingleAnyTarget,
@@ -141,17 +128,6 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                         false,
                     ),
                 ],
-            )
-        }
-
-        "Exile the top card of your library. If it's a permanent card, you may put it onto the battlefield. If you do, repeat this process." => {
-            (NoTarget, vec![ExileTopRepeatOnPermanentEntry])
-        }
-
-        "Target opponent exiles cards from the top of their library until they exile a nonland card. Until end of turn, you may cast that card without paying its mana cost." => {
-            (
-                BodyTarget::SingleOpponent,
-                vec![ExileTargetUntilNonlandForFreeCast],
             )
         }
 
@@ -193,13 +169,6 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                         },
                     ),
                 ],
-            )
-        }
-
-        "Reveal the top two cards of your library. Put all creature and land cards revealed this way into your hand and the rest on the bottom of your library in any order." => {
-            (
-                NoTarget,
-                vec![RevealTopCreaturesAndLandsRestBottom { count: 2 }],
             )
         }
 
@@ -354,16 +323,6 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                     ),
                 )),
             ])
-        }
-
-        "Return target creature you control and target creature you don't control to their owners' hands." => {
-            (
-                NoTarget,
-                controlled_creature_pair(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().not_controlled()),
-                    ReturnFixedTargets,
-                ),
-            )
         }
 
         "Create three 1/1 red Human creature tokens with haste. Sacrifice those tokens at the beginning of the next end step." => {
@@ -692,24 +651,6 @@ fn aura(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Opt
     };
     let mut program = Program::aura(Some(cost), restriction);
     match rules {
-        "Enchant creature\nWhen this Aura enters attached to a creature, each other nontoken creature you control becomes a copy of that creature.\nNontoken creatures you control enter as a copy of enchanted creature." =>
-        {
-            program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::Modifier { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticModifierRule::EnterControlledCreaturesAsEnchantedCopy });
-            add_trigger(
-                &mut program,
-                spellwake_engine::program::TriggerSpec::new(
-                    spellwake_engine::program::TriggerEvent::Enters {
-                        subject: spellwake_engine::program::ObjectFilter::self_object(),
-                        from_zone: spellwake_engine::program::TriggerFromZone::Any,
-                        cast_origin: None,
-                        attached_to_creature: true,
-                    },
-                ),
-                BodyTarget::None,
-                vec![Instruction::CopyOtherControlledNontokensAsEntryHost],
-            );
-        }
-
         "Enchant creature\nWhen enchanted creature dies, return that card to the battlefield under your control." =>
         {
             add_trigger(
@@ -860,30 +801,6 @@ fn enchantment(
 ) -> Option<Program> {
     let mut program = Program::enchantment(Some(cost));
     match rules {
-        "At the beginning of your upkeep, put a despair counter on this enchantment, then each player exiles X permanents they control and/or cards from their hand, where X is the number of despair counters on this enchantment." =>
-        {
-            add_trigger(
-                &mut program,
-                spellwake_engine::program::TriggerSpec::step_began(
-                    Step::Upkeep,
-                    PlayerRelation::Controller,
-                ),
-                BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
-                        CounterKind::Despair,
-                        literal(1),
-                    ),
-                    Instruction::ExileFromHandOrBattlefield(
-                        spellwake_engine::program::ValueExpr::counters(
-                            spellwake_engine::program::CounterSubjectRef::AbilitySource,
-                            Some(CounterKind::Despair),
-                        ),
-                    ),
-                ],
-            );
-        }
-
         "Instant and sorcery spells cost {2} less to cast." => {
             program.continuous = Some(
                 spellwake_engine::characteristics::StaticContinuousAbility::CostModifier {
@@ -1012,18 +929,6 @@ fn enchantment(
                     spellwake_engine::mana::CounterManaYield::RemoveChargeForColor,
                 ),
             });
-        }
-        "At the beginning of your upkeep, reveal the top card of your library. If it's a creature card that shares a creature type with a creature you control, you may cast it without paying its mana cost. If you don't cast it, put it on the bottom of your library." =>
-        {
-            add_trigger(
-                &mut program,
-                spellwake_engine::program::TriggerSpec::step_began(
-                    Step::Upkeep,
-                    PlayerRelation::Controller,
-                ),
-                BodyTarget::None,
-                vec![Instruction::RevealSharedTypeCreatureCastOrBottom],
-            );
         }
         "As long as you control exactly one creature, that creature gets +3/+1 and has lifelink." => {
             super::army_grants::add_battlefield_ability(
@@ -1424,35 +1329,9 @@ fn creature(
         )
     };
     let (keywords, clauses) = match rules {
-        "Flying, vigilance\nWhenever Bruna attacks or blocks, you may attach to it any number of Auras on the battlefield and you may put onto the battlefield attached to it any number of Aura cards that could enchant it from your graveyard and/or hand." => (
-            "Flying, vigilance",
-            vec![(spellwake_engine::program::TriggerSpec::any_of(vec![spellwake_engine::program::TriggerEvent::Attacks { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: false } }, spellwake_engine::program::TriggerEvent::BlocksOrBlocked { subject: spellwake_engine::program::ObjectFilter::self_object(), kind: spellwake_engine::program::BlockTriggerKind::Blocks }]), NoTarget,
-                vec![AttachBattlefieldAurasToSource, EnterHandOrGraveyardAurasAttachedToSource])],
-        ),
-
         "If combat damage would be dealt to this creature, prevent that damage and exile that many cards from the top of your library." => {
             let mut program = base()?;
             program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::DamageRule { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticDamageRule::PreventIncomingCombatAndExile });
-            return Some(program);
-        }
-
-        "{4}{B}{B}: Exile target creature and put a +1/+1 counter on this creature.\nThis creature has all activated abilities of all creature cards exiled with it." =>
-        {
-            let mut program = base()?;
-            program.activated.push(activation(
-                fixed_cost("{4}{B}{B}")?,
-                SourceCost::None,
-                SingleCreature,
-                vec![ExileTargetAsAbilityDonor, counter()],
-            ));
-            super::army_grants::add_battlefield_ability(
-                &mut program,
-                PermanentSelector {
-                    controller: ControllerSelector::SourceItself,
-                    ..Default::default()
-                },
-                StaticParts(vec![StaticPart::InheritExiledCreatureAbilities]),
-            )?;
             return Some(program);
         }
 
@@ -1574,29 +1453,6 @@ fn creature(
                 }]),
             )?;
             return Some(program);
-        }
-
-        "When this creature enters, any opponent may have it deal 4 damage to them. If a player does, sacrifice this creature." => {
-            (
-                "",
-                vec![(
-                    spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
-                    NoTarget,
-                    vec![
-                        OfferOpponentsDamage,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
-                                spellwake_engine::program::DamageRecipientsRef::Group(
-                                    spellwake_engine::program::DamageGroup::VolunteeringOpponent,
-                                ),
-                            )),
-                            literal(4),
-                            false,
-                        ),
-                        SacrificeStateTriggerSource,
-                    ],
-                )],
-            )
         }
 
         "Damage that would be dealt by this creature can't be prevented." => {
@@ -1778,39 +1634,6 @@ fn creature(
                 )],
             )
         }
-        "Flying\nWhen this creature enters, exile it unless you sacrifice another creature.\nUndying" => {
-            (
-                "Flying\nUndying",
-                vec![(
-                    spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
-                    NoTarget,
-                    vec![
-                        ChooseOtherControlledCreature {
-                            sacrifice: true,
-                            or_exile_source: true,
-                        },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source(),
-                    ],
-                )],
-            )
-        }
-        "Flying\nWhen this creature enters, exile all Zombies, then return all Human creature cards from your graveyard to the battlefield." => {
-            (
-                "Flying",
-                vec![(
-                    spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
-                    NoTarget,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(ObjectFilter::any().with_subtype(
-                                vocabulary.resolve_label("Zombie")?,
-                            ), spellwake_engine::program::PublicZoneDestination::Exile),
-                        ReturnGraveyardCohort(spellwake_engine::program::GraveyardCohortReturn::own(
-                            spellwake_engine::program::GraveyardReturnFilter::CreatureSubtype(vocabulary.resolve_label("Human")?),
-                        )),
-                    ],
-                )],
-            )
-        }
 
         "{1}{G}, {T}: Target creature you control fights another target creature." => {
             let mut program = base()?;
@@ -1841,33 +1664,6 @@ fn creature(
                 ],
             ));
             return Some(program);
-        }
-
-        "Flying\nAt the beginning of your upkeep, sacrifice a creature other than this creature." => {
-            (
-                "Flying",
-                vec![(
-                    spellwake_engine::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::Controller),
-                    NoTarget,
-                    vec![ChooseOtherControlledCreature {
-                        sacrifice: true,
-                        or_exile_source: false,
-                    }],
-                )],
-            )
-        }
-        "Whenever this creature attacks, return another creature you control to its owner's hand." => {
-            (
-                "",
-                vec![(
-                    spellwake_engine::program::TriggerSpec::self_attacks(),
-                    NoTarget,
-                    vec![ChooseOtherControlledCreature {
-                        sacrifice: false,
-                        or_exile_source: false,
-                    }],
-                )],
-            )
         }
 
         "Whenever this creature attacks, Human creatures you control get +1/+0 until end of turn." => {

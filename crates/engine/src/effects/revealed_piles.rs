@@ -1,8 +1,7 @@
 //! Ordered library selections and two-pile choices. The objects stay in place while players choose.
 use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence, ZoneReason};
-use crate::program::{PublicZoneDestination as Zone, RevealedHandSelection, ZoneActionKind};
-use crate::stack_window::StackEntry;
+use crate::program::{PublicZoneDestination as Zone, ZoneActionKind};
 
 /// A choice among identified objects. Dividing a pile can leave either pile empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,75 +101,6 @@ impl RevealedPiles {
     }
 }
 impl EffectWindow {
-    pub(super) fn progress_permanent_piles(
-        &mut self,
-        entry: &StackEntry,
-    ) -> Result<Option<EffectDecision>, EffectError> {
-        let TargetRef::Player(player) = self.instruction_target(entry)?.choice().target else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let controller = entry.controller();
-        let cursor = self
-            .resolution_cursor_mut()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let mut work = if let Some(work) = cursor.revealed_piles.take() {
-            work
-        } else {
-            let cards = self
-                .evaluated_characteristics()?
-                .objects
-                .values()
-                .filter(|object| {
-                    object.zone == ObjectZone::Battlefield
-                        && object.controller == Some(player)
-                        && self
-                            .window
-                            .cards()
-                            .phased_out_under(object.object)
-                            .is_none()
-                })
-                .map(|object| object.object)
-                .collect::<Vec<_>>();
-            if cards.is_empty() {
-                self.advance_instruction()?;
-                return Ok(None);
-            }
-            Box::new(RevealedPiles::new(cards))
-        };
-        if let Some(pile) = work.hand.clone() {
-            self.resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .revealed_piles = Some(work);
-            self.begin_fixed_sacrifice(controller, player, &pile)?;
-            return Ok(None);
-        }
-        let (chooser, choice) = match &work.first {
-            Some(first) => (
-                player,
-                PileChoice::Sacrifice {
-                    first: first.clone(),
-                    second: work
-                        .cards
-                        .iter()
-                        .copied()
-                        .filter(|id| !first.contains(id))
-                        .collect(),
-                },
-            ),
-            None => (controller, PileChoice::DividePermanents(work.cards.clone())),
-        };
-        let frame = PileChoiceFrame {
-            revision: self.revision,
-            chooser,
-            choice,
-        };
-        work.offered = Some(frame.clone());
-        self.resolution_cursor_mut()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .revealed_piles = Some(work);
-        Ok(Some(EffectDecision::RevealedPiles(frame)))
-    }
-
     fn revealed_batch(
         &self,
         entry: StackEntryId,
@@ -219,14 +149,6 @@ impl EffectWindow {
         player: SeatId,
         journal: &mut RulesJournal,
     ) -> Result<Option<EffectDecision>, EffectError> {
-        let revealed_name = match self.current_instruction()? {
-            Instruction::RevealToNameAfterSourceShuffle(name) => Some(name.clone()),
-            _ => None,
-        };
-        let hand_filter = match self.current_instruction()? {
-            Instruction::RevealTopHandRestGraveyard { hand, .. } => Some(*hand),
-            _ => None,
-        };
         let look_top_choose = match self.current_instruction()? {
             Instruction::LookTopChoose {
                 filter,
@@ -453,31 +375,8 @@ impl EffectWindow {
                     ),
                 )
             }
-            Instruction::LookTopOneRestGraveyard { count } => {
-                (usize::from(*count), true, false, false)
-            }
-            Instruction::LookTopCreatureSharingAttachedSubtype { count } => {
-                (usize::from(*count), true, false, true)
-            }
-            Instruction::RevealTopCreaturesAndLandsRestBottom { count } => {
-                (usize::from(*count), false, true, true)
-            }
-            Instruction::RevealHandAndBottomPiles => (3, false, false, true),
-            Instruction::RevealToNameAfterSourceShuffle(_) => (usize::MAX, false, false, false),
-            Instruction::RevealTopHandRestGraveyard { count, .. } => {
-                (usize::from(*count), false, false, false)
-            }
             _ => (5, false, false, false),
         };
-        let creature_choice = revealed_name.is_some()
-            || matches!(
-                self.current_instruction()?,
-                Instruction::RevealOpponentChoosesCreature
-            );
-        let share_attached_type = matches!(
-            self.current_instruction()?,
-            Instruction::LookTopCreatureSharingAttachedSubtype { .. }
-        );
         let mut work = if let Some(work) = self
             .resolution_cursor_mut()
             .ok_or(EffectError::WrongResolutionFrame)?
@@ -488,14 +387,7 @@ impl EffectWindow {
         } else {
             let library = self.window.cards().library(player);
             let mut reveal_until_matches: Vec<ObjectId> = Vec::new();
-            let named = if let Some(name) = &revealed_name {
-                let evaluated = self.evaluated_characteristics()?;
-                library.iter().position(|id| {
-                    evaluated
-                        .get(*id)
-                        .is_some_and(|card| self.name_rules().has_name(&card.current_names, name))
-                })
-            } else if let Some((filter, target_count, ..)) = &reveal_until {
+            let named = if let Some((filter, target_count, ..)) = &reveal_until {
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
                 let need = usize::from((*target_count).max(1));
@@ -563,7 +455,6 @@ impl EffectWindow {
                 .take(named.map_or(count, |index| index + 1))
                 .copied()
                 .collect();
-            let named_card = named.map(|index| library[index]);
             if cards.is_empty() {
                 if (look_top_choose_ext.is_some() || reveal_until_ext.is_some())
                     && let Some(cursor) = self.resolution_cursor_mut()
@@ -616,9 +507,7 @@ impl EffectWindow {
                 return Ok(None);
             }
             let mut work = RevealedPiles::new(cards);
-            if revealed_name.is_some() {
-                work.creature = Some(named_card);
-            } else if let Some((_, _, _, _, keep_all_revealed, optional_keep, ..)) = &reveal_until {
+            if let Some((_, _, _, _, keep_all_revealed, optional_keep, ..)) = &reveal_until {
                 if *keep_all_revealed {
                     work.hand = Some(work.cards.clone());
                 } else if !*optional_keep || reveal_until_matches.is_empty() {
@@ -646,8 +535,6 @@ impl EffectWindow {
             opp
         } else if private
             || take_all
-            || hand_filter.is_some()
-            || revealed_name.is_some()
             || look_top_choose.is_some()
             || look_top_choose_ext.is_some()
             || reveal_until.is_some()
@@ -949,29 +836,6 @@ impl EffectWindow {
                 };
                 Some((chooser, choice))
             }
-        } else if let Some(hand_filter) = hand_filter {
-            if work.hand.is_some() {
-                None
-            } else {
-                let current = self.evaluated_characteristics()?;
-                let eligible: Vec<_> = work
-                    .cards
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        current.get(*id).is_some_and(|card| match hand_filter {
-                            RevealedHandSelection::AllLands => card.has_type(CardType::Land),
-                            RevealedHandSelection::OneCreature => card.is_creature(),
-                        })
-                    })
-                    .collect();
-                if hand_filter == RevealedHandSelection::AllLands || eligible.is_empty() {
-                    work.hand = Some(eligible);
-                    None
-                } else {
-                    Some((player, PileChoice::OneToHand(eligible)))
-                }
-            }
         } else if take_all {
             if work.hand.is_none() {
                 let current = self.evaluated_characteristics()?;
@@ -988,51 +852,6 @@ impl EffectWindow {
                 );
             }
             None
-        } else if share_attached_type {
-            if work.hand.is_some() {
-                None
-            } else {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let StackKind::TriggeredAbility { source } = entry.kind() else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let current = self.evaluated_characteristics()?;
-                let kinds = match self.attachment_host_for_ability(source.id()) {
-                    Some(TargetRef::Object(host)) => current
-                        .get(host)
-                        .filter(|value| value.zone == ObjectZone::Battlefield)
-                        .map(|value| &value.current_creature_subtypes)
-                        .or_else(|| {
-                            self.growth_last_known
-                                .get(&host)
-                                .map(|value| &value.creature_subtypes)
-                        }),
-                    _ => None,
-                };
-                let eligible = work
-                    .cards
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        current.get(*id).is_some_and(|value| {
-                            value.is_creature()
-                                && kinds.is_some_and(|kinds| {
-                                    !kinds.is_disjoint(&value.current_creature_subtypes)
-                                })
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                Some((
-                    player,
-                    PileChoice::OptionalCreatureToBattlefield {
-                        looked: work.cards.clone(),
-                        eligible,
-                    },
-                ))
-            }
         } else if private {
             if work.hand.is_some() {
                 None
@@ -1046,29 +865,6 @@ impl EffectWindow {
                     PileChoice::OneToHand(work.cards.clone())
                 };
                 Some((player, choice))
-            }
-        } else if creature_choice {
-            if work.creature.is_some() {
-                None
-            } else {
-                let evaluated = self.evaluated_characteristics()?;
-                let eligible: Vec<_> = work
-                    .cards
-                    .iter()
-                    .copied()
-                    .filter(|id| evaluated.get(*id).is_some_and(|value| value.is_creature()))
-                    .collect();
-                match eligible.as_slice() {
-                    [] => {
-                        work.creature = Some(None);
-                        None
-                    }
-                    [only] => {
-                        work.creature = Some(Some(*only));
-                        None
-                    }
-                    _ => Some((opponent, PileChoice::Creature(eligible))),
-                }
             }
         } else if let Some(first) = &work.first {
             if work.hand.is_none() {
@@ -1118,15 +914,7 @@ impl EffectWindow {
             Some(crate::program::LookTopKeepDest::LibraryTop)
         );
         if work.batches.is_empty() {
-            let (chosen_zone, chosen) = if creature_choice {
-                (
-                    Zone::Battlefield,
-                    work.creature
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .into_iter()
-                        .collect::<Vec<_>>(),
-                )
-            } else if let Some(keep_dest) = ext_keep_dest {
+            let (chosen_zone, chosen) = if let Some(keep_dest) = ext_keep_dest {
                 let zone = match keep_dest {
                     crate::program::LookTopKeepDest::Hand
                     | crate::program::LookTopKeepDest::LibraryTop => Zone::Hand,
@@ -1141,10 +929,9 @@ impl EffectWindow {
                 )
             } else {
                 (
-                    if share_attached_type
-                        || look_top_choose
-                            .as_ref()
-                            .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)
+                    if look_top_choose
+                        .as_ref()
+                        .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)
                         || reveal_until
                             .as_ref()
                             .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)

@@ -128,7 +128,6 @@ impl EffectWindow {
     pub(crate) fn search_reveals_selected(&self) -> Result<bool, EffectError> {
         match self.current_instruction()? {
             Instruction::SearchLibrary { filter } => Ok(filter.reveal),
-            Instruction::ExileFromTargetLibrary => Ok(false),
             _ => Err(EffectError::WrongLibraryTopFrame),
         }
     }
@@ -188,13 +187,6 @@ impl EffectWindow {
                     (Some(filter), None)
                 }
             },
-            Instruction::ExileFromTargetLibrary => {
-                let bound = self.instruction_target(entry)?;
-                let TargetRef::Player(subject) = bound.choice().target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                (None, Some(subject))
-            }
             _ => return Err(EffectError::WrongLibraryTopFrame),
         };
         let library = self.window.cards().library(other_library.unwrap_or(player));
@@ -492,9 +484,7 @@ impl EffectWindow {
                         Some(SearchPairConstraint::DistinctLandTypes(_, _))
                     )
                 }),
-                required: (matches!(operation, Instruction::ExileFromTargetLibrary)
-                    || filter.is_some_and(LibrarySearch::is_required))
-                    && !library.is_empty(),
+                required: filter.is_some_and(LibrarySearch::is_required) && !library.is_empty(),
                 entry_colors,
                 entry_reveals,
             },

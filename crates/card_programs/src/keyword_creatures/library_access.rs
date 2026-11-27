@@ -17,57 +17,6 @@ pub(super) fn compile(
         return None;
     }
     let raw = face.oracle_text.as_deref()?;
-    if let Some((prior, last)) = raw.rsplit_once('\n')
-        && let Some(remaining) = last.strip_prefix("Whenever ").and_then(|line| {
-            line.strip_prefix(&face.name)
-                .or_else(|| line.strip_prefix(face.name.split_whitespace().next()?))
-        })
-        && remaining
-            == " attacks, you may pay {X}. When you do, return target creature card with mana value X from your graveyard to the battlefield with a corpse counter on it. If that creature would leave the battlefield, exile it instead of putting it anywhere else."
-    {
-        use spellwake_engine::program::{BodyTarget, ExecutableBody, Instruction, TriggerGrouping};
-        let mut reduced = card.clone();
-        reduced.faces[0].oracle_text = Some(prior.to_owned());
-        let mut program = super::compile(&reduced, vocabulary, Profile::Current).ok()?;
-        let id = program
-            .triggered
-            .iter()
-            .map(|ability| ability.id.0)
-            .max()
-            .map_or(Some(0), |id| id.checked_add(1))?;
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(id),
-            condition: spellwake_engine::program::TriggerSpec::self_attacks(),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    Instruction::OfferVariablePayment { each_player: false },
-                    Instruction::CreateReflexiveGraveyardReturn,
-                ],
-            ),
-        });
-        return Some(program);
-    }
-    let mut lines = raw.lines();
-    if let Some(first)=lines.next().and_then(|line|line.strip_prefix("As an additional cost to cast this spell, you may exile any number of creature cards from your graveyard. This spell costs {"))
-        && let Some(per_card)=first.strip_suffix("} less to cast for each card exiled this way.").and_then(|n|n.parse::<u8>().ok()).filter(|n|*n>0) {
-        use spellwake_engine::program::{BodyTarget,CastReduction,ExecutableBody,Instruction,TriggerGrouping};
-        let mut rules=lines.collect::<Vec<_>>();
-        let trigger=rules.pop()?;
-        let short=face.name.split(',').next()?;
-        if trigger!=format!("Whenever {short} attacks or dies, choose a card at random exiled with {short} and put that card into its owner's hand.") {return None;}
-        let mut reduced=card.clone();
-        reduced.faces[0].oracle_text=Some(rules.join("\n"));
-        let mut program=super::compile(&reduced,vocabulary,Profile::Current).ok()?;
-        program.cast_reductions.push(CastReduction::ExileGraveyardCreatures {per_card});
-        for condition in [spellwake_engine::program::TriggerSpec::self_attacks(),spellwake_engine::program::TriggerSpec::dies(spellwake_engine::program::ObjectFilter::self_object())] {
-            let id=program.triggered.iter().map(|ability|ability.id.0).max().map_or(Some(0),|id|id.checked_add(1))?;
-            program.triggered.push(TriggeredAbility {id:TriggeredAbilityId(id),condition,grouping:TriggerGrouping::EachOccurrence,
-                body:ExecutableBody::new(BodyTarget::None,vec![Instruction::ReturnRandomLinkedExile])});
-        }
-        return Some(program);
-    }
     if let Some(rest) = raw.strip_prefix("Skip your draw step.\n") {
         let mut reduced = card.clone();
         reduced.faces[0].oracle_text = Some(rest.to_owned());
@@ -96,7 +45,6 @@ pub(super) fn compile(
     let mut visibility = None;
     let mut permission = None;
     let mut choose_type = false;
-    let mut copy_from_library = false;
     let mut exile_top_cost = None;
     let mut other = Vec::new();
     for line in raw.lines() {
@@ -114,15 +62,6 @@ pub(super) fn compile(
                 if cost == 0 || exile_top_cost.replace(cost).is_some() {
                     return None;
                 }
-            }
-            line if line.strip_prefix(
-                "Whenever you cast an instant or sorcery spell from your library, ",
-            ) == Some("copy it. You may choose new targets for the copy.") =>
-            {
-                if copy_from_library {
-                    return None;
-                }
-                copy_from_library = true;
             }
             "Play with the top card of your library revealed." => {
                 if visibility.replace(true).is_some() {
@@ -207,30 +146,6 @@ pub(super) fn compile(
             ),
         },
     ]);
-    if copy_from_library {
-        use spellwake_engine::program::{
-            BodyTarget, CastCopyKeyword, ExecutableBody, Instruction, PlayerRelation,
-            TriggerGrouping,
-        };
-        let id = program
-            .triggered
-            .iter()
-            .map(|ability| ability.id.0)
-            .max()
-            .map_or(Some(0), |id| id.checked_add(1))?;
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(id),
-            condition: spellwake_engine::program::TriggerSpec::spell_cast(
-                PlayerRelation::Controller,
-                spellwake_engine::program::SpellFilter::instant_or_sorcery().from_own_library(),
-            ),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::CopyOnCast(CastCopyKeyword::CopyObservedSpell)],
-            ),
-        });
-    }
     if let Some(life) = exile_top_cost {
         use spellwake_engine::program::{BodyTarget, ExecutableBody, ResolvingPlayer};
         let id = program

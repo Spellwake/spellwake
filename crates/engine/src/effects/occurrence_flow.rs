@@ -892,18 +892,6 @@ impl EffectWindow {
                 spent_creature,
             )?;
             self.floating_mana.remember_cast(payment.source, spent);
-            if let Some(StackPayload::Instructions(payload)) =
-                self.payloads.get_mut(&payment.source)
-                && let Some(Instruction::ReturnOddGraveyardPermanentIfPaid { mana, minimum }) =
-                    payload.body.instructions.last()
-            {
-                payload.met_mana_threshold = payment
-                    .spend
-                    .iter()
-                    .filter(|unit| unit.mana_type == *mana)
-                    .fold(RulesInteger::from(0), |sum, unit| sum.plus(&unit.amount))
-                    >= i64::from(*minimum).into();
-            }
         }
         self.debit_mana(payment.payer, &payment.spend);
         self.emit_from(
@@ -1546,91 +1534,12 @@ impl EffectWindow {
         }
         removed
     }
-    pub(super) fn copy_controlled_creatures_as_entry_host(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        instruction: usize,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        use crate::characteristics::{ResolvedDuration, ResolvedPart, ResolvedParts};
-        use crate::occurrence::TriggerRelated;
-        let binding = self
-            .execution_bindings(entry.id())
-            .and_then(|b| b.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let [cause] = binding.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let (TriggerRelated::ZoneChange { after, .. } | TriggerRelated::TokenCreated { after, .. }) =
-            &cause.related
-        else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let Some(TargetRef::Object(host)) = after.attached_to else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let program = self
-            .copiable_program(host)
-            .or_else(|| self.departed_copy_sources.get(&host))
-            .ok_or(EffectError::InconsistentProgram)?
-            .clone();
-        let before = self.rules_snapshot(None)?;
-        let affected = before
-            .view()
-            .evaluated
-            .objects
-            .values()
-            .filter(|view| {
-                view.object != host
-                    && view.zone == ObjectZone::Battlefield
-                    && view.controller == Some(entry.controller())
-                    && view.is_creature()
-                    && !view.is_token
-            })
-            .map(|view| view.object)
-            .collect::<BTreeSet<_>>();
-        if affected.is_empty() {
-            return Ok(());
-        }
-        let effect = self.characteristics.add_effect_for_objects(
-            entry.id(),
-            affected,
-            ResolvedParts(vec![ResolvedPart::Copy(Box::new(program))]),
-            ResolvedDuration::NoStatedDuration,
-        )?;
-        self.emit_from(
-            EventCause::Instruction {
-                entry: entry.id(),
-                instruction,
-            },
-            &before,
-            None,
-            append,
-            |old, current, _| {
-                let appearances = characteristic_appearance_changes(
-                    old,
-                    current,
-                    effect.affected.iter().copied(),
-                )?;
-                Ok(vec![RulesOccurrence::ContinuousEffectCreated {
-                    effect,
-                    appearances,
-                }])
-            },
-        )
-    }
-
     fn needs_departed_copy_source(&self, object: ObjectId) -> bool {
         let refers_to = |source: ObjectId,
                          causes: &crate::occurrence::TriggerCauseSet,
                          body: &ExecutableBody| {
-            (source == object && body.instructions.iter().any(|op| matches!(op, Instruction::CreateNonlegendaryLoyaltyCopy | Instruction::Myriad)))
-                || (body.instructions.contains(&Instruction::CopyOtherControlledNontokensAsEntryHost)
-                    && causes.members().iter().any(|member| matches!(&member.related,
-                        crate::occurrence::TriggerRelated::ZoneChange { after, .. }
-                        | crate::occurrence::TriggerRelated::TokenCreated { after, .. }
-                        if after.attached_to == Some(TargetRef::Object(object)))))
-                || (body.instructions.iter().any(|op| matches!(op, Instruction::CopyEntrantOnceEachTurn | Instruction::CopyCreatureExiledForAbility | Instruction::DamageFromGrantingPermanent { .. } | Instruction::CopyEntrantAsArtifact)) && causes.members().iter().any(|member| {
+            (source == object && body.instructions.iter().any(|op| matches!(op, Instruction::Myriad)))
+                || (body.instructions.iter().any(|op| matches!(op, Instruction::DamageFromGrantingPermanent { .. })) && causes.members().iter().any(|member| {
                     matches!(&member.related, crate::occurrence::TriggerRelated::ZoneChange { after, .. }
                         | crate::occurrence::TriggerRelated::TokenCreated { after, .. } if after.object.id() == object)
                 }))
@@ -1642,28 +1551,27 @@ impl EffectWindow {
 
     fn needs_departed_ability_source(&self, object: ObjectId) -> bool {
         let needs_source = |op: &Instruction| {
-            matches!(op, Instruction::GiveEquippedCreatureToUpkeepPlayer)
-                || matches!(
-                    op,
-                    Instruction::CreateTokens { creations }
-                        | Instruction::CreateAttackingTokens { creations, .. }
-                        if creations.iter().any(|creation| {
-                            creation.amount.references_trigger_source_stat()
-                                || match &creation.base_size {
-                                    Some(crate::token::TokenSize::AtCreation(expr)) => {
-                                        expr.references_trigger_source_stat()
-                                    }
-                                    Some(crate::token::TokenSize::AtCreationPair {
-                                        power,
-                                        toughness,
-                                    }) => {
-                                        power.references_trigger_source_stat()
-                                            || toughness.references_trigger_source_stat()
-                                    }
-                                    _ => false,
+            matches!(
+            op,
+            Instruction::CreateTokens { creations }
+                    | Instruction::CreateAttackingTokens { creations, .. }
+                    if creations.iter().any(|creation| {
+                        creation.amount.references_trigger_source_stat()
+                            || match &creation.base_size {
+                                Some(crate::token::TokenSize::AtCreation(expr)) => {
+                                    expr.references_trigger_source_stat()
                                 }
-                        })
-                )
+                                Some(crate::token::TokenSize::AtCreationPair {
+                                    power,
+                                    toughness,
+                                }) => {
+                                    power.references_trigger_source_stat()
+                                        || toughness.references_trigger_source_stat()
+                                }
+                                _ => false,
+                            }
+                    })
+            )
         };
         if self.triggers.waiting().values().any(|waiting| waiting.source.object.id() == object && waiting.body.instructions.iter().any(needs_source))
             || self.payloads.values().any(|payload| matches!(payload, StackPayload::Instructions(p) if p.bindings.trigger.as_ref().is_some_and(|b|b.source.object.id()==object) && p.body.instructions.iter().any(needs_source))) {
@@ -1672,11 +1580,8 @@ impl EffectWindow {
         self.window.entries().iter().chain(self.window.resolving()).chain(self.window.checking_targets())
             .any(|entry| matches!(entry.kind(), StackKind::ActivatedAbility { source } if source.id() == object)
                 && self.payloads.get(&entry.id()).and_then(StackPayload::instructions).is_some_and(|body| body.iter().any(|op| matches!(op,
-                    Instruction::WatchSmallCreatureCombatDraw(_) | Instruction::PhaseOtherPlaneswalkersNextEndStep | Instruction::WeakenOpposingAttackersUntilNextTurn
-                    | Instruction::CreateReflexiveDiscardDamage
-                    | Instruction::ScheduleDelayedStepTrigger { .. }
+                    Instruction::ScheduleDelayedStepTrigger { .. }
                     | Instruction::EmitReflexiveTrigger { .. }
-                    | Instruction::RegisterTokenLinkedExile
                 ) || matches!(
                     op,
                     Instruction::AdjustLife(spec)
@@ -1727,9 +1632,6 @@ impl EffectWindow {
                             }
                             _ => None,
                         },
-                        Instruction::ExileFromHandOrBattlefield(amount) => {
-                            amount.ability_source_counter_kind()
-                        }
                         _ => None,
                     };
                     if let Some(kind) = kind {
@@ -3474,7 +3376,6 @@ impl EffectWindow {
                 .cast_from_hand_objects
                 .remove(&departed);
         }
-        self.record_aura_graveyard_returns(&records);
         if self.triggers.watches_ability_copies() {
             let activations = records
                 .records
@@ -3702,31 +3603,6 @@ impl EffectWindow {
             .collect()
     }
 
-    pub(super) fn captured_graveyard_card(
-        &self,
-    ) -> Result<Option<(ObjectId, SeatId)>, EffectError> {
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let binding = self
-            .execution_bindings(entry.id())
-            .and_then(|b| b.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let [member] = binding.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let crate::occurrence::TriggerRelated::ZoneChange { after, .. } = &member.related else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let owner = after.object.owner();
-        Ok(self
-            .window
-            .cards()
-            .get(after.object.id())
-            .filter(|card| card.card_id().is_some() && card.zone() == ObjectZone::Graveyard(owner))
-            .map(|card| (card.id(), owner)))
-    }
     pub(super) fn face_down_entry_for(
         &self,
         id: ObjectId,
@@ -3863,13 +3739,7 @@ impl EffectWindow {
                         .is_none_or(|domain| !domain.is_empty())
                 })
                 .collect::<Vec<_>>();
-            // The multi-walker library choice already specified entry timestamp order.
-            // After replacements, another controller still orders their own entrants.
-            let ordered_on_selection = matches!(work.origin,
-                LinkedReturnOrigin::LibraryTop { player, entry, instruction, .. } if player == *chooser
-                    && self.payloads.get(&entry).and_then(StackPayload::instructions)
-                        .and_then(|body| body.get(instruction)) == Some(&Instruction::LookTopPlaneswalkers));
-            if objects.len() > 1 && !ordered_on_selection && !work.orders.contains_key(chooser) {
+            if objects.len() > 1 && !work.orders.contains_key(chooser) {
                 return Ok(Some(EffectDecision::LinkedReturnOrder(
                     LinkedReturnOrderFrame {
                         revision: self.revision,
@@ -3992,13 +3862,7 @@ impl EffectWindow {
                 entry: entry.id(),
                 instruction,
                 tapped,
-                forest: matches!(
-                    self.payloads
-                        .get(&entry.id())
-                        .and_then(StackPayload::instructions)
-                        .and_then(|ops| ops.get(instruction)),
-                    Some(Instruction::ReturnDyingCreatureAsForest)
-                ),
+                forest: false,
                 corpse: matches!(
                     self.payloads
                         .get(&entry.id())

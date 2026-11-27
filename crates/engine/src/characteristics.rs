@@ -852,15 +852,6 @@ impl CharacteristicState {
         self.next_timestamp = next_timestamp;
         Ok(effect)
     }
-    pub(crate) fn take_all_plus_one_counters(
-        &mut self,
-        target: ObjectId,
-    ) -> spellwake_contracts::RulesInteger {
-        self.counters.get_mut(&target).map_or_else(
-            || 0.into(),
-            |c| std::mem::replace(&mut c.plus_one, 0.into()),
-        )
-    }
     pub(crate) fn take_plus_one_counter(
         &mut self,
         target: ObjectId,
