@@ -198,7 +198,7 @@ pub(super) fn lower_keyword(
                 .push(TriggeredAbility::cascade(ids.triggered()));
             Ok(())
         }
-        "storm" if is_spell => {
+        "storm" if param.is_none() && !program.has_type(CardType::Land) => {
             program.triggered.push(TriggeredAbility::spell_copies(
                 ids.triggered(),
                 CastCopyKeyword::Storm,
@@ -345,7 +345,25 @@ pub(super) fn lower_keyword(
                 .push(GrowthKeyword::Mentor.ability(ids.triggered()));
             Ok(())
         }
+        "modular\u{2014}sunburst" if param.is_none() => {
+            program
+                .entry_counter_abilities
+                .push(EntryCounterAbility::Sunburst);
+            program
+                .triggered
+                .push(TransferKeyword::Modular(0).ability(ids.triggered()));
+            Ok(())
+        }
         "modular" => {
+            if param.is_some_and(|s| s.trim().eq_ignore_ascii_case("sunburst")) {
+                program
+                    .entry_counter_abilities
+                    .push(EntryCounterAbility::Sunburst);
+                program
+                    .triggered
+                    .push(TransferKeyword::Modular(0).ability(ids.triggered()));
+                return Ok(());
+            }
             let n: u32 = param
                 .and_then(|s| s.parse().ok())
                 .ok_or("oracle:kw-param")?;
@@ -1021,16 +1039,7 @@ pub(super) fn lower_keyword(
             });
             Ok(())
         }
-        "flashback" => {
-            let (cost, x) = param
-                .and_then(parse_mana_cost_with_x)
-                .ok_or("oracle:flashback-non-mana")?;
-            if program.flashback.replace(cost).is_some() {
-                return Err("oracle:duplicate-flashback");
-            }
-            program.flashback_x_mana_symbols = x;
-            Ok(())
-        }
+        "flashback" => lower_flashback_keyword(param, program),
         "madness" => {
             let cost = param
                 .and_then(parse_fixed_mana_cost)
@@ -1134,7 +1143,7 @@ pub(super) fn lower_keyword(
                 .push(AdditionalCastCost::Entwine(cost));
             Ok(())
         }
-        "replicate" if is_spell => {
+        "replicate" if !program.has_type(CardType::Land) => {
             let cost = param
                 .and_then(parse_fixed_mana_cost)
                 .ok_or("oracle:replicate-non-mana")?;
@@ -1270,55 +1279,7 @@ pub(super) fn lower_keyword(
             program.cast_reductions.push(CastReduction::Undaunted);
             Ok(())
         }
-        "affinity" => {
-            let p = param.ok_or("oracle:affinity-param")?;
-            let stripped = p
-                .strip_prefix("for ")
-                .unwrap_or(p)
-                .trim()
-                .to_ascii_lowercase();
-            let mut sel = PermanentSelector {
-                controller: ControllerSelector::SourceController,
-                ..PermanentSelector::default()
-            };
-            match stripped.as_str() {
-                "artifacts" => {
-                    sel.required_types.insert(CardType::Artifact);
-                }
-                "creatures" => {
-                    sel.required_types.insert(CardType::Creature);
-                }
-                "enchantments" => {
-                    sel.required_types.insert(CardType::Enchantment);
-                }
-                "lands" => {
-                    sel.required_types.insert(CardType::Land);
-                }
-                "plains" => {
-                    sel.land_subtype = Some(LandType::Plains);
-                }
-                "islands" => {
-                    sel.land_subtype = Some(LandType::Island);
-                }
-                "swamps" => {
-                    sel.land_subtype = Some(LandType::Swamp);
-                }
-                "mountains" => {
-                    sel.land_subtype = Some(LandType::Mountain);
-                }
-                "forests" => {
-                    sel.land_subtype = Some(LandType::Forest);
-                }
-                "equipment" => {
-                    sel.artifact_subtype = Some(ArtifactSubtype::Equipment);
-                }
-                _ => return Err("oracle:unsupported-affinity"),
-            }
-            program
-                .cast_reductions
-                .push(CastReduction::Affinity(Box::new(sel)));
-            Ok(())
-        }
+        "affinity" => lower_affinity_keyword(param, program, vocabulary),
         "ascend" => {
             if is_spell {
                 let ProgramKind::Spell(spell) = &mut program.kind else {
@@ -2313,6 +2274,108 @@ pub(super) fn lower_keyword(
         }
         "champion" | "champion a" | "champion an" if !is_spell => {
             lower_champion_keyword(param, program, vocabulary, ids)
+        }
+        "hideaway" if !is_spell => {
+            let n: i64 = param
+                .and_then(|s| s.parse().ok())
+                .ok_or("oracle:kw-param")?;
+            if n <= 0 {
+                return Err("oracle:kw-param");
+            }
+            program.triggered.push(TriggeredAbility {
+                id: ids.triggered(),
+                condition: TriggerSpec::self_enters(),
+                grouping: TriggerGrouping::EachOccurrence,
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::LookTopChooseExt {
+                        library_owner: ResolvingPlayer::Controller,
+                        chooser: ResolvingPlayer::Controller,
+                        count: ValueExpr::literal(n),
+                        filter: None,
+                        max_picks: 1,
+                        take_all_matching: false,
+                        keep_dest: spellwake_engine::program::LookTopKeepDest::ExileLinked {
+                            face_down: true,
+                            playable: false,
+                            free: false,
+                            cast_only: false,
+                            any_color: false,
+                            duration: ResolvedDuration::NoStatedDuration,
+                        },
+                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomRandom,
+                        reveal_kept: false,
+                        reveal_all: false,
+                        reveal_only: false,
+                        secondary: None,
+                    }],
+                ),
+            });
+            let has_look_at_exiled =
+                matches!(
+                    &program.continuous,
+                    Some(StaticContinuousAbility::CastPermission {
+                        permission: CastPermissionRule::LookAtSourceExiledCards,
+                        ..
+                    })
+                ) || program.additional_battlefield_abilities.iter().any(|ab| {
+                    matches!(
+                        ab,
+                        StaticContinuousAbility::CastPermission {
+                            permission: CastPermissionRule::LookAtSourceExiledCards,
+                            ..
+                        }
+                    )
+                });
+            if !has_look_at_exiled {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ids.static_id(),
+                        permission: CastPermissionRule::LookAtSourceExiledCards,
+                    },
+                )?;
+            }
+            Ok(())
+        }
+        "absorb" if !is_spell => {
+            let n: u8 = param
+                .and_then(|s| s.parse().ok())
+                .ok_or("oracle:kw-param")?;
+            if n == 0 {
+                return Err("oracle:kw-param");
+            }
+            push_static_ability(
+                program,
+                StaticContinuousAbility::DamageRule {
+                    id: ids.static_id(),
+                    rule: StaticDamageRule::ModifyDamage {
+                        source: None,
+                        source_controller: PlayerRelation::AnyParticipant,
+                        recipient: StaticDamageRecipient::SelfObject,
+                        kind: StaticDamageKind::Any,
+                        op: StaticDamageOp::PreventUpTo(n),
+                    },
+                },
+            )
+        }
+        "bands with other" => {
+            let raw = param
+                .ok_or("oracle:unsupported-keyword")?
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let quality = match raw.as_str() {
+                "legendary creatures" => spellwake_engine::combat::BandQuality::LegendaryCreatures,
+                "creatures named wolves of the hunt" => {
+                    spellwake_engine::combat::BandQuality::CreaturesNamedWolvesOfTheHunt
+                }
+                _ => return Err("oracle:unsupported-keyword"),
+            };
+            program
+                .printed_keywords
+                .insert(KeywordAbility::BandsWithOther(quality));
+            Ok(())
         }
         _ => Err("oracle:unsupported-keyword"),
     }
@@ -4033,4 +4096,147 @@ fn lower_non_mana_cumulative_upkeep(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, instructions),
     })
+}
+
+fn lower_affinity_keyword(
+    param: Option<&str>,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(), &'static str> {
+    let raw = param.ok_or("oracle:affinity-param")?.trim();
+    let stripped = raw
+        .strip_prefix("for ")
+        .or_else(|| raw.strip_prefix("For "))
+        .unwrap_or(raw)
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+    if stripped.is_empty() {
+        return Err("oracle:affinity-param");
+    }
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let ast_filter =
+        spellwake_oracle_compiler::filter::parse_object_filter(&stripped, &compiler_vocab)
+            .map_err(|_| "oracle:unsupported-affinity")?;
+    if ast_filter.any_card || ast_filter.any_spell || ast_filter.is_ability {
+        return Err("oracle:unsupported-affinity");
+    }
+    let mut sel = lower_filter_to_permanent_selector(&ast_filter, vocabulary)
+        .map_err(|_| "oracle:unsupported-affinity")?;
+    if sel.controller != ControllerSelector::Any || sel.owner.is_some() {
+        return Err("oracle:unsupported-affinity");
+    }
+    sel.controller = ControllerSelector::SourceController;
+    let empty_controlled = PermanentSelector {
+        controller: ControllerSelector::SourceController,
+        ..PermanentSelector::default()
+    };
+    if sel == empty_controlled && stripped != "permanents" {
+        return Err("oracle:unsupported-affinity");
+    }
+    program
+        .cast_reductions
+        .push(CastReduction::Affinity(Box::new(sel)));
+    Ok(())
+}
+
+fn parse_flashback_positive_u8(tok: &str) -> Option<u8> {
+    if matches!(tok, "a" | "an") {
+        return Some(1);
+    }
+    let n = parse_cum_upkeep_positive_count(tok)?;
+    u8::try_from(n).ok()
+}
+
+fn lower_flashback_keyword(param: Option<&str>, program: &mut Program) -> Result<(), &'static str> {
+    let raw = param.ok_or("oracle:flashback-non-mana")?.trim();
+    if let Some((cost, x)) = parse_mana_cost_with_x(raw) {
+        if program.flashback.replace(cost).is_some() {
+            return Err("oracle:duplicate-flashback");
+        }
+        program.flashback_x_mana_symbols = x;
+        return Ok(());
+    }
+
+    let cleaned = raw
+        .trim_start_matches(['\u{2014}', '\u{2013}', '-', ':'])
+        .trim()
+        .trim_end_matches('.')
+        .trim();
+    if cleaned.is_empty() {
+        return Err("oracle:flashback-non-mana");
+    }
+
+    let mut segments = cleaned
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .peekable();
+    let (mana_cost, x_symbols) = match segments.peek().and_then(|seg| parse_mana_cost_with_x(seg)) {
+        Some(parsed) => {
+            segments.next();
+            parsed
+        }
+        None => (ManaCost::free(), 0),
+    };
+
+    let mut life: u16 = 0;
+    let mut sacrifice_creatures: u8 = 0;
+    let mut tap_white_creatures: u8 = 0;
+    let mut saw_non_mana = false;
+
+    for seg in segments {
+        let low = seg.trim_end_matches('.').trim().to_ascii_lowercase();
+        if let Some(rest) = low
+            .strip_prefix("pay ")
+            .and_then(|s| s.strip_suffix(" life"))
+        {
+            let amount: u16 = rest
+                .trim()
+                .parse()
+                .map_err(|_| "oracle:flashback-non-mana")?;
+            if amount == 0 || life != 0 {
+                return Err("oracle:flashback-non-mana");
+            }
+            life = amount;
+            saw_non_mana = true;
+        } else if let Some(rest) = low.strip_prefix("sacrifice ").and_then(|s| {
+            s.strip_suffix(" creatures")
+                .or_else(|| s.strip_suffix(" creature"))
+        }) {
+            let count =
+                parse_flashback_positive_u8(rest.trim()).ok_or("oracle:flashback-non-mana")?;
+            if sacrifice_creatures != 0 {
+                return Err("oracle:flashback-non-mana");
+            }
+            sacrifice_creatures = count;
+            saw_non_mana = true;
+        } else if let Some(rest) = low.strip_prefix("tap ").and_then(|s| {
+            s.strip_suffix(" untapped white creatures you control")
+                .or_else(|| s.strip_suffix(" untapped white creature you control"))
+        }) {
+            let count =
+                parse_flashback_positive_u8(rest.trim()).ok_or("oracle:flashback-non-mana")?;
+            if tap_white_creatures != 0 {
+                return Err("oracle:flashback-non-mana");
+            }
+            tap_white_creatures = count;
+            saw_non_mana = true;
+        } else {
+            return Err("oracle:flashback-non-mana");
+        }
+    }
+
+    if !saw_non_mana {
+        return Err("oracle:flashback-non-mana");
+    }
+    if program.flashback.replace(mana_cost).is_some() {
+        return Err("oracle:duplicate-flashback");
+    }
+    program.flashback_x_mana_symbols = x_symbols;
+    program.flashback_life = life;
+    program.flashback_sacrifice_creatures = sacrifice_creatures;
+    program.flashback_tap_white_creatures = tap_white_creatures;
+    Ok(())
 }

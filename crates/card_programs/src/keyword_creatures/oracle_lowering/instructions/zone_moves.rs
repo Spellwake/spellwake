@@ -5937,9 +5937,9 @@ pub(super) fn lower_zone_moves_instruction(
                                 BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                             ) {
                             MoveSubjectRef::TargetObject
-                        } else if last_instruction_moved_object(&builder.instructions)
-                            || (is_last_moved_card_anaphora(raw)
-                                && has_prior_moved_object(&builder.instructions))
+                        } else if is_last_moved_card_anaphora(raw)
+                            && (last_instruction_moved_object(&builder.instructions)
+                                || has_prior_moved_object(&builder.instructions))
                         {
                             MoveSubjectRef::LastMoved
                         } else if in_trigger {

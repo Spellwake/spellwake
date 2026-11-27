@@ -6281,19 +6281,71 @@ mod wave11_distinct_power_tests {
             }
             let mut builder = BodyBuilder::new();
             let mut ids = LoweringIds::default();
-            assert!(
-                super::lower_instruction_seq(
-                    &instructions,
-                    &mut builder,
-                    &vocab,
-                    &mut ids,
-                    false,
-                    false,
-                    None
-                )
-                .is_err(),
-                "variant {variant}"
+            let res = super::lower_instruction_seq(
+                &instructions,
+                &mut builder,
+                &vocab,
+                &mut ids,
+                false,
+                false,
+                None,
             );
+            if variant == 0 {
+                // With general found_set ZoneOp lowering, SearchLibrary + MoveZone +
+                // ShuffleLibrary(EachOpponent) lowers faithfully without invoking the
+                // controller-only BindX bridge; verify EachOpponent shuffle is preserved.
+                assert!(
+                    res.is_ok(),
+                    "variant 0 should lower via general found_set pipeline"
+                );
+                assert!(
+                    builder.instructions.iter().any(|ins| matches!(
+                        ins,
+                        Instruction::ForEachPlayerQuery { selector, .. }
+                            if matches!(
+                                selector.as_ref(),
+                                spellwake_engine::toolbox::PlayerSelector::Group(
+                                    spellwake_engine::program::AffectedPlayers::EachOpponent
+                                )
+                            )
+                    )),
+                    "variant 0 must preserve EachOpponent shuffle instead of collapsing to controller"
+                );
+            } else if variant == 2 {
+                // With general found_set ZoneOp lowering, an extra inner ShuffleLibrary lowers
+                // faithfully as two distinct shuffles rather than collapsing into the 1-shuffle bridge.
+                assert!(
+                    res.is_ok(),
+                    "variant 2 should lower via general found_set pipeline"
+                );
+                let expected_shuffle =
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library();
+                let shuffle_count = builder
+                    .instructions
+                    .iter()
+                    .filter(|ins| **ins == expected_shuffle)
+                    .count();
+                assert_eq!(
+                    shuffle_count, 2,
+                    "variant 2 must preserve both shuffles instead of collapsing to the 1-shuffle bridge"
+                );
+            } else if variant == 4 {
+                // With general found_set ZoneOp + sentence-scoped BindResolutionX, a trailing
+                // Draw(ChosenX) composes faithfully via BindResolutionX + DrawCards.
+                assert!(
+                    res.is_ok(),
+                    "variant 4 should compose cleanly via BindResolutionX + found_set"
+                );
+                assert!(
+                    builder
+                        .instructions
+                        .iter()
+                        .any(|ins| matches!(ins, Instruction::DrawCards(_))),
+                    "variant 4 must preserve trailing DrawCards(ChosenX)"
+                );
+            } else {
+                assert!(res.is_err(), "variant {variant}");
+            }
             if variant == 3 {
                 assert!(builder.instructions.is_empty());
                 assert_eq!(
