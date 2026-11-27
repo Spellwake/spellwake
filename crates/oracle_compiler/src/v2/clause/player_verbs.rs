@@ -539,8 +539,17 @@ pub(super) fn parse_player_verb_frame(
                 (),
             ));
         }
-        // Compositional delegation: `have <subj> <any subject verb frame>` (`have it deal damage equal to its power to ...`,
-        // `have ~ become a 3/3 Vampire artifact creature with haste until end of turn`, `have ~ fight ...`, etc.)
+        // Compositional delegation: `have <player> <player_verb_frame>` (`have target player lose 3 life`, `have target opponent discard a card`)
+        // OR `have <subj> <any subject verb frame>` (`have it deal damage equal to its power to ...`, `have ~ become a 3/3 ...`)
+        {
+            let pv_cp = ts.checkpoint();
+            if let Ok(sub_actor) = try_parse(ts, parse_player_ref)
+                && let Ok((effs, ())) = try_parse(ts, |s| parse_player_verb_frame(s, sub_actor))
+            {
+                return Ok((effs, ()));
+            }
+            ts.restore(pv_cp);
+        }
         {
             let sv_cp = ts.checkpoint();
             if let Ok(effs) = try_parse(
@@ -1555,6 +1564,7 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
     if ts.eat_word("remove") || ts.eat_word("removes") {
+        let _ = ts.eat_phrase(&["up", "to"]);
         let (all, count) = if ts.eat_word("all") {
             (true, None)
         } else if ts.eat_word("a") || ts.eat_word("an") {
@@ -1824,7 +1834,9 @@ fn parse_keyword_action_verb(ts: &mut TokenStream<'_>, actor: PlayerRef) -> PRes
             duration: Duration::Instant,
         });
     }
-    if ts.eat_phrase(&["repeat", "this", "process", "once"]) {
+    if ts.eat_phrase(&["repeat", "this", "process", "once"])
+        || ts.eat_phrase(&["repeat", "this", "process"])
+    {
         return Ok(Effect::MutatePlayer {
             player: actor,
             mutation: PlayerMutation::Action(PlayerActionKind::RepeatProcessOnce),

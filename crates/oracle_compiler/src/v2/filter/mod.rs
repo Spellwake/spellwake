@@ -58,6 +58,33 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     {
         return Ok(PlayerRef::EachPlayer);
     }
+    if ts.eat_phrase(&[
+        "that",
+        "player",
+        "or",
+        "that",
+        "planeswalker's",
+        "controller",
+    ]) || ts.eat_phrase(&["that", "player", "or", "that", "permanent's", "controller"])
+        || ts.eat_phrase(&[
+            "target",
+            "player",
+            "or",
+            "that",
+            "planeswalker's",
+            "controller",
+        ])
+        || ts.eat_phrase(&[
+            "target",
+            "player",
+            "or",
+            "that",
+            "permanent's",
+            "controller",
+        ])
+    {
+        return Ok(PlayerRef::ThatPlayer);
+    }
     if ts.eat_phrase(&["target", "opponent"]) {
         return Ok(PlayerRef::TargetOpponent);
     }
@@ -93,13 +120,24 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
         || ts.eat_phrase(&["that", "permanent's", "controller"])
         || ts.eat_phrase(&["that", "land's", "controller"])
         || ts.eat_phrase(&["that", "artifact's", "controller"])
+        || ts.eat_phrase(&["that", "source's", "controller"])
+        || ts.eat_phrase(&["that", "source's", "owner"])
         || ts.eat_phrase(&["that", "card's", "owner"])
         || ts.eat_phrase(&["that", "creature's", "owner"])
+        || ts.eat_phrase(&["target", "creature's", "controller"])
         || ts.eat_phrase(&["target", "creature's", "owner"])
         || ts.eat_phrase(&["target", "permanent's", "owner"])
+        || ts.eat_phrase(&["target", "nonland", "permanent's", "owner"])
         || ts.eat_phrase(&["target", "spell's", "controller"])
     {
         return Ok(PlayerRef::ItsController);
+    }
+    {
+        let ocp = ts.checkpoint();
+        if ts.eat_tilde() && ts.eat_word("'s") && ts.eat_word("owner") {
+            return Ok(PlayerRef::ItsOwner);
+        }
+        ts.restore(ocp);
     }
     if ts.eat_phrase(&["that", "spell's", "controller"]) {
         return Ok(PlayerRef::ThatSpellController);
@@ -561,6 +599,27 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             ts.restore(cp);
             break;
         }
+        // `<P>/<T>` adjective before noun (`Target 1/1 creature`, `target 2/2 artifact creature`)
+        if let Some(TokenKind::BasePt(p, t)) = ts.peek().map(|tok| &tok.kind)
+            && !flt.any_permanent
+            && !flt.any_card
+            && !flt.any_spell
+            && card_types_seen.is_empty()
+        {
+            let (p, t) = (*p, *t);
+            ts.pos += 1;
+            flt.stat_bounds.push(StatBound {
+                stat: StatKind::Power,
+                op: CompareOp::Eq,
+                value: Box::new(ValueExpr::Const(p)),
+            });
+            flt.stat_bounds.push(StatBound {
+                stat: StatKind::Toughness,
+                op: CompareOp::Eq,
+                value: Box::new(ValueExpr::Const(t)),
+            });
+            continue;
+        }
         let Some(word) = ts.peek_word() else {
             break;
         };
@@ -769,7 +828,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 ts.next_word();
                 flt.tapped = Some(true);
             }
-            "untapped" => {
+            "untapped" | "nontapped" => {
                 ts.next_word();
                 flt.tapped = Some(false);
             }
@@ -1201,6 +1260,13 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
         }
         if ts.eat_phrase(&["an", "opponent", "casts"]) {
             flt.controller = Some(ControllerRelation::Opponent);
+            continue;
+        }
+        if ts.eat_phrase(&["you", "control", "but", "don't", "own"])
+            || ts.eat_phrase(&["you", "cast", "but", "don't", "own"])
+        {
+            flt.controller = Some(ControllerRelation::You);
+            flt.owner = Some(ControllerRelation::NotYou);
             continue;
         }
         if ts.eat_phrase(&["you", "don't", "own"]) {
@@ -1724,22 +1790,43 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             } else {
                 let _ = ts.eat_word("a") || ts.eat_word("an");
                 let mut subs = Vec::new();
+                let mut ctypes = Vec::new();
+                let mut saw_or = false;
                 while let Some(w) = ts.peek_word() {
                     let low = w.to_ascii_lowercase();
                     if let Some(sub) = ts.vocab.lookup_subtype(&low) {
                         ts.next_word();
                         subs.push(sub.to_string());
-                        let _ = ts.eat_comma();
-                        if ts.eat_word("or") {
-                            let _ = ts.eat_word("a") || ts.eat_word("an");
-                            flt.subtypes_match_any = true;
-                        }
+                    } else if let Some(ct) = lookup_card_type(&low) {
+                        ts.next_word();
+                        ctypes.push(ct);
+                    } else if let Some(st) = lookup_supertype(&low) {
+                        ts.next_word();
+                        flt.required_supertypes = flt.required_supertypes.union(st);
+                    } else if let Some(col) = lookup_color(&low) {
+                        ts.next_word();
+                        flt.any_colors = flt.any_colors.union(col);
                     } else {
                         break;
                     }
+                    let _ = ts.eat_comma();
+                    if ts.eat_word("or") || ts.eat_word("and/or") {
+                        let _ = ts.eat_word("a") || ts.eat_word("an");
+                        saw_or = true;
+                    }
                 }
-                if !subs.is_empty() {
+                if !subs.is_empty() || !ctypes.is_empty() {
+                    if saw_or && subs.len() >= 2 {
+                        flt.subtypes_match_any = true;
+                    }
                     flt.subtypes.extend(subs);
+                    for ct in ctypes {
+                        if saw_or {
+                            flt.any_types = flt.any_types.union(ct);
+                        } else {
+                            flt.all_types = flt.all_types.union(ct);
+                        }
+                    }
                     continue;
                 }
                 ts.restore(cp);
@@ -1771,6 +1858,78 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 flt.flags = flt.flags.union(FilterFlags::WITH_ANY_COUNTER);
                 flt.predicates.push(FilterPredicate::HasCounterKind(ck));
                 continue;
+            }
+            if ts.eat_phrase(&["weren't", "cast", "this", "way"])
+                || ts.eat_phrase(&["wasn't", "cast", "this", "way"])
+                || ts.eat_phrase(&["weren't", "cast"])
+                || ts.eat_phrase(&["wasn't", "cast"])
+                || ts.eat_phrase(&["weren't", "put", "onto", "the", "battlefield"])
+                || ts.eat_phrase(&[
+                    "weren't",
+                    "put",
+                    "onto",
+                    "the",
+                    "battlefield",
+                    "this",
+                    "way",
+                ])
+                || ts.eat_phrase(&["weren't", "put", "there", "this", "way"])
+                || ts.eat_phrase(&["weren't", "put", "into", "your", "hand"])
+                || ts.eat_phrase(&["weren't", "chosen"])
+            {
+                flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                    PriorActionKind::ExiledThisWay,
+                ));
+                continue;
+            }
+            if ts.eat_phrase(&["isn't", "a", "mana", "ability"])
+                || ts.eat_phrase(&["aren't", "mana", "abilities"])
+            {
+                flt.predicates.push(FilterPredicate::NotManaAbility);
+                continue;
+            }
+            if ts.eat_phrase(&["isn't", "legendary"]) || ts.eat_phrase(&["aren't", "legendary"]) {
+                flt.forbidden_supertypes = flt.forbidden_supertypes.union(SupertypeMask::LEGENDARY);
+                continue;
+            }
+            if ts.eat_phrase(&["isn't", "all", "colors"])
+                || ts.eat_phrase(&["aren't", "all", "colors"])
+            {
+                flt.color_arity = Some(ColorArity::Monocolored);
+                continue;
+            }
+            {
+                let neg_cp = ts.checkpoint();
+                if ts.eat_phrase(&["isn't", "a"])
+                    || ts.eat_phrase(&["isn't", "an"])
+                    || ts.eat_word("isn't")
+                    || ts.eat_word("aren't")
+                {
+                    let mut f_subs = Vec::new();
+                    let mut f_types = CardTypeMask::EMPTY;
+                    while let Some(w) = ts.peek_word() {
+                        let low = w.to_ascii_lowercase();
+                        if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                            ts.next_word();
+                            f_subs.push(sub.to_string());
+                        } else if let Some(ct) = lookup_card_type(&low) {
+                            ts.next_word();
+                            f_types = f_types.union(ct);
+                        } else {
+                            break;
+                        }
+                        let _ = ts.eat_comma();
+                        if ts.eat_word("or") || ts.eat_word("and/or") {
+                            let _ = ts.eat_word("a") || ts.eat_word("an");
+                        }
+                    }
+                    if !f_subs.is_empty() || !f_types.is_empty() {
+                        flt.forbidden_subtypes.extend(f_subs);
+                        flt.forbidden_types = flt.forbidden_types.union(f_types);
+                        continue;
+                    }
+                }
+                ts.restore(neg_cp);
             }
             if ts.eat_phrase(&["were", "exiled", "this", "way"])
                 || ts.eat_phrase(&["was", "exiled", "this", "way"])
@@ -1898,22 +2057,43 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
                 || ts.eat_word("are")
             {
                 let mut subs = Vec::new();
+                let mut ctypes = Vec::new();
+                let mut saw_or = false;
                 while let Some(w) = ts.peek_word() {
                     let low = w.to_ascii_lowercase();
                     if let Some(sub) = ts.vocab.lookup_subtype(&low) {
                         ts.next_word();
                         subs.push(sub.to_string());
-                        let _ = ts.eat_comma();
-                        if ts.eat_word("or") {
-                            let _ = ts.eat_word("a") || ts.eat_word("an");
-                            flt.subtypes_match_any = true;
-                        }
+                    } else if let Some(ct) = lookup_card_type(&low) {
+                        ts.next_word();
+                        ctypes.push(ct);
+                    } else if let Some(st) = lookup_supertype(&low) {
+                        ts.next_word();
+                        flt.required_supertypes = flt.required_supertypes.union(st);
+                    } else if let Some(col) = lookup_color(&low) {
+                        ts.next_word();
+                        flt.any_colors = flt.any_colors.union(col);
                     } else {
                         break;
                     }
+                    let _ = ts.eat_comma();
+                    if ts.eat_word("or") || ts.eat_word("and/or") {
+                        let _ = ts.eat_word("a") || ts.eat_word("an");
+                        saw_or = true;
+                    }
                 }
-                if !subs.is_empty() {
+                if !subs.is_empty() || !ctypes.is_empty() {
+                    if saw_or && subs.len() >= 2 {
+                        flt.subtypes_match_any = true;
+                    }
                     flt.subtypes.extend(subs);
+                    for ct in ctypes {
+                        if saw_or {
+                            flt.any_types = flt.any_types.union(ct);
+                        } else {
+                            flt.all_types = flt.all_types.union(ct);
+                        }
+                    }
                     continue;
                 }
             }

@@ -372,7 +372,16 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if ts.eat_word("sacrifice") || ts.eat_word("sacrifices") {
                 let _ = ts.eat_phrase(&["one", "or", "more"]);
-                let subject = parse_subject_ref(ts)?;
+                let first = parse_subject_ref(ts)?;
+                let ocp = ts.checkpoint();
+                let subject = if (ts.eat_word("or") || ts.eat_word("and/or"))
+                    && let Ok(other) = try_parse(ts, parse_subject_ref)
+                {
+                    SubjectRef::Compound(vec![first, other])
+                } else {
+                    ts.restore(ocp);
+                    first
+                };
                 return Ok(vec![TriggerEvent::PermanentSacrificed { player, subject }]);
             }
             if (ts.eat_phrase(&["cycle", "or", "discard"])
@@ -429,7 +438,15 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     && ts.eat_word("a")
                     && let Some(v) = ts.next_number(false).and_then(|n| u8::try_from(n).ok())
                 {
-                    return Ok(vec![TriggerEvent::RolledDie { player, value: v }]);
+                    let mut evs = vec![TriggerEvent::RolledDie { player, value: v }];
+                    while ts.eat_word("or") {
+                        if let Some(v2) = ts.next_number(false).and_then(|n| u8::try_from(n).ok()) {
+                            evs.push(TriggerEvent::RolledDie { player, value: v2 });
+                        } else {
+                            break;
+                        }
+                    }
+                    return Ok(evs);
                 }
                 ts.restore(rcp);
             }
@@ -656,9 +673,11 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if ts.eat_word("play") || ts.eat_word("plays") {
                 if ts.eat_phrase(&["a", "land"]) {
+                    let from_exile = ts.eat_phrase(&["from", "exile"]);
                     if ts.eat_phrase(&["or", "cast", "a", "spell"])
                         || ts.eat_phrase(&["or", "casts", "a", "spell"])
                     {
+                        let spell_from_exile = ts.eat_phrase(&["from", "exile"]);
                         return Ok(vec![
                             TriggerEvent::PlayerAction {
                                 player,
@@ -667,7 +686,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                             TriggerEvent::SpellCast {
                                 caster: player,
                                 spell: None,
-                                from_outside_hand: false,
+                                from_outside_hand: from_exile || spell_from_exile,
                             },
                         ]);
                     }
@@ -750,7 +769,15 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     && ts.eat_word("a")
                     && let Some(v) = ts.next_number(false).and_then(|n| u8::try_from(n).ok())
                 {
-                    return Ok(vec![TriggerEvent::RolledDie { player, value: v }]);
+                    let mut evs = vec![TriggerEvent::RolledDie { player, value: v }];
+                    while ts.eat_word("or") {
+                        if let Some(v2) = ts.next_number(false).and_then(|n| u8::try_from(n).ok()) {
+                            evs.push(TriggerEvent::RolledDie { player, value: v2 });
+                        } else {
+                            break;
+                        }
+                    }
+                    return Ok(evs);
                 }
                 ts.restore(rcp);
             }
@@ -1033,7 +1060,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
     let first_subj = parse_subject_ref(ts)?;
     let subject = {
         let cp = ts.checkpoint();
-        if ts.eat_word("or")
+        if (ts.eat_word("or") || ts.eat_word("and/or"))
             && let Ok(other_subj) = try_parse(ts, parse_subject_ref)
         {
             SubjectRef::Compound(vec![first_subj, other_subj])
@@ -1080,8 +1107,12 @@ fn parse_subject_trigger_verb(
         || ts.eat_word("enter")
     {
         let mut from = None;
+        let _ = ts.eat_word("untapped") || ts.eat_word("tapped");
         let _ = ts.eat_phrase(&["under", "your", "control"]);
-        if ts.eat_word("from")
+        let _ = ts.eat_word("untapped") || ts.eat_word("tapped");
+        if ts.eat_phrase(&["from", "anywhere", "other", "than"]) {
+            let _ = try_parse(ts, crate::v2::filter::parse_zone_ref);
+        } else if ts.eat_word("from")
             && let Ok(z) = try_parse(ts, crate::v2::filter::parse_zone_ref)
         {
             from = Some(z.zone);
@@ -1092,25 +1123,21 @@ fn parse_subject_trigger_verb(
             subject,
         });
     }
-    if ts.eat_phrase(&["leaves", "the", "battlefield"])
-        || ts.eat_phrase(&["leave", "the", "battlefield"])
-    {
-        return Ok(TriggerEvent::ZoneChange {
-            from: Some(ZoneKind::Battlefield),
-            to: None,
-            subject,
-        });
-    }
-    if ts.eat_phrase(&["leaves", "your", "graveyard"])
-        || ts.eat_phrase(&["leave", "your", "graveyard"])
-        || ts.eat_phrase(&["leaves", "a", "graveyard"])
-        || ts.eat_phrase(&["leave", "a", "graveyard"])
-    {
-        return Ok(TriggerEvent::ZoneChange {
-            from: Some(ZoneKind::Graveyard),
-            to: None,
-            subject,
-        });
+    if ts.eat_word("leaves") || ts.eat_word("leave") {
+        if ts.eat_phrase(&["the", "battlefield"]) {
+            return Ok(TriggerEvent::ZoneChange {
+                from: Some(ZoneKind::Battlefield),
+                to: None,
+                subject,
+            });
+        }
+        if let Ok(z) = try_parse(ts, crate::v2::filter::parse_zone_ref) {
+            return Ok(TriggerEvent::ZoneChange {
+                from: Some(z.zone),
+                to: None,
+                subject,
+            });
+        }
     }
     if ts.eat_phrase(&["becomes", "unattached", "from"])
         && {
@@ -1215,11 +1242,17 @@ fn parse_subject_trigger_verb(
     {
         return Ok(TriggerEvent::ClassBecomesLevel { level });
     }
-    if ts.eat_phrase(&["transforms", "into"]) && ts.eat_tilde() {
+    if ts.eat_word("transforms") || ts.eat_word("transform") {
+        let _ = ts.eat_word("into") && ts.eat_tilde();
         return Ok(TriggerEvent::SubjectState {
             subject,
             event: SubjectTriggerKind::Transforms,
         });
+    }
+    if ts.eat_phrase(&["is", "sacrificed", "or", "destroyed"])
+        || ts.eat_phrase(&["are", "sacrificed", "or", "destroyed"])
+    {
+        return Ok(TriggerEvent::Dies { subject });
     }
     if ts.eat_phrase(&["exploits", "a", "creature"]) {
         return Ok(TriggerEvent::SubjectState {

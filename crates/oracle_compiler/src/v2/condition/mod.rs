@@ -76,6 +76,131 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             )));
         }
     }
+    {
+        let fcp = ts.checkpoint();
+        if (ts.eat_tilde() || ts.eat_word("it")) && ts.eat_word("was") {
+            if ts.eat_word("foretold") {
+                return Ok(ConditionExpr::EventCheck(EventCheckKind::KeywordCostPaid(
+                    crate::v2::ir::KeywordKind::Foretell,
+                )));
+            }
+            if ts.eat_phrase(&["cast", "from", "anywhere", "other", "than", "your", "hand"])
+                || ts.eat_phrase(&[
+                    "cast", "from", "anywhere", "other", "than", "its", "owner's", "hand",
+                ])
+            {
+                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Flag(
+                    ConditionFlag::WasCastFromHand,
+                ))));
+            }
+        }
+        ts.restore(fcp);
+    }
+    {
+        let lcp = ts.checkpoint();
+        if ts.eat_phrase(&["your", "life", "total", "is"]) {
+            if ts.eat_phrase(&["greater", "than", "your", "starting", "life", "total"]) {
+                return Ok(ConditionExpr::PlayerCheck {
+                    player: PlayerRef::You,
+                    kind: PlayerConditionKind::LifeAboveStarting { margin: 1 },
+                });
+            }
+            if ts.eat_phrase(&[
+                "less", "than", "or", "equal", "to", "half", "your", "starting", "life", "total",
+            ]) {
+                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::PlayerCheck {
+                    player: PlayerRef::You,
+                    kind: PlayerConditionKind::LifeAboveStarting { margin: 0 },
+                })));
+            }
+        }
+        ts.restore(lcp);
+    }
+    {
+        let hcp = ts.checkpoint();
+        if let Ok(player) = try_parse(ts, parse_player_ref)
+            && ts.eat_phrase(&["has", "more", "cards", "in", "hand", "than", "you"])
+        {
+            return Ok(ConditionExpr::Compare {
+                lhs: Box::new(ValueExpr::PlayerStat {
+                    player,
+                    stat: PlayerStatKind::CardsInHand,
+                }),
+                op: CompareOp::Gt,
+                rhs: Box::new(ValueExpr::PlayerStat {
+                    player: PlayerRef::You,
+                    stat: PlayerStatKind::CardsInHand,
+                }),
+            });
+        }
+        ts.restore(hcp);
+    }
+    {
+        let icp = ts.checkpoint();
+        if ts.eat_phrase(&["it", "isn't", "attacking", "or", "blocking"])
+            || ts.eat_phrase(&["it's", "not", "attacking", "or", "blocking"])
+        {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Or(
+                Box::new(ConditionExpr::SubjectState {
+                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                    state: crate::v2::ir::ObjectStateKind::Attacking,
+                }),
+                Box::new(ConditionExpr::SubjectState {
+                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                    state: crate::v2::ir::ObjectStateKind::Blocking,
+                }),
+            ))));
+        }
+        if let Some(n) = ts.next_number(false)
+            && ts.eat_phrase(&["or", "more", "creatures", "are", "blocking"])
+            && try_parse(ts, parse_subject_ref).is_ok()
+        {
+            return Ok(ConditionExpr::Compare {
+                lhs: Box::new(ValueExpr::Count(Box::new(crate::v2::ir::ObjectFilter {
+                    any_types: crate::ast::CardTypeMask::CREATURE,
+                    combat: Some(crate::ast::CombatState::Blocking),
+                    ..Default::default()
+                }))),
+                op: CompareOp::Ge,
+                rhs: Box::new(ValueExpr::Const(n)),
+            });
+        }
+        ts.restore(icp);
+        if let Ok(subj) = try_parse(ts, parse_subject_ref) {
+            if ts.eat_word("is")
+                && let Some((p, t)) = ts.next_base_pt()
+            {
+                return Ok(ConditionExpr::And(
+                    Box::new(ConditionExpr::Compare {
+                        lhs: Box::new(ValueExpr::ObjectStat {
+                            subject: Box::new(subj.clone()),
+                            stat: StatKind::Power,
+                        }),
+                        op: CompareOp::Eq,
+                        rhs: Box::new(ValueExpr::Const(p)),
+                    }),
+                    Box::new(ConditionExpr::Compare {
+                        lhs: Box::new(ValueExpr::ObjectStat {
+                            subject: Box::new(subj),
+                            stat: StatKind::Toughness,
+                        }),
+                        op: CompareOp::Eq,
+                        rhs: Box::new(ValueExpr::Const(t)),
+                    }),
+                ));
+            }
+            if ts.eat_phrase(&["has", "greater", "power", "than"])
+                && let Ok(other) = try_parse(ts, parse_subject_ref)
+            {
+                return Ok(ConditionExpr::HasGreaterStatThan {
+                    subject: Box::new(subj),
+                    other: Box::new(other),
+                    stat: Some(StatKind::Power),
+                });
+            }
+        }
+        ts.restore(icp);
+    }
     if ts.eat_phrase(&["you", "have", "the", "city's", "blessing"]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::HasCitysBlessing));
     }
