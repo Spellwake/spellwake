@@ -1574,8 +1574,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::SwitchPowerToughness { .. }
         | InstructionAst::Transform { .. }
         | InstructionAst::TurnFaceUp { .. }
-        | InstructionAst::TurnFaceDown { .. }
-        | InstructionAst::Empower { .. } => lower_counters_pt_instruction(
+        | InstructionAst::TurnFaceDown { .. } => lower_counters_pt_instruction(
             ins,
             builder,
             vocabulary,
@@ -1661,6 +1660,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::ChoosePlayerTarget { .. }
         | InstructionAst::Clash { .. }
         | InstructionAst::CollectEvidence { .. }
+        | InstructionAst::Empower { .. }
         | InstructionAst::Exert { .. }
         | InstructionAst::ExileWithCounters { .. }
         | InstructionAst::FlipCoin

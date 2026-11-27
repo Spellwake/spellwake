@@ -471,8 +471,18 @@ impl EffectWindow {
                 .retain(|rule| !rule.duration.expires_at_turn_start(active, position.number));
             next.triggers
                 .expire_delayed_event_triggers_at_turn_start(active, position.number);
+            next.permanent_goaded.retain(|id, players| {
+                !players.is_empty()
+                    && next.window.cards().get(*id).is_some_and(|c| {
+                        c.zone() == crate::object_identity::ObjectZone::Battlefield
+                    })
+            });
             next.goaded.retain(|id, players| {
-                players.retain(|player| *player != active && !next.skipped_turns.contains(player));
+                let permanent = next.permanent_goaded.get(id);
+                players.retain(|player| {
+                    permanent.is_some_and(|perm| perm.contains(player))
+                        || (*player != active && !next.skipped_turns.contains(player))
+                });
                 !players.is_empty()
                     && next.window.cards().get(*id).is_some_and(|c| {
                         c.zone() == crate::object_identity::ObjectZone::Battlefield

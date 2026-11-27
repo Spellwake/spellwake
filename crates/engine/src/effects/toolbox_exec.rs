@@ -953,17 +953,29 @@ impl EffectWindow {
                 if spec.auto_resolve_trivial
                     && let Some(auto_reply) = Self::trivial_prompt_reply(&resolved_domain)
                 {
-                    self.apply_prompt_reply(
-                        entry,
-                        index,
-                        actor,
-                        &spec,
-                        &resolved_domain,
-                        auto_reply,
-                        ctx.append,
-                    )?;
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
+                    let constraint_ok = match (&spec.domain, &auto_reply) {
+                        (
+                            crate::toolbox::PromptDomain::Objects {
+                                constraint: Some(constraint),
+                                ..
+                            },
+                            crate::toolbox::PromptChoiceReply::Objects(ids),
+                        ) => self.satisfies_selection_constraint(ids, *constraint)?,
+                        _ => true,
+                    };
+                    if constraint_ok {
+                        self.apply_prompt_reply(
+                            entry,
+                            index,
+                            actor,
+                            &spec,
+                            &resolved_domain,
+                            auto_reply,
+                            ctx.append,
+                        )?;
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    }
                 }
                 let frame = PromptChoiceFrame {
                     revision: self.revision,

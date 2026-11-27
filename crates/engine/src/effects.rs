@@ -1413,6 +1413,7 @@ pub struct EffectWindow {
     commanders: BTreeMap<CardId, CommanderRecord>,
     commander_color_identities: Option<BTreeMap<SeatId, BTreeSet<crate::characteristics::Color>>>,
     goaded: BTreeMap<ObjectId, BTreeSet<SeatId>>,
+    permanent_goaded: BTreeMap<ObjectId, BTreeSet<SeatId>>,
     entry_color_choices: BTreeMap<ObjectId, ManaType>,
     entry_creature_type_choices:
         BTreeMap<ObjectId, spellwake_contracts::creature_types::CreatureTypeId>,
@@ -2528,6 +2529,7 @@ impl EffectWindow {
             commanders: BTreeMap::new(),
             commander_color_identities: None,
             goaded: BTreeMap::new(),
+            permanent_goaded: BTreeMap::new(),
             entry_color_choices: BTreeMap::new(),
             entry_creature_type_choices: BTreeMap::new(),
             entry_choices: BTreeMap::new(),
@@ -2716,6 +2718,20 @@ impl EffectWindow {
     }
     pub fn name_rules(&self) -> &spellwake_contracts::names::NameRules {
         &self.name_rules
+    }
+    /// Whether `object` is currently goaded by `player` (CR 701.38).
+    #[must_use]
+    pub fn is_goaded_by(&self, object: ObjectId, player: SeatId) -> bool {
+        self.goaded
+            .get(&object)
+            .is_some_and(|players| players.contains(&player))
+    }
+    /// Whether `object` is currently goaded by any player (CR 701.38).
+    #[must_use]
+    pub fn is_goaded(&self, object: ObjectId) -> bool {
+        self.goaded
+            .get(&object)
+            .is_some_and(|players| !players.is_empty())
     }
     pub fn resolution_state(&self) -> Option<ResolutionState<'_>> {
         match self.pending_work.as_ref() {

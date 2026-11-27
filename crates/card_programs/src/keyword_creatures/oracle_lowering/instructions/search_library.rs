@@ -6425,17 +6425,59 @@ fn try_lower_search_library_toolbox<'a>(
         _ => return Err("oracle:unsupported-search-source"),
     };
 
+    let extract_selection_constraint = |f: &mut ObjectFilterAst| -> Result<
+        Option<spellwake_engine::toolbox::SelectionConstraint>,
+        &'static str,
+    > {
+        use spellwake_engine::toolbox::SelectionConstraint;
+        use spellwake_oracle_compiler::ast::ObjectFilterFlags as AstFlags;
+        let mut found: Option<SelectionConstraint> = None;
+        for (bit, sc) in [
+            (
+                AstFlags::DIFFERENT_NAMES,
+                SelectionConstraint::DistinctNames,
+            ),
+            (
+                AstFlags::DIFFERENT_MANA_VALUES,
+                SelectionConstraint::DistinctManaValues,
+            ),
+            (
+                AstFlags::DIFFERENT_CARD_TYPES,
+                SelectionConstraint::DistinctCardTypes,
+            ),
+        ] {
+            if (f.flags.0 & bit.0) != 0 {
+                if found.is_some() {
+                    return Err("oracle:unsupported-filter-flag");
+                }
+                f.flags = AstFlags(f.flags.0 & !bit.0);
+                found = Some(sc);
+            }
+        }
+        Ok(found)
+    };
+
     let mut clean_primary = effective_filter.clone();
     clean_primary.zone = None;
     let is_unrestricted = is_unrestricted_filter(&clean_primary) && effective_secondary.is_none();
-    let obj1 = lower_toolbox_search_filter(effective_filter, &trial, in_trigger, vocabulary)?;
+    let mut primary_for_lower = effective_filter.clone();
+    let selection_constraint = extract_selection_constraint(&mut primary_for_lower)?;
+    let obj1 = lower_toolbox_search_filter(&primary_for_lower, &trial, in_trigger, vocabulary)?;
     bind_filter_player_target(&mut trial, &obj1)?;
     if obj1.uses_target_permanent() && !is_permanent_body_target(trial.target) {
         return Err("oracle:unsupported-search-source");
     }
 
     let obj2_opt = if let Some(sec) = effective_secondary {
-        let obj2 = lower_toolbox_search_filter(sec, &trial, in_trigger, vocabulary)?;
+        if selection_constraint.is_some() && !secondary_is_or {
+            return Err("oracle:unsupported-secondary-search-filter");
+        }
+        let mut sec_for_lower = sec.clone();
+        let sec_constraint = extract_selection_constraint(&mut sec_for_lower)?;
+        if sec_constraint.is_some() && sec_constraint != selection_constraint {
+            return Err("oracle:unsupported-secondary-search-filter");
+        }
+        let obj2 = lower_toolbox_search_filter(&sec_for_lower, &trial, in_trigger, vocabulary)?;
         bind_filter_player_target(&mut trial, &obj2)?;
         if obj2.uses_target_permanent() && !is_permanent_body_target(trial.target) {
             return Err("oracle:unsupported-search-source");
@@ -6526,7 +6568,7 @@ fn try_lower_search_library_toolbox<'a>(
                         chooser: chooser.clone(),
                         min: Box::new(min_expr),
                         max: Box::new(max_expr),
-                        constraint: None,
+                        constraint: selection_constraint,
                         category: ChoiceCategory::Search,
                         hidden: !eff_reveal,
                     },
@@ -6667,7 +6709,7 @@ fn try_lower_search_library_toolbox<'a>(
                     chooser,
                     min: Box::new(min_expr),
                     max: Box::new(max_expr),
-                    constraint: None,
+                    constraint: selection_constraint,
                     category: ChoiceCategory::Search,
                     hidden: !eff_reveal,
                 };
@@ -6726,7 +6768,7 @@ fn try_lower_search_library_toolbox<'a>(
                 chooser: seat_sel.clone(),
                 min: Box::new(min_expr),
                 max: Box::new(max_expr),
-                constraint: None,
+                constraint: selection_constraint,
                 category: ChoiceCategory::Search,
                 hidden: !eff_reveal,
             };

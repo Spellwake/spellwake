@@ -3393,3 +3393,252 @@ fn phase11_foreach_player_query_relocates_inner_jumps() {
         "P1 (life 18 < 20) must take relocated skip jump and stay at 18"
     );
 }
+
+#[test]
+fn phase14_zone_op_selection_constraint_distinct_names_rejects_duplicates() {
+    use spellwake_contracts::names::{EnglishCardName, ObjectNames};
+    use spellwake_engine::toolbox::SelectionConstraint;
+
+    let vocab = vocabulary();
+    let mut bear_a1 = bear(2, 2, BTreeSet::new(), &vocab);
+    bear_a1.names = ObjectNames::single(EnglishCardName::new("Alpha Bear".into()).unwrap());
+    let mut bear_a2 = bear(2, 2, BTreeSet::new(), &vocab);
+    bear_a2.names = ObjectNames::single(EnglishCardName::new("Alpha Bear".into()).unwrap());
+    let mut bear_b = bear(2, 2, BTreeSet::new(), &vocab);
+    bear_b.names = ObjectNames::single(EnglishCardName::new("Beta Bear".into()).unwrap());
+
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::ZoneOp(Box::new(ZoneOpSpec::simple(
+                    ObjectQuery::zone(
+                        QueryZone::Library(Box::new(PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ))),
+                        ObjectFilter::creature(),
+                    ),
+                    ZoneSelection::Prompt {
+                        chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                        min: Box::new(ValueExpr::literal(0)),
+                        max: Box::new(ValueExpr::literal(2)),
+                        constraint: Some(SelectionConstraint::DistinctNames),
+                        category: ChoiceCategory::Search,
+                        hidden: true,
+                    },
+                    ZoneDest::Hand,
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, spell),
+            in_library(2, P0, bear_a1),
+            in_library(3, P0, bear_a2),
+            in_library(4, P0, bear_b),
+        ],
+    );
+    let paused = cast_untargeted(&game, 1).into_state();
+    let decision = paused
+        .pending_decision()
+        .expect("ZoneOp with DistinctNames prompt must pause for selection");
+    assert!(
+        matches!(decision.frame(), RuleFrame::PromptChoice(_)),
+        "expected PromptChoice frame"
+    );
+
+    // Selecting both Alpha Bears violates DistinctNames and must be rejected atomically.
+    let dup_err = attempt(
+        &paused,
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![
+                object(&paused, 2),
+                object(&paused, 3),
+            ])),
+        },
+    );
+    assert!(
+        dup_err.is_err(),
+        "choosing two cards with the same name must violate SelectionConstraint::DistinctNames"
+    );
+
+    // Selecting Alpha Bear + Beta Bear satisfies DistinctNames and moves both to hand.
+    let ok = submit(
+        &paused,
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![
+                object(&paused, 2),
+                object(&paused, 4),
+            ])),
+        },
+    )
+    .into_state();
+    assert_eq!(
+        ok.execution()
+            .window()
+            .cards()
+            .get(object(&ok, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    assert_eq!(
+        ok.execution()
+            .window()
+            .cards()
+            .get(object(&ok, 4))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+}
+
+#[test]
+fn phase14_zone_op_battlefield_face_down_enters_as_manifested_2_2() {
+    let vocab = vocabulary();
+    let titan = bear(6, 6, BTreeSet::new(), &vocab);
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                    ObjectQuery::ZoneScan {
+                        zone: QueryZone::Library(Box::new(PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ))),
+                        filter: Box::new(ObjectFilter::any()),
+                        slice: QuerySlice::Top(Box::new(ValueExpr::literal(1))),
+                    },
+                    ZoneDest::battlefield_face_down(
+                        ZoneController::Player(Box::new(PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ))),
+                        false,
+                    ),
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(vocab, vec![in_hand(1, P0, spell), in_library(2, P0, titan)]);
+    let after = cast_untargeted(&game, 1).into_state();
+    let card_obj = after
+        .execution()
+        .window()
+        .cards()
+        .get(object(&after, 2))
+        .expect("card on battlefield");
+    assert_eq!(card_obj.zone(), ObjectZone::Battlefield);
+    assert!(
+        card_obj.face_down().is_some(),
+        "ZoneDest::battlefield_face_down must enter face down"
+    );
+    let eval = after.execution().evaluated_characteristics().unwrap();
+    let view = eval
+        .get(card_obj.id())
+        .expect("evaluated face-down permanent");
+    let pt = view
+        .power_toughness
+        .as_ref()
+        .expect("manifested permanent is a 2/2 creature");
+    assert_eq!(pt.derived.power, RulesInteger::from(2));
+    assert_eq!(pt.derived.toughness, RulesInteger::from(2));
+}
+
+#[test]
+fn phase14_mutate_object_goad_permanent_persists_across_turns() {
+    let vocab = vocabulary();
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![Instruction::MutateObject(Box::new(
+                    MutateObjectSpec::goad_permanently(
+                        ObjectQuery::Targets,
+                        PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+    let opp_creature = bear(2, 2, BTreeSet::new(), &vocab);
+    let filler_p0 = bear(1, 1, BTreeSet::new(), &vocab);
+    let filler_p1 = bear(1, 1, BTreeSet::new(), &vocab);
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, spell),
+            bf(2, P1, opp_creature),
+            in_library(10, P0, filler_p0),
+            in_library(11, P1, filler_p1),
+        ],
+    );
+    let target_id = object(&game, 2);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::Cast {
+            spell: object(&game, 1),
+            target: TargetRef::Object(target_id),
+        },
+    );
+    let after_cast = pass_pair(cast.state()).into_state();
+    assert!(
+        after_cast.execution().is_goaded_by(target_id, P0),
+        "target creature must be goaded by P0 after resolution"
+    );
+    // Advance through P1's turn (where the goaded creature must attack P0) and back to P0's next turn.
+    let mut state = after_cast;
+    let start_turn = state.turn().unwrap().position().number;
+    for _ in 0..160 {
+        let pos = state.turn().unwrap().position();
+        if pos.number >= start_turn + 2 && pos.step == Step::PrecombatMain {
+            break;
+        }
+        if let Some(pending) = state.pending_decision() {
+            let chooser = pending.chooser();
+            let choice = match pending.frame() {
+                RuleFrame::Combat(CombatDecision::Attackers(_)) if chooser == P1 => {
+                    DecisionReply::DeclareAttackers(vec![AttackDeclaration {
+                        attacker: target_id,
+                        defender: P0,
+                        defending_planeswalker: None,
+                    }])
+                }
+                RuleFrame::Combat(CombatDecision::Attackers(_)) => {
+                    DecisionReply::DeclareAttackers(vec![])
+                }
+                RuleFrame::Combat(CombatDecision::Blockers(_)) => {
+                    DecisionReply::DeclareBlockers(vec![])
+                }
+                other => panic!("unexpected decision while advancing turn: {other:?}"),
+            };
+            state = reply(&state, chooser, choice).into_state();
+        } else {
+            let active = state.execution().window().active_player();
+            let order = if active == P0 { [P0, P1] } else { [P1, P0] };
+            state = pass_in_order(&state, order).into_state();
+        }
+    }
+    assert!(
+        state.turn().unwrap().position().number >= start_turn + 2,
+        "must reach P0's next turn"
+    );
+    assert!(
+        state.execution().is_goaded_by(target_id, P0),
+        "ObjectMutation::GoadPermanent must persist past the goader's next turn start"
+    );
+}
