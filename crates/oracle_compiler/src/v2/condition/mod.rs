@@ -133,22 +133,6 @@ pub(super) fn eat_suffix_cmp_op(
 }
 
 pub fn parse_condition(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
-    // Compound reveal-or-control/choose additional-cost condition.
-    // Checked BEFORE top-level `or` splitting so `or controlled a <subtype>` isn't split apart.
-    // Note: `parse_object_filter`'s post-modifier loop may already consume `as you cast ~` on the second filter.
-    {
-        let dcp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "revealed"])
-            && try_parse(ts, parse_object_filter).is_ok()
-            && (ts.eat_phrase(&["or", "controlled"]) || ts.eat_phrase(&["or", "chose"]))
-            && try_parse(ts, parse_object_filter).is_ok()
-        {
-            let _ = ts.eat_phrase(&["as", "you", "cast"])
-                && (ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]));
-            return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
-        }
-        ts.restore(dcp);
-    }
     let mut cond = parse_condition_atom(ts)?;
     loop {
         let cp = ts.checkpoint();
@@ -326,13 +310,29 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(fcp);
     }
-    if ts.eat_phrase(&[
-        "your", "life", "total", "is", "greater", "than", "your", "starting", "life", "total",
-    ]) {
-        return Ok(player_check(
-            PlayerRef::You,
-            PlayerConditionKind::LifeAboveStarting { margin: 1 },
-        ));
+    {
+        let lcp = ts.checkpoint();
+        if ts.eat_phrase(&["your", "life", "total", "is"]) {
+            let cmp = if ts.eat_phrase(&["greater", "than", "or", "equal", "to"]) {
+                Some((0, false))
+            } else if ts.eat_phrase(&["greater", "than"]) {
+                Some((1, false))
+            } else if ts.eat_phrase(&["less", "than"]) {
+                Some((0, true))
+            } else {
+                None
+            };
+            if let Some((margin, neg)) = cmp
+                && ts.eat_phrase(&["your", "starting", "life", "total"])
+            {
+                let base = player_check(
+                    PlayerRef::You,
+                    PlayerConditionKind::LifeAboveStarting { margin },
+                );
+                return Ok(if neg { not_cond(base) } else { base });
+            }
+        }
+        ts.restore(lcp);
     }
     {
         let hcp = ts.checkpoint();
@@ -816,7 +816,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(ConditionExpr::Flag(ConditionFlag::LesserManaValueSpell));
         }
         ts.restore(lcp);
-        // `~'s / its <keyword> cost was paid` / `the {M} cost was paid` / `<subj> was cast for its <keyword> cost`
+        // `~'s / its <keyword> cost was paid` / `<subj> was cast for its <keyword> cost`
         if ((ts.eat_tilde() && ts.eat_word("'s")) || ts.eat_word("its"))
             && let Ok(kw) = try_parse(ts, parse_keyword_kind)
             && ts.eat_phrase(&["cost", "was", "paid"])
@@ -824,13 +824,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(ConditionExpr::EventCheck(EventCheckKind::KeywordCostPaid(
                 kw,
             )));
-        }
-        ts.restore(lcp);
-        if ts.eat_word("the")
-            && ts.eat_mana_cost().is_some()
-            && ts.eat_phrase(&["cost", "was", "paid"])
-        {
-            return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
         }
         ts.restore(lcp);
         if (ts.eat_tilde()
@@ -948,21 +941,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             ));
         }
         ts.restore(lcp);
-        if ts.eat_phrase(&[
-            "a",
-            "permanent",
-            "left",
-            "the",
-            "battlefield",
-            "under",
-            "your",
-            "control",
-            "this",
-            "turn",
-        ]) {
-            return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
-        }
-        ts.restore(lcp);
         if ts.eat_phrase(&["a", "creature", "died", "this", "turn"]) {
             return Ok(ConditionExpr::Flag(ConditionFlag::PermanentDiedThisTurn));
         }
@@ -1014,19 +992,24 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             PlayerConditionKind::DescendedThisTurn,
             false,
         ),
-        (
-            &[
-                "you", "haven't", "cast", "a", "spell", "from", "your", "hand", "this", "turn",
-            ],
-            PlayerConditionKind::CastSpellFromHandThisTurn,
-            true,
-        ),
     ];
     for &(phrase, kind, neg) in YOU_PLAYER_CHECKS {
         if ts.eat_phrase(phrase) {
             let base = player_check(PlayerRef::You, kind);
             return Ok(if neg { not_cond(base) } else { base });
         }
+    }
+    {
+        let hcp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "haven't", "cast", "a", "spell"])
+            && ts.eat_phrase(&["from", "your", "hand", "this", "turn"])
+        {
+            return Ok(not_cond(player_check(
+                PlayerRef::You,
+                PlayerConditionKind::CastSpellFromHandThisTurn,
+            )));
+        }
+        ts.restore(hcp);
     }
     if ts.eat_any_phrase(&[
         &["you", "control", "your", "commander"],
@@ -1047,38 +1030,44 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             2,
         )));
     }
-    if ts.eat_any_phrase(&[
-        &[
-            "this", "is", "the", "first", "time", "this", "ability", "has", "resolved", "this",
-            "turn",
-        ],
-        &["it's", "the", "first", "time"],
-    ]) {
-        return Ok(ConditionExpr::EventCheck(
-            EventCheckKind::ResolutionCountThisTurn(1),
-        ));
-    }
-    if ts.eat_any_phrase(&[
-        &[
-            "this", "is", "the", "second", "time", "this", "ability", "has", "resolved", "this",
-            "turn",
-        ],
-        &["it's", "the", "second", "time"],
-    ]) {
-        return Ok(ConditionExpr::EventCheck(
-            EventCheckKind::ResolutionCountThisTurn(2),
-        ));
-    }
-    if ts.eat_any_phrase(&[
-        &[
-            "this", "is", "the", "third", "time", "this", "ability", "has", "resolved", "this",
-            "turn",
-        ],
-        &["it's", "the", "third", "time"],
-    ]) {
-        return Ok(ConditionExpr::EventCheck(
-            EventCheckKind::ResolutionCountThisTurn(3),
-        ));
+    // `this is the <ord> [or <ord>] time this ability has resolved this turn` / `it's the <ord> time`
+    {
+        let rcp = ts.checkpoint();
+        const RES_ORDS: &[(&[&str], u8)] = &[
+            (&["first"], 1),
+            (&["second"], 2),
+            (&["third"], 3),
+            (&["fourth"], 4),
+            (&["fifth"], 5),
+            (&["sixth"], 6),
+        ];
+        if ts.eat_phrase(&["this", "is", "the"])
+            && let Some(n1) = eat_table(ts, RES_ORDS)
+        {
+            let n2 = if ts.eat_word("or") {
+                eat_table(ts, RES_ORDS)
+            } else {
+                None
+            };
+            if ts.eat_phrase(&["time", "this", "ability", "has", "resolved", "this", "turn"]) {
+                let c1 = ConditionExpr::EventCheck(EventCheckKind::ResolutionCountThisTurn(n1));
+                if let Some(m) = n2 {
+                    let c2 = ConditionExpr::EventCheck(EventCheckKind::ResolutionCountThisTurn(m));
+                    return Ok(ConditionExpr::Or(Box::new(c1), Box::new(c2)));
+                }
+                return Ok(c1);
+            }
+        }
+        ts.restore(rcp);
+        if ts.eat_phrase(&["it's", "the"])
+            && let Some(n) = eat_table(ts, RES_ORDS)
+            && ts.eat_word("time")
+        {
+            return Ok(ConditionExpr::EventCheck(
+                EventCheckKind::ResolutionCountThisTurn(n),
+            ));
+        }
+        ts.restore(rcp);
     }
     {
         let acp = ts.checkpoint();
@@ -1211,16 +1200,18 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(mcp);
     }
-    if ts.eat_any_phrase(&[
-        &[
-            "it", "wasn't", "cast", "or", "no", "mana", "was", "spent", "to", "cast", "it",
-        ],
-        &["no", "mana", "was", "spent", "to", "cast", "it"],
-    ]) {
-        return Ok(ConditionExpr::SubjectCheck {
-            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
-            kind: SubjectConditionKind::NotCastOrNoManaSpent,
-        });
+    {
+        let ncp = ts.checkpoint();
+        if (ts.eat_phrase(&["it", "wasn't", "cast", "or"])
+            && ts.eat_phrase(&["no", "mana", "was", "spent", "to", "cast", "it"]))
+            || ts.eat_phrase(&["no", "mana", "was", "spent", "to", "cast", "it"])
+        {
+            return Ok(ConditionExpr::SubjectCheck {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                kind: SubjectConditionKind::NotCastOrNoManaSpent,
+            });
+        }
+        ts.restore(ncp);
     }
     const POISONED_PLAYERS: &[(&[&str], PlayerRef)] = &[
         (
@@ -1467,16 +1458,13 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(cp);
     }
-    // `[at least one | one or more] <flt> was/is milled/exiled/discarded/destroyed/revealed/sacrificed/returned/beheld [this way]`
+    // `[at least one | one or more] <flt> was/is milled/exiled/discarded/destroyed/revealed/sacrificed/returned [this way]`
     {
         let cp = ts.checkpoint();
         let _ = ts.eat_any_phrase(&[&["at", "least", "one"], &["one", "or", "more"]]);
         if let Ok(flt) = try_parse(ts, parse_object_filter)
             && ts.eat_any_word(&["was", "were", "is", "are"])
         {
-            if ts.eat_word("beheld") {
-                return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
-            }
             const PRIOR_ACTS: &[(&[&str], PriorActionKind)] = &[
                 (&["milled", "this", "way"], PriorActionKind::MilledThisWay),
                 (&["exiled", "this", "way"], PriorActionKind::ExiledThisWay),
@@ -1536,39 +1524,14 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(cp);
     }
-    if ts.eat_any_phrase(&[
-        &[
-            "a",
-            "permanent",
-            "left",
-            "the",
-            "battlefield",
-            "under",
-            "your",
-            "control",
-            "this",
-            "turn",
-        ],
-        &[
-            "a",
-            "permanent",
-            "you",
-            "controlled",
-            "left",
-            "the",
-            "battlefield",
-            "this",
-            "turn",
-        ],
-        &[
-            "a",
-            "permanent",
-            "left",
-            "the",
-            "battlefield",
-            "this",
-            "turn",
-        ],
+    if ts.eat_phrase(&[
+        "a",
+        "permanent",
+        "left",
+        "the",
+        "battlefield",
+        "this",
+        "turn",
     ]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
     }
@@ -1844,25 +1807,18 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             PlayerConditionKind::CardsLeftGraveyardThisTurn,
         ));
     }
-    if ts.eat_any_phrase(&[
-        &[
-            "a",
-            "land",
-            "entered",
-            "the",
-            "battlefield",
-            "under",
-            "your",
-            "control",
-            "this",
-            "turn",
-        ],
-        &["a", "land", "you", "control", "entered", "this", "turn"],
-    ]) {
-        return Ok(player_check(
-            PlayerRef::You,
-            PlayerConditionKind::LandEnteredThisTurn,
-        ));
+    {
+        let lcp = ts.checkpoint();
+        if (ts.eat_phrase(&["a", "land", "entered", "the", "battlefield"])
+            && ts.eat_phrase(&["under", "your", "control", "this", "turn"]))
+            || ts.eat_phrase(&["a", "land", "you", "control", "entered", "this", "turn"])
+        {
+            return Ok(player_check(
+                PlayerRef::You,
+                PlayerConditionKind::LandEnteredThisTurn,
+            ));
+        }
+        ts.restore(lcp);
     }
     // `<N> or more mana was spent to cast <subj>`
     {
@@ -1958,9 +1914,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             });
         }
         ts.restore(lcp);
-    }
-    if ts.eat_phrase(&["evidence", "was", "collected"]) {
-        return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
     }
     // `~ is still on the battlefield`
     {

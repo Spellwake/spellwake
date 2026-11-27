@@ -20,6 +20,18 @@ fn eat_table<T: Copy>(ts: &mut TokenStream<'_>, table: &[(&[&str], T)]) -> Optio
         .find_map(|&(phrase, val)| ts.eat_phrase(phrase).then_some(val))
 }
 
+pub(super) fn eat_cast_from_command_zone(ts: &mut TokenStream<'_>, unit: &str) -> bool {
+    let cp = ts.checkpoint();
+    if ts.eat_word(unit)
+        && ts.eat_phrase(&["it's", "been", "cast"])
+        && ts.eat_phrase(&["from", "the", "command", "zone", "this", "game"])
+    {
+        return true;
+    }
+    ts.restore(cp);
+    false
+}
+
 fn parse_stat_word(ts: &mut TokenStream<'_>) -> Option<StatKind> {
     if ts.eat_phrase(&["mana", "value"]) {
         Some(StatKind::ManaValue)
@@ -281,48 +293,30 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             Some(PlayerRef::EachPlayer),
         ));
     }
-    if ts.eat_any_phrase(&[
-        &[
-            "the",
-            "total",
-            "amount",
-            "of",
-            "life",
-            "your",
-            "opponents",
-            "have",
-            "lost",
-            "this",
-            "turn",
-        ],
-        &[
-            "the",
-            "total",
-            "amount",
-            "of",
-            "life",
-            "your",
-            "opponents",
-            "lost",
-            "this",
-            "turn",
-        ],
-        &[
-            "the",
-            "total",
-            "life",
-            "lost",
-            "by",
-            "your",
-            "opponents",
-            "this",
-            "turn",
-        ],
-    ]) {
-        return Ok(turn_event(
-            TurnEventKind::LifeLost,
-            Some(PlayerRef::EachOpponent),
-        ));
+    {
+        let lcp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "total", "amount", "of", "life"])
+            && ts.eat_phrase(&["your", "opponents"])
+            && {
+                let _ = ts.eat_word("have");
+                ts.eat_phrase(&["lost", "this", "turn"])
+            }
+        {
+            return Ok(turn_event(
+                TurnEventKind::LifeLost,
+                Some(PlayerRef::EachOpponent),
+            ));
+        }
+        ts.restore(lcp);
+        if ts.eat_phrase(&["the", "total", "life", "lost", "by"])
+            && ts.eat_phrase(&["your", "opponents", "this", "turn"])
+        {
+            return Ok(turn_event(
+                TurnEventKind::LifeLost,
+                Some(PlayerRef::EachOpponent),
+            ));
+        }
+        ts.restore(lcp);
     }
     const SPEED_TABLE: &[(&[&str], PlayerRef)] = &[
         (&["your", "speed"], PlayerRef::You),
@@ -337,79 +331,21 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
     if let Some(player) = eat_table(ts, SPEED_TABLE) {
         return Ok(ValueExpr::Speed(player));
     }
-    if ts.eat_any_phrase(&[
-        &[
-            "the",
-            "total",
-            "amount",
-            "of",
-            "noncombat",
-            "damage",
-            "dealt",
-            "to",
-            "your",
-            "opponents",
-            "this",
-            "turn",
-        ],
-        &[
-            "the",
-            "amount",
-            "of",
-            "noncombat",
-            "damage",
-            "dealt",
-            "to",
-            "your",
-            "opponents",
-            "this",
-            "turn",
-        ],
-    ]) {
-        return Ok(ValueExpr::DamageDealtToOpponentsThisTurn {
-            noncombat_only: true,
-        });
-    }
-    if ts.eat_any_phrase(&[
-        &[
-            "the",
-            "total",
-            "amount",
-            "of",
-            "damage",
-            "dealt",
-            "to",
-            "your",
-            "opponents",
-            "this",
-            "turn",
-        ],
-        &[
-            "the",
-            "amount",
-            "of",
-            "damage",
-            "dealt",
-            "to",
-            "your",
-            "opponents",
-            "this",
-            "turn",
-        ],
-        &[
-            "the",
-            "damage",
-            "dealt",
-            "to",
-            "your",
-            "opponents",
-            "this",
-            "turn",
-        ],
-    ]) {
-        return Ok(ValueExpr::DamageDealtToOpponentsThisTurn {
-            noncombat_only: false,
-        });
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_any_phrase(&[
+            &["the", "total", "amount", "of"],
+            &["the", "amount", "of"],
+            &["the"],
+        ]) {
+            let noncombat_only = ts.eat_word("noncombat");
+            if ts.eat_phrase(&["damage", "dealt", "to"])
+                && ts.eat_phrase(&["your", "opponents", "this", "turn"])
+            {
+                return Ok(ValueExpr::DamageDealtToOpponentsThisTurn { noncombat_only });
+            }
+        }
+        ts.restore(dcp);
     }
     if ts.eat_any_phrase(&[
         &[
@@ -708,10 +644,14 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         ts.restore(lcp);
     }
     // `the life total of a player with the most life`
-    if ts.eat_phrase(&[
-        "the", "life", "total", "of", "a", "player", "with", "the", "most", "life",
-    ]) {
-        return Ok(ValueExpr::HighestLifeTotal);
+    {
+        let hcp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "life", "total", "of"])
+            && ts.eat_phrase(&["a", "player", "with", "the", "most", "life"])
+        {
+            return Ok(ValueExpr::HighestLifeTotal);
+        }
+        ts.restore(hcp);
     }
     // `the damage [already] dealt to <player> [so far] this turn`
     {
@@ -827,9 +767,7 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                 ..Default::default()
             })));
         }
-        if ts.eat_phrase(&[
-            "times", "it's", "been", "cast", "from", "the", "command", "zone", "this", "game",
-        ]) {
+        if eat_cast_from_command_zone(ts, "times") {
             return Ok(ValueExpr::CommanderCastCount(PlayerRef::You));
         }
         if ts.eat_phrase(&["creatures", "in", "your", "party"]) {
@@ -841,18 +779,9 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                 && let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase())
             {
                 ts.next_word();
-                if ts.eat_phrase(&[
-                    "mana",
-                    "symbols",
-                    "in",
-                    "the",
-                    "mana",
-                    "costs",
-                    "of",
-                    "permanents",
-                    "you",
-                    "control",
-                ]) {
+                if ts.eat_phrase(&["mana", "symbols", "in", "the", "mana", "costs"])
+                    && ts.eat_phrase(&["of", "permanents", "you", "control"])
+                {
                     return Ok(ValueExpr::Devotion(c));
                 }
             }

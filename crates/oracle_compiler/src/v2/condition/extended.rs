@@ -31,9 +31,9 @@ pub(super) fn parse_there_are_condition(ts: &mut TokenStream<'_>) -> Option<Cond
             PlayerConditionKind::IsMonarch,
         )));
     }
-    if ts.eat_phrase(&[
-        "there", "is", "an", "instant", "card", "and", "a", "sorcery", "card", "in",
-    ]) && let Ok(zone) = try_parse(ts, parse_zone_ref)
+    if ts.eat_phrase(&["there", "is", "an", "instant", "card"])
+        && ts.eat_phrase(&["and", "a", "sorcery", "card", "in"])
+        && let Ok(zone) = try_parse(ts, parse_zone_ref)
     {
         return Some(ConditionExpr::And(
             Box::new(ConditionExpr::ZoneHasCount {
@@ -274,7 +274,10 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
     ];
     for &(phrase, step, neg) in STEP_CHECKS {
         if ts.eat_phrase(phrase) {
-            let base = ConditionExpr::EventCheck(EventCheckKind::DuringStep(step));
+            let base = ConditionExpr::And(
+                Box::new(ConditionExpr::Flag(ConditionFlag::IsYourTurn)),
+                Box::new(ConditionExpr::EventCheck(EventCheckKind::DuringStep(step))),
+            );
             return Ok(if neg { not_cond(base) } else { base });
         }
     }
@@ -328,43 +331,15 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
         ts.restore(ecp);
     }
 
-    // Life total vs starting life total & Monarch checks
-    const LIFE_MONARCH_CHECKS: &[(&[&str], PlayerRef, PlayerConditionKind, bool)] = &[
-        (
-            &[
-                "your", "life", "total", "is", "less", "than", "your", "starting", "life", "total",
-            ],
-            PlayerRef::You,
-            PlayerConditionKind::LifeAboveStarting { margin: 0 },
-            true,
-        ),
-        (
-            &[
-                "your", "life", "total", "is", "greater", "than", "or", "equal", "to", "your",
-                "starting", "life", "total",
-            ],
-            PlayerRef::You,
-            PlayerConditionKind::LifeAboveStarting { margin: 0 },
-            false,
-        ),
-        (
-            &["you're", "not", "the", "monarch"],
+    // Monarch checks
+    if ts.eat_any_phrase(&[
+        &["you're", "not", "the", "monarch"],
+        &["you", "aren't", "the", "monarch"],
+    ]) {
+        return Ok(not_cond(player_check(
             PlayerRef::You,
             PlayerConditionKind::IsMonarch,
-            true,
-        ),
-        (
-            &["you", "aren't", "the", "monarch"],
-            PlayerRef::You,
-            PlayerConditionKind::IsMonarch,
-            true,
-        ),
-    ];
-    for &(phrase, player, kind, neg) in LIFE_MONARCH_CHECKS {
-        if ts.eat_phrase(phrase) {
-            let base = player_check(player, kind);
-            return Ok(if neg { not_cond(base) } else { base });
-        }
+        )));
     }
     {
         let pcp = ts.checkpoint();
@@ -398,16 +373,6 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
         {
             return Ok(ConditionExpr::SubjectCheck {
                 subject: Box::new(subj),
-                kind: SubjectConditionKind::NotCastOrNoManaSpent,
-            });
-        }
-        ts.restore(mcp);
-        if ts.eat_phrase(&[
-            "none", "of", "them", "were", "cast", "or", "no", "mana", "was", "spent", "to", "cast",
-            "them",
-        ]) {
-            return Ok(ConditionExpr::SubjectCheck {
-                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::Them)),
                 kind: SubjectConditionKind::NotCastOrNoManaSpent,
             });
         }
@@ -511,11 +476,6 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
             && let Some(stat) = eat_stat_kind(ts)
             && ts.eat_any_word(&["is", "was"])
         {
-            if ts.eat_phrase(&["greater", "than", "each", "other", "creature's", "power"]) {
-                return Ok(ConditionExpr::Flag(
-                    ConditionFlag::NoOtherCreatureHasGreaterPower,
-                ));
-            }
             let prefix_op = eat_prefix_cmp_op(ts, true, true);
             if let Ok(rhs) = try_parse(ts, parse_value_expr) {
                 let op = prefix_op.unwrap_or_else(|| eat_suffix_cmp_op(ts, true, true));
@@ -536,9 +496,6 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
             return Ok(not_cond(ConditionExpr::Flag(
                 ConditionFlag::PermanentDiedThisTurn,
             )));
-        }
-        if ts.eat_phrase(&["another", "creature", "died", "this", "turn"]) {
-            return Ok(ConditionExpr::Flag(ConditionFlag::PermanentDiedThisTurn));
         }
         if let Some(n) = ts.next_number(false)
             && ts.eat_phrase(&[
@@ -725,23 +682,6 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
                     player_stat_val(other, PlayerStatKind::LifeTotal),
                 ));
             }
-            ts.restore(p_after);
-            if ts.eat_phrase(&[
-                "has",
-                "more",
-                "life",
-                "than",
-                "another",
-                "of",
-                "your",
-                "opponents",
-            ]) {
-                return Ok(cmp_cond(
-                    player_stat_val(player, PlayerStatKind::LifeTotal),
-                    CompareOp::Gt,
-                    player_stat_val(PlayerRef::EachOtherOpponent, PlayerStatKind::LifeTotal),
-                ));
-            }
         }
         ts.restore(hcp);
     }
@@ -810,82 +750,6 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
             });
         }
         ts.restore(acp);
-    }
-
-    // `two [nonland] cards that share (a|all their) <prop> (were|are) (milled|discarded) this way`
-    {
-        let tcp = ts.checkpoint();
-        if ts.eat_word("two") {
-            let nonland = ts.eat_word("nonland");
-            if ts.eat_phrase(&["cards", "that", "share"]) {
-                let _ = ts.eat_any_phrase(&[&["a"], &["all", "their"]]);
-                const TWO_SHARE_PROPS: &[(&[&str], SharedProperty)] = &[
-                    (&["card", "type"], SharedProperty::CardType),
-                    (&["card", "types"], SharedProperty::CardType),
-                    (&["color"], SharedProperty::Color),
-                    (&["colors"], SharedProperty::Color),
-                ];
-                const MILL_OR_DISCARD: &[(&[&str], PriorActionKind)] = &[
-                    (&["milled", "this", "way"], PriorActionKind::MilledThisWay),
-                    (
-                        &["discarded", "this", "way"],
-                        PriorActionKind::DiscardedThisWay,
-                    ),
-                ];
-                if let Some(property) = eat_table(ts, TWO_SHARE_PROPS)
-                    && ts.eat_any_word(&["were", "are"])
-                    && let Some(action) = eat_table(ts, MILL_OR_DISCARD)
-                {
-                    let mut flt = ObjectFilter {
-                        any_card: true,
-                        predicates: vec![FilterPredicate::SharesPropertyWith {
-                            property,
-                            reference: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThoseCards)),
-                            negated: false,
-                        }],
-                        ..Default::default()
-                    };
-                    if nonland {
-                        flt.forbidden_types = CardTypeMask::LAND;
-                    }
-                    return Ok(ConditionExpr::PriorActionMatched {
-                        action,
-                        filter: Box::new(flt),
-                    });
-                }
-            }
-        }
-        ts.restore(tcp);
-    }
-
-    // `this is the (first or second | fourth..sixth) time this ability has resolved this turn`
-    {
-        let rcp = ts.checkpoint();
-        if ts.eat_phrase(&["this", "is", "the"]) {
-            if ts.eat_phrase(&[
-                "first", "or", "second", "time", "this", "ability", "has", "resolved", "this",
-                "turn",
-            ]) {
-                return Ok(ConditionExpr::Or(
-                    Box::new(ConditionExpr::EventCheck(
-                        EventCheckKind::ResolutionCountThisTurn(1),
-                    )),
-                    Box::new(ConditionExpr::EventCheck(
-                        EventCheckKind::ResolutionCountThisTurn(2),
-                    )),
-                ));
-            }
-            const EXTRA_ORDS: &[(&[&str], u8)] =
-                &[(&["fourth"], 4), (&["fifth"], 5), (&["sixth"], 6)];
-            if let Some(n) = eat_table(ts, EXTRA_ORDS)
-                && ts.eat_phrase(&["time", "this", "ability", "has", "resolved", "this", "turn"])
-            {
-                return Ok(ConditionExpr::EventCheck(
-                    EventCheckKind::ResolutionCountThisTurn(n),
-                ));
-            }
-        }
-        ts.restore(rcp);
     }
 
     // `there's another <flt> on the battlefield`

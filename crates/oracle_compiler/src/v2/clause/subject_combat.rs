@@ -5,8 +5,8 @@ use crate::ast::{CardTypeMask, Rounding};
 use crate::v2::condition::parse_condition;
 use crate::v2::filter::parse_subject_ref;
 use crate::v2::ir::{
-    Duration, Effect, ObjectMutation, ObjectStateAction, PlayerActionKind, PlayerRef,
-    PlayerRestrictionKind, RuleRestrictionKind, StaticAbility, SubjectRef, ValueExpr,
+    Duration, Effect, ObjectMutation, ObjectStateAction, PlayerRef, PlayerRestrictionKind,
+    RuleRestrictionKind, StaticAbility, SubjectRef, ValueExpr,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
@@ -15,7 +15,7 @@ use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 use super::subject_verbs::parse_subject_verb_frame;
 use super::{
     apply_continuous, compile_quoted_face, eat_rounding, eat_type_color_subtype_run, mutate_obj,
-    player_action, simple_zone_op,
+    simple_zone_op,
 };
 
 /// Parse `<subj> can't ... [duration]` (handles both player-level and object-level restrictions).
@@ -76,40 +76,6 @@ pub(super) fn parse_subject_cant(
         _ => None,
     };
     if let Some(player) = player_opt {
-        if ts.eat_phrase(&["lose", "life"]) {
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            let mut out = vec![player_action(
-                player,
-                PlayerActionKind::LifeTotalCantChange,
-                duration,
-            )];
-            loop {
-                let acp = ts.checkpoint();
-                let had_comma = ts.eat_comma();
-                let had_and = ts.eat_word("and");
-                if (had_comma || had_and)
-                    && let Ok(more) = try_parse(ts, parse_subject_verb_frame)
-                {
-                    out.extend(more);
-                    continue;
-                }
-                ts.restore(acp);
-                break;
-            }
-            return Ok(out);
-        }
-        if ts.eat_phrase(&["activate", "this", "ability"]) {
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            let _ = ts.eat_phrase(&["during", "combat"]);
-            return Ok(vec![apply_continuous(
-                StaticAbility::PlayerRestriction {
-                    player,
-                    restriction: PlayerRestrictionKind::CantActivateAbilities,
-                    condition: None,
-                },
-                duration,
-            )]);
-        }
         if ts.eat_word("attack")
             && let Ok(atk_tgt) = try_parse(ts, parse_subject_ref)
         {
@@ -301,27 +267,11 @@ pub(super) fn parse_subject_cant(
         } else {
             ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlocked)
         }
-    } else if ts.eat_phrase(&[
-        "be",
-        "prevented",
-        "or",
-        "dealt",
-        "instead",
-        "to",
-        "another",
-        "permanent",
-        "or",
-        "player",
-    ]) || ts.eat_phrase(&["be", "prevented"])
-    {
+    } else if ts.eat_phrase(&["be", "prevented"]) {
         ObjectMutation::ApplyRule(RuleRestrictionKind::DamageCantBePrevented)
     } else if ts.eat_phrase(&["be", "regenerated"]) {
         ObjectMutation::CantBeRegenerated
     } else if ts.eat_phrase(&["be", "countered"]) {
-        // Optional `by <flt>` (`Autumn's Veil`: `can't be countered by blue or black spells this turn`)
-        if ts.eat_word("by") {
-            let _ = try_parse(ts, crate::v2::filter::parse_object_filter);
-        }
         ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCountered)
     } else if ts.eat_phrase(&["phase", "out"]) {
         ObjectMutation::ApplyRule(RuleRestrictionKind::CantPhaseOut)
@@ -546,43 +496,26 @@ pub(super) fn parse_extra_subject_predicates(
     subject: SubjectRef,
 ) -> PResult<Vec<Effect>> {
     // 1. `<subj> assigns/assign combat damage equal to its/their toughness rather than its/their power [dur]`
-    if ts.eat_any_phrase(&[
-        &[
-            "assigns",
-            "combat",
-            "damage",
-            "equal",
-            "to",
-            "its",
-            "toughness",
-            "rather",
-            "than",
-            "its",
-            "power",
-        ],
-        &[
-            "assign",
-            "combat",
-            "damage",
-            "equal",
-            "to",
-            "their",
-            "toughness",
-            "rather",
-            "than",
-            "their",
-            "power",
-        ],
-    ]) {
-        let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-        return Ok(vec![apply_continuous(
-            StaticAbility::SubjectRule {
-                subject,
-                rule: crate::v2::ir::SubjectStaticRule::AssignDamageByToughness,
-                condition: None,
-            },
-            duration,
-        )]);
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_any_word(&["assigns", "assign"])
+            && ts.eat_phrase(&["combat", "damage", "equal", "to"])
+            && ts.eat_any_word(&["its", "their"])
+            && ts.eat_phrase(&["toughness", "rather", "than"])
+            && ts.eat_any_word(&["its", "their"])
+            && ts.eat_word("power")
+        {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            return Ok(vec![apply_continuous(
+                StaticAbility::SubjectRule {
+                    subject,
+                    rule: crate::v2::ir::SubjectStaticRule::AssignDamageByToughness,
+                    condition: None,
+                },
+                duration,
+            )]);
+        }
+        ts.restore(cp);
     }
 
     // 2. `<subj> attacks/attack ... if able`
@@ -851,67 +784,29 @@ pub(super) fn parse_extra_subject_predicates(
         ts.restore(cp);
     }
 
-    // 9. `<subj> loses this ability and becomes an Aura enchantment with enchant <flt>`
+    // 10. `<subj> assign(s) its/their combat damage [this turn] as though it/they weren't blocked`
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "loses",
-            "this",
-            "ability",
-            "and",
-            "becomes",
-            "an",
-            "aura",
-            "enchantment",
-            "with",
-            "enchant",
-        ]) && try_parse(ts, crate::v2::filter::parse_object_filter).is_ok()
+        if ts.eat_any_word(&["assigns", "assign"])
+            && ts.eat_any_word(&["its", "their"])
+            && ts.eat_phrase(&["combat", "damage"])
         {
-            return Ok(vec![
-                mutate_obj(
-                    subject.clone(),
-                    ObjectMutation::RemoveAllAbilities,
-                    Duration::Permanent,
-                ),
-                mutate_obj(
-                    subject,
-                    ObjectMutation::BecomeCreatureTypes {
-                        subtypes: vec!["Aura".to_string()],
-                        add_types: CardTypeMask::ENCHANTMENT,
-                        keep_existing_types: false,
-                        base_pt: None,
-                        keywords: Vec::new(),
+            let _ = ts.eat_phrase(&["this", "turn"]);
+            if ts.eat_phrase(&["as", "though"])
+                && ts.eat_any_word(&["it", "they"])
+                && ts.eat_phrase(&["weren't", "blocked"])
+            {
+                return Ok(vec![apply_continuous(
+                    StaticAbility::SubjectRule {
+                        subject,
+                        rule: crate::v2::ir::SubjectStaticRule::AssignDamageAsUnblocked,
+                        condition: None,
                     },
-                    Duration::Permanent,
-                ),
-            ]);
+                    Duration::UntilEndOfTurn,
+                )]);
+            }
         }
         ts.restore(cp);
-    }
-
-    // 10. `<subj> assign(s) its/their combat damage [this turn] as though it/they weren't blocked`
-    if ts.eat_any_phrase(&[
-        &[
-            "assign", "their", "combat", "damage", "this", "turn", "as", "though", "they",
-            "weren't", "blocked",
-        ],
-        &[
-            "assigns", "its", "combat", "damage", "this", "turn", "as", "though", "it", "weren't",
-            "blocked",
-        ],
-        &[
-            "assign", "its", "combat", "damage", "this", "turn", "as", "though", "it", "weren't",
-            "blocked",
-        ],
-    ]) {
-        return Ok(vec![apply_continuous(
-            StaticAbility::SubjectRule {
-                subject,
-                rule: crate::v2::ir::SubjectStaticRule::AssignDamageAsUnblocked,
-                condition: None,
-            },
-            Duration::UntilEndOfTurn,
-        )]);
     }
 
     // 11. `<subj> must be blocked each combat [this turn] if able`
@@ -1065,7 +960,7 @@ pub(super) fn parse_extra_subject_predicates(
         ts.restore(cp);
     }
 
-    // 16. `is colorless`, `is sacrificed by its controller`, `can cast only one more spell`, `can be the target ... shroud`
+    // 16. `is colorless`, `is sacrificed by its controller`, `can cast only one more spell`
     if ts.eat_any_phrase(&[&["is", "colorless"], &["are", "colorless"]]) {
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
         return Ok(vec![mutate_obj(
@@ -1103,35 +998,6 @@ pub(super) fn parse_extra_subject_predicates(
             },
             duration,
         )]);
-    }
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "can",
-            "be",
-            "the",
-            "target",
-            "of",
-            "spells",
-            "and",
-            "abilities",
-            "controlled",
-            "by",
-        ]) && try_parse(ts, crate::v2::filter::parse_player_ref).is_ok()
-            && ts.eat_phrase(&["as", "though", "it", "didn't", "have", "shroud"])
-        {
-            return Ok(vec![apply_continuous(
-                StaticAbility::SubjectRule {
-                    subject,
-                    rule: crate::v2::ir::SubjectStaticRule::IgnoreKeywordForBlocking(
-                        crate::v2::ir::KeywordKind::Shroud,
-                    ),
-                    condition: None,
-                },
-                Duration::UntilEndOfTurn,
-            )]);
-        }
-        ts.restore(cp);
     }
 
     // 17. `[this turn] that are <colors> cost(s) {M} less/more to cast` + inline token/mana replacement predicates

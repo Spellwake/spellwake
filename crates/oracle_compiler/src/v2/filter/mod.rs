@@ -85,12 +85,6 @@ const PLAYER_REF_HEAD: &[(&[&[&str]], PlayerRef)] = &[
     (
         &[
             &["the", "player", "with", "the", "highest", "life", "total"],
-            &[
-                "the", "player", "with", "the", "most", "life", "or", "tied", "for", "most", "life",
-            ],
-            &[
-                "a", "player", "with", "the", "most", "life", "or", "tied", "for", "most", "life",
-            ],
             &["the", "player", "with", "the", "most", "life"],
             &["a", "player", "with", "the", "most", "life"],
         ],
@@ -253,6 +247,12 @@ const PLAYER_REF_TAIL: &[(&[&[&str]], PlayerRef)] = &[
 
 pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if let Some(p) = eat_phrase_groups(ts, PLAYER_REF_HEAD) {
+        if p == PlayerRef::HighestLifePlayer {
+            let _ = ts.eat_any_phrase(&[
+                &["or", "tied", "for", "the", "most", "life"],
+                &["or", "tied", "for", "most", "life"],
+            ]);
+        }
         return Ok(p);
     }
     if ts.eat_phrase(&[

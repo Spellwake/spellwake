@@ -74,7 +74,11 @@ fn parse_token_combat_mods(ts: &mut TokenStream<'_>, mods: &mut EntryModifiers) 
     ]) {
         mods.attacking = true;
         eat_atk_target(ts);
-    } else if ts.eat_word("tapped") {
+    } else if ts.eat_any_phrase(&[
+        &["that's", "tapped"],
+        &["that", "are", "tapped"],
+        &["tapped"],
+    ]) {
         mods.tapped = true;
     }
 }
@@ -203,13 +207,7 @@ fn parse_token_creation_named(
             Some(PredefinedToken::CursedRole)
         } else if ts.eat_phrase(&["young", "hero", "role"]) {
             Some(PredefinedToken::YoungHeroRole)
-        } else if ts.peek_word().is_some()
-            && ts.peek_n(1).is_some_and(
-                |t| matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("role")),
-            )
-        {
-            ts.next_word();
-            ts.next_word();
+        } else if ts.eat_phrase(&["virtuous", "role"]) {
             Some(PredefinedToken::Role)
         } else if let Some(w) = ts.next_word() {
             match w.to_ascii_lowercase().as_str() {
@@ -429,25 +427,35 @@ fn parse_token_creation_named(
     }
 
     // Trailing `that are blue, black, and red` / `that's all colors`
-    if ts.eat_phrase(&["that", "are"]) || ts.eat_phrase(&["that's"]) {
-        if ts.eat_phrase(&["all", "colors"]) {
-            colors = ColorMask::WHITE
-                .union(ColorMask::BLUE)
-                .union(ColorMask::BLACK)
-                .union(ColorMask::RED)
-                .union(ColorMask::GREEN);
-        } else {
-            loop {
-                let _ = ts.eat_comma();
-                let _ = ts.eat_word("and");
-                if let Some(w) = ts.peek_word()
-                    && let Some(c) = lookup_color(&w.to_ascii_lowercase())
-                {
-                    ts.next_word();
-                    colors = colors.union(c);
-                    continue;
+    {
+        let that_cp = ts.checkpoint();
+        if ts.eat_phrase(&["that", "are"]) || ts.eat_phrase(&["that's"]) {
+            if ts.eat_phrase(&["all", "colors"]) {
+                colors = ColorMask::WHITE
+                    .union(ColorMask::BLUE)
+                    .union(ColorMask::BLACK)
+                    .union(ColorMask::RED)
+                    .union(ColorMask::GREEN);
+            } else {
+                let mut matched_colors = 0usize;
+                loop {
+                    let sep_cp = ts.checkpoint();
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                    if let Some(w) = ts.peek_word()
+                        && let Some(c) = lookup_color(&w.to_ascii_lowercase())
+                    {
+                        ts.next_word();
+                        colors = colors.union(c);
+                        matched_colors += 1;
+                        continue;
+                    }
+                    ts.restore(sep_cp);
+                    break;
                 }
-                break;
+                if matched_colors == 0 {
+                    ts.restore(that_cp);
+                }
             }
         }
     }
@@ -458,6 +466,9 @@ fn parse_token_creation_named(
         ..EntryModifiers::default()
     };
     parse_token_combat_mods(ts, &mut mods);
+    if ts.peek_phrase(&["that's"]) || ts.peek_phrase(&["that", "are"]) {
+        return Err(ts.err("expected color or combat modifier after `that's`/`that are`"));
+    }
     if ts.eat_phrase(&["attached", "to"]) {
         mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
     }

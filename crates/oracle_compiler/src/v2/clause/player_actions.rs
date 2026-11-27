@@ -12,8 +12,7 @@ use crate::v2::value::parse_value_expr;
 
 use super::{
     apply_continuous, apply_replacement, exact_count, exile_zone_op, move_zone_op, mutate_obj,
-    mutate_player, player_action, prompt_choice, simple_zone_dest, simple_zone_op,
-    zone_cards_subject,
+    mutate_player, player_action, prompt_choice, simple_zone_dest, zone_cards_subject,
 };
 
 pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec> {
@@ -77,80 +76,10 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     if ts.eat_phrase(&["one", "mana", "of", "the", "chosen", "color"]) {
         return Ok(ManaSpec::ChosenColor(ValueExpr::Const(1)));
     }
-    if ts.eat_phrase(&[
-        "one", "mana", "of", "either", "of", "the", "circled", "colors",
-    ]) {
-        return Ok(ManaSpec::AnyColor {
-            amount: ValueExpr::Const(1),
-            single_color: true,
-        });
-    }
     if ts.eat_phrase(&["one", "mana", "of", "that", "color"]) {
         return Ok(ManaSpec::ThatColor(ValueExpr::Const(1)));
     }
-    {
-        let ccp = ts.checkpoint();
-        if ts.eat_phrase(&["one", "mana", "of", "any", "of"])
-            && ts.eat_tilde()
-            && ts.eat_phrase(&["'s", "colors"])
-        {
-            return Ok(ManaSpec::AnyColor {
-                amount: ValueExpr::Const(1),
-                single_color: true,
-            });
-        }
-        ts.restore(ccp);
-    }
-    {
-        let tcp = ts.checkpoint();
-        if ts.eat_any_phrase(&[
-            &["one", "mana", "of", "any", "type", "that"],
-            &["one", "mana", "of", "any", "color", "that"],
-            &["one", "mana", "of", "any", "type"],
-            &["one", "mana", "of", "any", "color"],
-        ]) && (ts.eat_any_phrase(&[
-            &["the", "sacrificed", "land"],
-            &["the", "sacrificed", "permanent"],
-            &["the", "exiled", "land"],
-        ]) || try_parse(ts, parse_object_filter).is_ok())
-            && (ts.eat_phrase(&["could", "produce"]) || ts.eat_word("produced"))
-        {
-            return Ok(ManaSpec::AnyColor {
-                amount: ValueExpr::Const(1),
-                single_color: true,
-            });
-        }
-        ts.restore(tcp);
-    }
-    if ts.eat_any_phrase(&[
-        &[
-            "one", "mana", "of", "any", "type", "that", "land", "produced",
-        ],
-        &[
-            "one",
-            "mana",
-            "of",
-            "any",
-            "type",
-            "that",
-            "permanent",
-            "produced",
-        ],
-        &[
-            "one", "mana", "of", "any", "of", "the", "exiled", "cards'", "colors",
-        ],
-        &["one", "mana", "of", "any", "color"],
-    ]) {
-        let _ = ts.eat_phrase(&["in", "your", "commander's", "color", "identity"]);
-        let acp = ts.checkpoint();
-        if ts.eat_word("among") && try_parse(ts, parse_object_filter).is_ok() {
-            let ccp = ts.checkpoint();
-            if !(ts.eat_word("and") && try_parse(ts, parse_object_filter).is_ok()) {
-                ts.restore(ccp);
-            }
-        } else {
-            ts.restore(acp);
-        }
+    if ts.eat_phrase(&["one", "mana", "of", "any", "color"]) {
         return Ok(ManaSpec::AnyColor {
             amount: ValueExpr::Const(1),
             single_color: true,
@@ -402,10 +331,6 @@ pub(super) fn parse_keyword_action_verb(
         (
             &["opens", "an", "attraction"],
             PlayerActionKind::OpenAttraction,
-        ),
-        (
-            &["repeat", "this", "process", "any", "number", "of", "times"],
-            PlayerActionKind::RepeatProcessOnce,
         ),
         (
             &["repeat", "this", "process", "once"],
@@ -1111,33 +1036,6 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 )]);
             }
             ts.restore(dcp);
-            // 5b2. `<player> would roll one or more dice this turn, instead ...`
-            if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
-                && ts.eat_phrase(&["would", "roll", "one", "or", "more", "dice", "this", "turn"])
-                && ts.eat_comma()
-                && ts.eat_phrase(&[
-                    "instead", "they", "roll", "that", "many", "dice", "plus", "one",
-                ])
-            {
-                let _ = ts.eat_comma();
-                let _ = ts.eat_any_word(&["then", "and"]);
-                if ts.eat_phrase(&[
-                    "you", "choose", "one", "of", "those", "rolls", "to", "ignore",
-                ]) {
-                    return Ok(vec![apply_replacement(
-                        crate::v2::ir::Replacement::EventInstead {
-                            event: crate::v2::ir::TriggerEvent::RolledDie { player, value: 0 },
-                            instead: vec![mutate_player(
-                                player,
-                                PlayerMutation::RollDie { sides: 6, count: 2 },
-                                Duration::Instant,
-                            )],
-                        },
-                        Duration::UntilEndOfTurn,
-                    )]);
-                }
-            }
-            ts.restore(dcp);
             // 5b4. `one or more <flt> enter this turn, each enters with <val> additional <kind> counter(s) on it`
             if ts.eat_phrase(&["one", "or", "more"])
                 && let Ok(flt) = try_parse(ts, parse_object_filter)
@@ -1159,53 +1057,6 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                     },
                     Duration::UntilEndOfTurn,
                 )]);
-            }
-            ts.restore(dcp);
-            // 5b6. `you cast <flt> [from your hand] this turn, put that card into your hand instead of into your graveyard as it resolves`
-            if ts.eat_phrase(&["you", "cast"])
-                && let Ok(flt) = try_parse(ts, parse_object_filter)
-            {
-                let _ = ts.eat_phrase(&["from", "your", "hand"]);
-                if ts.eat_phrase(&["this", "turn"])
-                    && ts.eat_comma()
-                    && ts.eat_phrase(&[
-                        "put",
-                        "that",
-                        "card",
-                        "into",
-                        "your",
-                        "hand",
-                        "instead",
-                        "of",
-                        "into",
-                        "your",
-                        "graveyard",
-                        "as",
-                        "it",
-                        "resolves",
-                    ])
-                {
-                    return Ok(vec![apply_replacement(
-                        crate::v2::ir::Replacement::EventInstead {
-                            event: crate::v2::ir::TriggerEvent::SpellCast {
-                                caster: PlayerRef::You,
-                                spell: Some(flt),
-                                from_outside_hand: false,
-                            },
-                            instead: vec![simple_zone_op(
-                                PlayerRef::You,
-                                crate::v2::ir::ZoneOpKind::Move,
-                                SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatCard),
-                                Vec::new(),
-                                Some(simple_zone_dest(
-                                    crate::v2::ir::ZoneKind::Hand,
-                                    crate::v2::ir::ZoneOwner::You,
-                                )),
-                            )],
-                        },
-                        Duration::UntilEndOfTurn,
-                    )]);
-                }
             }
             ts.restore(dcp);
             // 5c. `<src | a source of your choice> would deal [combat] damage [to <tgt> [and/or <tgt2>]] this turn/combat, <instead>`

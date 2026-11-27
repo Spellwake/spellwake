@@ -73,19 +73,6 @@ pub(super) fn try_parse_extra_mana_spend_purpose(
         &["pay", "a", "disturb", "cost"],
         &["pay", "a", "morph", "cost"],
         &["pay", "generic", "mana", "costs"],
-        &[
-            "pay",
-            "a",
-            "mana",
-            "cost",
-            "to",
-            "turn",
-            "a",
-            "manifested",
-            "creature",
-            "face",
-            "up",
-        ],
         &["turn", "permanents", "face", "up"],
         &["turn", "a", "permanent", "face", "up"],
         &["activate", "power-up", "abilities"],
@@ -407,7 +394,7 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
         ts.restore(cp);
     }
 
-    // 2. `Only the player ~ is attacking may activate ...`, `Spend only mana of the chosen color ...`, `For each mana in this ability's activation cost ...`
+    // 2. `Only the player ~ is attacking may activate this ability ...`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["only", "the", "player"])
@@ -436,50 +423,16 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
         }
         ts.restore(cp);
     }
-    if ts.eat_phrase(&[
-        "spend", "only", "mana", "of", "the", "chosen", "color", "to", "activate", "this",
-        "ability",
-    ]) && ts.is_eof()
-    {
-        return Ok(vec![mutate_player(
-            PlayerRef::You,
-            PlayerMutation::ManaRule(crate::v2::ir::ManaRuleKind::SpendOnlyColorOnX(
-                crate::ast::ColorMask::EMPTY,
-            )),
-            Duration::Permanent,
-        )]);
-    }
-    if ts.eat_phrase(&[
-        "for",
-        "each",
-        "mana",
-        "in",
-        "this",
-        "ability's",
-        "activation",
-        "cost",
-    ]) && ts.eat_comma()
-        && ts.eat_phrase(&[
-            "you", "may", "tap", "an", "untapped", "creature", "you", "control", "rather", "than",
-            "pay", "that", "mana",
-        ])
-        && ts.is_eof()
-    {
-        return Ok(vec![apply_continuous(
-            StaticAbility::GlobalFlag(crate::v2::ir::StaticFlagKind::CostReductionRule),
-            Duration::Permanent,
-        )]);
-    }
 
-    // 3. `As an additional cost to cast ~, <cost_or_effect>`
+    // 3. `As an additional cost to cast ~, <cost>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["as", "an", "additional", "cost", "to", "cast"])
             && (ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]))
             && ts.eat_comma()
+            && !ts.peek_phrase(&["you", "may"])
         {
             let body_cp = ts.checkpoint();
-            let _ = ts.eat_phrase(&["you", "may"]);
             if let Ok(costs) = try_parse(ts, crate::v2::cost::parse_cost_list)
                 && ts.is_eof()
             {

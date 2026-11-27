@@ -757,16 +757,6 @@ pub(super) fn parse_player_or_subject_condition(
         return Ok(ConditionExpr::Flag(ConditionFlag::CreatureAttackingYou));
     }
     {
-        let lcp = ts.checkpoint();
-        if ts.eat_phrase(&["a", "permanent", "left", "the", "battlefield"]) && {
-            let _ = ts.eat_phrase(&["under", "your", "control"]);
-            ts.eat_phrase(&["this", "turn"])
-        } {
-            return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
-        }
-        ts.restore(lcp);
-    }
-    {
         let scp = ts.checkpoint();
         if ts.eat_phrase(&["you've", "sacrificed"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)

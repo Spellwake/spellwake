@@ -438,24 +438,6 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
 fn parse_trigger_event_list_with_cond(
     ts: &mut TokenStream<'_>,
 ) -> PResult<(Vec<TriggerEvent>, Option<ConditionExpr>)> {
-    // `a land's ability causes you to add one or more mana of the chosen color`
-    if ts.eat_phrase(&[
-        "a", "land's", "ability", "causes", "you", "to", "add", "one", "or", "more", "mana", "of",
-        "the", "chosen", "color",
-    ]) {
-        return Ok((
-            vec![TriggerEvent::PlayerObjectEvent {
-                player: PlayerRef::You,
-                kind: PlayerObjectTriggerKind::TappedForMana,
-                filter: Some(ObjectFilter {
-                    predicates: vec![FilterPredicate::OfChosenColor],
-                    ..Default::default()
-                }),
-            }],
-            None,
-        ));
-    }
-
     // `a player other than ~'s owner controls it`
     {
         let ocp = ts.checkpoint();
@@ -644,10 +626,10 @@ fn parse_trigger_event_list_with_cond(
     // `a spell or ability an opponent controls causes you to discard <subj>`
     {
         let fcp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "a", "spell", "or", "ability", "an", "opponent", "controls", "causes", "you", "to",
-            "discard",
-        ]) && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        if ts.eat_phrase(&["a", "spell", "or", "ability"])
+            && ts.eat_phrase(&["an", "opponent", "controls"])
+            && ts.eat_phrase(&["causes", "you", "to", "discard"])
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Ok((
                 vec![TriggerEvent::ForcedDiscard {

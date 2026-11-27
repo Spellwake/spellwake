@@ -71,20 +71,24 @@ pub fn parse_for_each_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
     }
 
     // `time you've cast your/a commander / it's been cast from the command zone this game`
-    if (ts.eat_phrase(&["time", "you've", "cast"])
-        && (ts.eat_word("your") || ts.eat_word("a"))
-        && ts.eat_phrase(&[
-            "commander",
-            "from",
-            "the",
-            "command",
-            "zone",
-            "this",
-            "game",
-        ]))
-        || ts.eat_phrase(&[
-            "time", "it's", "been", "cast", "from", "the", "command", "zone", "this", "game",
-        ])
+    if {
+        let ccp = ts.checkpoint();
+        let ok = ts.eat_phrase(&["time", "you've", "cast"])
+            && ts.eat_any_word(&["your", "a"])
+            && ts.eat_phrase(&[
+                "commander",
+                "from",
+                "the",
+                "command",
+                "zone",
+                "this",
+                "game",
+            ]);
+        if !ok {
+            ts.restore(ccp);
+        }
+        ok
+    } || super::eat_cast_from_command_zone(ts, "time")
     {
         return Ok(ValueExpr::CommanderCastCount(PlayerRef::You));
     }

@@ -335,22 +335,6 @@ pub(super) fn parse_filter_post_modifiers(
             });
             continue;
         }
-        if ts.eat_phrase(&[
-            "that",
-            "doesn't",
-            "have",
-            "the",
-            "same",
-            "name",
-            "as",
-            "another",
-            "permanent",
-            "you",
-            "control",
-        ]) {
-            flt.flags = flt.flags.union(FilterFlags::DIFFERENT_NAMES);
-            continue;
-        }
         {
             let ncp = ts.checkpoint();
             if ts.eat_any_phrase(&[&["that", "doesn't", "have"], &["that", "don't", "have"]])
@@ -1574,35 +1558,17 @@ pub(super) fn parse_filter_post_modifiers(
             flt.flags = flt.flags.union(FilterFlags::AT_RANDOM);
             continue;
         }
-        if ts.eat_any_phrase(&[
-            &[
-                "that",
-                "were",
-                "put",
-                "into",
-                "graveyards",
-                "from",
-                "the",
-                "battlefield",
-                "this",
-                "turn",
-            ],
-            &[
-                "that",
-                "was",
-                "put",
-                "into",
-                "a",
-                "graveyard",
-                "from",
-                "the",
-                "battlefield",
-                "this",
-                "turn",
-            ],
-        ]) {
-            flt.flags = flt.flags.union(FilterFlags::DIED_THIS_TURN);
-            continue;
+        {
+            let dcp = ts.checkpoint();
+            if ts.eat_any_phrase(&[
+                &["that", "were", "put", "into", "graveyards"],
+                &["that", "was", "put", "into", "a", "graveyard"],
+            ]) && ts.eat_phrase(&["from", "the", "battlefield", "this", "turn"])
+            {
+                flt.flags = flt.flags.union(FilterFlags::DIED_THIS_TURN);
+                continue;
+            }
+            ts.restore(dcp);
         }
         if ts.eat_phrase(&["a", "player", "discarded", "this", "way"]) {
             flt.predicates.push(FilterPredicate::AffectedByPriorAction(

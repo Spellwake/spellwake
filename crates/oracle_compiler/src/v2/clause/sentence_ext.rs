@@ -5,7 +5,7 @@
 //! dynamic base P/T assignments, `For each` domains, player relative clauses, and
 //! possessive compound player-actor clauses.
 
-use crate::ast::{CardTypeMask, PlayerStatKind, Rounding, TurnStepAst};
+use crate::ast::{CardTypeMask, TurnStepAst};
 use crate::v2::clause::player_verbs::parse_player_verb_frame;
 use crate::v2::clause::subject_verbs::parse_trailing_duration;
 use crate::v2::filter::{
@@ -14,17 +14,16 @@ use crate::v2::filter::{
 use crate::v2::ir::{
     AnaphoraRef, ConditionExpr, DelayedTriggerKind, Duration, Effect, ForEachDomain, LifeOp,
     ObjectFilter, ObjectMutation, ParseStage, PlayerActionKind, PlayerMutation, PlayerRef,
-    PlayerRestrictionKind, PriorActionKind, Replacement, ReplacementRuleKind, RuleRestrictionKind,
-    StaticAbility, StaticFlagKind, StepOwner, SubjectRef, TriggerEvent, TriggerSpec, ValueExpr,
+    PriorActionKind, Replacement, ReplacementRuleKind, StaticAbility, StaticFlagKind, StepOwner,
+    SubjectRef, TriggerEvent, TriggerSpec, ValueExpr,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 
 use super::{
-    apply_continuous, apply_replacement, compile_quoted_face, eat_rounding,
-    eat_type_color_subtype_run, find_phrase_index, mutate_obj, mutate_player, parse_sentence_top,
-    player_action, simple_zone_op,
+    apply_continuous, apply_replacement, eat_type_color_subtype_run, find_phrase_index, mutate_obj,
+    mutate_player, parse_sentence_top, player_action,
 };
 
 /// Parse extended leading sentence forms before general clause dispatch.
@@ -744,36 +743,6 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
         ts.restore(cp);
     }
 
-    // 18. `Rather than pay [...], you may <verb>`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["rather", "than", "pay"])
-            && (ts.eat_phrase(&[
-                "the", "mana", "cost", "of", "the", "next", "spell", "you", "cast", "this", "turn",
-            ]) || (ts.eat_tilde() && ts.eat_phrase(&["'s", "mana", "cost"])))
-            && ts.eat_comma()
-            && let Ok(body) = try_parse(ts, parse_sentence_top)
-        {
-            return Ok(body);
-        }
-        ts.restore(cp);
-    }
-
-    // 19. `For one spell this turn, <body>`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["for", "one", "spell", "this", "turn"])
-            && ts.eat_comma()
-            && let Ok(body) = try_parse(ts, parse_sentence_top)
-        {
-            return Ok(vec![Effect::ScopedDuration {
-                duration: Duration::UntilEndOfTurn,
-                body,
-            }]);
-        }
-        ts.restore(cp);
-    }
-
     // 20. `Any number of target players may each <verb>` AND `You may then <verb>`
     {
         let cp = ts.checkpoint();
@@ -800,7 +769,7 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
         ts.restore(cp);
     }
 
-    // 21. `[Your | up to one target player's] life total becomes (half ... | that number)`
+    // 21. `[Your | up to one target player's] life total becomes that number`
     {
         let cp = ts.checkpoint();
         let life_p = if ts.eat_phrase(&["your", "life", "total", "becomes"]) {
@@ -812,99 +781,14 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
         } else {
             None
         };
-        if let Some(player) = life_p {
-            if ts.eat_phrase(&["that", "number"]) && ts.is_eof() {
-                return Ok(vec![Effect::AdjustLife {
-                    player,
-                    amount: ValueExpr::Var(crate::v2::ir::VarName::X),
-                    op: LifeOp::Set,
-                }]);
-            }
-            if ts.eat_any_phrase(&[
-                &["half", "your", "starting", "life", "total"],
-                &["half", "their", "starting", "life", "total"],
-            ]) {
-                let rounding = eat_rounding(ts, Rounding::Down);
-                if ts.is_eof() {
-                    return Ok(vec![Effect::AdjustLife {
-                        player,
-                        amount: ValueExpr::Div {
-                            expr: Box::new(ValueExpr::PlayerStat {
-                                player,
-                                stat: PlayerStatKind::LifeTotal,
-                            }),
-                            denom: 2,
-                            rounding,
-                        },
-                        op: LifeOp::Set,
-                    }]);
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 22. `It's an Aura enchantment with enchant <flt> and "..." [and it loses all other abilities]`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["it's", "an", "aura", "enchantment", "with", "enchant"])
-            && try_parse(ts, parse_object_filter).is_ok()
-            && ts.eat_word("and")
-            && let Some(quoted) = ts.next_quoted()
-            && let Ok(compiled) =
-                compile_quoted_face(ts, "~", "Enchantment - Aura", quoted.trim_end_matches(','))
-        {
-            let mut out = vec![
-                mutate_obj(
-                    SubjectRef::Anaphora(AnaphoraRef::It),
-                    ObjectMutation::BecomeCreatureTypes {
-                        subtypes: vec!["Aura".to_string()],
-                        add_types: CardTypeMask::ENCHANTMENT,
-                        keep_existing_types: false,
-                        base_pt: None,
-                        keywords: Vec::new(),
-                    },
-                    Duration::Permanent,
-                ),
-                mutate_obj(
-                    SubjectRef::Anaphora(AnaphoraRef::It),
-                    ObjectMutation::GrantAbility(Box::new(compiled)),
-                    Duration::Permanent,
-                ),
-            ];
-            let lcp = ts.checkpoint();
-            let _ = ts.eat_comma();
-            if ts.eat_phrase(&["and", "it", "loses", "all", "other", "abilities"]) {
-                out.push(mutate_obj(
-                    SubjectRef::Anaphora(AnaphoraRef::It),
-                    ObjectMutation::RemoveAllAbilities,
-                    Duration::Permanent,
-                ));
-            } else {
-                ts.restore(lcp);
-            }
-            if ts.is_eof() {
-                return Ok(out);
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 23. `You may pay <cost> to end this effect`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "may", "pay"])
-            && let Ok(cost) = try_parse(ts, crate::v2::cost::parse_cost_atom)
-            && ts.eat_phrase(&["to", "end", "this", "effect"])
+        if let Some(player) = life_p
+            && ts.eat_phrase(&["that", "number"])
             && ts.is_eof()
         {
-            return Ok(vec![Effect::Optional {
-                actor: PlayerRef::You,
-                body: vec![mutate_player(
-                    PlayerRef::You,
-                    PlayerMutation::PayCost(cost),
-                    Duration::Instant,
-                )],
+            return Ok(vec![Effect::AdjustLife {
+                player,
+                amount: ValueExpr::Var(crate::v2::ir::VarName::X),
+                op: LifeOp::Set,
             }]);
         }
         ts.restore(cp);
@@ -913,21 +797,11 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
     // 25. `If it wasn't (sacrificed | put onto the battlefield with this ability), <body>`
     {
         let cp = ts.checkpoint();
-        if ts.eat_any_phrase(&[
-            &["if", "it", "wasn't", "sacrificed"],
-            &[
-                "if",
-                "it",
-                "wasn't",
-                "put",
-                "onto",
-                "the",
-                "battlefield",
-                "with",
-                "this",
-                "ability",
-            ],
-        ]) && ts.eat_comma()
+        if ts.eat_phrase(&["if", "it", "wasn't"])
+            && (ts.eat_word("sacrificed")
+                || (ts.eat_phrase(&["put", "onto", "the", "battlefield"])
+                    && ts.eat_phrase(&["with", "this", "ability"])))
+            && ts.eat_comma()
             && let Ok(body) = try_parse(ts, parse_sentence_top)
         {
             return Ok(vec![Effect::IfPrevious {
@@ -938,7 +812,7 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
         ts.restore(cp);
     }
 
-    // 26. Global flag / pile choice / retarget / opponent spell+loyalty restriction
+    // 26. Global flag (`A deck can have any number of cards named ~`)
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&[
@@ -950,91 +824,6 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
                 StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck),
                 Duration::Permanent,
             )]);
-        }
-        ts.restore(cp);
-        if ts.eat_phrase(&[
-            "one",
-            "of",
-            "their",
-            "piles",
-            "is",
-            "chosen",
-            "by",
-            "one",
-            "of",
-            "their",
-            "opponents",
-            "of",
-            "their",
-            "choice",
-        ]) && ts.is_eof()
-        {
-            return Ok(vec![simple_zone_op(
-                PlayerRef::AnyOpponent,
-                crate::v2::ir::ZoneOpKind::ChoosePile,
-                SubjectRef::Anaphora(AnaphoraRef::OnePile),
-                Vec::new(),
-                None,
-            )]);
-        }
-        ts.restore(cp);
-        if ts.eat_phrase(&[
-            "the",
-            "new",
-            "targets",
-            "can't",
-            "be",
-            "you",
-            "or",
-            "a",
-            "permanent",
-            "you",
-            "control",
-        ]) && ts.is_eof()
-        {
-            return Ok(vec![apply_continuous(
-                StaticAbility::RuleRestriction {
-                    subject: Some(SubjectRef::Player(PlayerRef::You)),
-                    rule: RuleRestrictionKind::CantBeTargetedBy(Box::default()),
-                    condition: None,
-                },
-                Duration::Instant,
-            )]);
-        }
-        ts.restore(cp);
-        if ts.eat_phrase(&[
-            "your",
-            "opponents",
-            "can't",
-            "cast",
-            "spells",
-            "or",
-            "activate",
-            "planeswalkers'",
-            "loyalty",
-            "abilities",
-        ]) {
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            if ts.is_eof() {
-                return Ok(vec![
-                    apply_continuous(
-                        StaticAbility::PlayerRestriction {
-                            player: PlayerRef::EachOpponent,
-                            restriction: PlayerRestrictionKind::CantCastSpells,
-                            condition: None,
-                        },
-                        duration.clone(),
-                    ),
-                    apply_continuous(
-                        StaticAbility::PlayerRestriction {
-                            player: PlayerRef::EachOpponent,
-                            restriction: PlayerRestrictionKind::CantActivateAbilities,
-                            condition: None,
-                        },
-                        duration,
-                    ),
-                ]);
-            }
         }
         ts.restore(cp);
     }

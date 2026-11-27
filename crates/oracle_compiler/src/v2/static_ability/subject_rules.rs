@@ -288,7 +288,7 @@ pub(super) fn parse_subject_static_ability(
                 extra_parts.push(StaticAbility::SubjectRule {
                     subject: subject.clone(),
                     rule: SubjectStaticRule::AllCreatureTypes,
-                    condition: None,
+                    condition: condition.clone(),
                 });
                 continue;
             }
@@ -345,10 +345,6 @@ pub(super) fn parse_subject_static_ability(
                     "activated",
                 ],
             ]) {
-                let _ = ts.eat_any_phrase(&[
-                    &["unless", "they're", "mana", "abilities"],
-                    &["unless", "they", "are", "mana", "abilities"],
-                ]);
                 extra_parts.push(StaticAbility::RuleRestriction {
                     subject: Some(subject.clone()),
                     rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
@@ -391,7 +387,7 @@ pub(super) fn parse_subject_static_ability(
                                 colors,
                                 keep_existing,
                             },
-                            condition: None,
+                            condition: condition.clone(),
                         });
                     }
                     if !subtypes.is_empty() || saw_card_type {
@@ -454,6 +450,7 @@ pub(super) fn parse_subject_static_ability(
             scale = opt(ts, parse_static_scale_expr).map(Box::new);
         }
         parse_static_subject_tail(ts, &subject, &condition, &mut extra_parts);
+        let has_no_extras = grant_keywords.is_empty() && scale.is_none() && extra_parts.is_empty();
         let base = StaticAbility::ContinuousModifyPT {
             subject: subject.clone(),
             power,
@@ -464,7 +461,8 @@ pub(super) fn parse_subject_static_ability(
         };
         // Chained `as long as <cond>, [and] gets/has ...`
         let ala_cp = ts.checkpoint();
-        if ts.eat_phrase(&["as", "long", "as"])
+        if has_no_extras
+            && ts.eat_phrase(&["as", "long", "as"])
             && let Ok(c1) = try_parse(ts, parse_static_condition)
             && ts.eat_comma()
         {
@@ -474,7 +472,7 @@ pub(super) fn parse_subject_static_ability(
                 toughness,
                 grant_keywords: Vec::new(),
                 scale: None,
-                condition: Some(c1),
+                condition: Some(and_cond(condition.clone(), c1)),
             }];
             loop {
                 let item_cp = ts.checkpoint();
@@ -491,7 +489,7 @@ pub(super) fn parse_subject_static_ability(
                         toughness: t2,
                         grant_keywords: Vec::new(),
                         scale: None,
-                        condition: Some(c2),
+                        condition: Some(and_cond(condition.clone(), c2)),
                     });
                     continue;
                 }
@@ -506,7 +504,7 @@ pub(super) fn parse_subject_static_ability(
                     chain.push(StaticAbility::GrantKeywords {
                         subject: subject.clone(),
                         keywords: k2,
-                        condition: Some(c2),
+                        condition: Some(and_cond(condition.clone(), c2)),
                     });
                     continue;
                 }
@@ -687,7 +685,7 @@ pub(super) fn parse_subject_static_ability(
             return Ok(StaticAbility::SubjectRule {
                 subject,
                 rule: SubjectStaticRule::AdditionalTypesChosen,
-                condition: None,
+                condition,
             });
         }
         ts.restore(mcp);
@@ -695,7 +693,7 @@ pub(super) fn parse_subject_static_ability(
             return Ok(StaticAbility::SubjectRule {
                 subject,
                 rule: SubjectStaticRule::IsChosenColor,
-                condition: None,
+                condition,
             });
         }
         ts.restore(mcp);
@@ -703,7 +701,7 @@ pub(super) fn parse_subject_static_ability(
             return Ok(StaticAbility::SubjectRule {
                 subject,
                 rule: SubjectStaticRule::IsChosenType,
-                condition: None,
+                condition,
             });
         }
         ts.restore(mcp);
@@ -1392,10 +1390,6 @@ pub(super) fn parse_subject_static_ability(
                 "activated",
             ],
         ]) {
-            let _ = ts.eat_any_phrase(&[
-                &["unless", "they're", "mana", "abilities"],
-                &["unless", "they", "are", "mana", "abilities"],
-            ]);
             parts.push(StaticAbility::RuleRestriction {
                 subject: Some(subject),
                 rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
@@ -1472,7 +1466,7 @@ pub(super) fn parse_subject_static_ability(
         return Ok(StaticAbility::SubjectRule {
             subject,
             rule: SubjectStaticRule::IgnoreKeywordForBlocking(kw),
-            condition: None,
+            condition,
         });
     }
 
@@ -1485,7 +1479,7 @@ pub(super) fn parse_subject_static_ability(
                 &["as", "though", "they", "didn't", "have"],
                 &["as", "though", "it", "had"],
             ])
-            && try_parse(ts, crate::v2::filter::parse_keyword_kind).is_ok()
+            && try_parse(ts, crate::v2::filter::parse_keyword_kind).is_ok_and(|k2| k2 == kw)
         {
             return Ok(StaticAbility::SubjectRule {
                 subject,
@@ -1511,7 +1505,7 @@ pub(super) fn parse_subject_static_ability(
         return Ok(StaticAbility::SubjectRule {
             subject,
             rule: SubjectStaticRule::CanBlockAnyNumber,
-            condition: None,
+            condition,
         });
     }
 
@@ -1785,10 +1779,6 @@ pub(super) fn parse_subject_static_ability(
                 &["and", "their", "activated", "abilities"],
             ]) && ts.eat_phrase(&["can't", "be", "activated"])
             {
-                let _ = ts.eat_any_phrase(&[
-                    &["unless", "they're", "mana", "abilities"],
-                    &["unless", "they", "are", "mana", "abilities"],
-                ]);
                 parts.push(StaticAbility::RuleRestriction {
                     subject: Some(subject.clone()),
                     rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,

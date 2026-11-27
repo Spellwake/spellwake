@@ -5,9 +5,9 @@ use crate::v2::filter::{
     parse_counter_kind, parse_object_filter, parse_player_ref, parse_subject_ref,
 };
 use crate::v2::ir::{
-    AnaphoraRef, ConditionExpr, ConditionFlag, EventCheckKind, FilterFlags, FilterPredicate,
-    ObjectFilter, PlayerConditionKind, PlayerRef, PriorActionKind, SharedProperty,
-    SubjectConditionKind, SubjectRef, TurnEventKind, ValueExpr, ZoneKind, ZoneOwner, ZoneRef,
+    AnaphoraRef, ConditionExpr, ConditionFlag, FilterFlags, FilterPredicate, ObjectFilter,
+    PlayerConditionKind, PlayerRef, PriorActionKind, SubjectConditionKind, SubjectRef,
+    TurnEventKind, ValueExpr,
 };
 use crate::v2::parser::{PResult, TokenStream, try_parse};
 
@@ -83,26 +83,14 @@ pub(super) fn parse_extended_extra(ts: &mut TokenStream<'_>) -> PResult<Conditio
         }
         ts.restore(hcp);
     }
-    if ts.eat_phrase(&[
-        "they", "didn't", "put", "the", "card", "on", "top", "of", "their", "library",
-    ]) {
-        return Ok(ConditionExpr::EventCheck(EventCheckKind::DidntPutInZone(
-            ZoneKind::Library,
-        )));
-    }
 
-    // 2. Additional-cost, colored-mana-spent, and face-down entry conditions
+    // 2. Additional-cost and colored-mana-spent conditions
     if ts.eat_any_phrase(&[
         &["her", "additional", "cost", "was", "paid"],
         &["his", "additional", "cost", "was", "paid"],
         &["its", "additional", "cost", "was", "paid"],
     ]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
-    }
-    if ts.eat_phrase(&["that", "cost", "wasn't", "paid"]) {
-        return Ok(not_cond(ConditionExpr::Flag(
-            ConditionFlag::AdditionalCostPaid,
-        )));
     }
     {
         let ccp = ts.checkpoint();
@@ -121,31 +109,9 @@ pub(super) fn parse_extended_extra(ts: &mut TokenStream<'_>) -> PResult<Conditio
             }
         }
         ts.restore(ccp);
-        if let Ok(mut flt) = try_parse(ts, parse_object_filter)
-            && ts.eat_phrase(&[
-                "entered",
-                "the",
-                "battlefield",
-                "face",
-                "down",
-                "under",
-                "your",
-                "control",
-                "this",
-                "turn",
-            ])
-        {
-            flt.flags = flt.flags.union(FilterFlags::FACE_DOWN);
-            return Ok(ConditionExpr::PermanentEnteredThisTurn {
-                filter: Box::new(flt),
-                controller: PlayerRef::You,
-                min_count: 1,
-            });
-        }
-        ts.restore(ccp);
     }
 
-    // 3. Damage-source, shared-property, and group-state checks
+    // 3. Damage-source and group-state checks
     {
         let ccp = ts.checkpoint();
         if ts.eat_phrase(&["any", "of", "that", "damage", "was", "dealt", "by"])
@@ -158,25 +124,6 @@ pub(super) fn parse_extended_extra(ts: &mut TokenStream<'_>) -> PResult<Conditio
         }
         ts.restore(ccp);
     }
-    if ts.eat_phrase(&[
-        "two", "or", "more", "of", "those", "cards", "have", "the", "same", "name",
-    ]) {
-        return Ok(ConditionExpr::SharesTypeWith {
-            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThoseCards)),
-            other: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThoseCards)),
-            kind: SharedProperty::Name,
-        });
-    }
-    if ts.eat_any_phrase(&[
-        &["they", "all", "share", "a", "color"],
-        &["they", "share", "a", "color"],
-    ]) {
-        return Ok(ConditionExpr::SharesTypeWith {
-            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::Them)),
-            other: Box::new(SubjectRef::Anaphora(AnaphoraRef::Them)),
-            kind: SharedProperty::Color,
-        });
-    }
     if ts.eat_phrase(&["any", "of", "them", "are", "suspected"]) {
         return Ok(ConditionExpr::SubjectMatches {
             subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::Them)),
@@ -184,28 +131,6 @@ pub(super) fn parse_extended_extra(ts: &mut TokenStream<'_>) -> PResult<Conditio
                 flags: FilterFlags::SUSPECTED,
                 ..Default::default()
             }),
-        });
-    }
-    if ts.eat_phrase(&[
-        "one",
-        "or",
-        "more",
-        "of",
-        "the",
-        "chosen",
-        "permanents",
-        "are",
-        "still",
-        "on",
-        "the",
-        "battlefield",
-    ]) {
-        return Ok(ConditionExpr::InZone {
-            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThosePermanents)),
-            zone: ZoneRef {
-                zone: ZoneKind::Battlefield,
-                owner: ZoneOwner::Default,
-            },
         });
     }
     if ts.eat_phrase(&[
@@ -244,15 +169,6 @@ pub(super) fn parse_extended_extra(ts: &mut TokenStream<'_>) -> PResult<Conditio
                 CompareOp::Ge,
                 ValueExpr::Const(n),
             ));
-        }
-        ts.restore(hcp);
-        if ts.eat_phrase(&["the", "revealed", "land", "card", "was"])
-            && let Ok(flt) = try_parse(ts, parse_object_filter)
-        {
-            return Ok(ConditionExpr::SubjectMatches {
-                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::RevealedCard)),
-                filter: Box::new(flt),
-            });
         }
         ts.restore(hcp);
     }

@@ -178,22 +178,6 @@ pub(super) fn try_parse_extended_post_modifier(
         flt.controller = Some(ctrl);
         return Ok(true);
     }
-    if ts.eat_phrase(&[
-        "you",
-        "had",
-        "enter",
-        "the",
-        "battlefield",
-        "under",
-        "your",
-        "control",
-        "this",
-        "turn",
-    ]) {
-        flt.controller = Some(ControllerRelation::You);
-        flt.flags = flt.flags.union(FilterFlags::ENTERED_THIS_TURN);
-        return Ok(true);
-    }
     if ts.eat_any_phrase(&[
         &["that", "player", "has", "drawn", "this", "turn"],
         &["an", "opponent", "has", "drawn", "this", "turn"],

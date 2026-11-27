@@ -80,10 +80,6 @@ fn try_parse_and_cant_rider(
             ],
         ])
     {
-        let _ = ts.eat_any_phrase(&[
-            &["unless", "they're", "mana", "abilities"],
-            &["unless", "they", "are", "mana", "abilities"],
-        ]);
         return Some(ObjectMutation::ApplyRule(
             RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
         ));
@@ -1135,42 +1131,21 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                 }
                 return Ok(out);
             }
-            if ts.eat_any_phrase(&[
-                &[
-                    "and",
-                    "has",
-                    "base",
-                    "power",
-                    "and",
-                    "base",
-                    "toughness",
-                    "each",
-                    "equal",
-                    "to",
-                ],
-                &[
-                    "and",
-                    "has",
-                    "base",
-                    "power",
-                    "and",
-                    "toughness",
-                    "each",
-                    "equal",
-                    "to",
-                ],
-                &[
-                    "with",
-                    "base",
-                    "power",
-                    "and",
-                    "toughness",
-                    "each",
-                    "equal",
-                    "to",
-                ],
-                &["with", "power", "and", "toughness", "each", "equal", "to"],
-            ]) {
+            let has_dyn_bpt = {
+                let bpt_cp = ts.checkpoint();
+                let ok = (ts.eat_phrase(&["and", "has"]) || ts.eat_word("with")) && {
+                    let _ = ts.eat_word("base");
+                    ts.eat_phrase(&["power", "and"]) && {
+                        let _ = ts.eat_word("base");
+                        ts.eat_phrase(&["toughness", "each", "equal", "to"])
+                    }
+                };
+                if !ok {
+                    ts.restore(bpt_cp);
+                }
+                ok
+            };
+            if has_dyn_bpt {
                 let val = parse_value_expr(ts)?;
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
                 let mut out = Vec::new();
@@ -1387,28 +1362,25 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
     }
 
     // 5c. `<subj> can attack [this turn] as though it/they didn't have defender`
-    if ts.eat_any_phrase(&[
-        &[
-            "can", "attack", "this", "turn", "as", "though", "they", "didn't", "have", "defender",
-        ],
-        &[
-            "can", "attack", "this", "turn", "as", "though", "it", "didn't", "have", "defender",
-        ],
-        &[
-            "can", "attack", "as", "though", "they", "didn't", "have", "defender",
-        ],
-        &[
-            "can", "attack", "as", "though", "it", "didn't", "have", "defender",
-        ],
-    ]) {
-        return Ok(vec![apply_continuous(
-            StaticAbility::SubjectRule {
-                subject,
-                rule: SubjectStaticRule::CanAttackWithDefender,
-                condition: None,
-            },
-            Duration::UntilEndOfTurn,
-        )]);
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["can", "attack"]) {
+            let _ = ts.eat_phrase(&["this", "turn"]);
+            if ts.eat_phrase(&["as", "though"])
+                && ts.eat_any_word(&["it", "they"])
+                && ts.eat_phrase(&["didn't", "have", "defender"])
+            {
+                return Ok(vec![apply_continuous(
+                    StaticAbility::SubjectRule {
+                        subject,
+                        rule: SubjectStaticRule::CanAttackWithDefender,
+                        condition: None,
+                    },
+                    Duration::UntilEndOfTurn,
+                )]);
+            }
+        }
+        ts.restore(acp);
     }
 
     // 5c2. `<subj> can block an additional creature / <N> additional creatures [dur]`
@@ -1862,30 +1834,28 @@ fn append_trailing_subject_riders(
     duration: &Duration,
     out: &mut Vec<Effect>,
 ) {
-    if ts.eat_any_phrase(&[
-        &[
-            "and", "can", "attack", "this", "turn", "as", "though", "it", "didn't", "have",
-            "defender",
-        ],
-        &[
-            "and", "can", "attack", "this", "turn", "as", "though", "they", "didn't", "have",
-            "defender",
-        ],
-        &[
-            "and", "can", "attack", "as", "though", "it", "didn't", "have", "defender",
-        ],
-        &[
-            "and", "can", "attack", "as", "though", "they", "didn't", "have", "defender",
-        ],
-    ]) {
-        out.push(apply_continuous(
-            StaticAbility::SubjectRule {
-                subject: subject.clone(),
-                rule: SubjectStaticRule::CanAttackWithDefender,
-                condition: None,
-            },
-            Duration::UntilEndOfTurn,
-        ));
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["and", "can", "attack"]) {
+            let _ = ts.eat_phrase(&["this", "turn"]);
+            if ts.eat_phrase(&["as", "though"])
+                && ts.eat_any_word(&["it", "they"])
+                && ts.eat_phrase(&["didn't", "have", "defender"])
+            {
+                out.push(apply_continuous(
+                    StaticAbility::SubjectRule {
+                        subject: subject.clone(),
+                        rule: SubjectStaticRule::CanAttackWithDefender,
+                        condition: None,
+                    },
+                    Duration::UntilEndOfTurn,
+                ));
+            } else {
+                ts.restore(acp);
+            }
+        } else {
+            ts.restore(acp);
+        }
     }
     if ts.eat_any_phrase(&[
         &["and", "doesn't", "untap", "during"],

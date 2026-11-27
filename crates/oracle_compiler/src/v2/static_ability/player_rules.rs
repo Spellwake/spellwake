@@ -208,7 +208,7 @@ pub(super) fn parse_player_static_ability(
                             Some(filter),
                             None,
                             CastPermissionMode::AlternativeCost(costs),
-                            None,
+                            condition,
                         ));
                     }
                 }
@@ -258,7 +258,7 @@ pub(super) fn parse_player_static_ability(
                 return Ok(StaticAbility::SubjectRule {
                     subject: SubjectRef::SelfObject,
                     rule: SubjectStaticRule::MayNotUntap,
-                    condition: None,
+                    condition,
                 });
             }
             ts.restore(mcp);
@@ -394,7 +394,7 @@ pub(super) fn parse_player_static_ability(
                     let top_only = ts.eat_phrase(&["the", "top", "of"]);
                     if let Ok(zone) = try_parse(ts, parse_zone_ref) {
                         return Ok(play_from_zone(
-                            player, None, zone, top_only, true, true, None,
+                            player, None, zone, top_only, true, true, condition,
                         ));
                     }
                 }
@@ -442,7 +442,10 @@ pub(super) fn parse_player_static_ability(
             }
             {
                 let actcp = ts.checkpoint();
-                if ts.eat_phrase(&["may", "activate"]) {
+                if player == PlayerRef::You
+                    && condition.is_none()
+                    && ts.eat_phrase(&["may", "activate"])
+                {
                     if ts.eat_phrase(&["loyalty", "abilities", "of"]) && ts.eat_tilde() {
                         let _ = ts.eat_phrase(&["on", "any", "player's", "turn"]);
                         if ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"])
@@ -470,24 +473,29 @@ pub(super) fn parse_player_static_ability(
                     ]));
                 }
                 ts.restore(actcp);
-                if ts.eat_phrase(&["may", "activate", "loyalty", "abilities", "of"])
-                    && try_parse(ts, parse_object_filter).is_ok()
-                    && {
-                        let _ = ts.eat_phrase(&["on", "any", "player's", "turn"]);
-                        ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"])
-                    }
-                {
-                    return Ok(StaticAbility::GlobalFlag(StaticFlagKind::LoyaltyAsInstant));
-                }
-                ts.restore(actcp);
-                if ts.eat_phrase(&["may", "activate", "abilities", "of"])
-                    && let Ok(filter) = try_parse(ts, parse_object_filter)
+                if condition.is_none()
+                    && ts.eat_phrase(&["may", "activate", "abilities", "of"])
+                    && let Ok(mut filter) = try_parse(ts, parse_object_filter)
                     && ts.eat_phrase(&["as", "though", "those", "creatures", "had", "haste"])
                 {
-                    return Ok(StaticAbility::FilterRule {
-                        filter,
-                        kind: FilterStaticKind::ActivateAbilitiesAsHaste,
-                    });
+                    let player_ok = match player {
+                        PlayerRef::EachPlayer => true,
+                        PlayerRef::You
+                            if filter.controller.is_none()
+                                || filter.controller
+                                    == Some(crate::ast::ControllerRelation::You) =>
+                        {
+                            filter.controller = Some(crate::ast::ControllerRelation::You);
+                            true
+                        }
+                        _ => false,
+                    };
+                    if player_ok {
+                        return Ok(StaticAbility::FilterRule {
+                            filter,
+                            kind: FilterStaticKind::ActivateAbilitiesAsHaste,
+                        });
+                    }
                 }
                 ts.restore(actcp);
             }
@@ -502,18 +510,24 @@ pub(super) fn parse_player_static_ability(
                         &["can", "spend", "mana", "of", "any", "type"],
                         &["can", "spend", "mana", "of", "any", "color"],
                     ]);
-                if spend_matched && ts.eat_phrase(&["to", "cast"]) {
-                    let filter = if ts.eat_any_phrase(&[&["those", "spells"], &["that", "spell"]])
-                        || ts.eat_any_word(&["them", "it"])
-                    {
-                        Some(ObjectFilter {
-                            any_spell: true,
-                            ..Default::default()
-                        })
-                    } else {
-                        try_parse(ts, parse_object_filter).ok()
+                if condition.is_none()
+                    && spend_matched
+                    && ts.eat_phrase(&["to", "cast"])
+                    && let Ok(mut filter) = try_parse(ts, parse_object_filter)
+                {
+                    let player_ok = match player {
+                        PlayerRef::EachPlayer => true,
+                        PlayerRef::You
+                            if filter.controller.is_none()
+                                || filter.controller
+                                    == Some(crate::ast::ControllerRelation::You) =>
+                        {
+                            filter.controller = Some(crate::ast::ControllerRelation::You);
+                            true
+                        }
+                        _ => false,
                     };
-                    if let Some(filter) = filter {
+                    if player_ok {
                         return Ok(StaticAbility::FilterRule {
                             filter,
                             kind: FilterStaticKind::SpendManaAsAnyColor,
@@ -623,7 +637,17 @@ pub(super) fn parse_player_static_ability(
                     } else {
                         cast_flt.zones.pop().or_else(|| play_flt.zones.pop())
                     };
-                    if let Some(zone) = zone {
+                    let is_plain_land = play_flt
+                        == ObjectFilter {
+                            any_types: crate::ast::CardTypeMask::LAND,
+                            ..Default::default()
+                        }
+                        || play_flt
+                            == ObjectFilter {
+                                all_types: crate::ast::CardTypeMask::LAND,
+                                ..Default::default()
+                            };
+                    if is_plain_land && let Some(zone) = zone {
                         return Ok(play_from_zone(
                             player,
                             Some(cast_flt),
@@ -631,7 +655,7 @@ pub(super) fn parse_player_static_ability(
                             top_only,
                             true,
                             true,
-                            None,
+                            condition,
                         ));
                     }
                 }
@@ -652,7 +676,7 @@ pub(super) fn parse_player_static_ability(
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
                 return Ok(play_from_zone(
-                    player, None, zone, top_only, true, false, None,
+                    player, None, zone, top_only, true, false, condition,
                 ));
             }
             if ts.eat_phrase(&["may", "play", "cards", "from"]) {
@@ -691,7 +715,7 @@ pub(super) fn parse_player_static_ability(
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
                 return Ok(play_from_zone(
-                    player, None, zone, top_only, true, true, None,
+                    player, None, zone, top_only, true, true, condition,
                 ));
             }
             if ts.eat_phrase(&["may", "play", "cards", "exiled", "with"]) && ts.eat_tilde() {
@@ -702,7 +726,7 @@ pub(super) fn parse_player_static_ability(
                     false,
                     true,
                     true,
-                    None,
+                    condition,
                 ));
             }
             {
@@ -831,7 +855,7 @@ pub(super) fn parse_player_static_ability(
                                 CastPermissionMode::AsThoughFlash {
                                     extra_cost: Some(Box::new(crate::v2::ir::Cost::Mana(mc))),
                                 },
-                                None,
+                                condition,
                             ));
                         }
                         let cond = if ts.eat_phrase(&["as", "long", "as"]) || ts.eat_word("if") {
@@ -844,7 +868,7 @@ pub(super) fn parse_player_static_ability(
                             any_spell_flt,
                             None,
                             CastPermissionMode::AsThoughFlash { extra_cost: None },
-                            cond,
+                            merge_cond(condition, cond),
                         ));
                     }
                 }
@@ -996,7 +1020,7 @@ pub(super) fn parse_player_static_ability(
                             Some(filter),
                             None,
                             CastPermissionMode::AsThoughFlash { extra_cost: None },
-                            None,
+                            condition,
                         ));
                     }
                     if ts.eat_word("from") {

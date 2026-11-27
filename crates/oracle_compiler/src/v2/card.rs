@@ -14,10 +14,10 @@ use crate::v2::clause::{parse_effect_body_str, parse_effect_sentence};
 use crate::v2::cost::parse_cost_list;
 use crate::v2::filter::{parse_keyword_list, parse_subject_ref};
 use crate::v2::ir::{
-    Ability, ChoiceCount, ChoiceKind, CompiledCardV2, CompiledFaceV2, Cost, Duration, Effect,
-    EntryModifiers, LoyaltyDelta, ManaCost, ManaSymbol, ModalMode, ObjectMutation, ParseError,
-    ParseStage, PlayerRef, Span, SpreeMode, StickerPayload, SubjectRef, TableRowPayload, TokenSpec,
-    ValueExpr,
+    Ability, ChoiceCount, ChoiceKind, CompiledCardV2, CompiledFaceV2, Cost, DelayedTriggerKind,
+    Duration, Effect, EntryModifiers, LoyaltyDelta, ManaCost, ManaSymbol, ModalMode,
+    ObjectMutation, ParseError, ParseStage, PlayerRef, Replacement, Span, SpreeMode,
+    StickerPayload, SubjectRef, TableRowPayload, TokenSpec, TriggerSpec, ValueExpr,
 };
 use crate::v2::lexer::{TokenKind, tokenize};
 use crate::v2::parser::{TokenStream, try_parse};
@@ -517,18 +517,28 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                         i += 1;
                         continue;
                     }
-                    let mut eff_ts =
-                        TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Effect);
-                    if let Ok(effs) = crate::v2::clause::parse_effect_sentence(&mut eff_ts)
-                        && {
-                            let _ = eff_ts.eat_period();
-                            eff_ts.is_eof()
-                        }
-                    {
+                    let mut rep_ts =
+                        TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Replacement);
+                    if let Ok(rep) = parse_replacement(&mut rep_ts) {
                         out.keywords.extend(kws);
-                        out.spell_effects.extend(effs);
+                        out.replacements.push(rep);
                         i += 1;
                         continue;
+                    }
+                    if is_spell {
+                        let mut eff_ts =
+                            TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Effect);
+                        if let Ok(effs) = crate::v2::clause::parse_effect_sentence(&mut eff_ts)
+                            && {
+                                let _ = eff_ts.eat_period();
+                                eff_ts.is_eof()
+                            }
+                        {
+                            out.keywords.extend(kws);
+                            out.spell_effects.extend(effs);
+                            i += 1;
+                            continue;
+                        }
                     }
                 }
             }
@@ -561,7 +571,9 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     continue;
                 }
                 // Multi-sentence permanent paragraph fallback: split on top-level `.` (outside quotes)
-                // when sentence 1 is a valid Replacement or Static and remaining sentences are valid Effects/Statics.
+                // when sentence 1 is a valid Replacement or Static. Follow-up effect sentences are
+                // ONLY attached to `EventInstead` / `AsEnters` replacements (never detached into
+                // `out.spell_effects` on non-spell cards).
                 if let Some(first_dot) = toks
                     .iter()
                     .position(|t| matches!(t.kind, TokenKind::Period))
@@ -581,15 +593,14 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                         None
                     };
                     if head_rep.is_some() || head_st.is_some() {
+                        let can_attach_effects = matches!(
+                            head_rep,
+                            Some(Replacement::EventInstead { .. } | Replacement::AsEnters(_))
+                        );
                         let mut tail_effects = Vec::new();
                         let mut tail_statics = Vec::new();
                         let mut tail_reps = Vec::new();
                         let mut parse_tail_slice = |sl: &[crate::v2::lexer::Token<'_>]| -> bool {
-                            let mut sub = TokenStream::new(line, sl, vocab, ParseStage::Effect);
-                            if let Ok(effs) = parse_effect_sentence(&mut sub) {
-                                tail_effects.extend(effs);
-                                return true;
-                            }
                             let mut sts = TokenStream::new(line, sl, vocab, ParseStage::Static);
                             if let Ok(st) = parse_static_ability(&mut sts) {
                                 tail_statics.push(st);
@@ -600,6 +611,13 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                             if let Ok(rp) = parse_replacement(&mut rts) {
                                 tail_reps.push(rp);
                                 return true;
+                            }
+                            if can_attach_effects {
+                                let mut sub = TokenStream::new(line, sl, vocab, ParseStage::Effect);
+                                if let Ok(effs) = parse_effect_sentence(&mut sub) {
+                                    tail_effects.extend(effs);
+                                    return true;
+                                }
                             }
                             false
                         };
@@ -619,12 +637,17 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                             tail_ok = parse_tail_slice(&tail_toks[cur_start..]);
                         }
                         if tail_ok {
-                            if let Some(rep) = head_rep {
+                            if let Some(mut rep) = head_rep {
+                                if !tail_effects.is_empty()
+                                    && let Replacement::EventInstead { instead, .. }
+                                    | Replacement::AsEnters(instead) = &mut rep
+                                {
+                                    instead.extend(tail_effects);
+                                }
                                 out.replacements.push(rep);
                             } else if let Some(st) = head_st {
                                 out.statics.push(st);
                             }
-                            out.spell_effects.extend(tail_effects);
                             out.statics.extend(tail_statics);
                             out.replacements.extend(tail_reps);
                             i += 1;
@@ -724,15 +747,38 @@ fn parse_modal_header(line: &str, allow_no_dash: bool) -> Option<ModalHeaderInfo
     })
 }
 
-fn split_reflexive_modal(rest: &str) -> Option<(&str, ModalHeaderInfo)> {
+enum ReflexiveModalHeader {
+    WhenYouDo,
+    DelayedEvent(TriggerSpec),
+}
+
+fn split_reflexive_modal<'a>(
+    rest: &'a str,
+    vocab: &Vocabulary,
+) -> Option<(&'a str, ReflexiveModalHeader, ModalHeaderInfo)> {
     let low = rest.to_ascii_lowercase();
     let dot_idx = low.rfind(". when ")?;
     let pre_str = rest[..dot_idx].trim();
+    if pre_str.is_empty() {
+        return None;
+    }
     let reflex_str = rest[dot_idx + 2..].trim();
     for (idx, _) in reflex_str.rmatch_indices(", ") {
+        let header_part = reflex_str[..idx].trim();
         let modal_part = reflex_str[idx + 2..].trim();
-        if let Some(hdr) = parse_modal_header(modal_part, true) {
-            return Some((pre_str, hdr));
+        let Some(hdr) = parse_modal_header(modal_part, true) else {
+            continue;
+        };
+        if header_part.eq_ignore_ascii_case("when you do") {
+            return Some((pre_str, ReflexiveModalHeader::WhenYouDo, hdr));
+        }
+        if let Ok(htoks) = tokenize(header_part) {
+            let mut hts = TokenStream::new(header_part, &htoks, vocab, ParseStage::Trigger);
+            if let Ok(trig) = parse_trigger_header(&mut hts)
+                && hts.is_eof()
+            {
+                return Some((pre_str, ReflexiveModalHeader::DelayedEvent(trig), hdr));
+            }
         }
     }
     None
@@ -777,13 +823,23 @@ fn try_compile_triggered_modal(
         return true;
     }
 
-    if let Some((pre_str, hdr)) = split_reflexive_modal(rest) {
+    if let Some((pre_str, reflex_hdr, hdr)) = split_reflexive_modal(rest, vocab) {
         *i += 1;
         let modes = collect_modal_modes(lines, i, vocab, &mut out.errors);
         match parse_effect_body_str(pre_str, vocab) {
             Ok(mut body) if !modes.is_empty() => {
                 let reflex_body = build_modal_effects(hdr, modes, vocab, &mut out.errors);
-                body.push(Effect::ReflexiveTrigger(reflex_body));
+                match reflex_hdr {
+                    ReflexiveModalHeader::WhenYouDo => {
+                        body.push(Effect::ReflexiveTrigger(reflex_body));
+                    }
+                    ReflexiveModalHeader::DelayedEvent(delayed_trig) => {
+                        body.push(Effect::DelayedTrigger {
+                            trigger: DelayedTriggerKind::Event(delayed_trig),
+                            body: reflex_body,
+                        });
+                    }
+                }
                 out.abilities.push(Ability::Triggered { trigger, body });
             }
             Ok(_) => out.errors.push(make_parse_error(
@@ -1149,6 +1205,7 @@ fn parse_triggered_line(line: &str, vocab: &Vocabulary) -> Result<Ability, Vec<P
     // Parse remaining tokens as one or more sentences (split on `.` outside quotes, which are
     // already tokenized as single `TokenKind::Quoted` tokens!)
     let mut body = Vec::new();
+    let mut prev_sentence_start = 0usize;
     let mut cur_start = ts.pos;
     for idx in ts.pos..toks.len() {
         let is_period = matches!(toks[idx].kind, TokenKind::Period);
@@ -1185,18 +1242,34 @@ fn parse_triggered_line(line: &str, vocab: &Vocabulary) -> Result<Ability, Vec<P
         if is_period || is_sentence_ending_quote {
             let end_idx = if is_period { idx } else { idx + 1 };
             if end_idx > cur_start {
-                let mut sub =
-                    TokenStream::new(line, &toks[cur_start..end_idx], vocab, ParseStage::Effect);
-                let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
-                body.extend(effs);
+                let slice = &toks[cur_start..end_idx];
+                if !crate::v2::clause::try_merge_still_type_sentence(
+                    &mut body[prev_sentence_start..],
+                    slice,
+                    line,
+                    vocab,
+                ) {
+                    let mut sub = TokenStream::new(line, slice, vocab, ParseStage::Effect);
+                    let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
+                    prev_sentence_start = body.len();
+                    body.extend(effs);
+                }
             }
             cur_start = idx + 1;
         }
     }
     if cur_start < toks.len() {
-        let mut sub = TokenStream::new(line, &toks[cur_start..], vocab, ParseStage::Effect);
-        let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
-        body.extend(effs);
+        let slice = &toks[cur_start..];
+        if !crate::v2::clause::try_merge_still_type_sentence(
+            &mut body[prev_sentence_start..],
+            slice,
+            line,
+            vocab,
+        ) {
+            let mut sub = TokenStream::new(line, slice, vocab, ParseStage::Effect);
+            let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
+            body.extend(effs);
+        }
     }
     Ok(Ability::Triggered { trigger, body })
 }

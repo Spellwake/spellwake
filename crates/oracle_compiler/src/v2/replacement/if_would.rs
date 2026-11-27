@@ -25,11 +25,122 @@ fn eat_mana_override_cost(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::Man
     }
 }
 
-fn eat_optional_to_target(ts: &mut TokenStream<'_>, allow_or_noun: bool) {
-    if ts.eat_word("to") {
-        let _ = opt(ts, parse_subject_ref);
-        if allow_or_noun && ts.eat_word("or") && opt(ts, parse_subject_ref).is_none() {
-            let _ = ts.eat_any_word(&["permanent", "player"]);
+fn is_anaphoric_same_target(orig: &SubjectRef, tail: &SubjectRef) -> bool {
+    use crate::v2::ir::AnaphoraRef;
+    if orig == tail {
+        return true;
+    }
+    match (orig, tail) {
+        (SubjectRef::Player(_), SubjectRef::Player(PlayerRef::ThatPlayer)) => true,
+        (
+            SubjectRef::Group(flt) | SubjectRef::All(flt) | SubjectRef::Each(flt),
+            SubjectRef::Anaphora(
+                AnaphoraRef::ThatPermanent
+                | AnaphoraRef::ThatCreature
+                | AnaphoraRef::It
+                | AnaphoraRef::Them
+                | AnaphoraRef::ThosePermanents
+                | AnaphoraRef::ThoseCreatures,
+            ),
+        ) => {
+            matches!(
+                tail,
+                SubjectRef::Anaphora(
+                    AnaphoraRef::ThatPermanent
+                        | AnaphoraRef::It
+                        | AnaphoraRef::Them
+                        | AnaphoraRef::ThosePermanents
+                )
+            ) || (flt.any_types.0 & crate::ast::CardTypeMask::CREATURE.0) != 0
+                || (flt.all_types.0 & crate::ast::CardTypeMask::CREATURE.0) != 0
+        }
+        (
+            SubjectRef::SelfObject | SubjectRef::Anaphora(_),
+            SubjectRef::Anaphora(
+                AnaphoraRef::It
+                | AnaphoraRef::ThatPermanent
+                | AnaphoraRef::ThatCreature
+                | AnaphoraRef::SameTarget,
+            ),
+        ) => true,
+        (SubjectRef::Compound(a), SubjectRef::Compound(b)) if a.len() == 2 && b.len() == 2 => {
+            let has_anaphora = b.iter().any(|e| {
+                matches!(
+                    e,
+                    SubjectRef::Anaphora(_) | SubjectRef::Player(PlayerRef::ThatPlayer)
+                )
+            });
+            if !has_anaphora {
+                return false;
+            }
+            let plain_permanent = ObjectFilter {
+                any_permanent: true,
+                ..Default::default()
+            };
+            let match_elem = |x: &SubjectRef, y: &SubjectRef| {
+                is_anaphoric_same_target(x, y)
+                    || matches!(
+                        (x, y),
+                        (
+                            SubjectRef::Group(_) | SubjectRef::All(_) | SubjectRef::Each(_),
+                            SubjectRef::Group(g)
+                        ) if g.as_ref() == &plain_permanent
+                    )
+                    || matches!(
+                        (x, y),
+                        (
+                            SubjectRef::Player(_),
+                            SubjectRef::Player(PlayerRef::AnyPlayer)
+                        )
+                    )
+            };
+            (match_elem(&a[0], &b[0]) && match_elem(&a[1], &b[1]))
+                || (match_elem(&a[0], &b[1]) && match_elem(&a[1], &b[0]))
+        }
+        _ => false,
+    }
+}
+
+fn resolve_optional_to_target(
+    ts: &mut TokenStream<'_>,
+    existing: &Option<SubjectRef>,
+    allow_or_noun: bool,
+) -> PResult<Option<SubjectRef>> {
+    let cp = ts.checkpoint();
+    if !ts.eat_word("to") {
+        return Ok(existing.clone());
+    }
+    let first = match try_parse(ts, parse_subject_ref) {
+        Ok(s) => s,
+        Err(e) => {
+            ts.restore(cp);
+            return Err(e);
+        }
+    };
+    let tail = if allow_or_noun && ts.eat_word("or") {
+        let second = if let Ok(s2) = try_parse(ts, parse_subject_ref) {
+            s2
+        } else if ts.eat_word("permanent") {
+            SubjectRef::Group(Box::new(ObjectFilter {
+                any_permanent: true,
+                ..Default::default()
+            }))
+        } else if ts.eat_word("player") {
+            SubjectRef::Player(PlayerRef::AnyPlayer)
+        } else {
+            ts.restore(cp);
+            return Err(ts.err("expected target after `or` in damage replacement"));
+        };
+        SubjectRef::Compound(vec![first, second])
+    } else {
+        first
+    };
+    match existing {
+        None => Ok(Some(tail)),
+        Some(orig) if is_anaphoric_same_target(orig, &tail) => Ok(Some(orig.clone())),
+        Some(_) => {
+            ts.restore(cp);
+            Err(ts.err("conflicting target in damage replacement"))
         }
     }
 }
@@ -1085,19 +1196,20 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                         if ts.eat_phrase(&["it", "deals"])
                             && let Some(capped_to) = ts.next_number(false)
                             && ts.eat_word("damage")
+                            && let Ok(resolved_target) =
+                                resolve_optional_to_target(ts, &target, true)
+                            && ts.eat_word("instead")
+                            && eat_period_eof(ts)
                         {
-                            eat_optional_to_target(ts, true);
-                            if ts.eat_word("instead") && eat_period_eof(ts) {
-                                return Ok(wrap_while_cond(
-                                    while_cond,
-                                    Replacement::DamageRule(DamageReplacement::Cap {
-                                        source: dmg_source,
-                                        target,
-                                        threshold,
-                                        capped_to,
-                                    }),
-                                ));
-                            }
+                            return Ok(wrap_while_cond(
+                                while_cond,
+                                Replacement::DamageRule(DamageReplacement::Cap {
+                                    source: dmg_source,
+                                    target: resolved_target,
+                                    threshold,
+                                    capped_to,
+                                }),
+                            ));
                         }
                         ts.restore(ccp);
                     }
@@ -1122,33 +1234,37 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                         let pcp = ts.checkpoint();
                         if ts.eat_word("prevent")
                             && let Ok(amount) = try_parse(ts, parse_value_expr)
-                            && (ts.eat_phrase(&["of", "that", "damage"])
-                                || (ts.eat_word("damage") && {
-                                    let _ = ts.eat_any_phrase(&[
-                                        &["that", "spell", "would", "deal"],
-                                        &["that", "source", "would", "deal"],
-                                    ]);
-                                    eat_optional_to_target(ts, false);
-                                    true
-                                }))
                         {
-                            let final_amount = if ts.eat_comma()
-                                && ts.eat_phrase(&["where", "x", "is"])
-                                && let Ok(val) = try_parse(ts, parse_value_expr)
-                            {
-                                val
+                            let resolved_target = if ts.eat_phrase(&["of", "that", "damage"]) {
+                                Some(target.clone())
+                            } else if ts.eat_word("damage") {
+                                let _ = ts.eat_any_phrase(&[
+                                    &["that", "spell", "would", "deal"],
+                                    &["that", "source", "would", "deal"],
+                                ]);
+                                resolve_optional_to_target(ts, &target, false).ok()
                             } else {
-                                amount
+                                None
                             };
-                            if eat_period_eof(ts) {
-                                return Ok(wrap_while_cond(
-                                    while_cond,
-                                    Replacement::DamageRule(DamageReplacement::PreventFixed {
-                                        source: dmg_source,
-                                        target,
-                                        amount: final_amount,
-                                    }),
-                                ));
+                            if let Some(resolved_target) = resolved_target {
+                                let final_amount = if ts.eat_comma()
+                                    && ts.eat_phrase(&["where", "x", "is"])
+                                    && let Ok(val) = try_parse(ts, parse_value_expr)
+                                {
+                                    val
+                                } else {
+                                    amount
+                                };
+                                if eat_period_eof(ts) {
+                                    return Ok(wrap_while_cond(
+                                        while_cond,
+                                        Replacement::DamageRule(DamageReplacement::PreventFixed {
+                                            source: dmg_source,
+                                            target: resolved_target,
+                                            amount: final_amount,
+                                        }),
+                                    ));
+                                }
                             }
                         }
                         ts.restore(pcp);
@@ -1168,14 +1284,16 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                                     crate::ast::Rounding::Up
                                 };
                                 let _ = ts.eat_comma();
-                                eat_optional_to_target(ts, true);
-                                if (leading_instead || ts.eat_word("instead")) && eat_period_eof(ts)
+                                if let Ok(resolved_target) =
+                                    resolve_optional_to_target(ts, &target, true)
+                                    && (leading_instead || ts.eat_word("instead"))
+                                    && eat_period_eof(ts)
                                 {
                                     return Ok(wrap_while_cond(
                                         while_cond,
                                         Replacement::DamageRule(DamageReplacement::PreventFixed {
                                             source: dmg_source,
-                                            target,
+                                            target: resolved_target,
                                             amount: ValueExpr::Div {
                                                 expr: Box::new(ValueExpr::PriorActionCount(
                                                     crate::v2::ir::PriorActionKind::ThatMany,
@@ -1217,21 +1335,22 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                             } else {
                                 None
                             };
-                            if let Some(factor) = factor_opt {
-                                eat_optional_to_target(ts, true);
-                                if leading_instead || ts.eat_word("instead") {
-                                    let _ = ts.eat_period();
-                                    ts.expect_eof()?;
-                                    return Ok(wrap_while_cond(
-                                        while_cond,
-                                        Replacement::ModifyDamage {
-                                            source: dmg_source,
-                                            target,
-                                            add: 0,
-                                            factor,
-                                        },
-                                    ));
-                                }
+                            if let Some(factor) = factor_opt
+                                && let Ok(resolved_target) =
+                                    resolve_optional_to_target(ts, &target, true)
+                                && (leading_instead || ts.eat_word("instead"))
+                            {
+                                let _ = ts.eat_period();
+                                ts.expect_eof()?;
+                                return Ok(wrap_while_cond(
+                                    while_cond,
+                                    Replacement::ModifyDamage {
+                                        source: dmg_source,
+                                        target: resolved_target,
+                                        add: 0,
+                                        factor,
+                                    },
+                                ));
                             }
                             {
                                 let dcp = ts.checkpoint();
@@ -1245,8 +1364,9 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                                         } else {
                                             ValueExpr::Var(crate::v2::ir::VarName::X)
                                         };
-                                        eat_optional_to_target(ts, true);
-                                        if (leading_instead || ts.eat_word("instead"))
+                                        if let Ok(resolved_target) =
+                                            resolve_optional_to_target(ts, &target, true)
+                                            && (leading_instead || ts.eat_word("instead"))
                                             && eat_period_eof(ts)
                                         {
                                             return Ok(wrap_while_cond(
@@ -1254,7 +1374,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                                                 Replacement::DamageRule(
                                                     DamageReplacement::ModifyDynamic {
                                                         source: dmg_source,
-                                                        target,
+                                                        target: resolved_target,
                                                         add,
                                                     },
                                                 ),
@@ -1270,22 +1390,21 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                                     if ts.eat_phrase(&[
                                         "an", "amount", "of", "damage", "equal", "to",
                                     ]) && let Ok(add) = try_parse(ts, parse_value_expr)
+                                        && let Ok(resolved_target) =
+                                            resolve_optional_to_target(ts, &target, false)
+                                        && (leading_instead || ts.eat_word("instead"))
+                                        && eat_period_eof(ts)
                                     {
-                                        eat_optional_to_target(ts, false);
-                                        if (leading_instead || ts.eat_word("instead"))
-                                            && eat_period_eof(ts)
-                                        {
-                                            return Ok(wrap_while_cond(
-                                                while_cond,
-                                                Replacement::DamageRule(
-                                                    DamageReplacement::ModifyDynamic {
-                                                        source: dmg_source,
-                                                        target,
-                                                        add,
-                                                    },
-                                                ),
-                                            ));
-                                        }
+                                        return Ok(wrap_while_cond(
+                                            while_cond,
+                                            Replacement::DamageRule(
+                                                DamageReplacement::ModifyDynamic {
+                                                    source: dmg_source,
+                                                    target: resolved_target,
+                                                    add,
+                                                },
+                                            ),
+                                        ));
                                     }
                                     ts.restore(dcp);
                                 }
@@ -1300,21 +1419,21 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                             if let Some(sign) = sign_opt
                                 && let Some(n) = ts.next_number(false)
                                 && n > 0
+                                && let Ok(resolved_target) =
+                                    resolve_optional_to_target(ts, &target, false)
+                                && (leading_instead || ts.eat_word("instead"))
                             {
-                                eat_optional_to_target(ts, false);
-                                if leading_instead || ts.eat_word("instead") {
-                                    let _ = ts.eat_period();
-                                    ts.expect_eof()?;
-                                    return Ok(wrap_while_cond(
-                                        while_cond,
-                                        Replacement::ModifyDamage {
-                                            source: dmg_source,
-                                            target,
-                                            add: sign * i16::try_from(n).unwrap_or(1),
-                                            factor: 1,
-                                        },
-                                    ));
-                                }
+                                let _ = ts.eat_period();
+                                ts.expect_eof()?;
+                                return Ok(wrap_while_cond(
+                                    while_cond,
+                                    Replacement::ModifyDamage {
+                                        source: dmg_source,
+                                        target: resolved_target,
+                                        add: sign * i16::try_from(n).unwrap_or(1),
+                                        factor: 1,
+                                    },
+                                ));
                             }
                         }
                         ts.restore(deals_cp);

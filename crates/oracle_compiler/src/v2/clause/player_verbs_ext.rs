@@ -12,12 +12,12 @@ use crate::v2::filter::{
 use crate::v2::ir::{
     AnaphoraRef, CharacteristicKind, ChoiceKind, CountSpec, Duration, Effect, EntryModifiers,
     ForEachDomain, LifeOp, ObjectFilter, ObjectMutation, ObjectStateAction, PlayerActionKind,
-    PlayerMutation, PlayerRef, PriorActionKind, StaticAbility, StaticFlagKind, SubjectRef,
-    SubjectStaticRule, ValueExpr, VarName, ZoneKind, ZoneOpKind, ZoneOwner, ZoneRef,
+    PlayerMutation, PlayerRef, PriorActionKind, StaticAbility, SubjectRef, SubjectStaticRule,
+    ValueExpr, ZoneKind, ZoneOpKind, ZoneOwner, ZoneRef,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
-use crate::v2::value::{parse_for_each_expr, parse_value_expr};
+use crate::v2::value::parse_value_expr;
 use crate::vocab::lookup_color;
 
 use super::{
@@ -450,70 +450,6 @@ pub(super) fn try_parse_player_verb_ext(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
 ) -> Option<PResult<(Vec<Effect>, ())>> {
-    // 2. `secretly choose(s) ...`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_word("secretly") && ts.eat_any_word(&["choose", "chooses"]) {
-            let chosen = if let Some(res) = try_parse_choose_ext(ts, actor) {
-                res.ok()
-            } else if let Ok(s) = try_parse(ts, parse_subject_ref) {
-                Some((vec![prompt_choice(actor, ChoiceKind::ChooseObject(s))], ()))
-            } else {
-                None
-            };
-            if let Some((effs, ())) = chosen {
-                let rcp = ts.checkpoint();
-                if !(ts.eat_comma()
-                    && ts.eat_any_phrase(&[
-                        &["then", "the", "choices", "are", "revealed"],
-                        &["then", "those", "choices", "are", "revealed"],
-                        &[
-                            "then",
-                            "all",
-                            "players",
-                            "reveal",
-                            "those",
-                            "numbers",
-                            "simultaneously",
-                            "and",
-                            "determine",
-                            "the",
-                            "highest",
-                            "and",
-                            "lowest",
-                            "numbers",
-                            "revealed",
-                            "this",
-                            "way",
-                        ],
-                    ]))
-                {
-                    ts.restore(rcp);
-                }
-                return Some(Ok((effs, ())));
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 3. `meld(s) them into <Proper Name>`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_any_phrase(&[&["meld", "them", "into"], &["melds", "them", "into"]])
-            && eat_proper_name_words(ts)
-        {
-            return Some(Ok((
-                vec![mutate_obj(
-                    SubjectRef::Anaphora(AnaphoraRef::Them),
-                    ObjectMutation::StateAction(ObjectStateAction::Transform),
-                    Duration::Permanent,
-                )],
-                (),
-            )));
-        }
-        ts.restore(cp);
-    }
-
     // 4. `convert(s) <subj>`
     if ts.eat_any_word(&["convert", "converts"]) {
         if let Ok(subject) = try_parse(ts, parse_subject_ref) {
@@ -577,102 +513,6 @@ pub(super) fn try_parse_player_verb_ext(
                     SubjectRef::Anaphora(AnaphoraRef::ThatSpell)
                 };
                 return retarget(subj);
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 8. `activate(s) [the] loyalty abilities of <subj> ...`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_any_word(&["activate", "activates"]) {
-            let loyalty_flag = || {
-                Some(Ok((
-                    vec![apply_continuous(
-                        StaticAbility::GlobalFlag(StaticFlagKind::LoyaltyAsInstant),
-                        Duration::UntilEndOfTurn,
-                    )],
-                    (),
-                )))
-            };
-            let _ = ts.eat_word("the");
-            if ts.eat_phrase(&["loyalty", "abilities", "of"])
-                && try_parse(ts, parse_subject_ref).is_ok()
-                && ts.eat_any_phrase(&[
-                    &["twice", "this", "turn", "rather", "than", "only", "once"],
-                    &[
-                        "on", "any", "player's", "turn", "any", "time", "you", "could", "cast",
-                        "an", "instant",
-                    ],
-                ])
-            {
-                return loyalty_flag();
-            }
-            ts.restore(cp);
-            if ts.eat_any_word(&["activate", "activates"])
-                && ts.eat_phrase(&[
-                    "one",
-                    "of",
-                    "its",
-                    "loyalty",
-                    "abilities",
-                    "once",
-                    "this",
-                    "turn",
-                    "as",
-                    "though",
-                    "none",
-                    "of",
-                    "its",
-                    "loyalty",
-                    "abilities",
-                    "have",
-                    "been",
-                    "activated",
-                    "this",
-                    "turn",
-                ])
-            {
-                return loyalty_flag();
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 9. `count(s) the number of (<kind> counters on <subj> | <flt>)`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_any_phrase(&[
-            &["count", "the", "number", "of"],
-            &["counts", "the", "number", "of"],
-        ]) {
-            let expr_opt = {
-                let ccp = ts.checkpoint();
-                if let Ok(kind) = try_parse(ts, parse_counter_kind)
-                    && ts.eat_any_word(&["counters", "counter"])
-                    && ts.eat_word("on")
-                    && let Ok(subj) = try_parse(ts, parse_subject_ref)
-                {
-                    Some(ValueExpr::CounterCount {
-                        subject: Box::new(subj),
-                        kind,
-                    })
-                } else {
-                    ts.restore(ccp);
-                    try_parse(ts, parse_object_filter)
-                        .ok()
-                        .map(|flt| ValueExpr::Count(Box::new(flt)))
-                }
-            };
-            if let Some(expr) = expr_opt {
-                return Some(Ok((
-                    vec![Effect::BindVariable {
-                        var: VarName::X,
-                        expr,
-                        body: Vec::new(),
-                    }],
-                    (),
-                )));
             }
         }
         ts.restore(cp);
@@ -817,19 +657,14 @@ pub(super) fn try_parse_player_verb_ext(
         ts.restore(cp);
     }
 
-    // 14. `repeat(s) this process [once | any number of times | as many times as you/they choose]`
+    // 14. `repeat(s) this process [once]`
     {
         let cp = ts.checkpoint();
         if ts.eat_any_phrase(&[
             &["repeat", "this", "process"],
             &["repeats", "this", "process"],
         ]) {
-            let _ = ts.eat_any_phrase(&[
-                &["as", "many", "times", "as", "they", "choose"],
-                &["as", "many", "times", "as", "you", "choose"],
-                &["any", "number", "of", "times"],
-                &["once"],
-            ]);
+            let _ = ts.eat_word("once");
             if ts.is_eof()
                 || matches!(
                     ts.peek().map(|t| &t.kind),
@@ -849,33 +684,17 @@ pub(super) fn try_parse_player_verb_ext(
         ts.restore(cp);
     }
 
-    // 15. `note(s) (the number and kind of counters ... | the name of <subj>)`
+    // 15. `note(s) the name of <subj>`
     {
         let cp = ts.checkpoint();
-        if ts.eat_any_word(&["note", "notes"]) {
-            if ts.eat_phrase(&[
-                "the", "number", "and", "kind", "of", "counters", "that", "were", "on",
-            ]) && try_parse(ts, parse_subject_ref).is_ok()
-            {
-                return Some(Ok((
-                    vec![Effect::BindVariable {
-                        var: VarName::X,
-                        expr: ValueExpr::PriorActionCount(PriorActionKind::ThatMany),
-                        body: Vec::new(),
-                    }],
-                    (),
-                )));
-            }
-            ts.restore(cp);
-            if ts.eat_any_word(&["note", "notes"])
-                && ts.eat_phrase(&["the", "name", "of"])
-                && let Ok(s) = try_parse(ts, parse_subject_ref)
-            {
-                return Some(Ok((
-                    vec![prompt_choice(actor, ChoiceKind::ChooseObject(s))],
-                    (),
-                )));
-            }
+        if ts.eat_any_word(&["note", "notes"])
+            && ts.eat_phrase(&["the", "name", "of"])
+            && let Ok(s) = try_parse(ts, parse_subject_ref)
+        {
+            return Some(Ok((
+                vec![prompt_choice(actor, ChoiceKind::ChooseObject(s))],
+                (),
+            )));
         }
         ts.restore(cp);
     }
@@ -949,22 +768,6 @@ pub(super) fn try_parse_double_ext(
             (),
         )));
     }
-    if ts.eat_any_phrase(&[
-        &["the", "value", "of", "x"],
-        &["the", "life", "stakes", "with", "each", "flip"],
-    ]) {
-        return Some(Ok((
-            vec![Effect::BindVariable {
-                var: VarName::X,
-                expr: ValueExpr::Mul(
-                    Box::new(ValueExpr::Const(2)),
-                    Box::new(ValueExpr::Var(VarName::X)),
-                ),
-                body: Vec::new(),
-            }],
-            (),
-        )));
-    }
     ts.restore(cp);
     None
 }
@@ -976,16 +779,13 @@ pub(super) fn try_parse_have_ext(
 ) -> Option<PResult<(Vec<Effect>, ())>> {
     let cp = ts.checkpoint();
     if let Ok(subject) = try_parse(ts, parse_subject_ref) {
-        if ts.eat_any_phrase(&[
-            &[
-                "assign", "its", "combat", "damage", "this", "turn", "as", "though", "it",
-                "weren't", "blocked",
-            ],
-            &[
-                "assign", "their", "combat", "damage", "this", "turn", "as", "though", "they",
-                "weren't", "blocked",
-            ],
-        ]) {
+        if ts.eat_word("assign")
+            && ts.eat_any_word(&["its", "their"])
+            && ts.eat_phrase(&["combat", "damage", "this", "turn"])
+            && ts.eat_phrase(&["as", "though"])
+            && ts.eat_any_word(&["it", "they"])
+            && ts.eat_phrase(&["weren't", "blocked"])
+        {
             return Some(Ok((
                 vec![apply_continuous(
                     StaticAbility::SubjectRule {
@@ -1092,13 +892,6 @@ pub(super) fn try_parse_roll_ext(
             )],
         }]
     };
-    let _ = opt(ts, parse_for_each_expr);
-    {
-        let acp = ts.checkpoint();
-        if !(ts.eat_phrase(&["and", "add"]) && try_parse(ts, parse_value_expr).is_ok()) {
-            ts.restore(acp);
-        }
-    }
     if ts.eat_any_phrase(&[
         &["and", "choose", "one", "result"],
         &["and", "ignore", "the", "lower", "roll"],
@@ -1156,18 +949,8 @@ pub(super) fn parse_trailing_play_mana_rider(
     let cp = ts.checkpoint();
     let _ = ts.eat_comma();
     if ts.eat_word("and") {
-        let _ = ts.eat_any_word(&["you", "they"]);
-        let _ = ts.eat_word("may");
-        if let Some(Ok((effs, ()))) = try_parse_player_verb_ext(ts, actor) {
-            out.extend(effs);
-            return;
-        }
-        ts.restore(cp);
-        let _ = ts.eat_comma();
-        if ts.eat_phrase(&["and", "mana", "of", "any"])
-            && ts.eat_any_word(&["type", "color"])
-            && ts.eat_phrase(&["can", "be", "spent", "to", "cast"])
-            && ts.eat_any_phrase(&[
+        let eat_cast_obj = |s: &mut TokenStream<'_>| {
+            s.eat_any_phrase(&[
                 &["a", "spell", "this", "way"],
                 &["spells", "this", "way"],
                 &["that", "spell"],
@@ -1175,12 +958,41 @@ pub(super) fn parse_trailing_play_mana_rider(
                 &["it"],
                 &["them"],
             ])
+        };
+        let after_and = ts.checkpoint();
+        if ts.eat_any_word(&["you", "they"])
+            && ts.eat_word("may")
+            && ts.eat_phrase(&["spend", "mana", "as", "though", "it", "were"])
+            && ts.eat_phrase(&["mana", "of", "any"])
+            && ts.eat_any_word(&["color", "type"])
+            && ts.eat_phrase(&["to", "cast"])
+            && eat_cast_obj(ts)
         {
             out.push(player_action(
                 actor,
                 PlayerActionKind::SpendManaAsAnyType,
                 dur,
             ));
+            return;
+        }
+        ts.restore(after_and);
+        if ts.eat_phrase(&["mana", "of", "any"])
+            && ts.eat_any_word(&["type", "color"])
+            && ts.eat_phrase(&["can", "be", "spent", "to", "cast"])
+            && eat_cast_obj(ts)
+        {
+            out.push(player_action(
+                actor,
+                PlayerActionKind::SpendManaAsAnyType,
+                dur,
+            ));
+            return;
+        }
+        ts.restore(after_and);
+        let _ = ts.eat_any_word(&["you", "they"]);
+        let _ = ts.eat_word("may");
+        if let Some(Ok((effs, ()))) = try_parse_player_verb_ext(ts, actor) {
+            out.extend(effs);
             return;
         }
     }

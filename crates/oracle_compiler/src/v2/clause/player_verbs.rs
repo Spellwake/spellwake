@@ -370,31 +370,7 @@ pub(super) fn parse_player_verb_frame(
             top_only,
             dur.clone(),
         )];
-        let m_cp = ts.checkpoint();
-        let _ = ts.eat_comma();
-        if ts.eat_any_phrase(&[
-            &[
-                "and", "mana", "of", "any", "type", "can", "be", "spent", "to", "cast",
-            ],
-            &[
-                "and", "you", "may", "spend", "mana", "as", "though", "it", "were", "mana", "of",
-                "any", "color", "to", "cast",
-            ],
-            &[
-                "and", "you", "may", "spend", "mana", "as", "though", "it", "were", "mana", "of",
-                "any", "type", "to", "cast",
-            ],
-        ]) && ts.eat_any_phrase(&[&["those", "spells"], &["that", "spell"], &["it"], &["them"]])
-        {
-            out.push(player_action(
-                actor,
-                PlayerActionKind::SpendManaAsAnyType,
-                dur,
-            ));
-        } else {
-            ts.restore(m_cp);
-            super::player_verbs_ext::parse_trailing_play_mana_rider(ts, actor, dur, &mut out);
-        }
+        super::player_verbs_ext::parse_trailing_play_mana_rider(ts, actor, dur, &mut out);
         return Ok((out, ()));
     }
 
@@ -418,13 +394,7 @@ pub(super) fn parse_player_verb_frame(
 
     // 3b. `can't cast spells [or activate abilities] [dur]`
     if ts.eat_phrase(&["can't", "cast", "spells"]) {
-        let mut has_activate = false;
-        if ts.eat_phrase(&["or", "activate", "abilities"]) {
-            if ts.eat_word("of") {
-                let _ = opt(ts, parse_object_filter);
-            }
-            has_activate = true;
-        }
+        let has_activate = ts.eat_phrase(&["or", "activate", "abilities"]);
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
         let mut out = vec![apply_continuous(
             StaticAbility::PlayerRestriction {
@@ -471,13 +441,10 @@ pub(super) fn parse_player_verb_frame(
             }
         }
         ts.restore(cp);
-        // `cast (any number of | up to <val> of) [the] copies [without paying their mana costs]`
+        // `cast any number of [the] copies [without paying their mana costs]`
         {
             let acp = ts.checkpoint();
-            if (ts.eat_phrase(&["any", "number", "of"])
-                || (ts.eat_phrase(&["up", "to"])
-                    && opt(ts, parse_value_expr).is_some()
-                    && ts.eat_word("of")))
+            if ts.eat_phrase(&["any", "number", "of"])
                 && ts.eat_any_phrase(&[&["the", "copies"], &["copies"]])
             {
                 let free = ts.eat_any_phrase(&[
@@ -490,7 +457,7 @@ pub(super) fn parse_player_verb_frame(
                         PlayerMutation::GrantPlayPermission {
                             cast_only: true,
                             subject: Box::new(SubjectRef::Anaphora(
-                                crate::v2::ir::AnaphoraRef::ThatSpell,
+                                crate::v2::ir::AnaphoraRef::TheCopies,
                             )),
                             free,
                         },
@@ -502,8 +469,6 @@ pub(super) fn parse_player_verb_frame(
             ts.restore(acp);
         }
         let cp2 = ts.checkpoint();
-        let _ = ts.eat_phrase(&["any", "number", "of"])
-            || (ts.eat_phrase(&["up", "to"]) && opt(ts, parse_value_expr).is_some());
         let subj_opt =
             if ts.eat_any_phrase(&[&["the", "other", "cards"], &["the", "other", "card"]]) {
                 Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::OtherPile))
@@ -610,25 +575,7 @@ pub(super) fn parse_player_verb_frame(
                     dur.clone(),
                 ));
             }
-            let m_cp = ts.checkpoint();
-            let _ = ts.eat_comma();
-            if ts.eat_phrase(&[
-                "and", "mana", "of", "any", "type", "can", "be", "spent", "to", "cast",
-            ]) && ts.eat_any_phrase(&[
-                &["those", "spells"],
-                &["that", "spell"],
-                &["it"],
-                &["them"],
-            ]) {
-                out.push(player_action(
-                    actor,
-                    PlayerActionKind::SpendManaAsAnyType,
-                    dur,
-                ));
-            } else {
-                ts.restore(m_cp);
-                super::player_verbs_ext::parse_trailing_play_mana_rider(ts, actor, dur, &mut out);
-            }
+            super::player_verbs_ext::parse_trailing_play_mana_rider(ts, actor, dur, &mut out);
             return Ok((out, ()));
         }
         ts.restore(cp2);
@@ -994,55 +941,38 @@ pub(super) fn parse_player_verb_frame(
 
     // 3f. `copy(ies) <subj> [twice | <N> times] [for each <expr>] [, except ...]`
     if ts.eat_any_word(&["copy", "copies"]) {
-        // `copy the next <flt> [you cast] this turn when you cast it` / `copy the next loyalty ability ...`
+        // `copy the next <flt> [you cast] this turn when you cast it`
         {
             let ncp = ts.checkpoint();
-            if ts.eat_phrase(&["the", "next"]) {
-                let copy_that_spell = || {
-                    vec![Effect::CopyObject {
-                        actor,
-                        subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell),
-                        count: ValueExpr::Const(1),
-                        modifiers: EntryModifiers::default(),
-                        exceptions: Vec::new(),
-                    }]
-                };
-                let trig_ev = if ts.eat_phrase(&[
-                    "loyalty", "ability", "you", "activate", "this", "turn", "when", "you",
-                    "activate", "it",
-                ]) {
-                    Some(crate::v2::ir::TriggerEvent::AbilityActivated {
-                        player: actor,
-                        non_mana_only: true,
-                    })
-                } else if let Ok(flt) = try_parse(ts, parse_object_filter)
-                    && ts.eat_any_phrase(&[
-                        &["you", "cast", "this", "turn", "when", "you", "cast", "it"],
-                        &["this", "turn", "when", "you", "cast", "it"],
-                    ])
-                {
-                    Some(crate::v2::ir::TriggerEvent::SpellCast {
-                        caster: actor,
-                        spell: Some(flt),
-                        from_outside_hand: false,
-                    })
-                } else {
-                    None
-                };
-                if let Some(ev) = trig_ev {
-                    return Ok((
-                        vec![Effect::DelayedTrigger {
-                            trigger: crate::v2::ir::DelayedTriggerKind::Event(
-                                crate::v2::ir::TriggerSpec {
-                                    events: vec![ev],
-                                    intervening_if: None,
-                                },
-                            ),
-                            body: copy_that_spell(),
+            if ts.eat_phrase(&["the", "next"])
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+                && ts.eat_any_phrase(&[
+                    &["you", "cast", "this", "turn", "when", "you", "cast", "it"],
+                    &["this", "turn", "when", "you", "cast", "it"],
+                ])
+            {
+                return Ok((
+                    vec![Effect::DelayedTrigger {
+                        trigger: crate::v2::ir::DelayedTriggerKind::Event(
+                            crate::v2::ir::TriggerSpec {
+                                events: vec![crate::v2::ir::TriggerEvent::SpellCast {
+                                    caster: actor,
+                                    spell: Some(flt),
+                                    from_outside_hand: false,
+                                }],
+                                intervening_if: None,
+                            },
+                        ),
+                        body: vec![Effect::CopyObject {
+                            actor,
+                            subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell),
+                            count: ValueExpr::Const(1),
+                            modifiers: EntryModifiers::default(),
+                            exceptions: Vec::new(),
                         }],
-                        (),
-                    ));
-                }
+                    }],
+                    (),
+                ));
             }
             ts.restore(ncp);
         }
@@ -1121,30 +1051,11 @@ pub(super) fn parse_player_verb_frame(
     ]) {
         let subject = parse_subject_ref(ts)?;
         if ts.eat_phrase(&["by", "replacing", "all", "instances", "of"]) {
-            let kind = if ts.eat_any_phrase(&[
-                &[
-                    "one", "color", "word", "with", "another", "or", "one", "basic", "land",
-                    "type", "with", "another",
-                ],
-                &["one", "color", "word", "with", "another"],
-            ]) {
+            let kind = if ts.eat_phrase(&["one", "color", "word", "with", "another"]) {
                 CharacteristicKind::Color
             } else if ts.eat_phrase(&["one", "basic", "land", "type", "with", "another"]) {
                 CharacteristicKind::BasicLandType
-            } else if ts.eat_any_phrase(&[
-                &["one", "creature", "type", "with", "another"],
-                &["one", "creature", "type", "with"],
-            ]) {
-                let _ = opt(ts, |t| {
-                    if let Some(w) = t.peek_word()
-                        && t.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some()
-                    {
-                        t.next_word();
-                        Ok(())
-                    } else {
-                        Err(t.err("not subtype"))
-                    }
-                });
+            } else if ts.eat_phrase(&["one", "creature", "type", "with", "another"]) {
                 CharacteristicKind::CreatureType
             } else {
                 return Err(ts.err("expected text-change characteristic kind"));
@@ -1820,13 +1731,7 @@ pub(super) fn parse_player_verb_frame(
         if ts.eat_phrase(&["a", "basic", "land", "type"]) {
             return choose_char(CharacteristicKind::BasicLandType);
         }
-        // Try `parse_subject_ref` BEFORE optional leading count so `choose one of them` doesn't eat `one`!
-        let subj = if let Ok(s) = try_parse(ts, parse_subject_ref) {
-            s
-        } else {
-            let _ = opt(ts, parse_value_expr);
-            parse_subject_ref(ts)?
-        };
+        let subj = parse_subject_ref(ts)?;
         let _ = ts.eat_phrase(&["at", "random"]);
         return Ok((
             vec![prompt_choice(actor, ChoiceKind::ChooseObject(subj))],

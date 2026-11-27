@@ -145,13 +145,25 @@ fn anti_gaming_integrity_gate() {
             }
         }
 
-        // Multi-line check for `eat_seq` / `eat_rep_seq` calls and multiline `instead: Vec::new()` / `rider: Vec::new()`.
+        // Multi-line check for `eat_seq` / `eat_rep_seq`, `eat_phrase(&[>=10 words])`, and empty `ForEach`/`BindVariable` bodies.
         let rel_norm = rel.replace('\\', "/");
         if rel_norm.starts_with("v2/") {
             for (line_no, snippet) in find_multiline_long_seq_literals(&content, 10) {
                 violations.push(format!(
                     "{rel}:{line_no}: banned multiline verbatim `eat_seq`/`eat_rep_seq` matcher (>= 10 literal words): `{snippet}`"
                 ));
+            }
+            if !rel_norm.starts_with("v2/ir/") {
+                for (line_no, word_count, snippet) in find_long_eat_phrase_calls(&content, 10) {
+                    violations.push(format!(
+                        "{rel}:{line_no}: banned verbatim `eat_phrase(&[...])` matcher ({word_count} literal words >= 10): `{snippet}`"
+                    ));
+                }
+                for (line_no, kind) in find_empty_effect_container_bodies(&content) {
+                    violations.push(format!(
+                        "{rel}:{line_no}: banned empty `body: Vec::new()` inside `Effect::{kind}`"
+                    ));
+                }
             }
         }
     }
@@ -220,6 +232,92 @@ fn find_multiline_long_seq_literals(content: &str, min_words: usize) -> Vec<(usi
             for (off, bl) in lines[idx..=idx + block_end].iter().enumerate() {
                 if !bl.trim_start().starts_with("//") && has_long_seq_literal(bl, min_words) {
                     out.push((idx + off + 1, bl.trim().chars().take(60).collect()));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn find_long_eat_phrase_calls(content: &str, min_words: usize) -> Vec<(usize, usize, String)> {
+    let mut out = Vec::new();
+    let bytes = content.as_bytes();
+    let needle = b".eat_phrase(";
+    let mut pos = 0;
+    while pos + needle.len() <= bytes.len() {
+        let Some(rel_idx) = content[pos..].find(".eat_phrase(") else {
+            break;
+        };
+        let call_start = pos + rel_idx;
+        let line_no = content[..call_start]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count()
+            + 1;
+        // Skip if on a commented line
+        let line_start = content[..call_start].rfind('\n').map_or(0, |i| i + 1);
+        if content[line_start..call_start]
+            .trim_start()
+            .starts_with("//")
+        {
+            pos = call_start + needle.len();
+            continue;
+        }
+        let after = &content[call_start + needle.len()..];
+        if let Some(close_rel) = after.find(')') {
+            let arg = &after[..close_rel];
+            if let (Some(lb), Some(rb)) = (arg.find('['), arg.rfind(']'))
+                && rb > lb
+            {
+                let inner = &arg[lb + 1..rb];
+                let mut words = Vec::new();
+                let mut rest = inner;
+                while let Some(q1) = rest.find('"') {
+                    let s = &rest[q1 + 1..];
+                    let Some(q2) = s.find('"') else { break };
+                    words.push(&s[..q2]);
+                    rest = &s[q2 + 1..];
+                }
+                if words.len() >= min_words {
+                    let snippet = words.join(" ").chars().take(72).collect();
+                    out.push((line_no, words.len(), snippet));
+                }
+            }
+        }
+        pos = call_start + needle.len();
+    }
+    out
+}
+
+fn find_empty_effect_container_bodies(content: &str) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        let kind = if line.contains("Effect::ForEach") {
+            Some("ForEach")
+        } else if line.contains("Effect::BindVariable") {
+            Some("BindVariable")
+        } else {
+            None
+        };
+        if let Some(kind) = kind {
+            // Scan forward within this struct literal (up to 8 lines or closing brace)
+            let end = (idx + 8).min(lines.len());
+            for (off, l) in lines[idx..end].iter().enumerate() {
+                let lt = l.trim();
+                if lt.starts_with("//") {
+                    continue;
+                }
+                if lt.contains("body: Vec::new()") || lt.contains("body: vec![]") {
+                    out.push((idx + off + 1, kind));
+                    break;
+                }
+                if off > 0 && (lt.starts_with('}') || lt.starts_with("})")) {
+                    break;
                 }
             }
         }

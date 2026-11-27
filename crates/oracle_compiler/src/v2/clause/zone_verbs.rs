@@ -10,8 +10,8 @@ use crate::v2::filter::{
 };
 use crate::v2::ir::{
     AnaphoraRef, ChoiceKind, CountSpec, CounterKind, Duration, Effect, ObjectFilter,
-    ObjectMutation, ObjectStateAction, PlayerActionKind, PlayerMutation, PlayerRef,
-    ScaledPlayerAction, SubjectRef, ValueExpr, ZoneDest, ZoneKind, ZoneOpKind, ZoneOwner, ZoneRef,
+    ObjectMutation, ObjectStateAction, PlayerMutation, PlayerRef, ScaledPlayerAction, SubjectRef,
+    ValueExpr, ZoneDest, ZoneKind, ZoneOpKind, ZoneOwner, ZoneRef,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
@@ -19,8 +19,8 @@ use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 
 use super::{
     all_zone_cards_subject, counted_zone_op, exact_count, exile_zone_op, move_zone_op, mutate_obj,
-    mutate_player, parse_from_zone_list, player_action, prompt_choice, shuffled_zone_dest,
-    simple_zone_dest, simple_zone_op, zone_cards_subject,
+    mutate_player, parse_from_zone_list, prompt_choice, shuffled_zone_dest, simple_zone_dest,
+    simple_zone_op, zone_cards_subject,
 };
 
 const ZONE_VERBS: &[&str] = &[
@@ -1816,34 +1816,9 @@ fn parse_zone_verb_frame_inner(
                             dur.clone(),
                         ),
                     ];
-                    let mcp = ts.checkpoint();
-                    let _ = ts.eat_comma();
-                    if ts.eat_any_phrase(&[
-                        &[
-                            "and", "you", "may", "spend", "mana", "as", "though", "it", "were",
-                            "mana", "of", "any", "color", "to", "cast",
-                        ],
-                        &[
-                            "and", "you", "may", "spend", "mana", "as", "though", "it", "were",
-                            "mana", "of", "any", "type", "to", "cast",
-                        ],
-                        &[
-                            "and", "mana", "of", "any", "type", "can", "be", "spent", "to", "cast",
-                        ],
-                    ]) && ts.eat_any_phrase(&[
-                        &["those", "spells"],
-                        &["that", "spell"],
-                        &["it"],
-                        &["them"],
-                    ]) {
-                        out.push(player_action(
-                            actor,
-                            PlayerActionKind::SpendManaAsAnyType,
-                            dur,
-                        ));
-                    } else {
-                        ts.restore(mcp);
-                    }
+                    super::player_verbs_ext::parse_trailing_play_mana_rider(
+                        ts, actor, dur, &mut out,
+                    );
                     return Ok((out, ()));
                 }
             }
