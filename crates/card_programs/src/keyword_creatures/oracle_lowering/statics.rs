@@ -1864,6 +1864,20 @@ pub(super) fn lower_static(
             }
             Err("oracle:unsupported-cast-permission")
         }
+        StaticAbilityAst::StrivePerExtraTarget { delta } => {
+            if program.has_type(CardType::Land) {
+                return Err("oracle:unsupported-strive-cost");
+            }
+            let extra_cost =
+                parse_fixed_mana_cost(delta.trim()).ok_or("oracle:unsupported-strive-cost")?;
+            if !extra_cost.total().is_positive() {
+                return Err("oracle:unsupported-strive-cost");
+            }
+            if program.per_extra_target_cost.replace(extra_cost).is_some() {
+                return Err("oracle:duplicate-additional-cost");
+            }
+            Ok(())
+        }
         StaticAbilityAst::AdditionalCastCost { cost } => match cost {
             CostAtomAst::Sacrifice {
                 count,
@@ -1955,7 +1969,13 @@ pub(super) fn lower_static(
                     let mut inner = filter.as_ref().clone();
                     inner.zone = None;
                     if !is_unrestricted_filter(&inner) {
-                        return Err("oracle:unsupported-additional-cast-cost");
+                        let extra = lower_extra_cost_atom(cost, vocabulary)
+                            .map_err(|_| "oracle:unsupported-additional-cast-cost")?;
+                        if !is_valid_cast_extra_cost(&extra) {
+                            return Err("oracle:unsupported-additional-cast-cost");
+                        }
+                        program.extra_cast_costs.push(extra);
+                        return Ok(());
                     }
                     if program.graveyard_exile_x_cost {
                         return Err("oracle:duplicate-additional-cost");
@@ -1966,6 +1986,9 @@ pub(super) fn lower_static(
                 _ => {
                     let extra = lower_extra_cost_atom(cost, vocabulary)
                         .map_err(|_| "oracle:unsupported-additional-cast-cost")?;
+                    if !is_valid_cast_extra_cost(&extra) {
+                        return Err("oracle:unsupported-additional-cast-cost");
+                    }
                     program.extra_cast_costs.push(extra);
                     Ok(())
                 }
@@ -2001,6 +2024,9 @@ pub(super) fn lower_static(
             _ => {
                 let extra = lower_extra_cost_atom(cost, vocabulary)
                     .map_err(|_| "oracle:unsupported-additional-cast-cost")?;
+                if !is_valid_cast_extra_cost(&extra) {
+                    return Err("oracle:unsupported-additional-cast-cost");
+                }
                 program.extra_cast_costs.push(extra);
                 Ok(())
             }

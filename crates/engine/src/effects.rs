@@ -2591,16 +2591,7 @@ impl EffectWindow {
             source_cast_pending: BTreeMap::new(),
             cast_history: programs
                 .values()
-                .any(|p| {
-                    p.triggered.iter().any(|t| t.cast_copy_keyword().is_some())
-                        || matches!(
-                            p.conditional_cost,
-                            Some(
-                                crate::program::ConditionalCastCost::Prowl(_) | crate::program::ConditionalCastCost::Freerunning(_) | crate::program::ConditionalCastCost::Mayhem(_) | crate::program::ConditionalCastCost::Surge(_)
-                                    | crate::program::ConditionalCastCost::Spectacle(_)
-                            )
-                        )
-                })
+                .any(entry_counters::needs_cast_history)
                 .then(CastTurnHistory::default),
             spell_cast_positions: programs.values().any(|program| entry_counters::definition_or_token_matches(program, |p| {
                 matches!(&p.kind, ProgramKind::Spell(spell) if matches!(spell.body.target,

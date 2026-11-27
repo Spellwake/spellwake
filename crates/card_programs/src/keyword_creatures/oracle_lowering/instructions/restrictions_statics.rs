@@ -187,6 +187,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                                                 filter: flt_obj,
                                                 keyword: KeywordAbility::Rebound,
                                             },
+                                            "cascade" => TemporaryRuleKind::NextSpellCastKeyword {
+                                                filter: flt_obj,
+                                                keyword: spellwake_engine::program::NextSpellCastKeyword::Cascade,
+                                            },
+                                            "storm" => TemporaryRuleKind::NextSpellCastKeyword {
+                                                filter: flt_obj,
+                                                keyword: spellwake_engine::program::NextSpellCastKeyword::Storm,
+                                            },
                                             _ => return Err("oracle:unsupported-temp-static"),
                                         }
                                     };

@@ -1651,6 +1651,15 @@ pub enum CombatActionKind {
     BecomeBlocked,
 }
 
+/// Triggered cast keyword granted temporarily to the next matching spell cast by the controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextSpellCastKeyword {
+    /// CR 702.85 Cascade cast trigger.
+    Cascade,
+    /// CR 702.40 Storm cast trigger.
+    Storm,
+}
+
 /// Temporary game-rule modification installed by `Instruction::ApplyContinuous` (`ContinuousPayload::TemporaryRule`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemporaryRuleKind {
@@ -1702,6 +1711,12 @@ pub enum TemporaryRuleKind {
     NextSpellKeyword {
         filter: ObjectFilter,
         keyword: KeywordAbility,
+    },
+    /// Grant cascade or storm to the controller's next matching spell.
+    /// A successful matching cast consumes the rule and schedules the corresponding cast trigger.
+    NextSpellCastKeyword {
+        filter: ObjectFilter,
+        keyword: NextSpellCastKeyword,
     },
     /// Duration-scoped zone replacement effect (e.g. Yawgmoth's Will, Hallowed Moonlight, Cosmic Intervention).
     TemporaryZoneReplacement(Box<ZoneReplacementAbility>),
@@ -1864,9 +1879,9 @@ impl TemporaryRuleKind {
             Self::CantBeCountered { filter, .. }
             | Self::CantBeCounteredByColors { filter, .. }
             | Self::NextSpellFree { filter } => filter.as_ref().is_some_and(filter_uses_target),
-            Self::NextSpellKeyword { filter, .. } | Self::SpellCostReduction { filter, .. } => {
-                filter_uses_target(filter)
-            }
+            Self::NextSpellKeyword { filter, .. }
+            | Self::NextSpellCastKeyword { filter, .. }
+            | Self::SpellCostReduction { filter, .. } => filter_uses_target(filter),
             Self::SpellCostIncrease {
                 players, filter, ..
             } => players_use_target(*players) || filter_uses_target(filter),
@@ -8949,6 +8964,12 @@ impl ExecutableBody {
                     .map_err(|_| DefinitionError::InvalidInstruction)?;
                 None
             }
+            TemporaryRuleKind::NextSpellCastKeyword { filter, keyword: _ } => {
+                filter
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                None
+            }
             TemporaryRuleKind::FilteredFlash { player, filter, .. } => {
                 filter
                     .validate_vocabulary(vocabulary)
@@ -10378,6 +10399,8 @@ pub struct Program {
     pub conditional_cost: Option<ConditionalCastCost>,
     /// Optional mana costs on an instruction spell.
     pub additional_cast_costs: Vec<AdditionalCastCost>,
+    /// Mandatory additional mana cost paid for each chosen target beyond the first (Strive / Fireball).
+    pub per_extra_target_cost: Option<ManaCost>,
     /// Copiable battlefield replacement abilities; admitted action scope is explicit.
     pub zone_replacements: Vec<ZoneReplacementAbility>,
     /// Authored copiable types, independent of the executable body shape.
@@ -10645,6 +10668,7 @@ impl Program {
             graveyard_exile_x_cost: false,
             graveyard_self_cast: None,
             additional_cast_costs: vec![],
+            per_extra_target_cost: None,
             names: spellwake_contracts::names::ObjectNames::nameless(),
             supertypes: BTreeSet::new(),
             kind,
@@ -11449,6 +11473,17 @@ impl Program {
                 return Err(DefinitionError::CastingCost);
             }
             extra_cost.validate(vocabulary)?;
+        }
+        if let Some(extra_cost) = &self.per_extra_target_cost {
+            let valid_kind = match &self.kind {
+                ProgramKind::Spell(_) => !self.has_type(CardType::Land),
+                ProgramKind::Permanent(permanent) => {
+                    permanent.casting_cost.is_some() && !self.has_type(CardType::Land)
+                }
+            };
+            if !valid_kind || !extra_cost.valid() {
+                return Err(DefinitionError::CastingCost);
+            }
         }
         for (ability_id, extra_costs) in &self.extra_activation_costs {
             let Some(ability) = self.activated.iter().find(|ab| ab.id == *ability_id) else {
